@@ -155,3 +155,28 @@ loop, `tryBounce` no pouso) e um ramo no `js/interact.js`.
   nascem espalhadas/secas, a cama quica, a alavanca abre sessão e o alvo
   pontua, os fogos recarregam, o aro avança o curso, o xilofone registra a
   placa pisada, sem erros de página.
+
+---
+
+## Baús — visão de produto dos 3 estados (revisão 2026-07-24)
+
+O primeiro fix dos baús deixou o corpo SÓLIDO: aberto, mostrava um bloco
+preenchido ("sem o buraco de baú"). Revisado com contrato de produto explícito:
+
+| Estado | Leitura à distância |
+|---|---|
+| **Fechado** | faixa/fechadura douradas BRILHANDO → "tem loot aqui" |
+| **Aberto (recém)** | tampa girada + **cavidade oca** + pilha de tesouro dourada sobre a borda |
+| **Saqueado** | tampa girada + cavidade **VAZIA** + brilho apagado → "já era, siga em frente" |
+
+Implementação (`js/chestmodel.js`): corpo oco de verdade (4 paredes + fundo
+escuro), pilha de loot (`loot`, escondida no `markOpened`), painel interno
+fechando o vão do meio-cilindro da tampa (cobre a borda das paredes — sem friso),
+domo flush com as paredes (fresta de ar vazava o fundo claro como risco branco) e
+ferro FOSCO (metalness 0.75→0.3: o especular rasante do céu parecia defeito de
+mesh). Geometrias mescladas por material e cacheadas — 8 draw calls por baú
+(menos que os 11 da versão sólida) — e criação inteira em noSeed.
+
+Verificação: `scripts/capture-chest.js` captura os 3 estados lado a lado +
+close-up da ponta (`output/chest/`). Teste de estado saqueado pelo protocolo
+real (host abre → `chestOpened` → cliente marca) em `test/br-crates.test.js`.

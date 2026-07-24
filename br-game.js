@@ -875,11 +875,11 @@
           for (let i = 0; i < 4; i++) G.Structures.collide(p, 0.5, 0.6);
           if (Math.hypot(p.x - x, p.z - z) > 0.05) { vx = p.x; vz = p.z; vy = MP.heightAt(vx, vz); }
         }
-        const { group: g, lid, glow } = G.buildChest();
+        const { group: g, lid, glow, loot } = G.buildChest();
         g.position.set(vx, vy, vz);
         g.rotation.y = rng() * Math.PI * 2;   // rng SEMPRE consumido — bots espelham (scripts/bots.js:162)
         MP.scene.add(g);
-        crates.push({ key, g, lid, glow, opened: false, x: vx, z: vz });
+        crates.push({ key, g, lid, glow, loot, opened: false, x: vx, z: vz });
         return true;
       }
       // espalhados pelo mapa
@@ -909,6 +909,7 @@
         c.opened = true;
         c.lid.rotation.x = -1.15;   // abre girando na dobradiça (pivô traseiro)
         c.glow.emissiveIntensity = 0.12;
+        if (c.loot) c.loot.visible = false; // saqueado: cavidade fica VAZIA (leitura à distância)
       }
     }
     function nearestCrate() {
@@ -1488,12 +1489,12 @@
         // baú lendário no lugar
         setTimeout(() => {
           const y = MP.heightAt(p.x, p.z);
-          const { group: grp, lid, glow } = G.buildChest();
+          const { group: grp, lid, glow, loot } = G.buildChest();
           grp.scale.setScalar(1.3);            // baú lendário: maior
           glow.emissiveIntensity = 1.4;        // brilha mais (recompensa do GOLEM)
           grp.position.set(p.x, y, p.z);
           MP.scene.add(grp);
-          crates.push({ key: 'boss', g: grp, lid, glow, opened: false, x: p.x, z: p.z });
+          crates.push({ key: 'boss', g: grp, lid, glow, loot, opened: false, x: p.x, z: p.z });
         }, 2200);
       }
       MP.addKillFeed(`⛰ <b>${esc(d.by)}</b> derrotou o GOLEM`);

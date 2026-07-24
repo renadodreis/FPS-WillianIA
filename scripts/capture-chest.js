@@ -39,10 +39,13 @@ const output = path.join(__dirname, '..', 'output', 'chest');
       G.forceStart();
       G.Env.tod = 0.5; G.state.paused = true;
       const bx = 30, bz = 30, gy = MP.groundAt(bx, bz, 999);
-      const closed = G.buildChest(); closed.group.position.set(bx, gy, bz); closed.group.rotation.y = 0.5; MP.scene.add(closed.group);
-      const open = G.buildChest(); open.group.position.set(bx + 1.7, MP.groundAt(bx + 1.7, bz, 999), bz); open.group.rotation.y = 0.5; open.lid.rotation.x = -1.15; MP.scene.add(open.group);
-      MP.camera.position.set(bx + 0.85, gy + 1.15, bz + 3.1);
-      MP.camera.lookAt(bx + 0.85, gy + 0.42, bz);
+      // 3 estados de produto: fechado (achável) / aberto com tesouro / saqueado
+      const closed = G.buildChest(); closed.group.position.set(bx - 1.7, MP.groundAt(bx - 1.7, bz, 999), bz); closed.group.rotation.y = 0.4; MP.scene.add(closed.group);
+      const open = G.buildChest(); open.group.position.set(bx, gy, bz); open.group.rotation.y = 0.4; open.lid.rotation.x = -1.15; MP.scene.add(open.group);
+      const looted = G.buildChest(); looted.group.position.set(bx + 1.7, MP.groundAt(bx + 1.7, bz, 999), bz); looted.group.rotation.y = 0.4;
+      looted.lid.rotation.x = -1.15; looted.glow.emissiveIntensity = 0.12; looted.loot.visible = false; MP.scene.add(looted.group);
+      MP.camera.position.set(bx, gy + 2.1, bz + 2.4); // de cima o bastante pra enxergar DENTRO
+      MP.camera.lookAt(bx, gy + 0.3, bz);
       MP.camera.updateMatrixWorld(true);
       MP.renderer.render(MP.scene, MP.camera);
       // caixa envolvente do baú fechado (proporção)
@@ -55,6 +58,17 @@ const output = path.join(__dirname, '..', 'output', 'chest');
     await page.$eval('#game', c => { c.style.width = '1280px'; c.style.height = '720px'; });
     const canvas = await page.$('#game');
     await canvas.screenshot({ path: path.join(output, 'bau.png') });
+    // close-up de depuração: ponta direita do baú fechado, de perto
+    await page.evaluate(() => {
+      const MP = window.__MP;
+      const bx = 30 - 1.7, bz = 30, gy = MP.groundAt(bx, bz, 999);
+      MP.camera.position.set(bx + 1.35, gy + 0.85, bz + 1.0);
+      MP.camera.lookAt(bx + 0.3, gy + 0.45, bz);
+      MP.camera.updateMatrixWorld(true);
+      MP.renderer.render(MP.scene, MP.camera);
+    });
+    await new Promise(r => setTimeout(r, 40));
+    await canvas.screenshot({ path: path.join(output, 'bau-ponta.png') });
     console.log(`bau.png  →  tamanho ${JSON.stringify(report.size)} (larg×alt×prof)`);
     if (errors.length) { console.error('ERROS:'); for (const e of errors) console.error('  ' + e); }
     else console.log('sem erros de página');
