@@ -338,3 +338,48 @@ implantado e testado, para não quebrar ou corromper, encontre bugs".
 - Smoke test do contêiner local: healthcheck saudável, `/` e Socket.IO em 200,
   GLB v2 em 200 com 930.236 bytes e SHA esperado, fonte v1 em 404 e nenhum
   cabeçalho de QA exposto.
+
+## Sessão 2026-07-24 — entretenimento no mapa + refatoração de personagens
+
+Cinco rodadas, todas mescladas em `refatoracao`, no fork `renadodreis`, e
+DEPLOYADAS por gitpull no server A (`game.renatodreis.com.br`). Detalhe por
+rodada em `docs/2026-07-24-*.md`.
+
+- **Canhão de Circo** (commit da entrada em `feat/canhao-circo`, mesclado): atração
+  física client-side num ponto vazio — mira virando o corpo, E lança num arco
+  (38 m/s @52°, dentro do anti-cheat), recorde salvo. `js/cannon.js` +
+  `js/cannon-core.js` (pickSpot determinístico, geometria em noSeed pós-worldgen),
+  `player.launchT` + ramo balístico no `playerUpdate`. Testes cannon-core (12) +
+  cannon (browser 3260).
+- **+5 atrações do mapa** (`js/maptoys.js` + `js/maptoys-core.js`): cama elástica
+  (tryBounce no pouso), campo de tiro (alvos extraTargets + recorde), totem de
+  fogos, aros de acrobacia (passedRing + guarda de teleporte), xilofone. Espalhadas
+  por `pickSpot` com `avoid`. Testes maptoys-core (12) + maptoys (browser 3261).
+- **Fix dos baús** (commit `4dfda4f`): `js/chestmodel.js` (baú de verdade — tampa
+  abaulada meio-cilindro, ferragem, fechadura + faixa dourada emissiva, geometria
+  em cache/noSeed) compartilhado solo+BR; placement fora de parede via
+  `Structures.collide` (POI usa openSpot; espalhados/solo empurrados só no visual,
+  decisão+rng na posição crua p/ os bots seguirem espelhando `c*`). Teste
+  `br-crates` (3262).
+- **Personagens lote 1** (`43a6fb2`): crash de recarga (sniper idx6 sem `pos` em
+  fallback de GLB derrubava a escopeta idx7 — guard + try/catch); recarga
+  dirigindo/morto (`reloadBlocked`); splash −20% fantasma; faca sem headshot em
+  remoto (1.75×); cor sem validação → avatar branco (`brcolors.js` = fonte única
+  `sanitizeColors`, dual CJS/global); ressurreição deitada (reset deadT); bots
+  coloridos. Testes br-colors (6 puros) + char-fixes (3263, bloqueia GLB da sniper).
+- **Personagens lote 2** (`a7b0e44`): preview 3D no lobby (canvas reusando
+  `buildVoxelBody` via `__BR_debug.buildBody`) + 6 presets + aleatório; re-tint ao
+  vivo do avatar remoto (`retint`, guarda `colorsKey`); flash de dano cobre o visor
+  com restauração; debounce ~250ms do `hello`. Teste char-lobby (3264); UI por
+  `scripts/capture-lobby.js`.
+- **Personagens lote 3** (`6bf449e`): feel de recarga — sniper cancel (borda de
+  descida do reload no `weaponmodels` devolve mag_4/bolt_6 ao bind); mão esquerda
+  em 3 ramos; recarga cancelável ao atirar; escopeta cartucho-a-cartucho
+  (`updateReload`, cancel mantém o parcial). Teste reload-feel (3265);
+  weapon-mechanisms 8/8.
+
+Pesquisa profunda de personagem (workflow, 55 agentes, 34 bugs) com o roadmap
+R6/R10-R15 pendente em `docs/2026-07-24-personagens-refatoracao.md`. Suíte final
+verde (532 pass). **Lição de QA:** ao matar a suíte, `pkill` do runner NÃO mata os
+`server.js` filhos → órfão segura porta fixa e vira falsa "regressão real"
+(EADDRINUSE); sempre `pkill -f "FPS-WillianIA/server.js"` junto.
