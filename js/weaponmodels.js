@@ -195,6 +195,14 @@ export function createWeaponModels(deps) {
         action.timeScale = dur / Math.max(gun.reloadTime, 0.1);
         action.play();
       }
+      // fim/CANCELAMENTO da recarga: devolve mag_4/bolt_6 ao bind. Sem isto, trocar
+      // de arma no meio da recarga só zera gun.reloading (game.js) e os nós clip-owned
+      // congelavam fora do lugar. reset()+update(0) aplica o frame 0 (bind) mesmo com
+      // a arma invisível; stop() desliga sem replay-fantasma.
+      if (!gun.reloading && w.prevReloading && actions.reload) {
+        const { action } = actions.reload;
+        action.reset(); mixer.update(0); action.stop();
+      }
       // pós-tiro: ferrolho
       if (gun.cycleT > w.prevCycle && actions.bolt_slide) {
         const { action, dur } = actions.bolt_slide;

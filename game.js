@@ -1313,15 +1313,21 @@ function applyFpsCamera(dt, t) {
   if (gun.parts.handL) {
     const hb = gun.parts.handL.userData.base;
     if (gun.reloading) {
-      if (gun.parts.mag) {
+      if (gun.parts.mag && gun.parts.mag.userData.authority !== 'clip') {
+        // arma com pente PROCEDURAL: a mão persegue o pente (sai e volta)
         const grab = THREE.MathUtils.smoothstep(reloadK, 0.06, 0.18) * (1 - THREE.MathUtils.smoothstep(reloadK, 0.72, 0.85));
         _v1.copy(gun.parts.mag.position); _v1.y -= 0.08; _v1.z += 0.03;
         gun.parts.handL.position.lerpVectors(hb.p, _v1, grab);
         gun.parts.handL.rotation.x = hb.rx + grab * 0.5;
-      } else { // escopeta: mão vai à porta de carregamento inserindo cartuchos
+      } else if (gun.parts.pump) { // escopeta: mão à porta inserindo cartuchos
         const grab = THREE.MathUtils.smoothstep(reloadK, 0.15, 0.3) * (1 - THREE.MathUtils.smoothstep(reloadK, 0.85, 0.95));
         const bob = Math.abs(Math.sin(reloadK * Math.PI * 5)) * 0.025;
         gun.parts.handL.position.set(lerp(hb.p.x, 0.05, grab), lerp(hb.p.y, -0.05 + bob, grab), lerp(hb.p.z, 0.06, grab));
+      } else {
+        // sniper (pente clip-owned, animado pelo GLB) e bazuca: mão no apoio dianteiro,
+        // sem gesto de porta indevido nem perseguir um nó dirigido pelo clip
+        gun.parts.handL.position.copy(hb.p);
+        gun.parts.handL.rotation.x = hb.rx;
       }
     } else {
       gun.parts.handL.position.copy(hb.p);
@@ -1452,6 +1458,12 @@ function startReload(t) {
   if (gun.reloading || gun.mag === gun.magSize || gun.reserve <= 0) return;
   gun.reloading = true;
   gun.reloadEnd = t + gun.reloadTime;
+  // escopeta: cartucho a cartucho ao longo da MESMA duração (a bomba continua
+  // percorrendo o curso inteiro); o último cartucho entra no reloadEnd.
+  if (gun.parts.pump) {
+    gun.reloadPerShell = gun.reloadTime / Math.max(1, gun.magSize - gun.mag);
+    gun.nextShellT = t + gun.reloadPerShell;
+  }
   SFX.reload();
 }
 function finishReload() {
@@ -1460,6 +1472,20 @@ function finishReload() {
   gun.mag += take; gun.reserve -= take;
   gun.reloading = false;
   updateAmmoHUD();
+}
+// avança a recarga a cada frame: ESCOPETA carrega 1 cartucho por vez (cancelável
+// mantendo o parcial); as demais enchem o pente de uma vez no fim.
+function updateReload(t) {
+  if (!gun.reloading || reloadBlocked()) return;
+  if (gun.parts.pump) {
+    if (t >= (gun.nextShellT || Infinity) && gun.mag < gun.magSize && gun.reserve > 0) {
+      gun.mag += 1; gun.reserve -= 1; updateAmmoHUD(); SFX.reload();
+      gun.nextShellT = t + (gun.reloadPerShell || gun.reloadTime);
+    }
+    if (gun.mag >= gun.magSize || gun.reserve <= 0) gun.reloading = false;
+  } else if (t >= gun.reloadEnd) {
+    finishReload();
+  }
 }
 
 /* marcha ao longo do raio testando terreno e troncos (LOS barato em heightfield) */
@@ -1665,7 +1691,7 @@ function fire(t) {
 }
 
 function shootUpdate(dt, t) {
-  if (gun.reloading && t >= gun.reloadEnd) finishReload();
+  updateReload(t);
   if (justPressed.has('KeyR')) startReload(t);
   if (justPressed.has('Digit1')) switchWeapon(0);
   if (justPressed.has('Digit2')) switchWeapon(1);
@@ -1691,12 +1717,15 @@ function shootUpdate(dt, t) {
   if (justPressed.has('KeyG') && !state.flying) Grenades.throwNade(t);
   const interval = 60 / gun.rpm;
   const want = gun.auto ? mouse.shooting : mouse.clicked;
-  if (want && !gun.reloading && switchAnim > 0.8 && t - gun.lastShot >= interval) {
-    if (gun.mag > 0) {
-      gun.lastShot = t;
-      fire(t);
-    } else if (t - gun.lastShot > 0.25) {
-      gun.lastShot = t; SFX.empty(); startReload(t);
+  if (want && switchAnim > 0.8 && t - gun.lastShot >= interval) {
+    if (gun.reloading && gun.mag > 0) gun.reloading = false; // atirar CANCELA a recarga (mantém o já carregado)
+    if (!gun.reloading) {
+      if (gun.mag > 0) {
+        gun.lastShot = t;
+        fire(t);
+      } else if (t - gun.lastShot > 0.25) {
+        gun.lastShot = t; SFX.empty(); startReload(t);
+      }
     }
   }
   mouse.clicked = false;

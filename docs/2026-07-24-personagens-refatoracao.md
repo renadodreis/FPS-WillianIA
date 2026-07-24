@@ -72,12 +72,30 @@ lixo), recarga com um crash de rede, e combate com dano/headshot inconsistentes.
   cores nos materiais certos, `retint` troca sem recriar (corpo/visor/cVisor/
   canopy), cor inválida cai no default.
 
+## Lote 3 — ENTREGUE (feel de recarga)
+
+- **R8 — recarga coreografada correta:**
+  - Sniper: trocar de arma no meio da recarga zerava `gun.reloading` mas os nós
+    clip-owned `mag_4`/`bolt_6` congelavam fora do lugar. `js/weaponmodels.js`
+    ganhou a **borda de descida** do reload: `action.reset()+mixer.update(0)+
+    action.stop()` devolve ao bind (aplica frame 0 mesmo com a arma invisível).
+  - Mão esquerda: 3 ramos em vez de 2 — pente PROCEDURAL persegue o pente;
+    escopeta vai à porta; **sniper (clip) e bazuca ficam no apoio** (antes a mão
+    perseguia um nó dirigido pelo clip / a bazuca fazia gesto de porta indevido).
+- **R9 — recarga interrompível + escopeta incremental:**
+  - **Cancelável**: atirar com `gun.mag>0` durante a recarga cancela (mantém o
+    já carregado) — R acidental não prende mais o `reloadTime` inteiro.
+  - **Escopeta cartucho-a-cartucho**: `updateReload` carrega 1 por
+    `reloadTime/faltando` (último no `reloadEnd`, bomba percorre o curso inteiro),
+    com SFX por cartucho; cancelar mantém o parcial.
+- Testes: `test/reload-feel.test.js` (4, browser 3265) — cancel de arma normal
+  (mag 5→4), escopeta parcial-no-meio/cheia-no-fim, cancel mantém o parcial;
+  `weapon-mechanisms` (8/8) valida o sniper cancel + bind.
+
 ## Roadmap — próximos lotes (pesquisados, não implementados)
 
 - **R6** — cores aplicadas ao corpo em 1ª pessoa (`fpbody.js`, clonar material
   por instância — armadilha r185).
-- **R8/R9** — recarga coreografada (cancel da sniper clip-owned, mão esquerda,
-  bazuca) e recarga interrompível + incremental na escopeta.
 - **R10/R11/R12** — morte do remoto com colapso; pitch vertical do remoto
   (netcode, clamp no servidor); corpo FP desacoplado do pitch da câmera.
 - **R13/R14** — inimigos legíveis (heavy distinto, marcha, soco sincronizado);
