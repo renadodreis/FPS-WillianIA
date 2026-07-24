@@ -54,16 +54,28 @@ lixo), recarga com um crash de rede, e combate com dano/headshot inconsistentes.
   BLOQUEADO (força o fallback): idx7 recebe complementos e não há erro de página;
   recarga não roda dirigindo/morto e completa normal.
 
+## Lote 2 — ENTREGUE (customização visível)
+
+- **R2** — `hello` com debounce (~250ms): antes emitia a cada tecla/arraste e cada
+  hello faz `broadcastRoster` O(N). `sendHello()` coalesce o último estado.
+- **R4** — flash de dano cobre o visor, com **restauração** do glow base ao fim
+  (visor tratado separado dos `mats`, senão perderia o emissivo permanente).
+- **R5** — **re-tint ao vivo** do avatar remoto: trocar de cor re-tinge o boneco
+  JÁ criado (`buildVoxelBody.retint`), guarda por `colorsKey` no `playerUpdate`
+  (alta frequência → sem alocar `Color` por tick). Materiais + visor + canopy.
+- **R7** — **preview 3D no lobby + 6 presets + botão aleatório**: canvas com cena
+  three mínima reusando `buildVoxelBody` (fonte única, exposto via
+  `__BR_debug.buildBody`); auto-descarta quando o lobby fecha (`offsetParent`
+  null). Presets/aleatório atualizam inputs + preview (retint) + salvam + hello.
+  Verificado por captura (`scripts/capture-lobby.js` → `output/lobby/`).
+- Testes: `test/char-lobby.test.js` (4, browser 3264) — buildBody aplica as 4
+  cores nos materiais certos, `retint` troca sem recriar (corpo/visor/cVisor/
+  canopy), cor inválida cai no default.
+
 ## Roadmap — próximos lotes (pesquisados, não implementados)
 
-- **R2** — debounce do `hello` (hoje emite a cada tecla/arraste) + payload de
-  identidade unificado `{nick,colors,preset,bodyType}`.
-- **R4/R5** — flash de dano cobre o visor; re-tint ao vivo do avatar remoto sem
-  recriar (guarda de igualdade por `colorsKey`).
 - **R6** — cores aplicadas ao corpo em 1ª pessoa (`fpbody.js`, clonar material
   por instância — armadilha r185).
-- **R7** — preview 3D no lobby + presets + botão aleatório (reusar
-  `buildVoxelBody` como fonte única do mesh).
 - **R8/R9** — recarga coreografada (cancel da sniper clip-owned, mão esquerda,
   bazuca) e recarga interrompível + incremental na escopeta.
 - **R10/R11/R12** — morte do remoto com colapso; pitch vertical do remoto

@@ -219,11 +219,22 @@
             <div class="brH">SEU NICK</div>
             <input id="brNick" class="brInput" maxlength="14" value="${esc(S.nick)}">
             <div class="brH">CORES DO PERSONAGEM</div>
-            <div style="display:flex;gap:8px">
-              ${['corpo', 'roupa', 'detalhe', 'visor'].map((l, i) =>
-                `<label style="font-size:10px;text-align:center;opacity:.8">${l}<br>
-                 <input type="color" class="brCol4" data-i="${i}" value="${S.myColors[i]}"
-                   style="width:44px;height:34px;border:0;background:none;cursor:pointer"></label>`).join('')}
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;gap:8px">
+                  ${['corpo', 'roupa', 'detalhe', 'visor'].map((l, i) =>
+                    `<label style="font-size:10px;text-align:center;opacity:.8">${l}<br>
+                     <input type="color" class="brCol4" data-i="${i}" value="${esc(S.myColors[i])}"
+                       style="width:44px;height:34px;border:0;background:none;cursor:pointer"></label>`).join('')}
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:9px">
+                  ${PRESETS.map((p, i) =>
+                    `<button class="brPreset" data-p="${i}" style="font-size:10.5px;padding:4px 9px;border-radius:6px;border:1px solid #ffffff22;background:#ffffff14;color:#dfe7f2;cursor:pointer">${esc(p.n)}</button>`).join('')}
+                  <button id="brRandom" style="font-size:10.5px;padding:4px 9px;border-radius:6px;border:1px solid #ffffff22;background:#ffffff14;color:#dfe7f2;cursor:pointer">🎲 aleatório</button>
+                </div>
+              </div>
+              <canvas id="brPreview" width="132" height="168"
+                style="width:110px;height:150px;border-radius:9px;background:linear-gradient(160deg,#1b2536,#0c1017);flex:none;box-shadow:inset 0 0 0 1px #ffffff14"></canvas>
             </div>
             <div class="brH">NA SALA</div>
             <div class="brPlayers" id="brLobbyList">—</div>
@@ -341,20 +352,95 @@
         }
       });
     }
+    /* debounce do hello (R2): antes emitia a CADA tecla/arraste e cada hello faz
+       broadcastRoster O(N) no servidor. Coalesce em ~250ms mandando o último estado. */
+    let _helloT = null;
+    function sendHello() {
+      clearTimeout(_helloT);
+      _helloT = setTimeout(() => socket.emit('hello', { nick: S.nick, colors: S.myColors }), 250);
+    }
+    /* paletas-preset: seleção "profissional" com um clique (R7). */
+    const PRESETS = [
+      { n: 'Recruta', c: ['#4da6ff', '#2b3a4d', '#8a5a2b', '#ffd76a'] },
+      { n: 'Vulcão', c: ['#e0533d', '#3a1f1a', '#d9b38c', '#ffb03c'] },
+      { n: 'Selva', c: ['#3ddc84', '#16321f', '#7a5a2b', '#c8ffdd'] },
+      { n: 'Neon', c: ['#b56cff', '#241436', '#c0c0d0', '#ff8ad4'] },
+      { n: 'Ártico', c: ['#e8eef5', '#2b3a4d', '#c9a04e', '#9fd8ff'] },
+      { n: 'Sombra', c: ['#20242c', '#0e0f13', '#ff5d5d', '#ff5252'] },
+    ];
+    function randColor() { return '#' + (0x1000000 + Math.floor(Math.random() * 0xffffff)).toString(16).slice(1); }
+    /* preview 3D do próprio boneco: reusa buildVoxelBody (fonte única) numa cena
+       three mínima. Auto-descarta quando o lobby some (offsetParent null). */
+    let preview = null;
+    function disposePreview() { if (preview) { preview.dispose(); preview = null; } }
+    function initPreview() {
+      disposePreview();
+      const cv = document.getElementById('brPreview');
+      const THREE = window.__MP && window.__MP.THREE;
+      const dbg = window.__BR_debug;
+      if (!cv || !THREE || !dbg || typeof dbg.buildBody !== 'function') return;
+      let renderer;
+      try { renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true }); }
+      catch (e) { return; } // sem contexto WebGL extra: preview é opcional
+      const w = cv.clientWidth || 132, h = cv.clientHeight || 168;
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      renderer.setSize(w, h, false);
+      const scene = new THREE.Scene();
+      const cam = new THREE.PerspectiveCamera(32, w / h, 0.1, 50);
+      cam.position.set(0, 1.05, 4.6); cam.lookAt(0, 0.95, 0);
+      scene.add(new THREE.HemisphereLight(0xdfefff, 0x2a2f38, 1.15));
+      const key = new THREE.DirectionalLight(0xffffff, 1.25); key.position.set(2.5, 4, 3.5); scene.add(key);
+      const body = dbg.buildBody(S.myColors);
+      scene.add(body.g);
+      let raf = 0, t = 0, live = true;
+      function loop() {
+        if (!live) return;
+        // some quando o lobby fecha (display:none → offsetParent null) ou é recriado
+        if (document.getElementById('brPreview') !== cv || cv.offsetParent === null) { disposePreview(); return; }
+        t += 0.016; body.g.rotation.y = 0.5 + t * 0.7;
+        renderer.render(scene, cam);
+        raf = requestAnimationFrame(loop);
+      }
+      loop();
+      preview = {
+        retint(colors) { body.retint(colors); },
+        dispose() {
+          live = false; cancelAnimationFrame(raf);
+          scene.traverse(o => {
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+          });
+          renderer.dispose();
+        },
+      };
+    }
+    function applyColors(cols) { // aplica 4 cores nos inputs + salva + preview + hello
+      S.myColors = window.BRColors.sanitizeColors(cols);
+      const inputs = lobby.querySelectorAll('.brCol4');
+      inputs.forEach(inp => { inp.value = S.myColors[+inp.dataset.i]; });
+      localStorage.setItem('br_colors', JSON.stringify(S.myColors));
+      if (preview) preview.retint(S.myColors);
+      sendHello();
+    }
     function wireLobby() {
       const nickEl = document.getElementById('brNick');
       if (nickEl) nickEl.addEventListener('input', () => {
         S.nick = nickEl.value.trim().slice(0, 14) || S.nick;
         localStorage.setItem('br_nick', S.nick);
-        socket.emit('hello', { nick: S.nick, colors: S.myColors });
+        sendHello();
       });
       for (const inp of lobby.querySelectorAll('.brCol4')) {
         inp.addEventListener('input', () => {
           S.myColors[+inp.dataset.i] = inp.value;
           localStorage.setItem('br_colors', JSON.stringify(S.myColors));
-          socket.emit('hello', { nick: S.nick, colors: S.myColors });
+          if (preview) preview.retint(S.myColors);
+          sendHello();
         });
       }
+      for (const b of lobby.querySelectorAll('.brPreset')) b.addEventListener('click', () => applyColors(PRESETS[+b.dataset.p].c));
+      const rnd = document.getElementById('brRandom');
+      if (rnd) rnd.addEventListener('click', () => applyColors([randColor(), randColor(), randColor(), randColor()]));
+      initPreview();
       const btn = document.getElementById('brStartBtn');
       if (btn) btn.addEventListener('click', () => socket.emit('requestStart'));
       const fg = { golem: document.getElementById('fgGolem'),

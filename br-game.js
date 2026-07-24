@@ -183,7 +183,16 @@
       }
       chute.visible = false;
       g.add(chute);
-      return { g, legL, legR, armL, armR, chute, weapon, muzzle, mats: [mBody, mCloth, mDetail] };
+      // re-tingir o boneco JÁ criado quando as cores mudam (R5 + preview do lobby),
+      // sem recriar geometria. Só é chamado na MUDANÇA (guarda por colorsKey).
+      function retint(colors) {
+        const [a, b, c, d] = window.BRColors.sanitizeColors(colors).map(x => new THREE.Color(x));
+        mBody.color.copy(a); mCloth.color.copy(b); mDetail.color.copy(c);
+        mVisor.color.copy(d); mVisor.emissive.copy(d); cVisor.copy(d);
+        canopy.material.color.copy(a);
+      }
+      return { g, legL, legR, armL, armR, chute, weapon, muzzle,
+        mats: [mBody, mCloth, mDetail], mVisor, cVisor, canopy, retint };
     }
 
     function makeRemote(id, nk, colors, pos) {
@@ -1368,6 +1377,10 @@
       let rp = remotes.get(d.id);
       if (!rp) rp = makeRemote(d.id, d.nick, d.colors, d.pos);
       rp.nick = d.nick || rp.nick;
+      // trocar de cor re-tinge o boneco JÁ criado (sem recriar) — guarda de igualdade
+      // porque playerUpdate é de alta frequência (alocar Color por tick geraria GC).
+      const ck = Array.isArray(d.colors) ? d.colors.join('|') : '';
+      if (ck && ck !== rp.colorsKey) { rp.colorsKey = ck; rp.body.retint(d.colors); }
       const groundedBot = d.bot && !d.ship && !d.fall && !d.chute && !d.heli && !(d.car >= 0);
       rp.targetPos.set(d.pos[0], groundedBot ? MP.heightAt(d.pos[0], d.pos[2]) : d.pos[1], d.pos[2]);
       rp.targetYaw = d.rotY || 0;
@@ -1739,7 +1752,11 @@
         rp.body.muzzle.visible = rp.heldWeapon !== 'FACA' && rp.fireT > 0;
         if (rp.hitT > 0) {
           rp.hitT -= dt;
-          for (const m of rp.body.mats) { m.emissive.setHex(0xff2222); m.emissiveIntensity = Math.max(0, rp.hitT * 3); }
+          const gi = Math.max(0, rp.hitT * 3);
+          for (const m of rp.body.mats) { m.emissive.setHex(0xff2222); m.emissiveIntensity = gi; }
+          // visor pisca vermelho por cima do glow base e RESTAURA ao fim (senão perderia o brilho pra sempre)
+          if (rp.hitT > 0) { rp.body.mVisor.emissive.setHex(0xff2222); rp.body.mVisor.emissiveIntensity = 0.7 + gi; }
+          else { rp.body.mVisor.emissive.copy(rp.body.cVisor); rp.body.mVisor.emissiveIntensity = 0.7; }
         }
         // dirigindo: o carro correspondente segue o jogador remoto (antes ficava
         // um boneco flutuando e o carro parado no estacionamento)
@@ -1884,7 +1901,7 @@
 
     /* hook de depuração/testes (inofensivo em produção) */
     window.__BR_debug = {
-      S, zc, crates, remotes, drops, LOBBY,
+      S, zc, crates, remotes, drops, LOBBY, buildBody: buildVoxelBody, // buildBody: preview 3D do lobby
       get ship() { return ship; },
       /* nave: dimensões/estado local pros testes (window.__BR_shipManual=true
          desliga o passo automático e step(dt) pilota determinístico) */
