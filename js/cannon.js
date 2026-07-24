@@ -151,6 +151,7 @@ export function createCannon(deps) {
     muzzle.getWorldPosition(_f);
     if (FX.confetti) FX.confetti(_f, 18);
     if (SFX.cannonFire) SFX.cannonFire();
+    if (centerMsg) centerMsg('🎪 atravesse as argolas!', 1600); // curso balístico rumo à cidade
   }
 
   function land() {

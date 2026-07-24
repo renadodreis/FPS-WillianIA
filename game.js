@@ -2119,6 +2119,37 @@ const MiniMap = (() => {
   return { draw };
 })();
 
+/* radar das ATRAÇÕES: overlay 2D por cima do minimapa. Ícones coloridos na
+   posição real quando perto, CLAMPADOS na borda quando longe — o jogador sempre
+   vê a DIREÇÃO das atrações (o radar só alcança 95 m; elas vivem a 150-360 m). */
+const ToysRadar = (() => {
+  const S = 168, C = S / 2;
+  const cv = document.createElement('canvas');
+  cv.width = S; cv.height = S;
+  cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
+  const wrap = document.getElementById('minimapWrap');
+  if (wrap) wrap.appendChild(cv);
+  const ctx = cv.getContext('2d');
+  function draw() {
+    ctx.clearRect(0, 0, S, S);
+    if (!MapToys) return;
+    _euler.setFromQuaternion(camera.quaternion);
+    ctx.save(); ctx.translate(C, C); ctx.rotate(_euler.y);
+    const maxR = C * 0.8;
+    for (const l of MapToys.landmarks) {
+      let x = (l.x - player.pos.x) / 95 * C, y = (l.z - player.pos.z) / 95 * C;
+      const d = Math.hypot(x, y);
+      const far = d > maxR;
+      if (far) { x *= maxR / d; y *= maxR / d; }
+      ctx.fillStyle = '#' + l.color.toString(16).padStart(6, '0');
+      ctx.beginPath(); ctx.arc(x, y, far ? 2.6 : 3.8, 0, TAU); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 1; ctx.stroke();
+    }
+    ctx.restore();
+  }
+  return { draw };
+})();
+
 /* ================== loop principal ================== */
 let lastNow = performance.now();
 let treeAcc = 9, fpsFrames = 0, fpsAcc = 0, fpsVal = 0, miniAcc = 0;
@@ -2206,7 +2237,7 @@ function tick(forceDt) {
   if (treeAcc > 0.45) { treeAcc = 0; rebucketTrees(player.pos.x, player.pos.z); }
 
   miniAcc += dt; // PERF: radar a 15 Hz basta (era todo frame)
-  if (miniAcc > 1 / 15) { miniAcc = 0; MiniMap.draw(); }
+  if (miniAcc > 1 / 15) { miniAcc = 0; MiniMap.draw(); ToysRadar.draw(); }
 
   /* render */
   if (sky.material.uniforms.time) sky.material.uniforms.time.value = t; // nuvens andando

@@ -158,6 +158,32 @@ loop, `tryBounce` no pouso) e um ramo no `js/interact.js`.
 
 ---
 
+## Findability + sentido das atrações (revisão 2026-07-24, pós-playtest)
+
+Playtest real do dono: "só vi os arcos, e não fazem sentido". Dois defeitos de
+produto confirmados por captura:
+
+1. **Ninguém achava as atrações** — minimapa alcança só 95 m e elas vivem a
+   150-360 m da cidade; a 60 m, uma duna escondia atração E mastro de 9 m.
+   Fix em camadas:
+   - **Feixe de holofote vertical** (46 m, cor da atração, aditivo, `fog:false`)
+     — nenhum morro esconde, cor identificável a qualquer distância, leitura
+     de circo/festival (não sombrio).
+   - **Mastro com bandeirola** colorida pra leitura de perto.
+   - **Radar**: overlay 2D no minimapa com ícone colorido por atração,
+     **clampado na borda** quando longe (aponta a direção, padrão dos bosses).
+2. **Argolas flutuando a 3-10 m não faziam sentido a pé.** Redesenho: o curso
+   agora mora **no arco balístico do canhão** — 5 argolas nas alturas exatas da
+   trajetória do disparo (11-55 m, apogeu no meio), rumo à cidade. Ser cuspido
+   pelo canhão = atravessar o curso (~2,5 s) = cronômetro/recorde. No disparo:
+   "🎪 atravesse as argolas!". Canhão + argolas viram UMA atração coerente.
+   Teste de produto end-to-end: `cn.fire()` atravessa ≥3 argolas ou grava
+   recorde (test/maptoys.test.js).
+
+Capturas de verificação: `scripts/capture-toys.js` → `output/toys/`
+(curso lateral com as 5 argolas no arco, feixe visível por cima da duna que
+escondia tudo, close da cama elástica).
+
 ## Baús — visão de produto dos 3 estados (revisão 2026-07-24)
 
 O primeiro fix dos baús deixou o corpo SÓLIDO: aberto, mostrava um bloco

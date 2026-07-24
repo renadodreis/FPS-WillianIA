@@ -14,12 +14,12 @@ describe('Atrações do mapa 🎪', () => {
   before(async () => { h = await bootGame({ port: PORT }); });
   after(async () => { if (h) await h.close(); });
 
-  it('as 5 nascem no mapa, espalhadas e sem se empilhar', async () => {
+  it('atrações espalhadas sem empilhar; argolas moram NO canhão (curso do disparo)', async () => {
     const r = await h.play(() => {
       const G = window.__game, M = G.MapToys;
       if (!M) return { ok: false, why: 'sem __game.MapToys' };
       const s = M.spots;
-      const list = [s.tramp, s.gallery, s.fireworks, s.rings, s.xylo];
+      const list = [s.tramp, s.gallery, s.fireworks, s.xylo]; // aros são DO canhão agora
       let minPair = Infinity;
       for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++)
         minPair = Math.min(minPair, Math.hypot(list[i].x - list[j].x, list[i].z - list[j].z));
@@ -27,13 +27,36 @@ describe('Atrações do mapa 🎪', () => {
       let minCannon = Infinity;
       for (const p of list) minCannon = Math.min(minCannon, Math.hypot(p.x - cannon.x, p.z - cannon.z));
       const allDry = list.every(p => G.heightAt(p.x, p.z) > -3);
-      return { ok: true, minPair, minCannon, allDry, count: list.length };
+      const ringsAtCannon = Math.hypot(s.rings.x - cannon.x, s.rings.z - cannon.z);
+      return { ok: true, minPair, minCannon, allDry, count: list.length, ringsAtCannon };
     });
     assert.ok(r.ok, r.why);
-    assert.equal(r.count, 5);
+    assert.equal(r.count, 4);
     assert.ok(r.minPair > 30, `atrações empilhadas (${r.minPair.toFixed(1)} m)`);
     assert.ok(r.minCannon > 20, `atração colada no canhão (${r.minCannon.toFixed(1)} m)`);
     assert.ok(r.allDry, 'alguma nasceu na água');
+    assert.ok(r.ringsAtCannon < 2, `curso de argolas longe do canhão (${r.ringsAtCannon.toFixed(1)} m)`);
+  });
+
+  it('argolas seguem o ARCO BALÍSTICO do canhão; marcos e radar existem (findability)', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, M = G.MapToys;
+      const cn = G.Cannon.spot;
+      const L = M.rings.list;
+      const d0 = Math.hypot(L[0].x - cn.x, L[0].z - cn.z);
+      const ys = L.map(p => p.y - G.heightAt(cn.x, cn.z)); // alturas relativas à base do canhão
+      return {
+        d0, ys, count: L.length,
+        landmarks: M.landmarks.length,
+        overlay: document.getElementById('minimapWrap').querySelectorAll('canvas').length,
+      };
+    });
+    assert.equal(r.count, 5, 'curso deve ter 5 argolas');
+    assert.ok(Math.abs(r.d0 - 11) < 2, `argola 1 fora do arco (d=${r.d0.toFixed(1)})`);
+    assert.ok(r.ys[2] > r.ys[0] && r.ys[2] > r.ys[4], `sem apogeu no meio (${r.ys.map(y => y.toFixed(1))})`);
+    assert.ok(r.ys[0] > 5, `argola 1 baixa demais pro tiro (${r.ys[0].toFixed(1)} m)`);
+    assert.equal(r.landmarks, 5, 'cada atração precisa de um marco (mastro/bandeirola)');
+    assert.equal(r.overlay, 2, 'overlay do radar das atrações ausente no minimapa');
   });
 
   it('🤸 Cama Elástica: cair na placa quica pra cima', async () => {
@@ -97,7 +120,7 @@ describe('Atrações do mapa 🎪', () => {
       G.state.cinematic = false;
       return { next: st.next, running: st.running, total: st.total };
     });
-    assert.equal(r.total, 6);
+    assert.equal(r.total, 5);
     assert.ok(r.next >= 1, `curso não avançou (next=${r.next})`);
     assert.ok(r.running, 'cronômetro do curso não começou');
   });
@@ -115,6 +138,27 @@ describe('Atrações do mapa 🎪', () => {
     });
     assert.equal(r.plates, 8);
     assert.equal(r.step, 2, 'não detectou a placa pisada');
+  });
+
+  it('PRODUTO: ser disparado pelo canhão atravessa o curso de argolas', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, M = G.MapToys;
+      const cn = G.Cannon;
+      const sp = cn.spot;
+      QA.reset(sp.x, sp.z);
+      const P = QA.MP.player;
+      const L = M.rings.list;
+      // mira no azimute do curso (o disparo segue o olhar horizontal)
+      QA.MP.camera.lookAt(L[2].x, P.pos.y + 1.62, L[2].z);
+      QA.tick(2);
+      const before = M.rings.next;
+      cn.fire();
+      for (let i = 0; i < 320; i++) { QA.tick(1); if (P.onGround && cn.state === 'idle' && i > 60) break; }
+      return { before, after: M.rings.next, best: M.rings.best };
+    });
+    // curso completo grava recorde e reseta next → aceitar qualquer um dos sinais
+    assert.ok(r.after >= 3 || r.best > 0,
+      `o voo não atravessou as argolas (next ${r.before}→${r.after}, recorde ${r.best})`);
   });
 
   it('não gerou erros de página (window.onerror)', async () => {

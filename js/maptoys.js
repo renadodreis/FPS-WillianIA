@@ -10,9 +10,10 @@
    ================================================================ */
 import * as THREE from 'three';
 import {
-  pickSpot, bounceVelocity, passedRing, ringAt, plateAt, XYLO_NOTES,
+  pickSpot, bounceVelocity, passedRing, plateAt, XYLO_NOTES,
   betterMax, betterTime,
 } from './maptoys-core.js';
+import { LAUNCH, horizontalSpeed } from './cannon-core.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3();
 const loadNum = (k) => { try { return Number(localStorage.getItem(k)) || 0; } catch (e) { return 0; } };
@@ -176,20 +177,28 @@ export function createMapToys(deps) {
   // 💫 AROS DE ACROBACIA                                                    //
   // ===================================================================== //
   const ring = { spot: null, rings: [], next: 0, running: false, startT: 0, best: loadNum('callofai_ringBest'), prev: new THREE.Vector3() };
-  const RING_N = 6, RING_R = 2.0;
+  const RING_N = 5, RING_R = 2.6;
   noSeed(() => {
-    ring.spot = place(3.9);
-    // curso apontando pra cidade (cenográfico); normal = direção do curso
-    const dx = cx - ring.spot.x, dz = cz - ring.spot.z, dl = Math.hypot(dx, dz) || 1;
+    // As argolas moram NO ARCO DO CANHÃO: alturas seguem a trajetória REAL do
+    // disparo rumo à cidade — ser cuspido pelo canhão atravessa o curso inteiro
+    // (~2.5 s). Soltas no mapa, argolas a 3-10 m de altura não faziam sentido a pé.
+    const cs = cannonSpot || { x: cx + 220, z: cz };
+    const y0 = heightAt(cs.x, cs.z) + 0.4;            // pés do jogador ao ser disparado
+    ring.spot = { x: cs.x, y: y0, z: cs.z };
+    const dx = cx - cs.x, dz = cz - cs.z, dl = Math.hypot(dx, dz) || 1;
     const dir = { x: dx / dl, z: dz / dl };
+    const vh = horizontalSpeed(), tanP = Math.tan(LAUNCH.pitch), k = LAUNCH.gravity / (2 * vh * vh);
     for (let i = 0; i < RING_N; i++) {
-      const c = ringAt({ x: ring.spot.x, y: ring.spot.y, z: ring.spot.z }, dir, i, RING_N);
-      const torus = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.16, 10, 26),
+      const d = (i + 1) * 11;                          // 11..55 m (alcance do tiro ~63)
+      const x = cs.x + dir.x * d, z = cs.z + dir.z * d;
+      let y = y0 + tanP * d - k * d * d;               // balística do canhão
+      y = Math.max(y, heightAt(x, z) + 1.8);           // terreno subiu? argola nunca enterra
+      const torus = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.18, 10, 26),
         csmMat(new THREE.MeshStandardMaterial({ color: RAINBOW[i], emissive: RAINBOW[i], emissiveIntensity: 0.3, roughness: 0.4 })));
-      torus.position.set(c.x, c.y, c.z);
-      torus.lookAt(c.x + dir.x, c.y, c.z + dir.z); // encara a direção do curso
+      torus.position.set(x, y, z);
+      torus.lookAt(x + dir.x, y, z + dir.z); // encara a direção do curso
       scene.add(torus);
-      ring.rings.push({ mesh: torus, c: new THREE.Vector3(c.x, c.y, c.z), n: new THREE.Vector3(dir.x, 0, dir.z).normalize(), lit: false });
+      ring.rings.push({ mesh: torus, c: new THREE.Vector3(x, y, z), n: new THREE.Vector3(dir.x, 0, dir.z).normalize(), lit: false });
     }
   });
   function activePos(out) {
@@ -259,6 +268,42 @@ export function createMapToys(deps) {
   }
 
   // ===================================================================== //
+  // 🚩 MARCOS — mastro alto com bandeirola colorida por atração:           //
+  // visível de longe por cima da grama/morros (findability), e a MESMA    //
+  // lista alimenta os ícones do radar (clampados na borda do minimapa).   //
+  // ===================================================================== //
+  const landmarks = [];
+  noSeed(() => {
+    const poleGeo = new THREE.CylinderGeometry(0.09, 0.14, 9, 8);
+    const flagGeo = new THREE.ConeGeometry(0.85, 1.7, 4);
+    const poleMat = mat(0x2b2b33, { roughness: 0.7 });
+    // FEIXE de holofote vertical: morro nenhum esconde (testado: mastro de 9 m
+    // sumia atrás de duna a 60 m — o jogador logava e "não via nada")
+    const beamGeo = new THREE.CylinderGeometry(0.45, 0.95, 46, 8, 1, true);
+    const mk = (x, z, color) => {
+      const y = heightAt(x, z);
+      const pole = new THREE.Mesh(poleGeo, poleMat);
+      pole.position.set(x, y + 4.5, z); pole.castShadow = true; scene.add(pole);
+      const flag = new THREE.Mesh(flagGeo, csmMat(new THREE.MeshStandardMaterial(
+        { color, emissive: color, emissiveIntensity: 0.35, roughness: 0.5 })));
+      flag.rotation.z = -Math.PI / 2; flag.position.set(x + 0.8, y + 8.55, z);
+      scene.add(flag);
+      const beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending,
+        depthWrite: false, side: THREE.DoubleSide, fog: false, // fog lavava a cor — feixe identificável a qualquer distância
+      }));
+      beam.position.set(x, y + 23, z);
+      scene.add(beam);
+      landmarks.push({ x, z, color });
+    };
+    if (cannonSpot) mk(cannonSpot.x + 3.2, cannonSpot.z, 0xd7343a); // canhão + argolas
+    mk(tramp.spot.x + 3.4, tramp.spot.z, 0x8a3ffb);
+    mk(gal.spot.x - 6, gal.spot.z, 0xffe14a);
+    mk(fw.spot.x + 2.2, fw.spot.z + 2.2, 0xff8ad4);
+    mk(xyl.spot.x, xyl.spot.z - 3, 0x53c7ff);
+  });
+
+  // ===================================================================== //
   // roteamento                                                            //
   // ===================================================================== //
   function update(dt, t) {
@@ -289,5 +334,6 @@ export function createMapToys(deps) {
     startGallery: galleryStart, fireFireworks: fireworksFire,
     plates: xyl.plates,
     get lastPlate() { return xyl.last; },
+    get landmarks() { return landmarks.slice(); }, // {x,z,color} — radar do minimapa
   };
 }
