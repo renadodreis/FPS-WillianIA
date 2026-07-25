@@ -3,7 +3,18 @@
 'use strict';
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { CHROME, bootGame, startBRMatch } = require('./helpers/harness');
+
+it('acorda e invalida o carro antes de escrever a primeira pose remota', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'br-game.js'), 'utf8');
+  const poseWrite = src.indexOf('v.chassisBody.position.set(gp.x, gp.y, gp.z)');
+  const wakeCall = src.lastIndexOf('G.Car.wake(v)', poseWrite);
+  assert.ok(poseWrite >= 0, 'escrita da pose remota não encontrada');
+  assert.ok(wakeCall >= 0 && poseWrite - wakeCall < 160,
+    'pose remota pode mover body hibernado sem reativar suspensão/AABB antes');
+});
 
 describe('Rodas de carros remotos (BR)', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   let h, bot;

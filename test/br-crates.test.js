@@ -34,6 +34,31 @@ describe('Baús do BR — modelo e placement', { skip: !CHROME && 'Chrome não e
     assert.equal(r.semLoot, 0, `${r.semLoot} baús sem pilha de tesouro visível`);
   });
 
+  it('culling por distância é reaplicável sem mudar o estado do baú', async () => {
+    const r = await h.play(() => {
+      const dbg = window.__BR_debug, P = window.QA.MP.player.pos;
+      if (typeof dbg.cullCrates !== 'function') return { api: false };
+      const c = dbg.crates.find(item => !item.opened);
+      const saved = P.clone();
+      const state = { opened: c.opened, lidX: c.lid.rotation.x, loot: c.loot.visible };
+      P.set(c.x + 261, c.g.position.y, c.z);
+      dbg.cullCrates();
+      const hiddenFar = !c.g.visible;
+      P.set(c.x, c.g.position.y, c.z);
+      dbg.cullCrates();
+      const visibleNear = c.g.visible;
+      const unchanged = c.opened === state.opened &&
+        c.lid.rotation.x === state.lidX && c.loot.visible === state.loot;
+      P.copy(saved);
+      dbg.cullCrates();
+      return { api: true, hiddenFar, visibleNear, unchanged };
+    });
+    assert.equal(r.api, true, 'API interna de culling dos baús ausente');
+    assert.equal(r.hiddenFar, true, 'baú a 261 m continuou no pipeline');
+    assert.equal(r.visibleNear, true, 'baú próximo ficou oculto');
+    assert.equal(r.unchanged, true, 'culling alterou abertura/loot do baú');
+  });
+
   it('baú aberto mostra o INTERIOR saqueado: tampa gira, tesouro some, brilho apaga', async () => {
     // abre um baú pelo protocolo REAL (host → servidor → broadcast chestOpened)
     const key = await h.play(() =>

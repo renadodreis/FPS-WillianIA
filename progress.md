@@ -383,3 +383,144 @@ R6/R10-R15 pendente em `docs/2026-07-24-personagens-refatoracao.md`. Suíte fina
 verde (532 pass). **Lição de QA:** ao matar a suíte, `pkill` do runner NÃO mata os
 `server.js` filhos → órfão segura porta fixa e vira falsa "regressão real"
 (EADDRINUSE); sempre `pkill -f "FPS-WillianIA/server.js"` junto.
+
+## Sessão 2026-07-25 — otimização segura do cliente
+
+### Pedido atual
+
+O jogo parece lento até em localhost; otimizar sem introduzir bugs nem quebrar
+jogabilidade. O worktree já continha melhorias não commitadas em `br-game.js`,
+`js/chestmodel.js` e `scripts/perf-probe.js`; elas devem ser preservadas.
+
+### Diagnóstico antes de editar produção
+
+- Rede/servidor não explica a lentidão local: 30 bots deram RTT p50 1,1 ms,
+  p95 11,2 ms e zero falhas. O jogador local é simulado no navegador.
+- Render bruto SwiftShader 800×600: 19,52 ms completo; 6,84 ms sem sombras;
+  9,27 ms sem grama. A grama responde por ~916 mil triângulos visíveis.
+- Cruzar uma célula diagonal enfileira 25 chunks de grama; o orçamento atual de
+  seis refills/frame criou quatro frames de 14,5–16,2 ms.
+- Sete esqueletos têm 28 meshes com sombra e culling desligado; apenas tirar
+  suas sombras no A/B reduziu 17,03 → 13,01 ms.
+- Os seis `RaycastVehicle` continuam ativos estacionados: callbacks 1,57 ms e
+  broadphase 1,58 ms. `world.step` cresce de 2,42 ms @60 FPS para 5,54 ms @20.
+- 65 baús somaram 240 draw calls no probe imediato. Compartilhar materiais e
+  culling por distância — mudanças locais já existentes — atacam custo real.
+- `game.js` limita o delta a 50 ms e usa esse valor também no HUD. Abaixo de
+  20 FPS a simulação entra em slow-motion e o contador continua mostrando ~20;
+  `timeScale=0.25` ainda faz 60 FPS reais parecerem ~240.
+
+### Linha de base e plano
+
+- `git diff --check`: limpo.
+- `npm run analyze:lines`: 186.871 linhas JS; 409.838 no repositório.
+- `npm run lint`: passou antes da suíte.
+- Rodada principal de `npm test`: 535 testes, 529 passes, três falhas e três
+  cancelamentos sob carga; cinco arquivos entraram na triagem isolada automática
+  (`br-golem`, `br-late-join-flags`, `car-terrain-traversal`, `castle-layout` e
+  `city-destruction-client`). Todos passaram duas vezes consecutivas isolados:
+  somente flakes, suíte final verde (exit 0).
+- Plano TDD salvo em
+  `docs/superpowers/plans/2026-07-25-performance-optimization.md`.
+- Nenhum arquivo de produção foi alterado nesta sessão até este ponto.
+
+### Implementação TDD
+
+- `game.js`: tempo real (`frameDt`) e tempo simulado foram separados sem mudar
+  o clamp de 50 ms, `timeScale` ou os três substeps. O HUD não multiplica mais
+  o FPS por slow-motion. `G.perf` reutiliza um único objeto e publica
+  `frameMs`, `physicsSteps`, `physicsDroppedMs` e `simulationCoverage`; esta
+  última inclui tanto descarte do Cannon quanto o clamp (100 ms reais com
+  50 ms simulados agora resultam em cobertura ≈0,5).
+- CSM: a cascata próxima continua automática a cada frame; uma das três
+  distantes é atualizada em rodízio. Primeira renderização, resize, mudança de
+  FOV/frustum e reativação de sombras invalidam as quatro. Teleporte >20 m,
+  giro >30° ou salto da direção solar >2° também renovam as quatro no mesmo
+  frame; o seguinte volta ao rodízio.
+- `js/grass.js`: cada lâmina deixou de construir a classificação completa via
+  `surfaceAt`; usa `heightAt + biomeAt` e os mesmos `smoothstep`. Uma
+  caracterização de 4.096 pontos e comparação de buffers confirmou igualdade
+  bit a bit. O shader também reutiliza `modelMatrix * instanceMatrix`.
+- `js/car.js`: após 1,5 s estável, ≥3 rodas apoiadas e velocidade baixa, somente
+  o `RaycastVehicle.preStepCallback` é suspenso. Body/collider continuam no
+  mundo. `wakeup`, `setCur` e pose remota reinstalam o mesmo callback; a pose
+  remota invalida o AABB antes de escrever posição/quaternion.
+- `js/skeletons.js`: frustum culling foi reativado com esfera calculada uma vez
+  no protótipo. A margem inicial de 1,5× foi REPROVADA por um teste de vértices:
+  12/175 vértices da cimitarra saíam 40,7 cm no strike p=0,59. A margem medida
+  final é 2,1× (mínimo observado 1,968×), deixando ~11,5 cm; o teste vivo agora
+  encontra zero vértices fora.
+- O culling/prewarm e os materiais compartilhados dos baús que já estavam no
+  worktree foram preservados. A atualização de visibilidade foi extraída,
+  aplicada no início, a cada 0,5 s e na criação do baú do golem. Carros remotos
+  chamam `Car.wake` antes da pose direta.
+- Destruir/restaurar a cidade agora acorda a frota antes de remover/reinserir
+  lajes CANNON. Um teste RED reproduziu a ausência de wake sobre um carro
+  hibernado; o GREEN exige suspensão e AABB ativos antes do próximo step.
+
+### Medições depois das mudanças
+
+- O probe final move câmera **e jogador**, drena o streaming da grama e mede
+  lotes de nove caminhos controlados (`G.tick(0)` para frusta/escalonador +
+  `WebGLRenderer.render`) após 32 updates de estabilização e seis warmups.
+  Calls/triângulos de cada máscara repetiram exatamente nos três ciclos de
+  cada pose. Os JSONs completos estão em `output/perf-probe-3271.json`,
+  `3272.json` e `3273.json`.
+- Em 800×600, ANGLE/SwiftShader, o cenário de produção marcou throughput
+  `8,23 / 7,89 / 6,57 ms` (mediana entre processos 7,89 ms) e pior caso de
+  `513 / 519 / 519` draw calls (mediana 519). Com todos os 65 baús forçados,
+  foram `8,11 / 7,67 / 7,98 ms` (mediana 7,98 ms) e `755 / 748 / 764` calls
+  (mediana 755). O culling deixou 2–16 baús visíveis e reduziu o pior número
+  mediano de calls em 31,3%.
+- O throughput de produção foi ligeiramente pior nas duas primeiras rodadas e
+  melhor na terceira; portanto, este probe **não demonstra ganho causal de
+  tempo/FPS** no SwiftShader. Os triângulos também não foram monotônicos e não
+  sustentam alegação de redução.
+  “Sem baús” e “sem feixes” foram mantidos como controles, mas seus tempos não
+  são usados para atribuição. O baseline histórico de 19,52 ms usava protocolo
+  diferente e fica apenas como indício, sem a antiga alegação de −71,4%.
+- Refill de 169 chunks de grama: 216–236 ms → 96–104 ms, ganho aproximado de
+  2,3× (o microbenchmark anterior não preservou os brutos), com
+  matrizes, phase, tint, tracks e bounds byte-idênticos. O lote permaneceu em
+  seis chunks/frame porque a remoção do classificador já atacou o pico sem
+  alterar densidade nem fila.
+- O probe é throughput relativo de `G.tick(0)` + `WebGLRenderer.render` +
+  `gl.finish` em software; não é timer GPU nem representa FPS de uma placa
+  real. A simulação não avança (`dt=0`) e o composer real é no-op, mas as
+  rotinas de preparação do frame entram no lote. Um controle com quatro
+  cascatas por frame foi descartado porque saturou a fila assíncrona do
+  SwiftShader e deixou de ser uma comparação isolada.
+- Todas as três rodadas válidas tiveram zero `pageerror`, erro de console e
+  falha de request.
+
+### Regressão funcional e visual
+
+- Focados verdes: gameplay 35/35, grama 9/9, veículos/superfícies 24/24,
+  esqueletos 15/15, baús 5/5, PvE BR 4/4, bot visual 8/8 e personagem 2/2.
+- O cliente oficial de web game completou seis iterações e gerou seis estados/
+  screenshots sem `console.error` ou `pageerror`.
+- Rota Playwright no solo: entrada no buggy pela tecla real `E`, 8,84 m em 2 s
+  e 35,5 km/h; saída e caminhada de 4,63 m em 1,5 s. Zero erros do jogo e zero
+  requests 4xx/5xx. A inspeção registrou CSM `autoMask=1`, uma distante
+  agendada (`mask=4`) e zero vértices fora do bound na pose extrema.
+- Screenshots inspecionados manualmente em
+  `output/playwright/perf-route/.playwright-cli/`: grama contínua, clearing
+  intencional do acampamento, carro e trilha sem salto, baú íntegro, sombras
+  próximas/distantes e esqueleto/cimitarra completos. O browser CLI headless
+  roda o rAF a ~1 Hz; por isso seu FPS não foi usado como benchmark. A nova
+  telemetria expôs corretamente cobertura ≈0,049 num frame automatizado de
+  ~1 014 ms, em vez de mascarar o slow-motion.
+- Cobertura final: os 68 arquivos de teste passaram em três blocos seriais,
+  equivalentes a 547 testes no estado final (o teste urbano adicionado depois
+  do primeiro bloco passou focado). `gameplay` fechou 35/35 e `car-settle`
+  6/6 após os últimos deltas.
+- `car-terrain-traversal` reproduziu uma vez o flake histórico do
+  caso-controle (“nenhum contato rígido”), enquanto toda a travessia passou;
+  em seguida o arquivo passou duas vezes consecutivas, 2/2 em cada processo.
+- A execução monolítica pós-mudança foi encerrada por SIGTERM externo da célula
+  após ~10 min, não pelo runner do repositório. Por isso não há alegação de
+  `npm test` monolítico verde; a cobertura explícita dos 68 arquivos acima é a
+  evidência final. O Chrome de QA deixado por esse corte foi identificado pelo
+  perfil/PID e removido antes dos benchmarks válidos.
+- Checagens finais: `npm run lint` e `git diff --check` com exit 0;
+  `npm run analyze:lines` registrou 187.608 linhas JS e 415.339 no repositório.

@@ -22,6 +22,8 @@ export function createCar(deps) {
   const modelLoader = new GLTFLoader();
   const templateCache = new Map(); // por URL: rig + métricas prontos (1x por GLB)
   const wheelRadius = (cfg, i) => Array.isArray(cfg.wheelRVis) ? cfg.wheelRVis[i] : cfg.wheelRVis;
+  const PARKED_SPEED_SQ = 0.15 * 0.15;
+  const PARKED_SLEEP_TIME = 1.5;
 
   /* apoio estático real sob (x,z): terreno físico E lajes/asfalto/telhado —
      heightAt sozinho não enxerga as ruas elevadas da cidade */
@@ -274,6 +276,26 @@ export function createCar(deps) {
   }
   /* ---- frota ---- */
   const vehicles = [];
+  function resumeSuspension(v) {
+    if (v._suspensionActive) return;
+    world.addEventListener('preStep', v.vehicle.preStepCallback);
+    v._suspensionActive = true;
+    v._parkedT = 0;
+  }
+  function wakeVehicle(v) {
+    v._parkedT = 0;
+    resumeSuspension(v);
+    // Poses remotas são escritas diretamente no body. O chamador usa wake()
+    // antes da escrita; a flag permanece suja até o broadphase seguinte.
+    v.chassisBody.aabbNeedsUpdate = true;
+    v.chassisBody.wakeUp();
+  }
+  function suspendParked(v) {
+    if (!v._suspensionActive) return;
+    world.removeEventListener('preStep', v.vehicle.preStepCallback);
+    v._suspensionActive = false;
+    v.chassisBody.sleep();
+  }
   function makeVehicle(cfg, x, z, ry) {
     const { chassisBody, vehicle } = createPhysics(cfg, x, z, ry || 0);
     const v = {
@@ -281,7 +303,9 @@ export function createCar(deps) {
       bodyRoot: null, visualWheels: null, wheelRig: null, wheelRigStatus: 'loading',
       remoteHint: null, // dica visual de rede (nunca autoridade): giro/esterço
       steerCur: 0, lastThrottle: 0, modelStatus: 'loading', modelUrl: cfg.modelUrl, modelMetrics: null,
+      _parkedT: 0, _suspensionActive: true,
     };
+    chassisBody.addEventListener('wakeup', () => resumeSuspension(v));
     vehicles.push(v);
     return v;
   }
@@ -329,7 +353,17 @@ export function createCar(deps) {
 
   function update(dt) {
     for (const v of vehicles) {
-      const driven = state.driving && v === cur && !state.paused;
+      const hasDriver = state.driving && v === cur;
+      const driven = hasDriver && !state.paused;
+      const remoteActive = !!(v.remoteHint && v.remoteHint.ttl > 0);
+      if (hasDriver || remoteActive) {
+        if (!v._suspensionActive ||
+            v.chassisBody.sleepState === v.chassisBody.constructor.SLEEPING) wakeVehicle(v);
+        else {
+          v._parkedT = 0;
+          v.chassisBody.wakeUp();
+        }
+      }
       if (driven) {
         const fwdIn = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
         const steerIn = (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0); // +steer vira à esquerda
@@ -412,6 +446,18 @@ export function createCar(deps) {
         _wq2.set(wt.quaternion.x, wt.quaternion.y, wt.quaternion.z, wt.quaternion.w);
         pivot.quaternion.copy(_wq).multiply(_wq2);
       }
+      if (!hasDriver && !remoteActive && v._suspensionActive) {
+        const supported = v.vehicle.wheelInfos.reduce(
+          (n, w) => n + (w.raycastResult.body ? 1 : 0), 0);
+        const speedSq = v.chassisBody.velocity.lengthSquared() +
+          v.chassisBody.angularVelocity.lengthSquared();
+        if (supported >= 3 && speedSq < PARKED_SPEED_SQ) {
+          v._parkedT += dt;
+          if (v._parkedT >= PARKED_SLEEP_TIME) suspendParked(v);
+        } else {
+          v._parkedT = 0;
+        }
+      }
     }
     // poeira + áudio do veículo atual
     const kmh = speedKmh();
@@ -448,8 +494,11 @@ export function createCar(deps) {
   }
 
   return {
-    vehicles, nearest, update, speedKmh, ready,
-    setCur(v) { cur = v; v.chassisBody.wakeUp(); },
+    vehicles, nearest, update, speedKmh, ready, wake: wakeVehicle,
+    setCur(v) {
+      cur = v;
+      wakeVehicle(v);
+    },
     get cfg() { return cur.cfg; },
     get vehicle() { return cur.vehicle; },
     get chassisBody() { return cur.chassisBody; },

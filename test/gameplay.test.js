@@ -480,6 +480,144 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
     assert.ok(r.t1 > r.t0, 'relógio do mundo parado');
   });
 
+  it('dado timeScale=0,25, então o FPS continua medindo os frames reais', async () => {
+    const fps = await play(() => {
+      const QA = window.QA;
+      QA.reset();
+      QA.MP.setTimeScale(0.25);
+      QA.tick(240, 1 / 60);
+      const measured = QA.G.fps;
+      QA.MP.setTimeScale(1);
+      return measured;
+    });
+    assert.ok(fps >= 55 && fps <= 65, `FPS deveria ficar perto de 60, mas reportou ${fps}`);
+  });
+
+  it('dado um frame de 100 ms, então G.perf expõe os substeps e o tempo descartado reais', async () => {
+    const r = await play(() => {
+      const QA = window.QA, world = QA.MP.world, fixedDt = 1 / 60;
+      QA.reset();
+      const perfRef = QA.G.perf;
+      const stepsBefore = world.stepnumber;
+      const accumulatorBefore = world.accumulator;
+      QA.G.tick(0.1);
+      const steps = world.stepnumber - stepsBefore;
+      const droppedMs = Math.max(0,
+        accumulatorBefore + 0.1 - steps * fixedDt - world.accumulator) * 1000;
+      return {
+        sameObject: perfRef === QA.G.perf,
+        actualSteps: steps,
+        expectedDroppedMs: droppedMs,
+        physicsSteps: QA.G.perf && QA.G.perf.physicsSteps,
+        physicsDroppedMs: QA.G.perf && QA.G.perf.physicsDroppedMs,
+        simulationCoverage: QA.G.perf && QA.G.perf.simulationCoverage,
+        frameMs: QA.G.perf && QA.G.perf.frameMs,
+      };
+    });
+    assert.ok(r.sameObject, 'G.perf deve ser pré-alocado e reutilizado');
+    assert.equal(r.physicsSteps, r.actualSteps, 'substeps reportados divergem do World.stepnumber');
+    assert.ok(r.actualSteps >= 1 && r.actualSteps <= 3, `substeps inesperados: ${r.actualSteps}`);
+    assert.ok(r.expectedDroppedMs > 40, `tick longo não descartou tempo (${r.expectedDroppedMs} ms)`);
+    assert.ok(Math.abs(r.physicsDroppedMs - r.expectedDroppedMs) < 0.01,
+      `tempo descartado: esperado ${r.expectedDroppedMs}, recebido ${r.physicsDroppedMs}`);
+    assert.ok(Math.abs(r.simulationCoverage - (1 - r.expectedDroppedMs / 100)) < 0.001,
+      `cobertura de simulação incorreta: ${r.simulationCoverage}`);
+    assert.ok(Math.abs(r.frameMs - 100) < 0.001, `frameMs deveria ser 100, recebido ${r.frameMs}`);
+  });
+
+  it('dado atraso real de 100 ms, então simulationCoverage também revela o clamp de 50 ms', async () => {
+    const r = await play(() => {
+      const G = window.QA.G;
+      const originalNow = performance.now;
+      let fakeNow = originalNow.call(performance);
+      performance.now = () => fakeNow;
+      try {
+        G.tick(0); // sincroniza lastNow com o relógio controlado
+        fakeNow += 100;
+        G.tick(); // caminho real: aplica o clamp existente de 50 ms
+        return { ...G.perf };
+      } finally {
+        performance.now = originalNow;
+      }
+    });
+    assert.ok(Math.abs(r.frameMs - 100) < 0.001, `frame real deveria ser 100 ms, recebeu ${r.frameMs}`);
+    assert.ok(r.physicsDroppedMs < 0.01,
+      `Cannon descartou ${r.physicsDroppedMs} ms além do clamp nesta pré-condição`);
+    assert.ok(r.simulationCoverage > 0.49 && r.simulationCoverage < 0.51,
+      `clamp de 50/100 ms ficou invisível na cobertura: ${r.simulationCoverage}`);
+  });
+
+  it('dadas quatro cascatas, então só a próxima é automática e as distantes rodam uma por frame', async () => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G;
+      QA.reset();
+      QA.tick(120); // estabiliza FOV e elimina uma invalidação pendente
+      const masks = [];
+      for (let i = 0; i < 4; i++) {
+        G.tick(1 / 60);
+        masks.push(G.csmDebug.scheduledUpdateMask);
+      }
+      window.dispatchEvent(new Event('resize'));
+      G.tick(1 / 60);
+      const resizeMask = G.csmDebug.scheduledUpdateMask;
+
+      G.mouse.aiming = true;
+      G.tick(1 / 60);
+      const frustumMask = G.csmDebug.scheduledUpdateMask;
+      G.mouse.aiming = false;
+
+      const shadowSelect = document.getElementById('setShadow');
+      shadowSelect.value = '0';
+      shadowSelect.dispatchEvent(new Event('change'));
+      shadowSelect.value = '1';
+      shadowSelect.dispatchEvent(new Event('change'));
+      G.tick(1 / 60);
+      const reenabledMask = G.csmDebug.scheduledUpdateMask;
+
+      // O rodízio é seguro em movimento contínuo, mas um teleporte/giro brusco
+      // precisa renovar mapa + matriz das quatro cascatas no mesmo render.
+      const cinematic = G.state.cinematic;
+      G.state.cinematic = true;
+      G.camera.position.x += 200;
+      G.tick(1 / 60);
+      const teleportMask = G.csmDebug.scheduledUpdateMask;
+      G.tick(1 / 60);
+      const afterTeleportMask = G.csmDebug.scheduledUpdateMask;
+      G.camera.rotateY(Math.PI);
+      G.tick(1 / 60);
+      const turnMask = G.csmDebug.scheduledUpdateMask;
+      G.tick(1 / 60);
+      const afterTurnMask = G.csmDebug.scheduledUpdateMask;
+      G.state.cinematic = cinematic;
+      return {
+        autoUpdateMask: G.csmDebug.autoUpdateMask,
+        masks,
+        resizeMask,
+        frustumMask,
+        reenabledMask,
+        teleportMask,
+        afterTeleportMask,
+        turnMask,
+        afterTurnMask,
+      };
+    });
+    assert.equal(r.autoUpdateMask, 0b0001, 'somente a cascata próxima deve atualizar automaticamente');
+    for (const mask of r.masks)
+      assert.ok([0b0010, 0b0100, 0b1000].includes(mask),
+        `frame normal deveria atualizar uma cascata distante, recebeu ${mask.toString(2)}`);
+    assert.equal(new Set(r.masks.slice(0, 3)).size, 3, `rodízio não percorreu as três distantes: ${r.masks}`);
+    assert.equal(r.masks[3], r.masks[0], `rodízio não reiniciou: ${r.masks}`);
+    assert.equal(r.resizeMask, 0b1111, 'resize deve invalidar todas as cascatas');
+    assert.equal(r.frustumMask, 0b1111, 'mudança de frustum deve invalidar todas as cascatas');
+    assert.equal(r.reenabledMask, 0b1111, 'reativar sombras deve invalidar todas as cascatas');
+    assert.equal(r.teleportMask, 0b1111, 'teleporte deve invalidar todas as cascatas');
+    assert.ok([0b0010, 0b0100, 0b1000].includes(r.afterTeleportMask),
+      `após teleporte, rodízio deveria voltar ao normal: ${r.afterTeleportMask.toString(2)}`);
+    assert.equal(r.turnMask, 0b1111, 'giro brusco deve invalidar todas as cascatas');
+    assert.ok([0b0010, 0b0100, 0b1000].includes(r.afterTurnMask),
+      `após giro, rodízio deveria voltar ao normal: ${r.afterTurnMask.toString(2)}`);
+  });
+
   it('dada a partida iniciada via socket (sem clique), quando o mouse é capturado e o ESC solta, então o jogo PAUSA de verdade', async t => {
     // bug de playtest: partida BR inicia com lockFailed=true e o ESC deixava
     // o jogador num limbo — mouse solto, jogo correndo, sem menu de pausa

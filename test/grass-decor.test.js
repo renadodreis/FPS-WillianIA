@@ -31,6 +31,92 @@ describe('Grama decorativa (Chrome headless)', { skip: !CHROME && 'Chrome não e
     assert.equal(r.depois, r.antes, 'refreshAll mudou a contagem de corpos físicos');
   });
 
+  it('caracteriza height/desertK/forestK pelo caminho direto sem perder um bit', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G, THREE = window.QA.MP.THREE;
+      const failures = [];
+      for (let i = 0; i < 4096; i++) {
+        const x = ((i * 137.51) % 1080) - 540;
+        const z = ((i * 91.17) % 1080) - 540;
+        const surface = G.surfaceAt(x, z);
+        const biome = G.biomeAt(x, z);
+        const direct = {
+          height: G.heightAt(x, z),
+          desertK: THREE.MathUtils.smoothstep(-biome, 0.18, 0.45),
+          forestK: THREE.MathUtils.smoothstep(biome, 0.34, 0.62),
+        };
+        if (!Object.is(surface.height, direct.height) ||
+            !Object.is(surface.desertK, direct.desertK) ||
+            !Object.is(surface.forestK, direct.forestK)) {
+          failures.push({ x, z, surface, direct });
+          break;
+        }
+      }
+      return failures;
+    });
+    assert.deepEqual(r, [], `sampler direto divergiu: ${JSON.stringify(r[0])}`);
+  });
+
+  it('createGrass e refill não consultam o classificador completo surfaceAt', async () => {
+    const r = await h.play(async () => {
+      const { createGrass } = await import('/js/grass.js');
+      const THREE = window.QA.MP.THREE;
+      const scene = new THREE.Scene();
+      let surfaceCalls = 0;
+      const originalRandom = Math.random;
+      Math.random = () => 0.5;
+      try {
+        const grass = createGrass({
+          CFG: {
+            GRASS_CHUNKS: 1,
+            GRASS_TOTAL: 4,
+            GRASS_CHUNK_SIZE: 10,
+            GRASS_HEIGHT: 0.95,
+            WIND_STRENGTH: 0.55,
+          },
+          rand: (a, b) => b === undefined ? a * 0.5 : a + (b - a) * 0.5,
+          TAU: Math.PI * 2,
+          heightAt: () => 2,
+          biomeAt: () => 0.1,
+          WATER_LEVEL: -5,
+          simplex: { noise: () => 0 },
+          scene,
+          sunDir: new THREE.Vector3(0, 1, 0),
+          CITY: null,
+          VOLCANO: null,
+          clearings: [],
+          cityGrassFactor: null,
+          worldSeed: 424242,
+          surfaceAt: () => {
+            surfaceCalls++;
+            return { height: 2, desertK: 0, forestK: 0 };
+          },
+        });
+        const createCalls = surfaceCalls;
+        surfaceCalls = 0;
+        grass.refreshAll();
+        const refillCalls = surfaceCalls;
+        scene.traverse(obj => { if (obj.geometry) obj.geometry.dispose(); });
+        grass.material.dispose();
+        return { createCalls, refillCalls };
+      } finally {
+        Math.random = originalRandom;
+      }
+    });
+    assert.deepEqual(r, { createCalls: 0, refillCalls: 0 },
+      'grama ainda paga surfaceAt/classifyAt por lâmina');
+  });
+
+  it('shader calcula modelMatrix * instanceMatrix uma vez e reutiliza o produto', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'js', 'grass.js'), 'utf8');
+    const products = src.match(/modelMatrix\s*\*\s*instanceMatrix/g) || [];
+    assert.equal(products.length, 1, `produto de matrizes repetido ${products.length} vezes`);
+    const alias = src.match(/mat4\s+(\w+)\s*=\s*modelMatrix\s*\*\s*instanceMatrix/);
+    assert.ok(alias, 'produto model/instance não foi nomeado para reutilização');
+    const uses = src.match(new RegExp(`${alias[1]}\\s*\\*\\s*vec4`, 'g')) || [];
+    assert.ok(uses.length >= 2, `produto ${alias[1]} não foi reutilizado nas duas posições`);
+  });
+
   it('dadas as raízes, então ficam a ≤3 cm da superfície canônica', async () => {
     const r = await h.play(() => {
       const G = window.QA.G, MP = window.QA.MP;

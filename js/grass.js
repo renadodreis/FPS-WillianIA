@@ -3,7 +3,7 @@ import * as THREE from 'three';
 
 export function createGrass(deps) {
   const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings = [],
-    cityGrassFactor = null, worldSeed = 424242, surfaceAt = null } = deps;
+    cityGrassFactor = null, worldSeed = 424242 } = deps;
   /* RNG LOCAL por chunk: (seed, cx, cz) → mesmo conteúdo SEMPRE — preencher,
      reciclar, sair e voltar produz exatamente as mesmas matrizes/fases/cores,
      sem depender da ordem global do Math.random. */
@@ -105,12 +105,13 @@ export function createGrass(deps) {
         transformed.y *= 1.0 - trackK * 0.85;
 
         // some suavemente perto da borda do patch (esconde o recorte)
-        float dCam = distance((modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz, cameraPosition);
+        mat4 instanceWorld = modelMatrix * instanceMatrix;
+        float dCam = distance((instanceWorld * vec4(0.0, 0.0, 0.0, 1.0)).xyz, cameraPosition);
         float edgeFade = 1.0 - smoothstep(uPatchRadius * 0.72, uPatchRadius * 0.97, dCam);
         transformed.y *= edgeFade;
         transformed.x *= edgeFade;
 
-        vec4 wpos = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
+        vec4 wpos = instanceWorld * vec4(transformed, 1.0);
 
         // vento: ruido rolando + balanco senoidal com fase por instancia
         float w1 = vnoise(wpos.xz * 0.08 + vec2(uTime * 0.85, uTime * 0.55));
@@ -203,11 +204,11 @@ export function createGrass(deps) {
       const lz = r(-SIZE / 2, SIZE / 2);
       chunk.roots[i * 2] = lx; chunk.roots[i * 2 + 1] = lz;
       // raiz na superfície CANÔNICA (a mesma da malha/física) + fatores centrais
-      const su = surfaceAt ? surfaceAt(wx + lx, wz + lz) : null;
-      const y = su ? su.height : heightAt(wx + lx, wz + lz);
+      const y = heightAt(wx + lx, wz + lz);
       minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-      const desert = su ? (su.desertK || 0) : THREE.MathUtils.smoothstep(-biomeAt(wx + lx, wz + lz), 0.18, 0.45);
-      const forest = su ? (su.forestK || 0) : 0;
+      const bio = biomeAt(wx + lx, wz + lz);
+      const desert = THREE.MathUtils.smoothstep(-bio, 0.18, 0.45);
+      const forest = THREE.MathUtils.smoothstep(bio, 0.34, 0.62);
       dummy.position.set(lx, y, lz);
       dummy.rotation.set(r(-0.13, 0.13), r(0, TAU), r(-0.13, 0.13));
       let s = r(0.65, 1.4) * CFG.GRASS_HEIGHT;

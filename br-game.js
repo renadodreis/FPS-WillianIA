@@ -841,6 +841,13 @@
 
     /* =============== baús =============== */
     const crates = [];
+    const CRATE_CULL_RADIUS2 = 260 * 260;
+    function updateCrateVisibility(pos = MP.player.pos) {
+      for (const c of crates) {
+        const dx = pos.x - c.x, dz = pos.z - c.z;
+        c.g.visible = dx * dx + dz * dz < CRATE_CULL_RADIUS2;
+      }
+    }
     function buildCrates() {
       const rng = seededRng(INIT.worldSeed ^ 0xC0FFEE);
       // ponto ABERTO perto de um POI (não dentro de parede). SÓ cliente e SEM
@@ -1310,6 +1317,13 @@
       buildCrates();
       buildBoss();
       if (!ship) ship = buildShip();
+      // PRÉ-AQUECE os shaders dos baús AGORA, na cabine da nave — sem isso a
+      // compilação acontecia na 1ª vez que um baú entrava no frustum e travava o
+      // frame justamente AO ENTRAR no mapa. Compila UM baú (materiais são
+      // compartilhados: cobre todos) com a cena como contexto de luz/fog —
+      // compilar a CENA inteira aqui custaria segundos.
+      try { if (crates.length) MP.renderer.compile(crates[0].g, MP.camera, MP.scene); } catch (e) { /* headless sem GL completo */ }
+      updateCrateVisibility(); // sem janela inicial com os 65 baús no pipeline
       UI.showHud(true);
       if (asSpectator) {
         enterSpectator();
@@ -1495,6 +1509,7 @@
           grp.position.set(p.x, y, p.z);
           MP.scene.add(grp);
           crates.push({ key: 'boss', g: grp, lid, glow, loot, opened: false, x: p.x, z: p.z });
+          updateCrateVisibility();
         }, 2200);
       }
       MP.addKillFeed(`⛰ <b>${esc(d.by)}</b> derrotou o GOLEM`);
@@ -1654,7 +1669,7 @@
     }, 500);
 
     /* =============== loop principal do BR =============== */
-    let lastT = performance.now(), hudAcc = 0, dmgAcc = 0, promptAcc = 0;
+    let lastT = performance.now(), hudAcc = 0, dmgAcc = 0, promptAcc = 0, crateCullAcc = 0;
     (function brTick() {
       requestAnimationFrame(brTick);
       const nowMs = performance.now();
@@ -1793,6 +1808,7 @@
               rp.carHintPos.copy(gp);
               rp.carHintYaw = rp.yaw;
             }
+            G.Car.wake(v); // callback de suspensão + AABB antes da pose direta
             v.chassisBody.position.set(gp.x, gp.y, gp.z);
             v.chassisBody.velocity.set(0, 0, 0);
             v.chassisBody.angularVelocity.set(0, 0, 0);
@@ -1885,6 +1901,13 @@
           else if (UI.hintBox.innerHTML.includes('ABRIR BAÚ')) UI.hint('');
         }
       }
+      /* PERF: baú a mais de 260 m nem entra no pipeline (65 baús × 8 meshes
+         somavam ~240 draw calls extras olhando o mapa). Cadência de 0,5 s. */
+      crateCullAcc += dt;
+      if (crateCullAcc > 0.5) {
+        crateCullAcc = 0;
+        updateCrateVisibility();
+      }
       hudAcc += dt;
       if (hudAcc > 0.25) {
         hudAcc = 0;
@@ -1903,6 +1926,7 @@
     /* hook de depuração/testes (inofensivo em produção) */
     window.__BR_debug = {
       S, zc, crates, remotes, drops, LOBBY, buildBody: buildVoxelBody, // buildBody: preview 3D do lobby
+      cullCrates: updateCrateVisibility,
       get ship() { return ship; },
       /* nave: dimensões/estado local pros testes (window.__BR_shipManual=true
          desliga o passo automático e step(dt) pilota determinístico) */

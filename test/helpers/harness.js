@@ -93,6 +93,7 @@ async function bootGame({
   extraEnv = {},
   blockRequests = [],
   delayRequests = [],
+  protocolTimeout = 180000,
 }) {
   const puppeteer = require('puppeteer-core');
   const rankFile = extraEnv.RANK_FILE || path.join(os.tmpdir(),
@@ -111,10 +112,11 @@ async function bootGame({
   try {
     await waitForServer(srv, serverPort || port, bootToken);
     browser = await puppeteer.launch({
-    executablePath: CHROME,
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader',
-      '--use-gl=angle', '--use-angle=swiftshader', '--mute-audio', '--window-size=800,600'],
+      executablePath: CHROME,
+      headless: 'new',
+      protocolTimeout,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader',
+        '--use-gl=angle', '--use-angle=swiftshader', '--mute-audio', '--window-size=800,600'],
     });
     const page = await browser.newPage();
     // A flag existe antes do primeiro tick: sob máquina carregada, uma morte

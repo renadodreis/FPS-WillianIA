@@ -66,6 +66,69 @@ describe('Esqueletos (caçadores que atravessam tudo)', { skip: !CHROME && 'Chro
     }
   });
 
+  it('dado o modelo skinned, então usa culling com bounds conservadores válidos', async () => {
+    const r = await play(() => {
+      const G = window.__game, THREE = window.QA.MP.THREE;
+      let meshes = 0, culled = 0, skinned = 0, skinnedBounded = 0;
+      for (const sk of G.Skeletons.list) {
+        if (!sk.model) continue;
+        sk.model.traverse(o => {
+          if (!o.isMesh) return;
+          meshes++;
+          if (o.frustumCulled) culled++;
+          if (o.isSkinnedMesh) {
+            skinned++;
+            if (o.boundingSphere && Number.isFinite(o.boundingSphere.radius) &&
+                o.boundingSphere.radius > 0) skinnedBounded++;
+          }
+        });
+      }
+
+      // A pose de strike em p=0,59 é o extremo da cimitarra. Valida os
+      // vértices skinados reais contra a esfera ESTÁTICA usada pelo frustum.
+      const actor = G.Skeletons.list[0];
+      actor.attacking = true;
+      actor.attackHit = true;
+      actor.attackT = actor.attackDuration * 0.59;
+      actor.moveBlend = 0;
+      G.Skeletons.update(0, actor.attackT);
+      actor.group.updateMatrixWorld(true);
+      const rigs = new Set();
+      actor.model.traverse(o => {
+        if (o.isSkinnedMesh && !rigs.has(o.skeleton)) {
+          rigs.add(o.skeleton);
+          o.skeleton.update();
+        }
+      });
+      const vertex = new THREE.Vector3();
+      let worstRatio = 0, worstMesh = '', outside = 0;
+      actor.model.traverse(o => {
+        if (!o.isSkinnedMesh || !o.boundingSphere) return;
+        const count = o.geometry.attributes.position.count;
+        for (let i = 0; i < count; i++) {
+          o.getVertexPosition(i, vertex);
+          const ratio = vertex.distanceTo(o.boundingSphere.center) / o.boundingSphere.radius;
+          if (ratio > 1) outside++;
+          if (ratio > worstRatio) {
+            worstRatio = ratio;
+            worstMesh = o.name;
+          }
+        }
+      });
+      actor.attacking = false;
+      actor.attackT = 0;
+      G.Skeletons.update(0, 0);
+      return { meshes, culled, skinned, skinnedBounded, worstRatio, worstMesh, outside };
+    });
+    assert.ok(r.meshes > 0, 'modelo carregado sem meshes');
+    assert.ok(r.skinned > 0, 'pré-condição vazia: modelo sem SkinnedMesh');
+    assert.equal(r.culled, r.meshes, `${r.meshes - r.culled}/${r.meshes} meshes ignoram o frustum`);
+    assert.equal(r.skinnedBounded, r.skinned,
+      `${r.skinned - r.skinnedBounded}/${r.skinned} meshes skinned sem bounding sphere`);
+    assert.equal(r.outside, 0,
+      `${r.outside} vértices de ${r.worstMesh} saem do bound (uso ${(r.worstRatio * 100).toFixed(1)}%)`);
+  });
+
   it('dado RNG repetido, então o fallback também preserva 24m entre spawns', async () => {
     const pos = await play(async () => {
       const { S } = await window.__makeSkeletonTestSystem();

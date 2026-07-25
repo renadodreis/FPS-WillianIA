@@ -8,9 +8,9 @@ const { CHROME, bootGame } = require('./helpers/harness');
 
 function settleChecks(h) {
   return h.play(() => {
-    const QA = window.QA, G = QA.G;
+    const QA = window.QA, G = QA.G, world = QA.MP.world;
     QA.tick(360); // 6 s de física: tudo assenta
-    return G.Car.vehicles.map(v => {
+    const parked = G.Car.vehicles.map(v => {
       const up = v.chassisBody.quaternion.vmult(
         new (Object.getPrototypeOf(v.chassisBody.position).constructor)(0, 1, 0));
       return {
@@ -21,6 +21,10 @@ function settleChecks(h) {
         finito: [v.chassisBody.position.x, v.chassisBody.position.y, v.chassisBody.position.z,
           v.chassisBody.quaternion.x, v.chassisBody.quaternion.w,
           ...v.vehicle.wheelInfos.map(w => w.suspensionLength)].every(Number.isFinite),
+        sleepState: v.chassisBody.sleepState,
+        sleepingState: v.chassisBody.constructor.SLEEPING,
+        suspensaoAtiva: world.hasEventListener('preStep', v.vehicle.preStepCallback),
+        bodyNoWorld: world.bodies.includes(v.chassisBody),
         rodas: v.vehicle.wheelInfos.map(w => ({
           contato: !!w.raycastResult.body,
           susp: +w.suspensionLength.toFixed(3),
@@ -28,15 +32,61 @@ function settleChecks(h) {
         })),
       };
     });
+
+    // A retomada precisa ser síncrona: a suspensão volta antes do próximo
+    // world.step e usa exatamente o callback criado pelo RaycastVehicle.
+    const byWake = G.Car.vehicles[0];
+    const wakeCallback = byWake.vehicle.preStepCallback;
+    byWake.chassisBody.wakeUp();
+    const wakeUp = {
+      awake: byWake.chassisBody.sleepState === byWake.chassisBody.constructor.AWAKE,
+      callbackMesmo: byWake.vehicle.preStepCallback === wakeCallback,
+      suspensaoAtiva: world.hasEventListener('preStep', wakeCallback),
+      bodyNoWorld: world.bodies.includes(byWake.chassisBody),
+    };
+
+    const bySetCur = G.Car.vehicles[1];
+    const setCurCallback = bySetCur.vehicle.preStepCallback;
+    G.Car.setCur(bySetCur);
+    const setCur = {
+      selecionado: G.Car.group === bySetCur.group,
+      awake: bySetCur.chassisBody.sleepState === bySetCur.chassisBody.constructor.AWAKE,
+      callbackMesmo: bySetCur.vehicle.preStepCallback === setCurCallback,
+      suspensaoAtiva: world.hasEventListener('preStep', setCurCallback),
+      bodyNoWorld: world.bodies.includes(bySetCur.chassisBody),
+    };
+
+    // O multiplayer escreve pose direto no body. A API precisa acordá-lo e
+    // invalidar o AABB ANTES da escrita, inclusive no primeiro pacote (sem hint).
+    const byRemotePose = G.Car.vehicles[2];
+    const remoteCallback = byRemotePose.vehicle.preStepCallback;
+    const hasWakeApi = typeof G.Car.wake === 'function';
+    let remotePose = null;
+    if (hasWakeApi) {
+      byRemotePose.chassisBody.aabbNeedsUpdate = false;
+      G.Car.wake(byRemotePose);
+      byRemotePose.chassisBody.position.x += 1;
+      remotePose = {
+        awake: byRemotePose.chassisBody.sleepState === byRemotePose.chassisBody.constructor.AWAKE,
+        callbackMesmo: byRemotePose.vehicle.preStepCallback === remoteCallback,
+        suspensaoAtiva: world.hasEventListener('preStep', remoteCallback),
+        aabbDirty: byRemotePose.chassisBody.aabbNeedsUpdate,
+        bodyNoWorld: world.bodies.includes(byRemotePose.chassisBody),
+      };
+    }
+    return { parked, wakeUp, setCur, hasWakeApi, remotePose };
   });
 }
 
 function assertSettled(r) {
-  for (const v of r) {
+  for (const v of r.parked) {
     assert.equal(v.rig, 'ready', `${v.tipo}: rig ${v.rig}`);
     assert.ok(v.finito, `${v.tipo}: estado não finito`);
     assert.ok(v.vel < 0.6, `${v.tipo}: ainda se movendo (${v.vel} m/s) — spawn ejetou?`);
     assert.ok(v.upY > 0.85, `${v.tipo}: tombado (up.y=${v.upY})`);
+    assert.equal(v.sleepState, v.sleepingState, `${v.tipo}: body não dormiu após 6 s`);
+    assert.equal(v.suspensaoAtiva, false, `${v.tipo}: callback de suspensão continuou no preStep`);
+    assert.ok(v.bodyNoWorld, `${v.tipo}: hibernação removeu body/collider do world`);
     const contato = v.rodas.filter(w => w.contato);
     assert.ok(contato.length >= 3, `${v.tipo}: só ${contato.length}/4 rodas apoiadas`);
     for (const w of contato) {
@@ -45,6 +95,19 @@ function assertSettled(r) {
         `${v.tipo}: pneu a ${w.apoio}m do apoio esperado (susp=${w.susp})`);
     }
   }
+  for (const [origem, resumed] of [['wakeUp()', r.wakeUp], ['setCur()', r.setCur]]) {
+    if (origem === 'setCur()') assert.ok(resumed.selecionado, 'setCur() não selecionou o veículo');
+    assert.ok(resumed.awake, `${origem} não acordou o body imediatamente`);
+    assert.ok(resumed.callbackMesmo, `${origem} trocou a identidade do preStepCallback`);
+    assert.ok(resumed.suspensaoAtiva, `${origem} não reinstalou a suspensão imediatamente`);
+    assert.ok(resumed.bodyNoWorld, `${origem} precisou reinserir o body no world`);
+  }
+  assert.ok(r.hasWakeApi, 'Car.wake ausente para pose remota sem remoteHint');
+  assert.ok(r.remotePose.awake, 'Car.wake não acordou pose remota imediatamente');
+  assert.ok(r.remotePose.callbackMesmo, 'Car.wake trocou a identidade do preStepCallback');
+  assert.ok(r.remotePose.suspensaoAtiva, 'Car.wake não reinstalou a suspensão');
+  assert.ok(r.remotePose.aabbDirty, 'Car.wake não invalidou o AABB antes da pose remota');
+  assert.ok(r.remotePose.bodyNoWorld, 'Car.wake removeu/reinseriu o body no world');
 }
 
 for (const [seed, port] of [['99', 3173], ['7', 3180]]) {
@@ -56,9 +119,101 @@ for (const [seed, port] of [['99', 3173], ['7', 3180]]) {
     });
     after(async () => { if (h) await h.close(); });
 
-    it('dado o spawn, então nenhum carro nasce enterrado, flutuando ou ejetado', async () => {
+    it('dado o spawn, então cada carro assenta e hiberna só a suspensão', async () => {
       assertSettled(await settleChecks(h));
     });
+
+    if (seed === '99') {
+      it('dado um carro pilotado ou com dica remota viva, então a suspensão não hiberna', async () => {
+        const r = await h.play(() => {
+          const QA = window.QA, G = QA.G, world = QA.MP.world;
+          QA.clearInput();
+          G.state.driving = false;
+          QA.tick(360);
+
+          const driven = G.Car.vehicles[0];
+          G.Car.setCur(driven);
+          G.state.driving = true;
+          QA.tick(240);
+          const drivenState = {
+            awake: driven.chassisBody.sleepState !== driven.chassisBody.constructor.SLEEPING,
+            suspensaoAtiva: world.hasEventListener('preStep', driven.vehicle.preStepCallback),
+          };
+
+          G.state.driving = false;
+          const remote = G.Car.vehicles[2];
+          remote.remoteHint = { speed: 8, steer: 0.1, ttl: 10 };
+          remote.chassisBody.wakeUp();
+          QA.tick(240);
+          const remoteState = {
+            awake: remote.chassisBody.sleepState !== remote.chassisBody.constructor.SLEEPING,
+            suspensaoAtiva: world.hasEventListener('preStep', remote.vehicle.preStepCallback),
+          };
+          remote.remoteHint.ttl = 0;
+          QA.clearInput();
+          return { drivenState, remoteState };
+        });
+        assert.ok(r.drivenState.awake, 'carro pilotado foi hibernado');
+        assert.ok(r.drivenState.suspensaoAtiva, 'suspensão do carro pilotado foi removida');
+        assert.ok(r.remoteState.awake, 'carro com dica remota viva foi hibernado');
+        assert.ok(r.remoteState.suspensaoAtiva, 'suspensão do carro remoto foi removida');
+      });
+
+      it('dada uma troca física da cidade, então acorda toda a frota antes do próximo step', async () => {
+        const r = await h.play(() => {
+          const QA = window.QA, G = QA.G, world = QA.MP.world;
+          const city = G.Structures.city;
+          city.restore();
+          QA.clearInput();
+          G.state.driving = false;
+          for (const v of G.Car.vehicles) {
+            v.remoteHint = null;
+            v.chassisBody.velocity.setZero();
+            v.chassisBody.angularVelocity.setZero();
+          }
+          QA.tick(360);
+          const sleepers = G.Car.vehicles.filter(v =>
+            v.chassisBody.sleepState === v.chassisBody.constructor.SLEEPING &&
+            !world.hasEventListener('preStep', v.vehicle.preStepCallback));
+          const originalWake = G.Car.wake;
+          const calls = { destroyed: [], intact: [] };
+          let phase = 'destroyed';
+          G.Car.wake = v => {
+            calls[phase].push(G.Car.vehicles.indexOf(v));
+            return originalWake(v);
+          };
+          let afterDestroy;
+          try {
+            city.destroy();
+            afterDestroy = sleepers.map(v => ({
+              awake: v.chassisBody.sleepState === v.chassisBody.constructor.AWAKE,
+              suspension: world.hasEventListener('preStep', v.vehicle.preStepCallback),
+              aabbDirty: v.chassisBody.aabbNeedsUpdate,
+            }));
+            phase = 'intact';
+            city.restore();
+          } finally {
+            G.Car.wake = originalWake;
+          }
+          return {
+            vehicleCount: G.Car.vehicles.length,
+            sleeperCount: sleepers.length,
+            calls,
+            afterDestroy,
+          };
+        });
+        assert.ok(r.sleeperCount > 0, 'pré-condição vazia: nenhum veículo hibernou');
+        assert.deepEqual(r.calls.destroyed, [...Array(r.vehicleCount).keys()],
+          'destroy() não acordou toda a frota');
+        assert.deepEqual(r.calls.intact, [...Array(r.vehicleCount).keys()],
+          'restore() não acordou toda a frota');
+        for (const v of r.afterDestroy) {
+          assert.ok(v.awake, 'carro hibernado não acordou sincronicamente no destroy()');
+          assert.ok(v.suspension, 'suspensão não voltou antes da remoção dos apoios urbanos');
+          assert.ok(v.aabbDirty, 'AABB não foi invalidado antes da troca física da cidade');
+        }
+      });
+    }
   });
 }
 

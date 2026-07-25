@@ -75,15 +75,27 @@ function geos() {
   return CACHE;
 }
 
-export function buildChest(matFn = (m) => m) {
+let SHARED = null; // wood/wood2/iron IGUAIS em todos os baús → compartilhados.
+export function buildChest(matFn) {
   return noSeed(() => {
     const g = geos();
-    const wood  = matFn(new THREE.MeshStandardMaterial({ color: 0x6e4a2a, roughness: 0.72 }));
-    const wood2 = matFn(new THREE.MeshStandardMaterial({ color: 0x3f2a17, roughness: 0.85 }));
-    // ferro FORJADO fosco: metalness alto espelhava o céu em ângulo rasante e
-    // vazava um risco branco na ponta da tampa (parecia defeito de mesh)
-    const iron  = matFn(new THREE.MeshStandardMaterial({ color: 0x2e2b26, metalness: 0.3, roughness: 0.7 }));
-    const glow  = matFn(new THREE.MeshStandardMaterial({ color: 0xf2c14e, metalness: 0.7, roughness: 0.3, emissive: 0xf7b93c, emissiveIntensity: 1.0 }));
+    // PERF (medido): 65 baús × 4 materiais únicos = 260 materiais pagavam
+    // compilação/setup na PRIMEIRA entrada no frustum — hitch de ~0,5 s "ao
+    // entrar no mapa". Sem matFn (BR), wood/wood2/iron são de módulo (criados
+    // 1×); só o glow é por baú (markOpened/boss mexem em emissiveIntensity).
+    // Com matFn (solo usa csmMat), mantém materiais próprios — são 3 baús.
+    let wood, wood2, iron;
+    if (!matFn && SHARED) ({ wood, wood2, iron } = SHARED);
+    else {
+      const f = matFn || ((m) => m);
+      wood  = f(new THREE.MeshStandardMaterial({ color: 0x6e4a2a, roughness: 0.72 }));
+      wood2 = f(new THREE.MeshStandardMaterial({ color: 0x3f2a17, roughness: 0.85 }));
+      // ferro FORJADO fosco: metalness alto espelhava o céu em ângulo rasante e
+      // vazava um risco branco na ponta da tampa (parecia defeito de mesh)
+      iron  = f(new THREE.MeshStandardMaterial({ color: 0x2e2b26, metalness: 0.3, roughness: 0.7 }));
+      if (!matFn) SHARED = { wood, wood2, iron };
+    }
+    const glow = (matFn || ((m) => m))(new THREE.MeshStandardMaterial({ color: 0xf2c14e, metalness: 0.7, roughness: 0.3, emissive: 0xf7b93c, emissiveIntensity: 1.0 }));
 
     const group = new THREE.Group();
     const add = (geo, m, shadow) => {

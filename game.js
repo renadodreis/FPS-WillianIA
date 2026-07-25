@@ -173,6 +173,52 @@ for (const l of csm.lights) {
   l.shadow.bias = -0.00022;
   l.shadow.normalBias = 0.02;
 }
+let csmFarCursor = 1, csmFullRefresh = true, csmLastUpdateMask = 0;
+for (let i = 0; i < csm.lights.length; i++)
+  csm.lights[i].shadow.autoUpdate = i === 0;
+const csmLastCameraPos = camera.position.clone();
+const csmLastCameraQuat = camera.quaternion.clone();
+const csmLastLightDirection = csm.lightDirection.clone();
+const CSM_CAMERA_JUMP_SQ = (CFG.CSM_MAX_FAR / 8) ** 2;
+const CSM_CAMERA_TURN = THREE.MathUtils.degToRad(30);
+const CSM_LIGHT_TURN = THREE.MathUtils.degToRad(2);
+function invalidateCsmShadows() { csmFullRefresh = true; }
+function invalidateCsmDiscontinuities() {
+  if (camera.position.distanceToSquared(csmLastCameraPos) > CSM_CAMERA_JUMP_SQ ||
+      camera.quaternion.angleTo(csmLastCameraQuat) > CSM_CAMERA_TURN ||
+      csm.lightDirection.angleTo(csmLastLightDirection) > CSM_LIGHT_TURN)
+    invalidateCsmShadows();
+  csmLastCameraPos.copy(camera.position);
+  csmLastCameraQuat.copy(camera.quaternion);
+  csmLastLightDirection.copy(csm.lightDirection);
+}
+function scheduleCsmShadows() {
+  csmLastUpdateMask = 0;
+  for (let i = 0; i < csm.lights.length; i++) {
+    const shadow = csm.lights[i].shadow;
+    shadow.autoUpdate = i === 0;
+    shadow.needsUpdate = false;
+  }
+  if (!renderer.shadowMap.enabled) return;
+  if (csmFullRefresh) {
+    for (let i = 0; i < csm.lights.length; i++) {
+      csm.lights[i].shadow.needsUpdate = true;
+      csmLastUpdateMask |= 1 << i;
+    }
+    csmFullRefresh = false;
+    return;
+  }
+  if (csm.lights.length <= 1) return;
+  csm.lights[csmFarCursor].shadow.needsUpdate = true;
+  csmLastUpdateMask = 1 << csmFarCursor;
+  csmFarCursor = csmFarCursor + 1 < csm.lights.length ? csmFarCursor + 1 : 1;
+}
+function csmShadowMask(key) {
+  let mask = 0;
+  for (let i = 0; i < csm.lights.length; i++)
+    if (csm.lights[i].shadow[key]) mask |= 1 << i;
+  return mask;
+}
 // registrar materiais que recebem as cascatas
 const csmMaterials = [];
 function csmMat(mat) { csm.setupMaterial(mat); csmMaterials.push(mat); return mat; }
@@ -1927,6 +1973,10 @@ for (const p of platforms) {
 Structures.castle.registerCleanup(() => Cover.removeBySource('castle'));
 // cidade destruída = telhado climático some junto (e volta no restore)
 Structures.city.onStateChange = st => {
+  // A troca remove/reinsere lajes CANNON logo após este callback. Veículos
+  // hibernados precisam recuperar a suspensão antes que o apoio físico mude,
+  // senão podem permanecer congelados no ar até alguma interação externa.
+  for (const v of Car.vehicles) Car.wake(v);
   Cover.removeBySource('city');
   if (st === 'intact') {
     buildCityCover();
@@ -2153,6 +2203,8 @@ const ToysRadar = (() => {
 /* ================== loop principal ================== */
 let lastNow = performance.now();
 let treeAcc = 9, fpsFrames = 0, fpsAcc = 0, fpsVal = 0, miniAcc = 0;
+const PHYSICS_DT = 1 / 60, PHYSICS_MAX_STEPS = 3;
+const perf = { physicsSteps: 0, physicsDroppedMs: 0, simulationCoverage: 1, frameMs: 0 };
 const carPosV = new THREE.Vector3();
 let menuT = 0;
 
@@ -2160,10 +2212,40 @@ function animate() {
   requestAnimationFrame(animate);
   tick();
 }
+function stepPhysics(dt, intendedDt = dt) {
+  const stepsBefore = world.stepnumber;
+  const accumulatorBefore = world.accumulator;
+  world.step(PHYSICS_DT, dt, PHYSICS_MAX_STEPS);
+  perf.physicsSteps = world.stepnumber - stepsBefore;
+  const dropped = Math.max(0,
+    accumulatorBefore + dt - perf.physicsSteps * PHYSICS_DT - world.accumulator);
+  perf.physicsDroppedMs = dropped * 1000;
+  perf.simulationCoverage = intendedDt > 0
+    ? clamp((dt - dropped) / intendedDt, 0, 1)
+    : 1;
+}
+function renderFrame() {
+  invalidateCsmDiscontinuities();
+  if (csmDirty) {
+    csm.updateFrustums();
+    invalidateCsmShadows();
+    csmDirty = false;
+  }
+  csm.update();
+  scheduleCsmShadows();
+  composer.render();
+}
 function tick(forceDt) {
   const now = performance.now();
-  const dt = (forceDt !== undefined ? forceDt : Math.min((now - lastNow) / 1000, 0.05)) * timeScale;
+  const frameDt = forceDt !== undefined ? forceDt : (now - lastNow) / 1000;
+  const simFrameDt = forceDt !== undefined ? frameDt : Math.min(frameDt, 0.05);
+  const dt = simFrameDt * timeScale;
+  const intendedDt = frameDt * timeScale;
   lastNow = now;
+  perf.physicsSteps = 0;
+  perf.physicsDroppedMs = 0;
+  perf.simulationCoverage = 1;
+  perf.frameMs = frameDt * 1000;
 
   if (!state.started || state.paused) {
     // menu / pausa: mundo vivo ao fundo, câmera orbitando devagar
@@ -2185,8 +2267,7 @@ function tick(forceDt) {
     Volcano.update(dt, menuT);
     if (sky.material.uniforms.time) sky.material.uniforms.time.value = menuT;
     camera.updateMatrixWorld();
-    csm.update();
-    composer.render();
+    renderFrame();
     return;
   }
 
@@ -2197,7 +2278,7 @@ function tick(forceDt) {
   Env.update(dt, t);
   if (!state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
   shootUpdate(dt, t);
-  world.step(1 / 60, dt, 3);
+  stepPhysics(dt, intendedDt);
   Car.update(dt, t);
   Heli.update(dt, t);
   if (!window.__BR_active) Enemies.update(dt, t); // BR: sem inimigos comuns
@@ -2242,12 +2323,10 @@ function tick(forceDt) {
   /* render */
   if (sky.material.uniforms.time) sky.material.uniforms.time.value = t; // nuvens andando
   camera.updateMatrixWorld();
-  if (csmDirty) { csm.updateFrustums(); csmDirty = false; }
-  csm.update();
-  composer.render();
+  renderFrame();
 
   /* contador de FPS (+ ping quando online e habilitado) */
-  fpsFrames++; fpsAcc += dt;
+  fpsFrames++; fpsAcc += frameDt;
   if (fpsAcc >= 0.5) {
     fpsVal = Math.round(fpsFrames / fpsAcc);
     const png = (SETTINGS.ping !== 0 && window.__MP_ping != null) ? ' · ' + window.__MP_ping + ' ms' : '';
@@ -2298,7 +2377,14 @@ $('settings').addEventListener('click', e => e.stopPropagation());
   sp.value = String(SETTINGS.ping === 0 ? 0 : 1);
   sv.oninput = () => { SETTINGS.vol = sv.value / 100; SFX.setVolumes(); persistSettings(); };
   sr.onchange = () => { SETTINGS.res = +sr.value; renderer.setPixelRatio(Math.min(devicePixelRatio, SETTINGS.res)); composer.setSize(window.innerWidth, window.innerHeight); persistSettings(); };
-  ss.onchange = () => { SETTINGS.shadow = +ss.value; renderer.shadowMap.enabled = SETTINGS.shadow === 1; csmMaterials.forEach(m => m.needsUpdate = true); persistSettings(); };
+  ss.onchange = () => {
+    const shadowsWereEnabled = renderer.shadowMap.enabled;
+    SETTINGS.shadow = +ss.value;
+    renderer.shadowMap.enabled = SETTINGS.shadow === 1;
+    if (!shadowsWereEnabled && renderer.shadowMap.enabled) invalidateCsmShadows();
+    csmMaterials.forEach(m => m.needsUpdate = true);
+    persistSettings();
+  };
   sb.onchange = () => { SETTINGS.bloom = +sb.value; bloomPass.enabled = SETTINGS.bloom === 1; persistSettings(); };
   sp.onchange = () => { SETTINGS.ping = +sp.value; persistSettings(); };
 }
@@ -2317,6 +2403,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
   csm.updateFrustums();
+  invalidateCsmShadows();
 });
 
 /* clareiras de grama sob os veículos: refill no FIM do init — fillChunk
@@ -2347,10 +2434,13 @@ window.__game = {
     hasShader: material => csm.shaders.has(material),
     get materialCount() { return csmMaterials.length; },
     get shaderCount() { return csm.shaders.size; },
+    get autoUpdateMask() { return csmShadowMask('autoUpdate'); },
+    get scheduledUpdateMask() { return csmLastUpdateMask; },
   },
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
   get fps() { return fpsVal; },
+  perf,
   get errors() { return __errors; },
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
   platforms, // hook de QA: plataformas/rampas pisáveis (andares e escada da torre)

@@ -298,6 +298,15 @@ export function createSkeletons(deps) {
     const box = new THREE.Box3().setFromObject(proto);
     const size = box.getSize(new THREE.Vector3());
     const s = 2.25 / size.y; // esqueleto de 2,25m — maior que o player: dá medo
+    /* PERF: o rig vinha com frustumCulled=false e seus 4 meshes eram enviados
+       às 4 cascatas mesmo fora delas. Calcula o skin UMA vez no protótipo; os
+       clones copiam a esfera. 2,1× cobre o extremo medido da cimitarra no
+       strike (mínimo 1,968×) e ainda deixa 11 cm de margem em escala real. */
+    proto.traverse(o => {
+      if (!o.isSkinnedMesh) return;
+      o.computeBoundingSphere();
+      if (o.boundingSphere) o.boundingSphere.radius *= 2.1;
+    });
     const preparedMaterials = new Set();
     for (const sk of list) {
       const root = cloneRig(proto); // rig compartilhado quebra com .clone() comum
@@ -306,7 +315,7 @@ export function createSkeletons(deps) {
       root.traverse(o => {
         if (o.isMesh || o.isSkinnedMesh) {
           o.castShadow = true;
-          o.frustumCulled = false; // skinned: bbox estático erra e some da tela
+          o.frustumCulled = true; // sphere skinned conservadora preparada acima
           const materials = Array.isArray(o.material) ? o.material : [o.material];
           for (const material of materials) {
             if (material && !preparedMaterials.has(material)) {
