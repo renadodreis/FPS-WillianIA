@@ -715,3 +715,56 @@ jogador não pode mexer.
 Ressalva registrada: o botão "Sombras: Desligadas" já existia e é um vetor menor
 (sombra pode denunciar alguém atrás de quina). Não é mudança desta rodada e
 remover quebraria a opção de perf de quem precisa.
+
+## Sessão 2026-07-26 — sol vazando no horizonte
+
+### Sintoma e reprodução
+
+Reclamação: "o sol está vazando no horizonte, ficando com um blur, tudo
+branco". Reproduzido em captura (`output/sol/`): olhando na direção do sol
+com `tod = 0.72`, um borrão branco cobre ~40% da tela e engole o horizonte.
+
+Isolamento por A/B na mesma pose: com bloom = borrão; **sem bloom = horizonte
+limpo e legível**. O culpado é o bloom pegando o céu, não o céu em si.
+
+**Pré-existente, não regressão.** A mesma captura em `ccfca46` (antes de todo
+o trabalho desta rodada) mostra o mesmo borrão.
+
+### Causa
+
+A compressão soft-Reinhard do céu era `texColor / (1 + 0,55 * texColor)`, que
+satura em 1/0,55 = 1,82. O limiar do bloom é 1,0, então TODA radiância bruta
+de céu acima de 2,22 florescia.
+
+No golden hour o `mieCoefficient` sobe de 0,0008 para 0,0078 (~10×) e o
+`rayleigh` de 1,15 para 3,75. O halo de Mie vira uma área enorme acima de
+2,22 — o horizonte inteiro passa do limiar. Fora do golden hour o sol é um
+ponto pequeno e correto (verificado em `tod = 0.30`, sol a 18°).
+
+### Correção
+
+O fator de compressão virou uniform (`uGlare`) e acompanha o PRÓPRIO halo:
+
+    haloK = clamp((mie - MIE_BASE) / MIE_HALO_SPAN, 0, 1)
+    uGlare = lerp(GLARE_BASE 0,55, GLARE_MAX 0,85, haloK)
+
+Com 0,85 o céu satura em 1,18 e só floresce acima de radiância bruta 6,67 —
+antes 2,22. Barra 3× mais alta.
+
+Propriedade de segurança: no mie base o valor é EXATAMENTE 0,55, então o dia
+normal não muda um pixel. Medido no ciclo: `glare` = 0,55 em tod 0,30 / 0,50 /
+0,76 e só 0,85 no pico de 0,72. Chuva também aperta (o clima sobe o mie).
+
+Valor escolhido por varredura visual (0,55 / 0,75 / 0,85 / 0,95 / 1,10 em
+`output/sol-fix/`), não por chute. 0,95 chega perto demais de matar o brilho
+do sol (teto 1,05 contra limiar 1,0); 1,10 mataria por completo.
+
+Teste `test/sky-glare.test.js` (porta 3295, 6 casos): uniform declarado E
+usado no shader, sem o literal 0.55 sobrando, dia normal idêntico ao antigo,
+golden hour no teto, faixa que floresce encolhe ≥2×, chuva aperta.
+
+### Não foi mexido, de propósito
+
+Subir `BLOOM_THRESHOLD` resolveria o horizonte, mas afeta TODA fonte de bloom —
+janelas da cidade à noite (`emissiveIntensity` 1,6), tracer, explosão, flash de
+tiro. A correção no céu é cirúrgica: só o céu muda, e só quando o halo cresce.

@@ -90,6 +90,14 @@ export function createEnv(deps) {
     // gradiente pêssego/rosa/lilás do horizonte — referência Vice City)
     u.rayleigh.value = lerp(0.55, 1.15, dayK) + gk * 2.6;
     u.mieCoefficient.value = 0.0008 + weatherK * 0.0035 + gk * 0.007;
+    /* O halo de Mie é o que estoura no bloom: quanto maior, mais céu passa do
+       limiar e mais o horizonte vira borrão branco. A compressão do céu segue
+       o próprio halo — no mie base nada muda, no pico do golden hour aperta e
+       só o núcleo do sol continua florescendo. */
+    if (u.uGlare) {
+      const haloK = clamp((u.mieCoefficient.value - CFG.MIE_BASE) / CFG.MIE_HALO_SPAN, 0, 1);
+      u.uGlare.value = lerp(CFG.GLARE_BASE, CFG.GLARE_MAX, haloK);
+    }
     if (u.cloudCoverage) u.cloudCoverage.value = 0.38 + weatherK * 0.45;
     _f.copy(FOG_DAY).lerp(FOG_NIGHT, nightK).lerp(FOG_RAIN, weatherK * 0.7 * dayK).lerp(COL_GOLD_FOG, gk * 0.6);
     scene.fog.color.copy(_f);

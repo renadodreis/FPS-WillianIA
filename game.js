@@ -144,12 +144,22 @@ const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.deg
     u.cloudCoverage.value = 0.38;
     u.cloudDensity.value = 0.45;
   }
-  // o glare HDR do sol dominava a cena com ACES+bloom; comprime só os highlights
-  // (soft-Reinhard: céu azul quase não muda, núcleo do sol capa em ~5.5 e ainda aciona o bloom)
-  sky.material.fragmentShader = sky.material.fragmentShader.replace(
-    'gl_FragColor = vec4( texColor, 1.0 );',
-    'gl_FragColor = vec4( texColor / ( 1.0 + 0.55 * texColor ), 1.0 );'
-  );
+  /* Compressão soft-Reinhard do glare HDR do céu: `texColor/(1+k*texColor)`
+     satura em 1/k, então k decide QUANTO do céu passa do limiar do bloom.
+
+     Antes k era fixo em 0,55 (teto 1,82) e o limiar do bloom é 1,0 — ou seja,
+     todo céu com radiância bruta acima de 2,22 florescia. No golden hour o
+     `mieCoefficient` sobe de 0,0008 para 0,0078 (~10×) e o halo do sol vira
+     uma área enorme acima desse valor: o horizonte inteiro virava um borrão
+     branco. Agora k é uniform e acompanha o próprio mie — quanto maior o
+     halo, mais apertada a compressão. Fora do golden hour nada muda. */
+  u.uGlare = { value: CFG.GLARE_BASE };
+  sky.material.fragmentShader = sky.material.fragmentShader
+    .replace('void main() {', 'uniform float uGlare;\nvoid main() {')
+    .replace(
+      'gl_FragColor = vec4( texColor, 1.0 );',
+      'gl_FragColor = vec4( texColor / ( 1.0 + uGlare * texColor ), 1.0 );'
+    );
 }
 
 /* ---- luzes ---- */

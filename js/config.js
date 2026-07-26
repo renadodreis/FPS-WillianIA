@@ -25,6 +25,13 @@ export const CFG = {
   BLOOM_STRENGTH:   0.28,
   BLOOM_RADIUS:     0.35,
   BLOOM_THRESHOLD:  1.0,
+  // Compressão do glare do céu: satura em 1/k. BASE mantém o dia como sempre
+  // foi; MAX entra quando o halo de Mie cresce (golden hour, chuva) e evita
+  // que o horizonte inteiro passe do limiar do bloom e vire borrão branco.
+  GLARE_BASE:       0.55,
+  GLARE_MAX:        0.85,   // teto 1,18: céu só floresce acima de 6,67 (era 2,22)
+  MIE_BASE:         0.0008,
+  MIE_HALO_SPAN:    0.007,   // mie extra do golden hour: 0,0008 -> 0,0078
   EXPOSURE:         0.58,
 };
 
