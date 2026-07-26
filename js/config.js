@@ -29,6 +29,10 @@ export const CFG = {
 };
 
 /* ===== configurações (localStorage) ===== */
-export const SETTINGS = Object.assign({ vol: 0.5, res: 1.5, shadow: 1, bloom: 1, ping: 1 },
+// `res` é o TETO de resolução; `autores` deixa a máquina descer dele quando a
+// GPU não dá conta e voltar quando sobra folga (ver js/adaptivequality.js).
+// `aa` = SMAA. São TRÊS passes em resolução cheia (bordas, pesos, mistura),
+// o item mais caro do pós — e o único que não tinha botão.
+export const SETTINGS = Object.assign({ vol: 0.5, res: 1.5, shadow: 1, bloom: 1, ping: 1, autores: 1, aa: 1 },
   (() => { try { return JSON.parse(localStorage.getItem('callofai_cfg') || '{}'); } catch (e) { return {}; } })());
 export function persistSettings() { localStorage.setItem('callofai_cfg', JSON.stringify(SETTINGS)); }

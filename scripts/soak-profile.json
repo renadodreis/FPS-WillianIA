@@ -1,0 +1,41 @@
+{
+  "_doc": "Perfil do soak (scripts/soak.js). Peso = chance relativa da ação ser sorteada. Peso 0 desliga a ação. Edite isto pra direcionar a caçada — é o único arquivo que você precisa mexer pra parametrizar o teste.",
+
+  "ticksPorAcao": 12,
+  "_ticksPorAcao": "frames de 1/60 simulados entre uma ação e a próxima. 12 = 0,2 s de jogo por ação.",
+
+  "acoes": {
+    "olhar":            30,
+    "andar":            26,
+    "correr":           10,
+    "pular":             6,
+    "agachar":           5,
+    "atirar":           18,
+    "mirar":            10,
+    "recarregar":        6,
+    "trocarArma":        8,
+    "granada":           3,
+    "kitMedico":         2,
+    "comerCarne":        2,
+    "interagir":         5,
+    "veiculo":           4,
+    "teleportar":        4,
+    "pausar":            2,
+    "redimensionar":     2,
+    "configResolucao":   3,
+    "configSombra":      2,
+    "configBloom":       2,
+    "configAutoRes":     2
+  },
+
+  "limites": {
+    "_doc": "Invariantes numéricas. Violar qualquer uma para o soak e gera relatório com a seed.",
+    "margemForaDoMundo": 60,
+    "alturaMin": -200,
+    "alturaMax": 2000,
+    "velocidadeMax": 400,
+    "fatorVazamento": 3,
+    "programasExtras": 60,
+    "pixelRatioMin": 0.4
+  }
+}

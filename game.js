@@ -43,6 +43,8 @@ import { createNight } from './js/night.js';
 import { createSkeletons } from './js/skeletons.js';
 import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
+import { createPrewarm } from './js/prewarm.js';
+import { createResolutionScaler } from './js/adaptivequality.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { buildChest } from './js/chestmodel.js';
@@ -253,7 +255,45 @@ const smaaPass = new SMAAPass(window.innerWidth * renderer.getPixelRatio(), wind
 composer.addPass(smaaPass);
 composer.addPass(new OutputPass());
 bloomPass.enabled = +SETTINGS.bloom !== 0;
+/* SMAA são 3 passes em resolução CHEIA (bordas, pesos, mistura) — sozinho custa
+   mais que o passe da cena inteira, e era o único efeito sem botão. Desligar só
+   deixa a borda serrilhada: não muda geometria, culling nem o que fica visível,
+   então não abre vantagem competitiva. */
+smaaPass.enabled = +SETTINGS.aa !== 0;
 if (+SETTINGS.shadow === 0) renderer.shadowMap.enabled = false;
+
+/* ---- resolução: teto do jogador + escala adaptativa ----
+   BUG que isto conserta: o EffectComposer congela o pixelRatio na
+   construção e só o atualiza via setPixelRatio(). O menu chamava apenas
+   renderer.setPixelRatio(), então trocar "Resolução" mudava o canvas mas
+   NÃO os render targets do pós — quem baixava pra "Desempenho" pra fugir
+   do travamento continuava renderizando na resolução do boot. */
+function pixelRatioCeiling() {
+  // localStorage corrompido faz `+SETTINGS.res` virar NaN; setPixelRatio(NaN)
+  // zera o canvas (tela preta). Lixo aqui cai no padrão.
+  const dpr = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  const wanted = +SETTINGS.res;
+  return Math.min(dpr, Number.isFinite(wanted) && wanted > 0 ? wanted : 1);
+}
+function applyPixelRatio(value) {
+  renderer.setPixelRatio(value);
+  composer.setPixelRatio(value); // sem isto o pós continua na razão antiga
+}
+const resScaler = createResolutionScaler({ ceiling: pixelRatioCeiling() });
+applyPixelRatio(resScaler.scale);
+
+/* ---- prewarm: linka os programas WebGL fora do tiroteio ---- */
+const prewarm = createPrewarm({ renderer, scene, camera });
+let prewarmBusy = false, prewarmNextAt = 0;
+/* Janela segura = menu, lobby ou pausa. Aqui ninguém sente meio segundo
+   de compilação; no meio do combate seria o travamento que queremos matar. */
+function prewarmIfIdle(nowMs) {
+  if (prewarmBusy || nowMs < prewarmNextAt) return;
+  prewarmBusy = true;
+  prewarmNextAt = nowMs + 1000;
+  // sem await no loop: rejeição aqui viraria unhandledrejection no console
+  Promise.resolve(prewarm.flush()).catch(() => {}).finally(() => { prewarmBusy = false; });
+}
 
 /* ================== física (cannon-es) ================== */
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
@@ -2204,7 +2244,8 @@ const ToysRadar = (() => {
 let lastNow = performance.now();
 let treeAcc = 9, fpsFrames = 0, fpsAcc = 0, fpsVal = 0, miniAcc = 0;
 const PHYSICS_DT = 1 / 60, PHYSICS_MAX_STEPS = 3;
-const perf = { physicsSteps: 0, physicsDroppedMs: 0, simulationCoverage: 1, frameMs: 0 };
+const perf = { physicsSteps: 0, physicsDroppedMs: 0, simulationCoverage: 1, frameMs: 0,
+  simMs: 0, renderScale: 1, renderScaleChanges: 0 };
 const carPosV = new THREE.Vector3();
 let menuT = 0;
 
@@ -2268,6 +2309,8 @@ function tick(forceDt) {
     if (sky.material.uniforms.time) sky.material.uniforms.time.value = menuT;
     camera.updateMatrixWorld();
     renderFrame();
+    // menu/lobby/pausa: melhor janela que existe pra linkar shader
+    if (forceDt === undefined) prewarmIfIdle(now);
     return;
   }
 
@@ -2323,7 +2366,18 @@ function tick(forceDt) {
   /* render */
   if (sky.material.uniforms.time) sky.material.uniforms.time.value = t; // nuvens andando
   camera.updateMatrixWorld();
+  perf.simMs = performance.now() - now; // CPU do jogo; o resto do frame é render
   renderFrame();
+
+  /* Qualidade adaptativa: o teto continua sendo a escolha do jogador; a
+     escala só desce quando quem estoura o frame é o render, nunca quando o
+     gargalo é CPU (aí baixar pixel deixaria feio sem acelerar nada). */
+  if (forceDt === undefined && +SETTINGS.autores !== 0 &&
+      resScaler.push(frameDt * 1000, perf.simMs, now)) {
+    applyPixelRatio(resScaler.scale);
+    perf.renderScaleChanges++;
+  }
+  perf.renderScale = resScaler.scale;
 
   /* contador de FPS (+ ping quando online e habilitado) */
   fpsFrames++; fpsAcc += frameDt;
@@ -2372,20 +2426,38 @@ $('btnBack').addEventListener('click', e => { e.stopPropagation(); $('settings')
 $('settings').addEventListener('click', e => e.stopPropagation());
 { // bindings das configurações (aplicam ao vivo + persistem)
   const sv = $('setVol'), sr = $('setRes'), ss = $('setShadow'), sb = $('setBloom'), sp = $('setPing');
+  const sa = $('setAutoRes'), saa = $('setAA');
   sv.value = SETTINGS.vol * 100;
   sr.value = String(SETTINGS.res); ss.value = String(SETTINGS.shadow); sb.value = String(SETTINGS.bloom);
   sp.value = String(SETTINGS.ping === 0 ? 0 : 1);
+  sa.value = String(+SETTINGS.autores === 0 ? 0 : 1);
+  saa.value = String(+SETTINGS.aa === 0 ? 0 : 1);
   sv.oninput = () => { SETTINGS.vol = sv.value / 100; SFX.setVolumes(); persistSettings(); };
-  sr.onchange = () => { SETTINGS.res = +sr.value; renderer.setPixelRatio(Math.min(devicePixelRatio, SETTINGS.res)); composer.setSize(window.innerWidth, window.innerHeight); persistSettings(); };
+  sr.onchange = () => {
+    SETTINGS.res = +sr.value;
+    resScaler.setCeiling(pixelRatioCeiling());
+    // escolha explícita do jogador vale AGORA: quem clica "Qualidade" quer
+    // qualidade neste frame, não daqui a alguns degraus do controlador.
+    resScaler.reset();
+    applyPixelRatio(resScaler.scale); // renderer E composer: ver applyPixelRatio
+    persistSettings();
+  };
+  sa.onchange = () => {
+    SETTINGS.autores = +sa.value;
+    if (SETTINGS.autores === 0) { resScaler.reset(); applyPixelRatio(resScaler.scale); }
+    persistSettings();
+  };
   ss.onchange = () => {
     const shadowsWereEnabled = renderer.shadowMap.enabled;
     SETTINGS.shadow = +ss.value;
     renderer.shadowMap.enabled = SETTINGS.shadow === 1;
     if (!shadowsWereEnabled && renderer.shadowMap.enabled) invalidateCsmShadows();
     csmMaterials.forEach(m => m.needsUpdate = true);
+    prewarm.invalidate(); // needsUpdate relinka os programas: reaquecer
     persistSettings();
   };
   sb.onchange = () => { SETTINGS.bloom = +sb.value; bloomPass.enabled = SETTINGS.bloom === 1; persistSettings(); };
+  saa.onchange = () => { SETTINGS.aa = +saa.value; smaaPass.enabled = SETTINGS.aa === 1; persistSettings(); };
   sp.onchange = () => { SETTINGS.ping = +sp.value; persistSettings(); };
 }
 ui.overlay.addEventListener('click', (e) => {
@@ -2402,6 +2474,9 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
+  // arrastar a janela pra outro monitor muda o devicePixelRatio e, com ele, o
+  // teto; depois do setSize pra não realocar os render targets duas vezes
+  if (resScaler.setCeiling(pixelRatioCeiling())) applyPixelRatio(resScaler.scale);
   csm.updateFrustums();
   invalidateCsmShadows();
 });
@@ -2441,6 +2516,17 @@ window.__game = {
   get gun() { return gun; },
   get fps() { return fpsVal; },
   perf,
+  prewarm, // QA/BR: linkagem antecipada de shader (warm/schedule/flush/stats)
+  renderQuality: {
+    get scale() { return resScaler.scale; },
+    get ceiling() { return resScaler.ceiling; },
+    get stats() { return resScaler.stats; },
+    get pixelRatio() { return renderer.getPixelRatio(); },
+    // espelho interno do composer: precisa acompanhar o renderer (ver applyPixelRatio)
+    get composerPixelRatio() { return composer._pixelRatio; },
+    apply: applyPixelRatio,
+    ceilingOf: pixelRatioCeiling,
+  },
   get errors() { return __errors; },
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
   platforms, // hook de QA: plataformas/rampas pisáveis (andares e escada da torre)
@@ -2574,4 +2660,8 @@ window.__MP = {
 };
 
 rebucketTrees(0, 0);
+/* Mundo montado e ninguém jogando ainda: melhor momento do processo inteiro
+   pra linkar os programas. O menu segue chamando prewarmIfIdle pros GLBs que
+   ainda estão baixando. */
+prewarmIfIdle(performance.now());
 animate();

@@ -1323,6 +1323,12 @@
       // compartilhados: cobre todos) com a cena como contexto de luz/fog —
       // compilar a CENA inteira aqui custaria segundos.
       try { if (crates.length) MP.renderer.compile(crates[0].g, MP.camera, MP.scene); } catch (e) { /* headless sem GL completo */ }
+      /* NÃO chamar G.prewarm.flush() aqui. Tentado e revertido: `compileAsync`
+         roda `compile()` de forma SÍNCRONA antes de esperar, então varrer a cena
+         inteira neste ponto trava a thread por segundos e derrubou 5 arquivos de
+         teste de BR por timeout. O comentário acima já avisava. O aquecimento
+         pesado é do LOBBY (`prewarmIfIdle` em game.js), que roda enquanto
+         `state.started` é falso — ou seja, antes de chegar aqui. */
       updateCrateVisibility(); // sem janela inicial com os 65 baús no pipeline
       UI.showHud(true);
       if (asSpectator) {

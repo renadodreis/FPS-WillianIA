@@ -232,3 +232,105 @@ describe('Grama decorativa (Chrome headless)', { skip: !CHROME && 'Chrome não e
     assert.equal(r.depois, 0, 'trilha sobreviveu à reciclagem do chunk');
   });
 });
+
+/* ================================================================
+   LOD de lâmina por DISTÂNCIA — corta triângulo sem tirar lâmina.
+
+   Regra dura: reduzir densidade, altura ou alcance da grama seria
+   WALLHACK (adversário deitado no mato ficaria visível pra quem
+   baixasse a configuração). Por isso o LOD mexe só nos SEGMENTOS de
+   altura da lâmina: mesma quantidade, mesma altura, mesma silhueta.
+   ================================================================ */
+describe('Grama — LOD de lâmina (Chrome headless)', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  let h;
+  before(async () => { h = await bootGame({ port: 3234 }); });
+  after(async () => { if (h) await h.close(); });
+
+  it('chunk perto usa a lâmina completa; chunk longe usa a reduzida', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G;
+      window.QA.reset(0, 0);
+      window.QA.tick(200); // drena a fila de refill
+      const lods = G.Grass.debugLod();
+      const perto = lods.filter(l => Math.max(Math.abs(l.cx), Math.abs(l.cz)) <= 1);
+      const longe = lods.filter(l => Math.max(Math.abs(l.cx), Math.abs(l.cz)) >= 6);
+      return {
+        total: lods.length,
+        pertoCheios: perto.every(l => !l.reduzida),
+        longeReduzidos: longe.every(l => l.reduzida),
+        trisPerto: perto[0] && perto[0].triangulosPorLamina,
+        trisLonge: longe[0] && longe[0].triangulosPorLamina,
+      };
+    });
+    assert.ok(r.total > 100, `grade de chunks inesperada: ${r.total}`);
+    assert.equal(r.pertoCheios, true, 'chunk colado no jogador perdeu detalhe');
+    assert.equal(r.longeReduzidos, true, 'chunk distante não economizou triângulo');
+    assert.ok(r.trisLonge < r.trisPerto, `LOD não reduziu: ${r.trisPerto} -> ${r.trisLonge}`);
+  });
+
+  it('ANTI-TRAPAÇA: o LOD nunca muda a quantidade de lâminas de nenhum chunk', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G;
+      window.QA.tick(200);
+      const lods = G.Grass.debugLod();
+      const contagens = new Set(lods.map(l => l.laminas));
+      return { contagens: [...contagens], reduzidos: lods.filter(l => l.reduzida).length };
+    });
+    assert.equal(r.contagens.length, 1,
+      `chunks com contagens diferentes de lâmina: ${r.contagens.join(', ')} — densidade variável é wallhack`);
+    assert.ok(r.reduzidos > 0, 'nenhum chunk reduzido: o teste não provou nada');
+  });
+
+  it('ANTI-TRAPAÇA: lâmina reduzida mantém base e ponta (silhueta e ocultamento)', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G;
+      return G.Grass.debugBladeShapes();
+    });
+    assert.ok(r.completa.segmentos > r.reduzida.segmentos, 'as duas lâminas são iguais');
+    assert.ok(Math.abs(r.completa.alturaMax - r.reduzida.alturaMax) < 1e-6,
+      `altura mudou: ${r.completa.alturaMax} vs ${r.reduzida.alturaMax}`);
+    assert.ok(Math.abs(r.completa.larguraBase - r.reduzida.larguraBase) < 1e-6,
+      `largura da base mudou: ${r.completa.larguraBase} vs ${r.reduzida.larguraBase}`);
+    assert.ok(Math.abs(r.completa.larguraTopo - r.reduzida.larguraTopo) < 1e-6,
+      `largura do topo mudou: ${r.completa.larguraTopo} vs ${r.reduzida.larguraTopo}`);
+  });
+
+  it('o LOD não altera um único byte do conteúdo do chunk (mundo idêntico)', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G, MP = window.QA.MP;
+      window.QA.reset(0, 0);
+      window.QA.tick(200);
+      const perto = G.Grass.debugChunkBytes(5, 5); // longe do centro => reduzida
+      // aproxima: o mesmo chunk vira "perto" e recupera a lâmina completa
+      MP.player.pos.set(50, G.heightAt(50, 50) + 1, 50);
+      window.QA.tick(200);
+      const depois = G.Grass.debugChunkBytes(5, 5);
+      const iguais = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+      return {
+        achou: !!(perto && depois),
+        m: perto && depois && iguais(perto.m, depois.m),
+        ph: perto && depois && iguais(perto.ph, depois.ph),
+        ti: perto && depois && iguais(perto.ti, depois.ti),
+      };
+    });
+    assert.equal(r.achou, true, 'chunk (5,5) não estava na grade nas duas medições');
+    assert.equal(r.m, true, 'matriz de instância mudou com o LOD — posição/altura da grama se moveu');
+    assert.equal(r.ph, true, 'fase do vento mudou com o LOD');
+    assert.equal(r.ti, true, 'tint mudou com o LOD');
+  });
+
+  it('chunk que se aproxima recupera a lâmina completa', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G, MP = window.QA.MP;
+      MP.player.pos.set(0, G.heightAt(0, 0) + 1, 0);
+      window.QA.tick(200);
+      const antes = G.Grass.debugLod().find(l => l.cx === 5 && l.cz === 0);
+      MP.player.pos.set(50, G.heightAt(50, 0) + 1, 0); // chunk 5 vira o centro
+      window.QA.tick(200);
+      const depois = G.Grass.debugLod().find(l => l.cx === 5 && l.cz === 0);
+      return { antes: antes && antes.reduzida, depois: depois && depois.reduzida };
+    });
+    assert.equal(r.antes, true, 'chunk distante não estava reduzido');
+    assert.equal(r.depois, false, 'chunk ficou reduzido mesmo colado no jogador');
+  });
+});

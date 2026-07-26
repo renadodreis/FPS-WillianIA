@@ -23,8 +23,8 @@ export function createGrass(deps) {
   const PATCH_RADIUS = (N / 2) * SIZE;              // raio do tapete de grama
 
   // geometria da lâmina: quad afunilado com leve curvatura, raiz em y=0
-  function bladeGeometry() {
-    const g = new THREE.PlaneGeometry(0.1, 1, 1, 4);
+  function bladeGeometry(segmentos = 4) {
+    const g = new THREE.PlaneGeometry(0.1, 1, 1, segmentos);
     g.translate(0, 0.5, 0);
     const p = g.attributes.position;
     for (let i = 0; i < p.count; i++) {
@@ -35,7 +35,19 @@ export function createGrass(deps) {
     g.computeVertexNormals();
     return g;
   }
-  const baseBlade = bladeGeometry();
+  const baseBlade = bladeGeometry(4);
+  /* LOD DE LÂMINA — economia de triângulo SEM tirar grama do mapa.
+
+     A mesma fórmula de afunilamento/curva, com metade dos segmentos de
+     altura: base, meio e ponta caem exatamente nos mesmos pontos, só some
+     a subdivisão intermediária. Longe, a curvatura da lâmina é sub-pixel.
+
+     REGRA DURA DE ANTI-TRAPAÇA: o LOD mexe SÓ em segmentos. Quantidade,
+     altura e alcance da grama são idênticos e nunca viram configuração do
+     jogador — grama mais rala é wallhack contra quem está deitado no mato. */
+  const loBlade = bladeGeometry(2);
+  const LOD_RING = CFG.GRASS_LOD_RING || 4; // chunks além deste anel usam a reduzida
+  const bladeTriangles = geo => (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
 
   const uniforms = {
     uTime:        { value: 0 },
@@ -259,7 +271,7 @@ export function createGrass(deps) {
     const mesh = new THREE.InstancedMesh(geo, material, PER_CHUNK);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = true;   // culling por chunk
-    const chunk = { mesh, cx: 99999, cz: 99999, roots: new Float32Array(PER_CHUNK * 2) };
+    const chunk = { mesh, cx: 99999, cz: 99999, roots: new Float32Array(PER_CHUNK * 2), reduzida: false };
     legacyConsume(cx, cz); // preserva o consumo do stream seedado (ver comentário)
     fillChunk(chunk, cx, cz);
     scene.add(mesh);
@@ -273,8 +285,30 @@ export function createGrass(deps) {
       chunks.push(makeChunk(i - halfN, j - halfN));
 
   let centerX = 0, centerZ = 0; // celula central atual
+  let lodForcado = null;        // QA/captura: ver debugForceLod
   const REBUILD_BUDGET = 6;     // chunks re-preenchidos por frame, no maximo
   const pending = [];
+
+  /* Troca APENAS os atributos de vértice compartilhados (posição, normal, uv,
+     índice). As instâncias — matriz, fase, tint, trilha — e a bounding sphere
+     continuam sendo as do chunk, intocadas. Por isso o LOD não move uma lâmina
+     nem muda um byte do conteúdo determinístico. */
+  function aplicarLod(chunk, reduzida) {
+    if (chunk.reduzida === reduzida) return;
+    const src = reduzida ? loBlade : baseBlade;
+    const g = chunk.mesh.geometry;
+    g.setIndex(src.index);
+    g.setAttribute('position', src.attributes.position);
+    g.setAttribute('normal', src.attributes.normal);
+    g.setAttribute('uv', src.attributes.uv);
+    chunk.reduzida = reduzida;
+  }
+  function atualizarLods() {
+    for (const ch of chunks)
+      aplicarLod(ch, lodForcado !== null ? lodForcado
+        : Math.max(Math.abs(ch.cx - centerX), Math.abs(ch.cz - centerZ)) > LOD_RING);
+  }
+  atualizarLods();
 
   function update(playerPos, carPos, time) {
     uniforms.uTime.value = time;
@@ -300,6 +334,11 @@ export function createGrass(deps) {
       const [ch, tx, tz] = pending.shift();
       fillChunk(ch, tx, tz);
     }
+    /* DEPOIS do refill: `aplicarLod` decide pelo ch.cx/ch.cz, que só é
+       atualizado dentro de fillChunk. Rodar antes usaria coordenada velha e
+       deixaria o chunk recém-reciclado com o detalhe do lugar antigo.
+       Custo: 169 comparações e um early-return — sem alocação, sem refill. */
+    atualizarLods();
   }
 
   /* refaz todos os chunks já preenchidos — usado quando as clareiras são
@@ -367,5 +406,41 @@ export function createGrass(deps) {
     }
   }
 
-  return { update, material, PATCH_RADIUS, refreshAll, debugSample, debugChunkBytes, stampTrack };
+  /* QA/captura: força um LOD em TODOS os chunks pra comparação visual A/B.
+     `null` devolve o controle ao anel de distância. Não mexe em contagem de
+     lâmina, altura nem alcance — só na subdivisão da lâmina. */
+  function debugForceLod(reduzida) {
+    lodForcado = reduzida === null || reduzida === undefined ? null : !!reduzida;
+    atualizarLods();
+  }
+  /* QA: estado do LOD por chunk. Só leitura. */
+  function debugLod() {
+    return chunks.map(ch => ({
+      cx: ch.cx, cz: ch.cz,
+      reduzida: ch.reduzida,
+      laminas: ch.mesh.count,
+      triangulosPorLamina: bladeTriangles(ch.mesh.geometry),
+    }));
+  }
+  /* QA: prova de que a lâmina reduzida preserva base, ponta e altura — é o
+     que garante silhueta e ocultamento idênticos (ver regra anti-trapaça). */
+  function debugBladeShapes() {
+    const medir = geo => {
+      const p = geo.attributes.position;
+      let alturaMax = -Infinity, larguraBase = 0, larguraTopo = 0;
+      for (let i = 0; i < p.count; i++) {
+        const y = p.getY(i), x = Math.abs(p.getX(i));
+        if (y > alturaMax) alturaMax = y;
+        if (y < 1e-6) larguraBase = Math.max(larguraBase, x);
+      }
+      for (let i = 0; i < p.count; i++)
+        if (Math.abs(p.getY(i) - alturaMax) < 1e-6) larguraTopo = Math.max(larguraTopo, Math.abs(p.getX(i)));
+      return { segmentos: geo.parameters.heightSegments, alturaMax, larguraBase, larguraTopo,
+        triangulos: bladeTriangles(geo) };
+    };
+    return { completa: medir(baseBlade), reduzida: medir(loBlade) };
+  }
+
+  return { update, material, PATCH_RADIUS, refreshAll, debugSample, debugChunkBytes, stampTrack,
+    debugLod, debugBladeShapes, debugForceLod };
 }

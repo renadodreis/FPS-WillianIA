@@ -524,3 +524,194 @@ jogabilidade. O worktree já continha melhorias não commitadas em `br-game.js`,
   perfil/PID e removido antes dos benchmarks válidos.
 - Checagens finais: `npm run lint` e `git diff --check` com exit 0;
   `npm run analyze:lines` registrou 187.608 linhas JS e 415.339 no repositório.
+
+## Sessão 2026-07-25 (parte 2) — travamento ≠ lentidão
+
+### Pedido
+
+Jogadores reclamam de travamento e lentidão em produção. O console que o
+usuário capturou não explicava nada. Otimizar sem criar bug novo nem perder
+qualidade.
+
+### Triagem do console (7 de 8 mensagens não eram do jogo)
+
+- `MaxListenersExceededWarning` (×2) e `ObjectMultiplex - orphaned data`
+  (×4) vêm de `contentscript.js` — extensão do navegador (MetaMask), não do
+  jogo. O "memory leak detected" é do EventEmitter da extensão.
+- `GLTFLoader: Unknown extension "KHR_materials_pbrSpecularGlossiness"` (×2)
+  é real e vem de dois assets carregados em runtime:
+  `Armas/low-poly_Shotgun_rápida_fraca.glb` e
+  `Cenários/low_poly__tree_assets.glb` (`Armas/ak-47_reddot.glb` também tem,
+  mas não é carregado). Efeito é só visual — material cai no padrão. Custo de
+  perf zero. Correção pendente: reexportar em metallic-roughness.
+
+### Dois problemas distintos, separados pela primeira vez
+
+- **Lentidão constante** = custo de fragment: pixel ratio, bloom, SMAA, grama.
+- **Travamento (hitch)** = linkagem de programa WebGL no meio do frame. Já
+  havia precedente disso no repo: o comentário em `br-game.js` sobre compilar
+  o baú na cabine da nave descreve exatamente este bug, resolvido só pros baús.
+
+A rodada anterior mediu em SwiftShader, cujo gargalo é oposto ao de GPU real —
+por isso os ganhos dela (grama 2,3×, física, draw calls) não atacaram o que
+trava a máquina do jogador.
+
+### BUG encontrado: o seletor "Resolução" quase não fazia nada
+
+`EffectComposer` congela `_pixelRatio` na construção e só o atualiza via
+`setPixelRatio()`. O handler chamava apenas `renderer.setPixelRatio()`, então
+os render targets do pós continuavam na razão do boot. Quem baixava pra
+"Desempenho" fugindo do travamento seguia sombreando a mesma quantidade de
+pixels. Consertado em `applyPixelRatio()` (renderer + composer juntos), com
+teste vivo que compara `composer.renderTarget1.width` entre "Desempenho" e
+"Qualidade" (prova física, não o campo interno).
+
+### Implementação TDD
+
+- `js/prewarm.js` (novo): linka programas e sobe texturas em janela segura.
+  `warm/schedule/flush/invalidate/stats`. Nunca propaga erro (headless e
+  contexto perdido são casos normais). Pula material já aquecido.
+  Chamado no fim do boot, a 1 Hz no menu/lobby/pausa (`prewarmIfIdle`) e em
+  `beginMatch` — a chamada síncrona do baú foi PRESERVADA, a nova é aditiva.
+- `js/adaptivequality.js` (novo): controlador puro de escala de resolução.
+  Sem three, sem DOM, 17 testes de unidade. Duas travas de qualidade:
+  1. Nunca passa do teto do jogador.
+  2. Só desce quando o p90 de `frame - simMs` acusa a GPU. Se o gargalo é
+     CPU, baixar pixel deixaria feio sem acelerar nada — e não desce.
+- Detecção de vsync: num monitor de 60 Hz nenhum frame desce de ~16,7 ms, bem
+  acima de `upMs`. Sem enxergar isso, um pico isolado derrubaria a resolução e
+  ela NUNCA mais voltaria — otimização virando perda permanente de qualidade.
+  O sinal de folga é o frame colado no período do monitor (p10) com jitter
+  < 2 ms; quem só atinge o vsync na média tem jitter alto e não sobe.
+- Anti-oscilação: subir exige N janelas boas seguidas (começa em 2) e N dobra
+  (até 16) toda vez que uma subida é seguida de descida.
+- `SETTINGS.autores` (novo, padrão ligado) + seletor "Resolução adaptativa".
+  `res` virou explicitamente o TETO. Escolha manual do jogador vale no frame
+  (reset do controlador), não daqui a alguns degraus.
+- `perf` publica `simMs`, `renderScale` e `renderScaleChanges`.
+- Passo forçado (`tick(dt)` do QA) NÃO reescala: determinismo dos testes
+  preservado, com asserção viva e estrutural.
+
+### Medições
+
+- `scripts/prewarm-probe.js` (novo): conta programas WebGL linkados DURANTE o
+  render numa varredura de 8 poses pelo mapa. Cada um seria uma travada.
+  Resultado: 461-465 materiais colapsam em ~60 programas distintos; o prewarm
+  linka todos em 86-98 ms na janela segura. Varredura pós-warm linkou 0, 10 e
+  0 programas em três corridas.
+- A variação 0/10/0 é corrida com GLB ainda carregando, NÃO lacuna de sombra —
+  o probe reporta o nome do programa novo e veio vazio nas corridas limpas. É
+  exatamente o caso que `prewarmIfIdle` a 1 Hz no lobby cobre.
+- Limite honesto e documentado no módulo: `renderer.compile` não prepara os
+  materiais de profundidade do shadow map. Objeto que entra na cena depois
+  ainda pode linkar o programa de sombra no primeiro frame em que projeta.
+- Custo conhecido da escala adaptativa: cada mudança realoca os render targets
+  do composer + bloom + SMAA. Por isso degrau de 0,25 e cooldown de 2,5 s —
+  no pior caso 3 realocações em ~7,5 s e depois estabiliza.
+
+### Endurecimento antes do deploy (3 falhas achadas relendo o código)
+
+Cada uma nasceu de teste RED próprio, não de suposição:
+
+1. **Rejeição não tratada.** O loop chama `prewarm.flush()` SEM await. Um
+   `traverse` que explode (GLB meio carregado, nó já descartado) virava
+   `unhandledrejection` no console do jogador — por causa de uma otimização.
+   `collectNew` agora conta o erro em vez de propagar; os dois pontos de
+   chamada (`game.js` e `br-game.js`) também têm `.catch()`.
+2. **Escala NaN.** `SETTINGS.res` vem de localStorage: corrompido, `+"lixo"`
+   é NaN, e `setPixelRatio(NaN)` zera o canvas (tela preta). O bug já existia
+   no código original; a mudança só o levaria também pro composer. Sanitizado
+   no controlador (`sane()`) e em `pixelRatioCeiling()`.
+3. **Realocação dupla no resize.** `setCeiling` antes de `composer.setSize`
+   realocava os render targets duas vezes por resize. Reordenado.
+
+Descartado de propósito: `try/catch` especulativo no `applyPixelRatio`.
+Engolir a falha faria `resScaler.scale` divergir do pixel ratio real e o
+controlador desceria em cascata sem efeito — pior que o erro visível. O loop
+já sobrevive porque `animate()` reagenda o rAF antes do `tick()`.
+
+### Segurança
+
+- `git diff --name-only` não toca `server.js` nem nenhum arquivo de protocolo.
+  Zero mudança de superfície de anti-cheat.
+- Módulos novos não têm `fetch`, `socket`, `eval`, `innerHTML`, `localStorage`
+  nem `postMessage` — verificado por grep.
+- `window.__game.prewarm` e `.renderQuality` são hooks de cliente, ao lado dos
+  que já existiam (`forceStart`, `teleportToCar`, `player`). Não concedem
+  autoridade de servidor: resolução é decisão local, o servidor valida dano,
+  alcance e crédito de kill igual antes.
+- Resolução menor não revela nada oculto — culling, LOD e frustum inalterados.
+- `deploy.env` e `.env` conferidos por `git check-ignore -v`: os dois ignorados.
+
+### Verificação
+
+- `npm run lint` exit 0.
+- Novos: `adaptive-quality` 19/19, `prewarm` 15/15, `render-quality` 10/10
+  (porta 3281).
+- Regressão focada verde: `gameplay`, `game-modules`, `br-crates`,
+  `grass-decor`, `deployment-context`, `br-late-join-flags`, `plan`.
+
+### Pendente (Tier 0 e Tier 2 do plano)
+
+- Tier 0: overlay de perf + telemetria anônima de fim de partida (string da
+  GPU, p50/p1% de frame, settings, contagem de hitches). Sem isso a otimização
+  segue sendo feita no escuro — nenhuma medição local representa o parque de
+  máquinas real.
+- Tier 2: SMAA sem botão de desligar (3 passes fullscreen sempre ligados),
+  bloom em meia resolução no tier baixo, densidade de grama por tier
+  (170k lâminas fixas hoje), sombra 512/3 cascatas no tier baixo.
+- Auto-tier no primeiro boot pela string da GPU (`WEBGL_debug_renderer_info`).
+
+### Tier 2 — avaliado item a item, com medição antes de implementar
+
+**Correções no diagnóstico anterior** (eu estava errado nos dois):
+- Bloom JÁ é meia-resolução internamente (`resx = width / 2` no UnrealBloomPass).
+- A grama NÃO entra no shadow map (sem `castShadow`, sem `csmMat`), então não é
+  multiplicada por cascata.
+
+**Item 1 — botão de antisserrilhado (FEITO).** SMAA são três passes em resolução
+CHEIA (`_materialEdges`, `_materialWeights`, `_materialBlend`), o único efeito do
+pós sem botão. A 1920×1080 com `res: 1.5` (buffer 2880×1620 = 4,67 Mpx) isso é
+14,0 Mpx/frame — 3× o passe da cena inteira. `SETTINGS.aa`, padrão ligado.
+Teste vivo prova que desligar não muda draw calls nem triângulos da cena: é só
+pós, não abre vantagem competitiva.
+
+**Item 2 — LOD de lâmina de grama (FEITO).** `bladeGeometry(segmentos)`: chunks
+além do anel `GRASS_LOD_RING` usam 2 segmentos de altura em vez de 4. Medido:
+**1.358.760 → 1.005.000 triângulos (−26,0%)**, 88 de 169 chunks reduzidos,
+**169.845 lâminas mantidas**. `aplicarLod` troca só position/normal/uv/index
+(compartilhados); matriz de instância, fase, tint, trilha e bounding sphere
+ficam intactos — os 9 testes antigos de grama, incluindo igualdade byte a byte,
+continuam verdes. `atualizarLods()` roda DEPOIS do refill: antes usaria
+`ch.cx/ch.cz` velho e o chunk reciclado ficaria com o detalhe do lugar anterior.
+
+**Item 3 — sombra 1024→512: MEDIDO E RECUSADO.** Cena sem sombra: 352 calls /
+692.593 tri. Com 1 cascata (regime normal): 365 calls (+4%) / +74 mil tri. Com
+as 4 (refresh cheio, só em teleporte/giro brusco/salto solar): 552 calls (+57%).
+O rodízio de cascatas da sessão anterior já tirou o custo; baixar resolução
+atacaria fragment de um passe depth-only barato. Risco sem ganho.
+
+**Erro de ferramenta corrigido no meio:** o primeiro probe de sombra acusou
+"+0 calls". Causa: `WebGLRenderer.render()` faz `info.reset()` (linha 17696) e o
+`autoReset` interno zerava a contagem. Com `R.info.autoReset = false` os números
+acima apareceram. Probe que mente é pior que probe nenhum.
+
+### Regra de anti-trapaça agora tem teste
+
+Configuração que reduz densidade, altura ou alcance da grama é **wallhack**:
+adversário deitado no mato fica visível pra quem baixa a opção. Vale igual pra
+distância de visão e névoa. Dois testes travam isso:
+
+- `render-quality`: varre o bloco `<div id="settings">` do index.html e as chaves
+  de `SETTINGS` procurando `grama|grass|view dist|fog|densidade` — falha se
+  alguém expuser esses vetores no menu no futuro.
+- `grass-decor`: prova que o LOD nunca muda a contagem de lâminas de nenhum
+  chunk e que a lâmina reduzida mantém base, ponta e altura (silhueta e
+  ocultamento idênticos).
+
+`GRASS_LOD_RING` mora em `CFG` (constante de código), NUNCA em `SETTINGS` — o
+jogador não pode mexer.
+
+Ressalva registrada: o botão "Sombras: Desligadas" já existia e é um vetor menor
+(sombra pode denunciar alguém atrás de quina). Não é mudança desta rodada e
+remover quebraria a opção de perf de quem precisa.
