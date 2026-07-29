@@ -188,6 +188,68 @@ describe('game feel — combate', { skip: !CHROME && 'Chrome não encontrado' },
     assert.ok(!r.emits.includes('shotHit'), 'shotHit em cadáver');
   });
 
+  it('3 — levar dano mostra QUANTO foi (número na tela, não só o flash)', async () => {
+    const r = await h.play(() => {
+      const MP = window.QA.MP;
+      window.QA.reset(30, 30);
+      MP.player.health = 100; MP.player.armor = 0; MP.player.invulnUntil = 0;
+      MP.playerDamage(37, null, { type: 'test' });
+      const el = document.getElementById('hfTook');
+      return { html: el.innerHTML, cls: el.className, health: MP.player.health };
+    });
+    assert.equal(r.health, 63);
+    assert.ok(r.cls.includes('show'), 'contador de dano recebido não apareceu');
+    assert.ok(r.html.includes('-37'), `número errado: ${r.html}`);
+    assert.ok(!r.cls.includes('danger'), '37 de 100 não é ameaça de morte');
+  });
+
+  it('3 — golpes seguidos somam no MESMO número (rajada não vira poluição)', async () => {
+    await wait(800); // fecha a janela de rajada do teste anterior
+    const r = await h.play(() => {
+      const MP = window.QA.MP;
+      window.QA.reset(30, 30);
+      MP.player.health = 100; MP.player.armor = 0; MP.player.invulnUntil = 0;
+      MP.playerDamage(10, null, { type: 'test' });
+      MP.playerDamage(10, null, { type: 'test' });
+      MP.playerDamage(10, null, { type: 'test' });
+      return document.getElementById('hfTook').innerHTML;
+    });
+    assert.ok(r.includes('-30'), `rajada não somou: ${r}`);
+  });
+
+  it('7 — "o próximo tiro igual me mata" vira aviso explícito', async () => {
+    const r = await h.play(() => {
+      const MP = window.QA.MP;
+      window.QA.reset(30, 30);
+      MP.player.health = 50; MP.player.armor = 0; MP.player.invulnUntil = 0;
+      MP.playerDamage(30, null, { type: 'test' }); // sobram 20 < 30
+      return { cls: document.getElementById('hfTook').className, health: MP.player.health };
+    });
+    assert.equal(r.health, 20);
+    assert.ok(r.cls.includes('danger'), 'jogador a um tiro da morte não foi avisado');
+  });
+
+  it('4 — escudo quebrando avisa (barra estilhaça) e só no frame da quebra', async () => {
+    const r = await h.play(async () => {
+      const MP = window.QA.MP;
+      const bar = document.getElementById('armorFill');
+      window.QA.reset(30, 30);
+      MP.player.health = 100; MP.player.invulnUntil = 0;
+      MP.player.armor = 50;
+      bar.className = '';
+      MP.playerDamage(20, null, { type: 'test' });   // absorve 14, escudo vai a 36
+      const midCls = bar.className, midArmor = MP.player.armor;
+      MP.player.armor = 5;
+      MP.playerDamage(40, null, { type: 'test' });   // consome os 5 que sobravam
+      await new Promise(r2 => setTimeout(r2, 20));
+      return { midCls, midArmor, breakCls: bar.className, armor: MP.player.armor };
+    });
+    assert.equal(r.midArmor, 36, 'absorção de 70% mudou');
+    assert.ok(!r.midCls.includes('hfBreak'), 'escudo que só arranhou não pode anunciar quebra');
+    assert.equal(r.armor, 0);
+    assert.ok(r.breakCls.includes('hfBreak'), 'escudo acabou e o jogador não ficou sabendo');
+  });
+
   it('2 — kill confirmada pelo servidor acende o hitmarker de KILL no PvP', async function (t) {
     if (!spot) { t.skip('nenhuma linha de tiro limpa nesta seed'); return; }
     await walkHostTo(25);

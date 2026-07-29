@@ -1933,13 +1933,18 @@ function playerDamage(dmg, fromPos, cause) {
   // no BR online, pausar NÃO pode dar imunidade (senão vira exploit em tiroteio)
   if (player.dead || (state.paused && !window.__BR_active)) return;
   if (state.gameTime < (player.invulnUntil || 0)) return; // proteção de spawn
-  if (player.armor > 0) { // armadura azul absorve 70% do dano até quebrar
-    const absorb = Math.min(player.armor, dmg * 0.7);
-    player.armor -= absorb;
-    dmg -= absorb;
+  const shield = HitCore.armorAbsorb(player.armor, dmg); // azul absorve 70% até quebrar
+  if (shield.absorbed > 0) {
+    player.armor = shield.armor;
+    dmg = shield.dmg;
     updateArmorHUD();
   }
   player.health -= dmg;
+  // "quanto eu tomei?", "ainda tenho escudo?", "o próximo me mata?" —
+  // as três respostas saem juntas, no mesmo instante do golpe
+  const lethalNext = HitCore.lethalThreat(player.health, dmg);
+  if (dmg > 0 || shield.absorbed > 0) HitFeel.tookHit(dmg, shield.absorbed, lethalNext);
+  if (shield.broke) HitFeel.armorBreak();
   player.lastDamageT = state.gameTime;
   const causeType = cause && typeof cause.type === 'string' ? cause.type : 'environment';
   player.lastDamageCause = {
@@ -1948,8 +1953,10 @@ function playerDamage(dmg, fromPos, cause) {
     weapon: cause && cause.weapon ? String(cause.weapon) : null,
     t: Date.now(),
   };
-  damageFlash(1);
-  addTrauma(0.32);
+  // arranhão e tiro de sniper deixaram de sacudir igual: o flash e o tranco
+  // passam a medir o TAMANHO do golpe (e o golpe que quase mata bate mais forte)
+  damageFlash(lethalNext ? 1.6 : clamp(0.55 + dmg * 0.016, 0.55, 1.2));
+  addTrauma(clamp(0.14 + dmg * 0.006, 0.14, 0.55));
   SFX.hurt();
   if (fromPos) { // seta apontando de onde veio o dano
     _euler.setFromQuaternion(camera.quaternion);
