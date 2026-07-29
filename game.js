@@ -2328,7 +2328,10 @@ const ToysRadar = (() => {
     _euler.setFromQuaternion(camera.quaternion);
     ctx.save(); ctx.translate(C, C); ctx.rotate(_euler.y);
     const maxR = C * 0.8;
-    for (const l of MapToys.landmarks) {
+    // atrações + POIs do mundo (entradas dos térreos ocos): mesma regra de
+    // clamp na borda, senão POI fora do alcance de 95 m some
+    const pois = MapToys.landmarks.concat(Structures.poiMarks);
+    for (const l of pois) {
       let x = (l.x - player.pos.x) / 95 * C, y = (l.z - player.pos.z) / 95 * C;
       const d = Math.hypot(x, y);
       const far = d > maxR;
