@@ -119,47 +119,224 @@
   #scope .dot { position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; transform: translate(-50%,-50%);
     border-radius: 50%; background: rgba(255,72,48,0.95); box-shadow: 0 0 7px rgba(255,60,40,0.9); }
 
-  /* ===== Tela inicial ===== */
+  /* ================================================================
+     TELA INICIAL
+
+     Regras de custo (o menu roda com o mundo 3D inteiro por trás e é a
+     janela de prewarm de shader — ver game.js/prewarmIfIdle):
+       · o único blur da tela é o backdrop-filter do #overlay. Nenhuma
+         camada nova de blur, nenhum filter animado.
+       · tudo que anima em loop anima só `opacity`/`transform` (composto
+         na GPU, zero repaint). Sombra/gradiente animado em elemento de
+         tela cheia é proibido.
+       · o dip-to-black do corte de câmera (#menuCut) é escrito pelo
+         tick() do jogo, não por setInterval.
+     ================================================================ */
+  /* Scrim, não cortina: escuro atrás do painel (legibilidade) e claro nas
+     bordas, porque o mapa ao fundo É a arte da tela inicial. */
   #overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
-    background: radial-gradient(ellipse at 50% 30%, rgba(16,26,40,0.82), rgba(5,8,14,0.94));
-    backdrop-filter: blur(5px); transition: opacity .6s; cursor: pointer; }
+    background: radial-gradient(ellipse 62% 60% at 50% 47%,
+      rgba(5,9,15,0.86) 0%, rgba(6,10,17,0.66) 52%, rgba(6,10,17,0.30) 100%);
+    backdrop-filter: blur(5px); transition: opacity .6s; cursor: pointer;
+    overflow-y: auto; padding: clamp(10px, 2vh, 26px) clamp(10px, 2vw, 30px); }
   #overlay.hidden { opacity: 0; pointer-events: none; }
-  #panel { text-align: center; max-width: 760px; padding: 30px; }
-  #title { font-size: 64px; font-weight: 800; letter-spacing: 14px; color: transparent;
-    background: linear-gradient(180deg, #fff, #ffd76a 55%, #ff9a3d);
+  /* corte de câmera: opacidade escrita pelo passeio cinematográfico */
+  #menuCut { position: fixed; inset: 0; background: #04060a; opacity: 0; pointer-events: none; z-index: 0; }
+  /* margin:auto (e não só align-items) para o topo continuar alcançável
+     quando o painel fica mais alto que a janela */
+  #panel { position: relative; z-index: 1; margin: auto; text-align: center;
+    width: 100%; max-width: min(1040px, 96vw); padding: clamp(6px, 1.6vh, 22px) clamp(6px, 1.4vw, 20px);
+    animation: panelIn .72s cubic-bezier(.16,.9,.24,1) both; }
+
+  /* ---- título vivo ---- */
+  #titleWrap { position: relative; display: inline-block;
+    padding: clamp(6px, 1.4vh, 16px) clamp(12px, 3vw, 44px) clamp(12px, 2vh, 22px); }
+  /* will-change: as duas animações do título rodam pra sempre. Sem camada
+     própria elas obrigam o #overlay (que carrega o backdrop-filter) a
+     repintar junto — caro. Superfícies pequenas, promoção barata. */
+  #titleGlow { position: absolute; left: 50%; top: 52%; width: 128%; height: 210%; transform: translate(-50%,-50%);
+    pointer-events: none; z-index: 0; will-change: opacity, transform;
+    background: radial-gradient(ellipse at center, rgba(255,171,71,0.30) 0%, rgba(255,120,40,0.10) 42%, rgba(255,120,40,0) 70%);
+    animation: glowBreath 5.4s ease-in-out infinite; }
+  #title { position: relative; z-index: 1; line-height: .96; white-space: nowrap;
+    font-size: clamp(30px, min(7.6vw, 9.4vh), 86px);
+    font-weight: 800; letter-spacing: clamp(4px, 1.1vw, 16px);
+    font-feature-settings: "ss01" 1, "kern" 1; }
+  #title .ln { display: inline-block; color: transparent; -webkit-text-fill-color: transparent;
+    background-image: linear-gradient(180deg, #fff9ec 2%, #ffe3a6 32%, #ffb95c 66%, #ff8c2c 100%);
     -webkit-background-clip: text; background-clip: text;
-    text-shadow: 0 0 60px rgba(255,180,80,0.25); margin-bottom: 2px; }
-  #subtitle { color: rgba(200,220,255,0.75); font-size: 14px; letter-spacing: 6px; margin-bottom: 34px; }
-  #controls { display: grid; grid-template-columns: repeat(2, minmax(240px, 1fr)); gap: 9px 26px; text-align: left;
-    background: rgba(10,16,26,0.55); border: 1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 22px 30px; }
-  .ctl { display: flex; align-items: center; gap: 12px; color: rgba(230,240,255,0.92); font-size: 14px; }
-  .key { display: inline-flex; align-items: center; justify-content: center; min-width: 38px; height: 28px; padding: 0 8px;
-    background: linear-gradient(180deg, #2c3a4e, #1a2434); border: 1px solid rgba(255,255,255,0.25); border-bottom-width: 3px;
-    border-radius: 6px; color: #ffd76a; font-weight: 700; font-size: 12px; letter-spacing: 1px; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
-  #clickPlay { margin-top: 34px; font-size: 19px; letter-spacing: 5px; color: #fff; animation: pulse 1.6s ease-in-out infinite; }
-  @keyframes pulse { 0%,100% { opacity: .55; } 50% { opacity: 1; text-shadow: 0 0 24px rgba(255,210,110,.8); } }
-  #loadingMsg { margin-top: 14px; color: rgba(160,190,230,.6); font-size: 12px; letter-spacing: 2px; }
-  #pausedTag { display: none; margin-top: 10px; color: #ff9a3d; letter-spacing: 4px; font-size: 13px; }
+    /* aberração cromática + apoio escuro: o text-shadow pinta ATRÁS do
+       gradiente recortado, e o céu do jogo pode estourar de branco atrás */
+    text-shadow: 1.5px 0 0 rgba(0,176,255,0.22), -1.5px 0 0 rgba(255,48,60,0.20),
+                 0 3px 14px rgba(2,5,10,0.7), 0 0 34px rgba(255,168,64,0.45);
+    animation: lnIn .62s cubic-bezier(.16,.86,.28,1) both;
+    animation-delay: calc(var(--i) * 0.065s + 0.16s); }
+  #title .ln.sm { font-size: .58em; vertical-align: .18em; opacity: .9; }
+  #title .ln.hot { background-image: linear-gradient(180deg, #fff0cd 2%, #ffbb5e 32%, #ff8a2e 68%, #ff5a14 100%);
+    text-shadow: 1.5px 0 0 rgba(255,124,0,0.20), -1.5px 0 0 rgba(255,42,20,0.26),
+                 0 3px 14px rgba(2,5,10,0.7), 0 0 44px rgba(255,120,30,0.6); }
+  #title .sp { display: inline-block; width: .34em; }
+  /* CRT: linhas estáticas + uma varredura clara (só transform anima).
+     A máscara existe pra o retângulo do gradiente não virar uma caixa
+     visível em volta do título. */
+  #titleScan { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden;
+    background: repeating-linear-gradient(180deg, rgba(4,8,14,0.30) 0 1px, rgba(4,8,14,0) 1px 3px); opacity: .42;
+    -webkit-mask-image: radial-gradient(ellipse 62% 46% at 50% 50%, #000 40%, rgba(0,0,0,0) 82%);
+    mask-image: radial-gradient(ellipse 62% 46% at 50% 50%, #000 40%, rgba(0,0,0,0) 82%); }
+  #titleScan::after { content: ''; position: absolute; left: -10%; right: -10%; height: 22%; will-change: transform;
+    background: linear-gradient(180deg, rgba(255,238,200,0) 0%, rgba(255,238,200,0.22) 50%, rgba(255,238,200,0) 100%);
+    animation: scanSweep 6.2s linear infinite; }
+  @keyframes lnIn { from { opacity: 0; transform: translate3d(0, .5em, 0) scale(.84); }
+                    to   { opacity: 1; transform: none; } }
+  @keyframes glowBreath { 0%, 100% { opacity: .5; transform: translate(-50%,-50%) scale(.93); }
+                          50%      { opacity: 1;  transform: translate(-50%,-50%) scale(1.07); } }
+  @keyframes scanSweep { 0% { transform: translateY(-160%); } 100% { transform: translateY(560%); } }
+  @keyframes panelIn { from { opacity: 0; transform: translate3d(0, 22px, 0) scale(.99); }
+                       to   { opacity: 1; transform: none; } }
+  @keyframes riseIn { from { opacity: 0; transform: translate3d(0, 14px, 0); }
+                      to   { opacity: 1; transform: none; } }
+
+  #subtitle { display: flex; align-items: center; justify-content: center; gap: clamp(8px, 1.6vw, 18px);
+    color: rgba(196,218,250,0.78); font-size: clamp(9px, .82vw, 13px); letter-spacing: .42em;
+    margin: clamp(2px, .8vh, 8px) 0 clamp(14px, 3.2vh, 34px);
+    animation: riseIn .5s ease-out both .34s; }
+  #subtitle i { flex: 1 1 0; max-width: clamp(30px, 9vw, 130px); height: 1px;
+    background: linear-gradient(90deg, rgba(255,190,110,0) 0%, rgba(255,190,110,.55) 100%); }
+  #subtitle i:last-child { background: linear-gradient(270deg, rgba(255,190,110,0) 0%, rgba(255,190,110,.55) 100%); }
+  #subtitle span { white-space: nowrap; }
+
+  /* ---- controles: agrupados por intenção, não uma parede de texto ---- */
+  #controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    gap: clamp(10px, 1.4vw, 26px); text-align: left;
+    background: linear-gradient(180deg, rgba(13,21,33,0.62), rgba(7,12,20,0.52));
+    border: 1px solid rgba(255,205,120,0.16); border-radius: 16px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 10px 30px rgba(0,0,0,0.28);
+    padding: clamp(12px, 1.9vh, 24px) clamp(14px, 1.8vw, 28px);
+    animation: riseIn .5s ease-out both .44s; }
+  .ctlGroup h4 { font-size: clamp(8px, .62vw, 10px); font-weight: 700; letter-spacing: .34em; text-transform: uppercase;
+    color: #ffb257; margin-bottom: clamp(6px, 1vh, 11px); padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255,180,90,0.20); }
+  .ctl { display: flex; align-items: center; gap: 9px; margin: clamp(3px, .7vh, 7px) 0;
+    color: rgba(226,238,255,0.90); font-size: clamp(10px, .78vw, 13px); }
+  .ctl b { font-weight: 500; }
+  .ctl b i { font-style: normal; opacity: .48; }
+  .keys { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto;
+    min-width: clamp(62px, 6.4vw, 96px); }
+  .key { display: inline-flex; align-items: center; justify-content: center;
+    min-width: clamp(19px, 1.7vw, 25px); height: clamp(19px, 1.7vw, 25px); padding: 0 5px;
+    background: linear-gradient(180deg, #35465f 0%, #263346 46%, #1b2434 100%);
+    border: 1px solid rgba(178,205,242,0.26); border-bottom: 3px solid rgba(5,9,16,0.85);
+    border-radius: 6px; color: #ffd76a; font-weight: 700;
+    font-size: clamp(8.5px, .68vw, 11px); letter-spacing: .04em;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 2px 4px rgba(0,0,0,0.45);
+    text-shadow: 0 1px 0 rgba(0,0,0,0.55); }
+  .key.wide { min-width: clamp(38px, 3.4vw, 50px); }
+  .key.mouse { min-width: clamp(30px, 2.8vw, 42px); }
+  .key.dash { min-width: 7px; padding: 0; background: none; border: none; box-shadow: none;
+    color: rgba(255,215,106,0.55); text-shadow: none; }
+
+  #loadingMsg { margin-top: clamp(8px, 1.4vh, 15px); color: rgba(178,203,238,.72); text-shadow: 0 1px 4px rgba(0,0,0,.8);
+    font-size: clamp(9px, .72vw, 12px); letter-spacing: .18em; animation: riseIn .5s ease-out both .66s; }
+  #pausedTag { display: none; margin-top: 10px; color: #ff9a3d; letter-spacing: .3em; font-size: 13px;
+    animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
   #overlay.paused #pausedTag { display: block; }
 
-  /* ===== menu: botões ===== */
-  #menuBtns { display: flex; flex-direction: column; gap: 10px; margin-top: 30px; align-items: center; }
-  .mbtn { min-width: 270px; padding: 12px 28px; font-size: 15px; letter-spacing: 4px; color: #fff; cursor: pointer;
-    background: linear-gradient(90deg, rgba(255,154,61,0.14), rgba(255,215,106,0.05));
-    border: 1px solid rgba(255,200,120,0.4); border-radius: 10px; text-align: center;
-    transition: all .15s; text-shadow: 0 1px 3px #000; }
-  .mbtn:hover { background: linear-gradient(90deg, rgba(255,154,61,0.35), rgba(255,215,106,0.12));
-    border-color: #ffd76a; transform: scale(1.04); box-shadow: 0 0 24px rgba(255,170,60,0.25); }
-  .mbtn.sec { min-width: 200px; font-size: 12px; opacity: .8; border-color: rgba(255,255,255,0.25); background: rgba(20,28,40,0.4); }
-  .mbtn.disabled { pointer-events: none; opacity: .45; cursor: default; }
+  /* PAUSA = sóbria e imediata: o menu de pausa reaparece dezenas de vezes
+     por partida, repetir a entrada cinematográfica seria irritante. */
+  #overlay.paused #panel, #overlay.paused #subtitle, #overlay.paused #controls,
+  #overlay.paused #menuBtns, #overlay.paused #loadingMsg, #overlay.paused #title .ln,
+  #overlay.paused #titleGlow, #overlay.paused #titleScan::after, #overlay.paused #settings.open
+    { animation: none; opacity: 1; transform: none; }
+  #overlay.paused #titleGlow { opacity: .42; transform: translate(-50%,-50%) scale(1); }
+  #overlay.paused #titleScan::after { display: none; }
 
-  /* ===== configurações ===== */
-  #settings { display: none; background: rgba(10,16,26,0.7); border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 14px; padding: 24px 34px; margin-top: 20px; text-align: left; }
-  #settings.open { display: block; }
-  .srow { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 10px 0; color: #dfe8f5; font-size: 13px; letter-spacing: 1px; }
-  .srow input[type=range] { width: 160px; accent-color: #ffd76a; }
-  .srow select { background: #1a2434; color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px; padding: 4px 8px; }
+  /* ===== menu: botões com peso ===== */
+  #menuBtns { display: flex; flex-direction: column; gap: clamp(7px, 1.1vh, 12px);
+    margin-top: clamp(14px, 3vh, 32px); align-items: center; animation: riseIn .5s ease-out both .54s; }
+  .mbtn { position: relative; overflow: hidden; isolation: isolate;
+    min-width: clamp(210px, 26vw, 300px); padding: clamp(9px, 1.4vh, 15px) clamp(18px, 2.4vw, 32px);
+    font-size: clamp(12px, .95vw, 16px); letter-spacing: .3em; font-weight: 700; color: #fff; cursor: pointer;
+    background: linear-gradient(100deg, rgba(255,154,61,0.16), rgba(255,215,106,0.05));
+    border: 1px solid rgba(255,200,120,0.42); border-radius: 10px; text-align: center;
+    text-shadow: 0 1px 3px #000;
+    transition: transform .16s cubic-bezier(.2,.9,.3,1.25), box-shadow .16s ease, border-color .16s ease,
+                background .16s ease, color .16s ease; }
+  /* barra âmbar que "acende" no foco: leitura de seleção sem depender de cor sozinha */
+  .mbtn::before { content: ''; position: absolute; left: 0; top: 50%; width: 3px; height: 0;
+    transform: translateY(-50%); background: linear-gradient(180deg, #ffd76a, #ff9a3d);
+    box-shadow: 0 0 12px rgba(255,170,60,.75); transition: height .18s ease; }
+  /* varredura de brilho (só transform anima) */
+  .mbtn::after { content: ''; position: absolute; inset: 0; z-index: -1; transform: translateX(-120%);
+    background: linear-gradient(100deg, rgba(255,215,106,0) 0%, rgba(255,215,106,0.22) 50%, rgba(255,215,106,0) 100%);
+    transition: transform .5s ease; }
+  .mbtn:hover, .mbtn:focus-visible {
+    background: linear-gradient(100deg, rgba(255,154,61,0.34), rgba(255,215,106,0.12));
+    border-color: #ffd76a; color: #fff6de; transform: translateY(-2px) scale(1.028);
+    box-shadow: 0 0 26px rgba(255,170,60,0.28), 0 6px 18px rgba(0,0,0,0.35); }
+  .mbtn:hover::before, .mbtn:focus-visible::before { height: 62%; }
+  .mbtn:hover::after, .mbtn:focus-visible::after { transform: translateX(120%); }
+  .mbtn:focus-visible { outline: 2px solid #ffd76a; outline-offset: 3px; }
+  .mbtn:active { transform: translateY(0) scale(.985); }
+  .mbtn.hit { animation: mbtnHit .26s cubic-bezier(.2,.9,.3,1.4); }
+  @keyframes mbtnHit { 0% { transform: scale(.95); } 55% { transform: translateY(-2px) scale(1.05); } 100% { transform: none; } }
+  .mbtn.sec { min-width: clamp(180px, 20vw, 220px); font-size: clamp(10px, .78vw, 12.5px); letter-spacing: .26em;
+    opacity: .82; border-color: rgba(255,255,255,0.24); background: rgba(20,28,40,0.42); }
+  .mbtn.sec:hover, .mbtn.sec:focus-visible { opacity: 1; }
+  .mbtn.disabled { pointer-events: none; opacity: .45; cursor: default; letter-spacing: .12em; }
+
+  /* "entrando no jogo": o #overlay some SÍNCRONO (contrato do setPaused),
+     então o feedback mora aqui fora, por cima e sem pointer-events */
+  #launchFx { position: fixed; inset: 0; z-index: 150; pointer-events: none; opacity: 0;
+    background: radial-gradient(ellipse at 50% 52%, rgba(255,232,176,0.92) 0%, rgba(255,154,61,0.5) 30%, rgba(255,120,40,0) 68%); }
+  #launchFx.go { will-change: opacity, transform; animation: launchGo .52s cubic-bezier(.2,.75,.3,1) both; }
+  @keyframes launchGo { 0% { opacity: 0; transform: scale(.5); }
+                        16% { opacity: .95; transform: scale(1); }
+                        100% { opacity: 0; transform: scale(1.55); } }
+
+  /* ===== configurações (NUNCA depender de estar dentro do #panel: o
+     multiplayer-client move este bloco pro card do lobby e devolve) ===== */
+  #settings { display: none; background: linear-gradient(180deg, rgba(13,21,33,0.78), rgba(7,12,20,0.72));
+    border: 1px solid rgba(255,205,120,0.18); border-radius: 14px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05); padding: clamp(14px, 2vh, 24px) clamp(16px, 2.2vw, 32px);
+    margin: 18px auto 0; max-width: 520px; text-align: left; }
+  #settings.open { display: block; animation: riseIn .26s ease-out both; }
+  /* configurações abertas trocam de lugar com a grade de controles:
+     ninguém precisa das duas ao mesmo tempo e a tela para de rolar */
+  #overlay:has(#settings.open) #controls { display: none; }
+  .shead { font-size: 9.5px; font-weight: 700; letter-spacing: .34em; text-transform: uppercase; color: #ffb257;
+    padding-bottom: 5px; margin: 14px 0 8px; border-bottom: 1px solid rgba(255,180,90,0.18); }
+  .shead:first-child { margin-top: 0; }
+  .srow { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 9px 0;
+    color: #dfe8f5; font-size: clamp(11px, .8vw, 13px); letter-spacing: .06em; }
+  .srow input[type=range] { width: clamp(110px, 12vw, 170px); accent-color: #ffd76a; cursor: pointer; }
+  .srow select { background: #1a2434; color: #fff; border: 1px solid rgba(255,255,255,0.3); border-radius: 6px;
+    padding: 4px 8px; cursor: pointer; transition: border-color .15s ease; }
+  .srow select:hover, .srow select:focus-visible { border-color: #ffd76a; outline: none; }
+
+  /* ---- telas curtas: o menu inteiro precisa caber sem rolagem ---- */
+  @media (max-height: 780px) {
+    #subtitle { margin-bottom: clamp(10px, 2vh, 18px); }
+    #menuBtns { margin-top: clamp(10px, 2vh, 18px); }
+    #settings { margin-top: 12px; }
+  }
+  @media (max-height: 560px) {
+    #controls { display: none; }  /* sobra só o essencial: título + botões */
+    #titleWrap { padding-top: 0; padding-bottom: 0; }
+  }
+  @media (max-width: 560px) {
+    #title { white-space: normal; }
+    #subtitle { letter-spacing: .24em; }
+    #subtitle i { display: none; }
+  }
+  /* acessibilidade: quem pediu menos movimento recebe o menu parado */
+  @media (prefers-reduced-motion: reduce) {
+    #panel, #subtitle, #controls, #menuBtns, #loadingMsg, #pausedTag,
+    #title .ln, #titleGlow, #titleScan::after, #settings.open, .mbtn.hit, #launchFx.go
+      { animation: none !important; opacity: 1; transform: none; }
+    #titleGlow { opacity: .55; transform: translate(-50%,-50%); }
+    .mbtn { transition: none; }
+  }
 
   /* ===== HUD: missão / armadura / inventário ===== */
   #mission { position: fixed; left: 22px; top: 202px; max-width: 250px; color: #ffe9b8; font-size: 12px;
