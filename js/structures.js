@@ -845,12 +845,17 @@ export function createStructures(deps) {
     radius: 95,
     _state: 'intact',
     _bodies: [],          // corpos CANNON das paredes urbanas (registrados pelo game.js)
+    _ruinBodies: [],      // corpos CANNON dos ESCOMBROS (idem, mas entram só no destroy)
     _world: null,
     _savedWalls: [], _savedPlatforms: [],
     containsPoint(x, z) { return Math.hypot(x - CITY.x, z - CITY.z) <= this.radius; },
     getState() { return this._state; },
     setState(st) { if (st === 'destroyed') this.destroy(); else if (st === 'intact') this.restore(); },
     registerBody(b) { this._bodies.push(b); },
+    // Escombro é o espelho da parede urbana: a parede sai do mundo no destroy,
+    // o escombro entra. Sem isto o entulho barrava jogador e bala (walls[]) mas
+    // o CARRO ATRAVESSAVA — o loop de corpos do game.js só roda no boot.
+    registerRuinBody(b) { this._ruinBodies.push(b); },
     bindPhysics(world) { this._world = world; },
     destroy() {
       if (this._state === 'destroyed') return;
@@ -864,7 +869,10 @@ export function createStructures(deps) {
       for (let i = walls.length - 1; i >= 0; i--) if (walls[i].city) walls.splice(i, 1);
       for (let i = platforms.length - 1; i >= 0; i--) if (platforms[i].city) platforms.splice(i, 1);
       for (const rw of ruinWalls) walls.push(rw); // escombros: poucos colisores baixos
-      if (this._world) for (const b of this._bodies) this._world.removeBody(b);
+      if (this._world) {
+        for (const b of this._bodies) this._world.removeBody(b);
+        for (const b of this._ruinBodies) this._world.addBody(b);
+      }
     },
     restore() {
       if (this._state === 'intact') return;
@@ -876,11 +884,14 @@ export function createStructures(deps) {
       for (const w of this._savedWalls) walls.push(w);
       for (const p of this._savedPlatforms) platforms.push(p);
       this._savedWalls = []; this._savedPlatforms = [];
-      if (this._world) for (const b of this._bodies) this._world.addBody(b);
+      if (this._world) {
+        for (const b of this._ruinBodies) this._world.removeBody(b);
+        for (const b of this._bodies) this._world.addBody(b);
+      }
     },
   };
 
-  return { sites, walls, rayHit, segBlocked, collide, FORT_POS, castle, flames, smokeSpots, flags, city,
+  return { sites, walls, ruinWalls, rayHit, segBlocked, collide, FORT_POS, castle, flames, smokeSpots, flags, city,
     cityMat, carSpots, enemyCamps, chestSpots, baseSites, heliSpot, bazookaSpot, towerTopY, NEXUS_INTERIOR,
     fieldRoofs };
 }

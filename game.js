@@ -487,6 +487,19 @@ for (const b of Structures.walls) {
   if (b.castle) Structures.castle.registerPhysicsBody(world, wb);
   if (b.city) Structures.city.registerBody(wb); // destruição da cidade remove estes
 }
+/* ESCOMBROS: os colisores das ruínas só entram em Structures.walls no destroy(),
+   depois deste loop — sem um corpo criado aqui o entulho barrava jogador e bala
+   mas o CARRO ATRAVESSAVA. Os corpos nascem prontos (com updateAABB) e ficam
+   FORA do mundo; a cidade os adiciona/remove junto com a troca de estado. */
+for (const b of Structures.ruinWalls) {
+  const hx = (b.x1 - b.x0) / 2, hy = (b.y1 - b.y0) / 2, hz = (b.z1 - b.z0) / 2;
+  if (hx < 0.04 || hy < 0.04 || hz < 0.04) continue;
+  const rb = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
+  rb.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2);
+  rb.userData = { category: 'rigid', sourceId: 'city-ruin', hardForVehicle: true };
+  rb.updateAABB(); // estático posicionado após o construtor: AABB ficaria na origem
+  Structures.city.registerRuinBody(rb);
+}
 Structures.city.bindPhysics(world);
 
 /* apoio físico do castelo para RaycastVehicle. O player/IA consulta
