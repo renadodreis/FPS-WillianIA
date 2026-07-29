@@ -47,6 +47,7 @@ import { createPrewarm } from './js/prewarm.js';
 import { createResolutionScaler } from './js/adaptivequality.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
+import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
 import { buildChest } from './js/chestmodel.js';
 
 /* ================================================================
@@ -2259,6 +2260,35 @@ const perf = { physicsSteps: 0, physicsDroppedMs: 0, simulationCoverage: 1, fram
 const carPosV = new THREE.Vector3();
 let menuT = 0;
 
+/* ---- passeio cinematográfico do menu ----
+   Planos por pontos de interesse REAIS do mapa (a cidade, o castelo, a boca
+   do vulcão, o carro do spawn). Os alvos saem de Structures/CityLayout/
+   VOLCANO — nada aqui sorteia nada: consumir o `Math.random` seedado mudaria
+   o layout do mundo (invariante do worldgen). `at(v)` preenche o vetor
+   recebido, então o passeio inteiro roda com zero alocação por frame. */
+let menuFortY = 0; // chão do forte: constante, amostrado uma vez só
+/* Ordem proposital: abre no SPAWN (íntimo, e o plano mais barato de desenhar,
+   que é o que a página mostra enquanto ainda está bootando) e só então abre
+   pro panorama — cidade, castelo, vulcão. */
+const MENU_SHOTS = [
+  { key: 'carro', dur: 9,
+    at: v => v.set(Car.group.position.x, Car.group.position.y + 1.1, Car.group.position.z),
+    r0: 16.5, r1: 9.8, h0: 5.2, h1: 2.3, a0: 0.55, spin: 0.055, fov0: 58, fov1: 64 },
+  { key: 'cidade', dur: 11,
+    at: v => v.set(Structures.heliSpot.x, Structures.heliSpot.y - 6, Structures.heliSpot.z),
+    r0: 172, r1: 118, h0: 34, h1: 12, a0: 2.35, spin: 0.030, fov0: 46, fov1: 52 },
+  { key: 'castelo', dur: 10,
+    at: v => v.set(Structures.FORT_POS.x,
+      menuFortY || (menuFortY = heightAt(Structures.FORT_POS.x, Structures.FORT_POS.z) + 12),
+      Structures.FORT_POS.z),
+    r0: 98, r1: 64, h0: 44, h1: 21, a0: 3.95, spin: -0.036, fov0: 50, fov1: 56 },
+  { key: 'vulcao', dur: 10,
+    at: v => v.set(VOLCANO.lavaX, VOLCANO.baseY + VOLCANO.h * 0.62, VOLCANO.lavaZ),
+    r0: 196, r1: 138, h0: 70, h1: 40, a0: 5.25, spin: 0.026, fov0: 44, fov1: 50 },
+];
+const MenuCam = createMenuCamera({ THREE, camera, heightAt, shots: MENU_SHOTS,
+  cutEl: document.getElementById('menuCut') });
+
 function animate() {
   requestAnimationFrame(animate);
   tick();
@@ -2299,15 +2329,22 @@ function tick(forceDt) {
   perf.frameMs = frameDt * 1000;
 
   if (!state.started || state.paused) {
-    // menu / pausa: mundo vivo ao fundo, câmera orbitando devagar
+    // menu / pausa: mundo vivo ao fundo, câmera passeando pelo mapa
     menuT += dt;
     if (!state.started) {
-      const a = menuT * 0.07;
-      camera.position.set(Math.sin(a) * 16, heightAt(Math.sin(a) * 16, Math.cos(a) * 16) + 4.5, Math.cos(a) * 16);
-      camera.lookAt(Car.group.position.x, Car.group.position.y + 1.2, Car.group.position.z);
-      camera.updateProjectionMatrix();
+      // a arma em primeira pessoa é filha da câmera: no passeio cinematográfico
+      // ela ficava plantada no canto de TODOS os planos. O frame de jogo
+      // reescreve weaponRoot.visible toda vez (ver shootUpdate), então isto
+      // vale só enquanto a partida não começou.
+      weaponRoot.visible = false;
+      MenuCam.update(dt);
     }
-    Grass.update(camera.position, carPosV.copy(Car.group.position), menuT);
+    /* A grade de grama fica ANCORADA no spawn durante o menu. Seguir a câmera
+       do passeio (que salta ~800 m a cada corte) enfileiraria os 169 chunks a
+       cada troca de plano e o REBUILD_BUDGET (6/frame) pagaria isso por meio
+       segundo. Ancorada, o custo é zero e a grama já nasce pronta pro início. */
+    Grass.update(state.started ? camera.position : player.pos,
+      carPosV.copy(Car.group.position), menuT);
     Env.update(dt, menuT);
     Car.update(dt, menuT);
     Heli.update(dt, menuT);
@@ -2407,9 +2444,17 @@ window.addEventListener('pointerlockerror', () => {
   setPaused(false);
 });
 
+/* som de interface, navegação por teclado e destravamento do AudioContext no
+   PRIMEIRO gesto do jogador (antes só o startGame chamava init/resume, então o
+   hover nunca tinha som). Os SFX.ui* são chamados de forma opcional. */
+const MenuUI = wireMenuUI({ SFX });
+
 function startGame(trusted) {
   if (state.started) return;
   SFX.init(); SFX.resume(); SFX.musicStart(); SFX.setVolumes();
+  // flash de "entrando no jogo": elemento à parte, porque o #overlay some
+  // SÍNCRONO no setPaused (contrato coberto por test/gameplay.test.js)
+  MenuUI.launch();
   state.started = true;
   updateHealthHUD(); updateAmmoHUD(); updateInvHUD(); updateSlotsHUD(); updateArmorHUD();
   // banner de boas-vindas é do modo solo; no BR o lobby já anuncia a partida
@@ -2523,6 +2568,7 @@ window.__game = {
     get scheduledUpdateMask() { return csmLastUpdateMask; },
   },
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
+  MenuCam, // QA/captura: goTo('cidade'|'castelo'|'vulcao'|'carro')
   get gun() { return gun; },
   get fps() { return fpsVal; },
   perf,

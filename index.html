@@ -65,41 +65,59 @@
 </div>
 
 <div id="overlay">
+  <div id="menuCut" aria-hidden="true"></div>
   <div id="panel">
-    <div id="title">CALL OF AI</div>
-    <div id="subtitle">FPS DE MUNDO ABERTO &nbsp;·&nbsp; DIA & NOITE &nbsp;·&nbsp; CLIMA DINÂMICO</div>
+    <div id="titleWrap">
+      <div id="titleGlow" aria-hidden="true"></div>
+      <div id="title" role="heading" aria-level="1" aria-label="Call of AI"><span class="ln" style="--i:0">C</span><span class="ln" style="--i:1">A</span><span class="ln" style="--i:2">L</span><span class="ln" style="--i:3">L</span><span class="sp"></span><span class="ln sm" style="--i:4">O</span><span class="ln sm" style="--i:5">F</span><span class="sp"></span><span class="ln hot" style="--i:6">A</span><span class="ln hot" style="--i:7">I</span></div>
+      <div id="titleScan" aria-hidden="true"></div>
+    </div>
+    <div id="subtitle"><i></i><span>MUNDO ABERTO &nbsp;·&nbsp; DIA &amp; NOITE &nbsp;·&nbsp; CLIMA DINÂMICO</span><i></i></div>
     <div id="controls">
-      <div class="ctl"><span class="key">W A S D</span> Mover</div>
-      <div class="ctl"><span class="key">SHIFT</span> Correr</div>
-      <div class="ctl"><span class="key">ESPAÇO</span> Pular</div>
-      <div class="ctl"><span class="key">CTRL</span> Agachar / Deslizar</div>
-      <div class="ctl"><span class="key">🖱 ESQ / DIR</span> Atirar / Mirar</div>
-      <div class="ctl"><span class="key">R</span> Recarregar</div>
-      <div class="ctl"><span class="key">E</span> Veículo / Baú</div>
-      <div class="ctl"><span class="key">1-5</span> Armas (ou scroll)</div>
-      <div class="ctl"><span class="key">G</span> Granada</div>
-      <div class="ctl"><span class="key">Q</span> Kit médico</div>
-      <div class="ctl"><span class="key">T</span> Acessório da mira</div>
-      <div class="ctl"><span class="key">TAB</span> Inventário &nbsp;·&nbsp; <span class="key">F</span> Comer carne</div>
+      <div class="ctlGroup">
+        <h4>Movimento</h4>
+        <div class="ctl"><span class="keys"><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span></span><b>Mover</b></div>
+        <div class="ctl"><span class="keys"><span class="key wide">SHIFT</span></span><b>Correr</b></div>
+        <div class="ctl"><span class="keys"><span class="key wide">ESPAÇO</span></span><b>Pular</b></div>
+        <div class="ctl"><span class="keys"><span class="key wide">CTRL</span></span><b>Agachar / deslizar</b></div>
+      </div>
+      <div class="ctlGroup">
+        <h4>Combate</h4>
+        <div class="ctl"><span class="keys"><span class="key mouse">🖱 ESQ</span><span class="key mouse">DIR</span></span><b>Atirar / mirar</b></div>
+        <div class="ctl"><span class="keys"><span class="key">R</span></span><b>Recarregar</b></div>
+        <div class="ctl"><span class="keys"><span class="key">1</span><span class="key dash">–</span><span class="key">5</span></span><b>Trocar de arma <i>(ou scroll)</i></b></div>
+        <div class="ctl"><span class="keys"><span class="key">G</span></span><b>Granada</b></div>
+        <div class="ctl"><span class="keys"><span class="key">T</span></span><b>Acessório da mira</b></div>
+      </div>
+      <div class="ctlGroup">
+        <h4>Interação</h4>
+        <div class="ctl"><span class="keys"><span class="key">E</span></span><b>Veículo / baú</b></div>
+        <div class="ctl"><span class="keys"><span class="key">Q</span></span><b>Kit médico</b></div>
+        <div class="ctl"><span class="keys"><span class="key">F</span></span><b>Comer carne</b></div>
+        <div class="ctl"><span class="keys"><span class="key wide">TAB</span></span><b>Inventário</b></div>
+      </div>
     </div>
     <div id="menuBtns">
-      <div class="mbtn" id="btnNew">NOVO JOGO</div>
-      <div class="mbtn sec" id="btnSettings">⚙ &nbsp;CONFIGURAÇÕES</div>
+      <div class="mbtn" id="btnNew" role="button" tabindex="0">NOVO JOGO</div>
+      <div class="mbtn sec" id="btnSettings" role="button" tabindex="0">⚙ &nbsp;CONFIGURAÇÕES</div>
     </div>
     <div id="settings">
+      <h4 class="shead">Áudio</h4>
       <div class="srow"><span>Volume geral</span><input type="range" id="setVol" min="0" max="100" value="50"></div>
+      <h4 class="shead">Vídeo</h4>
       <div class="srow"><span>Resolução</span><select id="setRes"><option value="1">Desempenho</option><option value="1.5" selected>Equilibrado</option><option value="2">Qualidade</option></select></div>
       <div class="srow"><span>Resolução adaptativa</span><select id="setAutoRes"><option value="1" selected>Ligada</option><option value="0">Desligada</option></select></div>
       <div class="srow"><span>Sombras</span><select id="setShadow"><option value="1" selected>Ligadas</option><option value="0">Desligadas</option></select></div>
       <div class="srow"><span>Antisserrilhado</span><select id="setAA"><option value="1" selected>Ligado</option><option value="0">Desligado</option></select></div>
       <div class="srow"><span>Bloom</span><select id="setBloom"><option value="1" selected>Ligado</option><option value="0">Desligado</option></select></div>
       <div class="srow"><span>Mostrar ping</span><select id="setPing"><option value="1" selected>Sim</option><option value="0">Não</option></select></div>
-      <div class="mbtn sec" id="btnBack" style="margin-top:14px">VOLTAR</div>
+      <div class="mbtn sec" id="btnBack" role="button" tabindex="0" style="margin-top:14px">VOLTAR</div>
     </div>
-    <div id="loadingMsg">ESC pausa o jogo</div>
+    <div id="loadingMsg">ESC pausa o jogo &nbsp;·&nbsp; ↑ ↓ e ENTER navegam o menu</div>
     <div id="pausedTag">— PAUSADO —</div>
   </div>
 </div>
+<div id="launchFx" aria-hidden="true"></div>
 <div id="deathScreen"><div id="deathTitle">VOCÊ MORREU</div><div id="deathSub">reiniciando...</div></div>
 
 <script src="/socket.io/socket.io.js"></script>
