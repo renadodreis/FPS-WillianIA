@@ -36,6 +36,7 @@ describe('constantes = contrato do servidor', () => {
     assert.equal(H.BLAST_REACH.BAZUCA, 340);
     assert.equal(H.BLAST_REACH.GRANADA, 80);
     assert.equal(H.BLAST_VICTIM_RADIUS, 12);
+    assert.equal(H.SHOT_ORIGIN_TOLERANCE, 5);
   });
 });
 
@@ -82,6 +83,14 @@ describe('portão de predição — admitShot', () => {
   it('RECUSA arma desconhecida (server.js valida por prefixo)', () => {
     assert.equal(gate().admitShot(1000, { ...base, weapon: 'MARRETA' }).reason, 'weapon');
     assert.equal(gate().admitShot(1000, { ...base, weapon: '' }).reason, 'weapon');
+  });
+
+  it('RECUSA origem do tiro longe da posição reportada (limite de 5 m)', () => {
+    // acontece de verdade no helicóptero: o servidor guarda a posição da
+    // AERONAVE e o cliente reportava a origem do jogador
+    assert.equal(gate().admitShot(1000, { ...base, originDist: 9 }).reason, 'origin');
+    assert.equal(gate().admitShot(1000, { ...base, originDist: 4.9 }).ok, true);
+    assert.equal(gate().admitShot(1000, { ...base }).ok, true, 'sem informação, não inventa recusa');
   });
 
   it('RECUSA dano zero/negativo', () => {

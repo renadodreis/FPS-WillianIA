@@ -36,6 +36,7 @@ export const DMG_BUDGET_PER_S = 520;
 export const HITS_PER_S = 12;
 export const BLAST_REACH = { BAZUCA: 340, GRANADA: 80 };
 export const BLAST_VICTIM_RADIUS = 12;
+export const SHOT_ORIGIN_TOLERANCE = 5; // fromPos x posição reportada
 export const WINDOW_MS = 1000;
 
 /* prefixos aceitos pelo servidor: renomear arma fora desta lista faz o
@@ -96,6 +97,8 @@ export function createHitGate() {
       if (!isWeaponCode(p.weapon)) return NO('weapon');
       if (p.shooterImmune || p.victimImmune) return NO('immune');
       if (!(p.dist <= shotRange(p.weapon))) return NO('range');
+      // `originDist` é opcional: sem informação, não se inventa recusa
+      if (Number.isFinite(p.originDist) && p.originDist > SHOT_ORIGIN_TOLERANCE) return NO('origin');
       return meter(now, clampDmg(p.dmg, SHOT_DMG_CAP));
     },
     admitBlast(now, p) {

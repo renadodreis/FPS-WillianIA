@@ -20,6 +20,8 @@ import { createStructures } from './js/structures.js';
 import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
+import * as HitCore from './js/hitfeel-core.js';
+import { createHitFeel } from './js/hitfeel.js';
 import { createWeapons } from './js/weapons.js';
 import { createWeaponRig } from './js/weaponrig.js';
 import { createWeaponModels } from './js/weaponmodels.js';
@@ -983,12 +985,12 @@ function showBanner(html, dur = 3500) {
   bannerTimer = setTimeout(() => ui.banner.classList.remove('show'), dur);
 }
 
-let hitmarkerTimer = null;
-function showHitmarker(kill) {
-  ui.hitmarker.classList.toggle('kill', !!kill);
-  ui.hitmarker.classList.add('show');
-  clearTimeout(hitmarkerTimer);
-  hitmarkerTimer = setTimeout(() => ui.hitmarker.classList.remove('show'), kill ? 220 : 110);
+/* camada de tela do game feel: DOM/CSS/FX próprios (index.html e style.css
+   não são desta rodada) — ver js/hitfeel.js */
+const HitFeel = createHitFeel({ ui, SFX, FX, camera });
+/* aceita sabor ('hit' | 'head' | 'kill') e o booleano antigo (compat) */
+function showHitmarker(flavor) {
+  HitFeel.hitmarker(flavor === true ? 'kill' : flavor === false || !flavor ? 'hit' : flavor);
 }
 function addKillFeed(html) {
   const div = document.createElement('div');
@@ -1842,14 +1844,22 @@ function fire(t) {
       const head = bestPart === 'head' || bestPart === 'core';
       let dmg = head ? gun.dmg * 2 : gun.dmg;
       let died;
-      if (bestBoss) died = bestBossObj.damage(dmg, _hitPos, _rayDir, bestPart);
-      else if (bestExtra) died = bestExtra.damage(dmg, _hitPos, _rayDir, head);
-      else if (bestRemote) { died = bestRemote.damage(dmg, _hitPos, _rayDir, head); remoteHit = true; }
-      else died = bestEnemy.damage(dmg, _hitPos, _rayDir, bestPart === 'head');
-      hitAny = true; totalDmg += dmg;
-      headAny = headAny || head;
-      _hitAgg.copy(_hitPos);
-      if (died) killAny = true; // pontuação é creditada no die() do alvo
+      if (bestRemote) {
+        // JOGADOR REMOTO: o acerto é PREDIÇÃO — o servidor ainda pode recusar
+        // (alcance, imunidade, alvo já morto, orçamento). Quem decide mostrar
+        // hitmarker/número é o portão em br-game.js, no flush do queueHit.
+        // Aqui a mão só reporta o acerto; a tela não é avisada.
+        bestRemote.damage(dmg, _hitPos, { head });
+        remoteHit = true;
+      } else {
+        if (bestBoss) died = bestBossObj.damage(dmg, _hitPos, _rayDir, bestPart);
+        else if (bestExtra) died = bestExtra.damage(dmg, _hitPos, _rayDir, head);
+        else died = bestEnemy.damage(dmg, _hitPos, _rayDir, bestPart === 'head');
+        hitAny = true; totalDmg += dmg;
+        headAny = headAny || head;
+        _hitAgg.copy(_hitPos);
+        if (died) killAny = true; // pontuação é creditada no die() do alvo
+      }
     } else {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, 240);
       FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
@@ -1861,7 +1871,7 @@ function fire(t) {
   if (!remoteHit && missEndSet && window.__BR_shotMiss) window.__BR_shotMiss(_v3, _missEnd);
   if (hitAny) {
     DmgNums.spawn(_hitAgg, Math.round(totalDmg), headAny);
-    showHitmarker(killAny);
+    showHitmarker(HitCore.hitmarkerFlavor({ kill: killAny, head: headAny }));
     if (killAny) { SFX.kill(); }
     else if (headAny) SFX.headshot();
     else SFX.hit();
@@ -2777,6 +2787,9 @@ window.__MP = {
   heightAt, groundAt, addKillFeed, showHitmarker, playerDamage,
   updateHealthHUD, updateArmorHUD, updateAmmoHUD, updateInvHUD, updateSlotsHUD,
   setTimeScale,
+  // game feel: br-game.js é script clássico e não importa ESM — o núcleo puro
+  // e a camada de tela chegam por aqui (ver js/hitfeel-core.js e js/hitfeel.js)
+  HitCore, HitFeel,
   FX, DmgNums, SFX, rayBlockedAt, weaponRoot, centerMsg, showBanner,
   WATER_LEVEL, slopeAt, justPressed, world,
   socket: __mpSocket, spawn: __mpSpawn,
