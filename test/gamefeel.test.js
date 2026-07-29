@@ -332,6 +332,14 @@ describe('game feel — combate', { skip: !CHROME && 'Chrome não encontrado' },
       const orig = window.__MP.showHitmarker;
       window.__MP.showHitmarker = f => { window.__QA_markers.push(f); return orig(f); };
       document.getElementById('hitmarker').className = '';
+      // matar o último vivo termina a partida: instrumenta a encenação da
+      // vitória antes do golpe (lacuna 7)
+      window.__QA_timeScale = [];
+      const ots = window.__MP.setTimeScale;
+      window.__MP.setTimeScale = v => { window.__QA_timeScale.push(v); return ots(v); };
+      window.__QA_victory = 0;
+      const ov = window.__MP.SFX.victory;
+      window.__MP.SFX.victory = () => { window.__QA_victory++; return ov(); };
     });
     host.emit('died', { killerId: myId, cause: { type: 'player' }, weapon: 'FUZIL' });
     await wait(700);
@@ -341,5 +349,19 @@ describe('game feel — combate', { skip: !CHROME && 'Chrome não encontrado' },
     assert.ok(r.markers.includes('kill'),
       `matar no PvP continua sem hitmarker de kill (sabores=${JSON.stringify(r.markers)})`);
     assert.ok(r.cls.includes('kill'), `classe vermelha não foi aplicada: "${r.cls}"`);
+  });
+
+  it('7 — a VITÓRIA é encenada: câmera lenta + fanfarra antes da tabela', async () => {
+    // a kill anterior era do último adversário vivo: a partida acabou nela
+    await h.page.waitForFunction('window.__BR_debug.S.phase === "ENDED"', { timeout: 8000 });
+    const mid = await h.play(() => ({
+      scales: window.__QA_timeScale.slice(), victory: window.__QA_victory,
+    }));
+    assert.equal(mid.victory, 1, 'ganhar continua sem fanfarra (SFX.victory nunca era tocado)');
+    assert.ok(mid.scales.some(v => v < 1), `não houve câmera lenta na vitória: ${JSON.stringify(mid.scales)}`);
+    // e o jogo tem de VOLTAR ao normal quando a tabela aparece
+    await h.page.waitForFunction('window.__QA_timeScale.slice(-1)[0] === 1', { timeout: 5000 });
+    const shown = await h.play(() => document.body.innerHTML.includes('RANKING DA PARTIDA'));
+    assert.ok(shown, 'a tabela de resultado não chegou depois da encenação');
   });
 });

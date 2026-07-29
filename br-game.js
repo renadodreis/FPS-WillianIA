@@ -1692,6 +1692,7 @@
       MP.addKillFeed(`⛰ <b>${esc(d.by)}</b> derrotou o GOLEM`);
     });
     socket.on('chat', d => UI.addChat(d.nick, d.msg, d.sys));
+    const VICTORY_BEAT_MS = 1000; // câmera lenta antes da tabela de resultado
     socket.on('matchEnd', d => {
       S.phase = 'ENDED';
       window.__BR_lastGlobalTop = d.globalTop;
@@ -1706,7 +1707,12 @@
       } catch (e) {}
       const rows = d.ranking.map(r =>
         `<tr><td>#${r.placement}</td><td>${esc(r.nick)}</td><td>☠ ${r.kills}</td></tr>`).join('');
-      LOBBY.overlay(`
+      /* MOMENTO DA VITÓRIA — o `victory()` já existia no áudio e nunca era
+         tocado: ganhar caía direto na tela de resultado, sem um segundo de
+         respiro. Agora o último instante da partida roda em câmera lenta
+         (mesmo recurso da própria morte) com a fanfarra, e só então vem a
+         tabela. Só pro VENCEDOR: quem perdeu já teve a encenação da morte. */
+      const showResults = () => LOBBY.overlay(`
         <div class="brTitle" style="${won ? '' : 'color:#e8f1f8'}">${won ? '🏆 VITÓRIA MAGISTRAL!' : '🏆 FIM DE PARTIDA'}</div>
         <div class="brSub">PARTIDA #${S.matchNum}</div>
         <div style="text-align:center;font-size:19px;margin:10px 0">
@@ -1721,7 +1727,17 @@
         </div></div>
         <div style="text-align:center;margin-top:16px;font-size:13px;opacity:.75">
           próxima partida (mapa novo) em <b id="brNextIn">${d.nextIn}</b>s...</div>`);
-      LOBBY.renderGlobal(d.globalTop);
+      const finish = () => {
+        MP.setTimeScale(1);
+        showResults();
+        LOBBY.renderGlobal(d.globalTop);
+      };
+      if (won) {
+        MP.SFX.victory();
+        MP.showBanner('🏆 <b>VITÓRIA</b><small>último de pé</small>', VICTORY_BEAT_MS);
+        MP.setTimeScale(0.42);
+        setTimeout(finish, VICTORY_BEAT_MS);
+      } else finish();
       let n = d.nextIn;
       const iv = setInterval(() => {
         n--;
