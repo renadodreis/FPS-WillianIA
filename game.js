@@ -763,15 +763,26 @@ const Scenery = createScenery();
 
     // barris de madeira: cobertura leve perto dos POIs novos
     const barril = await Scenery.prop('/assets/models/Cenários/wooden_barrel.glb', { height: 1.05 });
-    const spots = [[mx + 5, mz + 4], [mx - 6, mz + 2], [mx + 3, mz - 6],
-      [tx + 4, tz + 2], [tx - 3, tz - 4], [tx + 2, tz - 5]];
+    // sem refúgio (busca de clareira na floresta falhou) os 3 barris dele não
+    // existem: antes caíam em (4,2)/(-3,-4)/(2,-5) — em cima do acampamento inicial
+    const spots = [[mx + 5, mz + 4], [mx - 6, mz + 2], [mx + 3, mz - 6]];
+    if (tx || tz) spots.push([tx + 4, tz + 2], [tx - 3, tz - 4], [tx + 2, tz - 5]);
+    const BARRIL_R = 0.42, BARRIL_H = 1.05;
     for (const [bx, bz] of spots) {
-      if (!bx && !bz) continue;
+      const by = heightAt(bx, bz);
       const b = barril.root.clone(true);
-      b.position.set(bx, heightAt(bx, bz), bz);
+      b.position.set(bx, by, bz);
       b.rotation.y = poiRand(TAU);
       scene.add(b);
-      addObstacle(bx, bz, 0.55);
+      addObstacle(bx, bz, 0.55, { category: 'rigid', sourceId: 'barrel' }); // player não atravessa
+      // ...e o CARRO também não: sem corpo CANNON o barril era decoração
+      // atravessável (só o cacto é "vegetação macia" de propósito).
+      const body = new CANNON.Body({ mass: 0,
+        shape: new CANNON.Cylinder(BARRIL_R, BARRIL_R, BARRIL_H, 10) });
+      body.position.set(bx, by + BARRIL_H / 2, bz);
+      body.userData = { category: 'rigid', sourceId: 'barrel', hardForVehicle: true };
+      body.updateAABB(); // estático posicionado após o construtor: AABB ficaria na origem
+      world.addBody(body);
     }
     // tira árvores que nasceram dentro dos POIs novos e refaz o LOD
     for (let i = treeSpots.length - 1; i >= 0; i--) {
