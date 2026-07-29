@@ -35,6 +35,15 @@
    tilt > 0 mira pra cima  → assunto mais BAIXO;  tilt < 0 → assunto mais alto. */
 export function createMenuCamera(deps) {
   const { THREE, camera, heightAt, shots, cutEl } = deps;
+  /* PORTÃO DE CORTE (mayTour): o passeio só troca de plano quando o chamador
+     libera — na prática, quando o prewarm linkou os shaders pendentes. Sem
+     isto, o primeiro corte pra cidade compila dezenas de programas WebGL
+     SINCRONAMENTE em GPU fraca; a main thread trava por segundos, o engine.io
+     derruba o socket e o cliente renasce com outro id → em produção o
+     multiplayer recarrega a página NO MEIO DO MENU. Checado a CADA corte:
+     um lote de GLB tardio (árvores/POIs) volta a segurar o corte seguinte.
+     Enquanto segura, o plano atual continua orbitando — ninguém percebe. */
+  const mayTour = deps.mayTour || (() => true);
   const _target = new THREE.Vector3();
   const _pos = new THREE.Vector3();
   const _aim = new THREE.Vector3();
@@ -65,7 +74,7 @@ export function createMenuCamera(deps) {
       }
       if (cutT >= CUT_IN + CUT_OUT) { cutT = -1; paintCut(0); }
       else paintCut(cutT < CUT_IN ? cutT / CUT_IN : 1 - (cutT - CUT_IN) / CUT_OUT);
-    } else if (shotT >= s.dur) {
+    } else if (shotT >= s.dur && mayTour()) {
       cutT = 0; swapped = false;
     }
 
@@ -108,7 +117,8 @@ export function createMenuCamera(deps) {
     return true;
   }
 
-  return { update, goTo, get shot() { return shots[idx].key; } };
+  return { update, goTo, get shot() { return shots[idx].key; },
+    shotIndex: () => idx };
 }
 
 /* ---------------- interface do menu ---------------- */

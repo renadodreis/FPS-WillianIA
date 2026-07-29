@@ -534,9 +534,29 @@
     });
     socket.emit('hello', { nick: S.nick, colors: S.myColors });
 
-    /* reconexão do socket.io ganharia um id novo no servidor (avatar duplicado,
-       identidade quebrada) — recarregar é o único caminho limpo */
-    socket.io.on('reconnect', () => location.reload());
+    /* ---------- reconexão ----------
+       O servidor emite um `init` FRESCO em toda conexão. Uma reconexão ainda
+       no LOBBY, com a MESMA seed, não precisa derrubar a página: basta adotar
+       o init novo (id/host/roster) e reapresentar o hello. Isso importa em
+       máquina fraca: o boot bloqueia a main thread por vários segundos, o
+       transporte do engine.io pode cair NO MENU e o reload jogava o jogador
+       de volta pro início do carregamento (raiz do cancelamento em cadeia de
+       test/br-drops: o id renascia e o __MP_init ficava órfão).
+       Durante a partida (ou se a seed mudou — nextMatch no vácuo), o mundo já
+       divergiu: recarregar segue sendo o único caminho limpo. */
+    /* O servidor SÓ emite `init` no evento de conexão, e o primeiro já foi
+       consumido pelo bootstrap do game.js antes deste handler existir. Logo,
+       todo `init` visto aqui É uma reconexão — sem depender do listener
+       `reconnect` do manager (que o harness de QA remove junto com o reload). */
+    socket.on('init', d => {
+      const preMatch = S.phase === 'LOBBY' || S.phase === 'ENDED';
+      if (preMatch && window.__MP_init && d.worldSeed === window.__MP_init.worldSeed) {
+        Object.assign(window.__MP_init, d);  // id novo, host/roster atuais
+        sendHello();                         // reapresenta nick/cores na sala
+      } else {
+        location.reload();
+      }
+    });
 
     /* ---------- ping (mostrado ao lado do FPS quando habilitado) ---------- */
     setInterval(() => {

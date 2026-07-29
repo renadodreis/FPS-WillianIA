@@ -2433,7 +2433,13 @@ const MENU_SHOTS = [
     pan: -0.20, tilt: -0.07 },
 ];
 const MenuCam = createMenuCamera({ THREE, camera, heightAt, shots: MENU_SHOTS,
-  cutEl: document.getElementById('menuCut') });
+  cutEl: document.getElementById('menuCut'),
+  /* Só corta de plano com o prewarm QUENTE e OCIOSO: pelo menos um flush
+     completo e fila vazia. Sem isto o corte pra cidade linka os shaders dela
+     na hora (síncrono) — segundos de main thread travada em GPU fraca, o
+     socket cai e o multiplayer recarrega a página no meio do menu (raiz do
+     cancelamento em cadeia de test/br-drops; ver test/menuscene-gate.test.js). */
+  mayTour: () => { const s = prewarm.stats; return s.runs > 0 && s.queued === 0; } });
 
 function animate() {
   requestAnimationFrame(animate);
