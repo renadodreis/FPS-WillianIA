@@ -11,6 +11,7 @@ import {
   MAX_CASTLE_RAMP_SLOPE_DEGREES,
   measureCastleSite,
 } from './castle.js';
+import { towerPlatforms, towerSurfaces, towerSteps } from './watchtower.js';
 
 export function createStructures(deps) {
   const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
@@ -21,11 +22,27 @@ export function createStructures(deps) {
   const fortGeos = [];   // fallback legado isolado: não entra na malha mundial
   let buildingFort = false;
   const smokeSpots = []; // topos de chaminé (fumaça ambiente)
+  const towerClearings = []; // clareiras de grama sob a escada das torres (game.js)
   const flags = [];      // bandeiras que tremulam
   const flagGeo = new THREE.PlaneGeometry(1.15, 0.55);
   flagGeo.translate(0.6, 0, 0); // articulada no mastro
   const flagMat = new THREE.MeshStandardMaterial({ color: 0xe8562a, side: THREE.DoubleSide, roughness: 0.7 });
   const _sc = new THREE.Color();
+  // NEUTRALIZAÇÃO DO RNG: THREE.generateUUID() consome Math.random 4× por
+  // objeto, e Math.random É o PRNG SEEDADO do worldgen (contrato do
+  // CLAUDE.md). Qualquer geometria/material criado durante a geração
+  // deslocaria tudo gerado depois (bases, baús, grama). noSeed() troca
+  // Math.random por um PRNG privado enquanto a geometria é criada — os
+  // UUIDs saem daqui e o stream seedado fica intacto.
+  // Declarado NO TOPO porque a escada das torres de vigia (a primeira
+  // coisa construída) já precisa dele; antes vivia junto da Torre Nexus.
+  let _us = 0x9E3779B9 >>> 0;
+  const noSeed = (fn) => {
+    const _R = Math.random;
+    Math.random = () => (_us = (_us * 1664525 + 1013904223) >>> 0) / 4294967296;
+    try { return fn(); } finally { Math.random = _R; }
+  };
+
 
   function sbox(w, h, d, x, y, z, color, solid = true) {
     const g = new THREE.BoxGeometry(w, h, d);
@@ -46,6 +63,51 @@ export function createStructures(deps) {
     (buildingFort ? fortGeos : geos).push(g);
   }
 
+  /* escada dog-leg externa + tampo pisável.
+     O contrato geométrico mora em js/watchtower.js (puro, testável em
+     node). Aqui só se materializa: `platforms` são objetos puros (não
+     tocam o RNG) e a geometria vai TODA dentro de noSeed, porque a torre
+     nasce na fase SEEDADA e cada BoxGeometry custa 4 Math.random. */
+  function towerAccess(cx, cz, y) {
+    for (const p of towerPlatforms(cx, cz, y)) platforms.push(p);
+    const s = towerSurfaces(cx, cz, y);
+    towerClearings.push({ x: cx + 2.6, z: cz - 0.6, r: 5.2 }); // grama não brota na escada
+    noSeed(() => {
+      const wood = 0x8a6238, dark = 0x6b4a2e;
+      // degraus visuais por cima da rampa lógica (padrão flight() da Nexus)
+      for (const st of towerSteps(cx, cz, y))
+        sbox(st.w, st.h, st.d, st.x, st.y, st.z, wood, false);
+      // patamares: laje visual com a espessura do degrau
+      for (const L of [s.landingN, s.landingT])
+        sbox(L.x1 - L.x0, 0.22, L.z1 - L.z0, (L.x0 + L.x1) / 2, L.y - 0.11, (L.z0 + L.z1) / 2, wood, false);
+      // longarinas inclinadas (fecham o vão embaixo dos degraus)
+      for (const f of [s.flightA, s.flightB]) {
+        const dz = f.z1 - f.z0, dy = f.y1 - f.y0, len = Math.hypot(dz, dy);
+        for (const sx of [f.x0 + 0.08, f.x1 - 0.08]) {
+          const g = new THREE.BoxGeometry(0.16, 0.42, len);
+          g.rotateX(-Math.atan2(dy, dz));
+          g.translate(sx, (f.y0 + f.y1) / 2 - 0.34, (f.z0 + f.z1) / 2);
+          paintGeometry(g, _sc.setHex(dark)); geos.push(g);
+        }
+        // corrimão externo acompanhando o lance
+        const gh = new THREE.BoxGeometry(0.08, 0.08, len);
+        gh.rotateX(-Math.atan2(dy, dz));
+        gh.translate(f.x1 - 0.08, (f.y0 + f.y1) / 2 + 0.95, (f.z0 + f.z1) / 2);
+        paintGeometry(gh, _sc.setHex(dark)); geos.push(gh);
+        for (let i = 0; i <= 3; i++) {
+          const t = i / 3, pz = f.z0 + dz * t;
+          sbox(0.08, 0.95, 0.08, f.x1 - 0.08, f.y0 + dy * t + 0.48, pz, dark, false);
+        }
+      }
+      // pés dos patamares apoiados no terreno (nada flutuando)
+      for (const [px, pz] of [[s.landingN.x0 + 0.2, s.landingN.z0 + 0.2], [s.landingN.x1 - 0.2, s.landingN.z0 + 0.2]]) {
+        const gy2 = heightAt(px, pz);
+        const hh = Math.max(0.2, s.midY - gy2); // terreno acidentado não inverte a estaca
+        sbox(0.2, hh, 0.2, px, s.midY - hh / 2, pz, dark, false);
+      }
+    });
+  }
+
   function tower(cx, cz) {
     const y = heightAt(cx, cz);
     sites.push({ x: cx, z: cz, r: 5, type: 'torre' });
@@ -58,11 +120,17 @@ export function createStructures(deps) {
     sbox(0.2, 0.2, 3.4, cx + 1.4, y + 3.6, cz, 0x8a6238, false);
     sbox(3.7, 0.28, 3.7, cx, y + H, cz, 0x8a6238);
     fieldRoofs.push({ x0: cx - 1.85, x1: cx + 1.85, z0: cz - 1.85, z1: cz + 1.85, roofY: y + H + 0.14 });
-    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz - 1.78, 0x6b4a2e, false);
-    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz + 1.78, 0x6b4a2e, false);
-    sbox(0.14, 0.5, 3.7, cx - 1.78, y + H + 0.5, cz, 0x6b4a2e, false);
-    sbox(0.14, 0.5, 3.7, cx + 1.78, y + H + 0.5, cz, 0x6b4a2e, false);
+    // Guarda-corpos agora SÓLIDOS: 6,3 m de queda sem parapeito é armadilha,
+    // e o murinho de 0,5 m também para bala (rayHit) — vira a cobertura que
+    // faz do tampo um ninho de sniper de verdade, não um pedestal exposto.
+    // A face LESTE é a boca da escada: o trecho vira 2,7 m (mesma contagem
+    // de geometria = mesmo consumo de RNG) e deixa o vão de entrada ao sul.
+    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz - 1.78, 0x6b4a2e);
+    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz + 1.78, 0x6b4a2e);
+    sbox(0.14, 0.5, 3.7, cx - 1.78, y + H + 0.5, cz, 0x6b4a2e);
+    sbox(0.14, 0.5, 2.7, cx + 1.78, y + H + 0.5, cz - 0.5, 0x6b4a2e);
     scone(3, 1.7, cx, y + H + 1.8, cz, 0xa84f35);
+    towerAccess(cx, cz, y);
   }
 
   function cabin(cx, cz, flip) {
@@ -244,17 +312,7 @@ export function createStructures(deps) {
   const cityInteriorLampGeos = []; // luminárias emissivas do interior (mesh própria)
   const cityInteriorSignGeos = []; // numeração dos andares (atlas em CanvasTexture)
   let cityInteriorSignTex;         // textura-atlas dos números (setada na geração da torre)
-  // NEUTRALIZAÇÃO DO RNG: THREE.generateUUID() consome Math.random 4× por objeto,
-  // e Math.random É o PRNG SEEDADO do worldgen (contrato do CLAUDE.md). Criar a
-  // geometria do interior da torre (centenas de objetos) deslocaria tudo gerado
-  // depois (bases, baús, grama). noSeed() troca Math.random por um PRNG privado
-  // enquanto a geometria é criada — os UUIDs saem daqui e o stream seedado fica intacto.
-  let _us = 0x9E3779B9 >>> 0;
-  const noSeed = (fn) => {
-    const _R = Math.random;
-    Math.random = () => (_us = (_us * 1664525 + 1013904223) >>> 0) / 4294967296;
-    try { return fn(); } finally { Math.random = _R; }
-  };
+  // (noSeed vive no TOPO de createStructures: as torres de vigia já o usam)
   const cityProps = new THREE.Group(); cityProps.name = 'cityProps';
   // PRNG independente pro detalhe arquitetônico: determinístico em todos os
   // clientes (seed constante) e NÃO consome o rand seedado do worldgen.
@@ -968,7 +1026,7 @@ export function createStructures(deps) {
   };
 
   return { sites, walls, ruinWalls, rayHit, segBlocked, collide, invalidateWallCache,
-    FORT_POS, castle, flames, smokeSpots, flags, city,
+    FORT_POS, castle, flames, smokeSpots, towerClearings, flags, city,
     cityMat, carSpots, enemyCamps, chestSpots, baseSites, heliSpot, bazookaSpot, towerTopY, NEXUS_INTERIOR,
     fieldRoofs };
 }

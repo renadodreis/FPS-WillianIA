@@ -496,6 +496,7 @@ const Structures = createStructures({ clamp, rand, TAU, heightAt, slopeAt, platf
 // seedado e aqui ainda deslocaria o stream das árvores/vegetação.
 grassClearings.push({ x: 7.5, z: -6, r: 4.5 },
   Structures.castle.clearing,
+  ...Structures.towerClearings, // escada das torres de vigia: grama não atravessa degrau
   ...Structures.carSpots.map(s => ({ x: s.x, z: s.z, r: s.type === 'truck' ? 5.5 : 4.5 })));
 
 /* paredes das construções também são sólidas pra física dos veículos —
