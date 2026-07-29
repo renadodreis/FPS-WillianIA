@@ -160,12 +160,20 @@ describe('Qualidade de render (Chrome headless)', { skip: !CHROME && 'Chrome nã
       const original = sel.value;
       const desligado = set('0'), ligado = set('1');
       sel.value = original; sel.dispatchEvent(new Event('change'));
-      return { achouPasse: !!smaa, desligado, ligado, padrao: original };
+      return { achouPasse: !!smaa, desligado, ligado, padrao: original,
+        // o padrão deixou de ser fixo: no primeiro boot o js/gputier.js
+        // escolhe o preset pela GPU (headless = SwiftShader = tier baixo)
+        tier: window.QA.G.gpuTier };
     });
     assert.equal(r.achouPasse, true, 'SMAAPass sumiu do composer');
     assert.equal(r.desligado, false, 'desligar não desabilitou o passe: 3 passes fullscreen continuam');
     assert.equal(r.ligado, true);
-    assert.equal(r.padrao, '1', 'antisserrilhado tem que vir ligado por padrão');
+    // O padrão agora vem do auto-tier: numa GPU capaz continua ligado; num
+    // rasterizador de software (o caso do headless) nasce desligado de
+    // propósito — SMAA são 3 passes em resolução cheia.
+    const esperado = r.tier && r.tier.applied ? String(r.tier.preset.aa) : '1';
+    assert.equal(r.padrao, esperado,
+      `antisserrilhado nasceu em "${r.padrao}", fora do preset do tier "${r.tier && r.tier.tier}"`);
   });
 
   it('desligar antisserrilhado NÃO muda o que é desenhado (só pós)', async () => {

@@ -46,6 +46,8 @@ import { createInteract } from './js/interact.js';
 import { createPrewarm } from './js/prewarm.js';
 import { createResolutionScaler } from './js/adaptivequality.js';
 import { installFastSAP } from './js/sapbroadphase.js';
+import { autoTierSettings } from './js/gputier.js';
+import { createPerfHud } from './js/perfhud.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { buildChest } from './js/chestmodel.js';
@@ -105,6 +107,21 @@ const SFX = createSFX({ SETTINGS, clamp, rand });
 /* ================== renderer / cena / pós ================== */
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+/* PRIMEIRO boot: a string da GPU escolhe o preset de partida (js/gputier.js).
+   Existindo configuração salva o módulo não encosta em nada — a escolha
+   manual do jogador vence e persiste. Roda ANTES do primeiro setPixelRatio
+   e antes do pós ler bloom/SMAA, senão o preset chegaria tarde demais. */
+const __tier = autoTierSettings({
+  gl: renderer.getContext(),
+  stored: (() => { try { return localStorage.getItem('callofai_cfg'); } catch { return null; } })(),
+  settings: SETTINGS,
+  search: location.search, // ?tier=alto|medio|baixo|off (suporte/QA)
+});
+if (__tier.applied) {
+  persistSettings(); // vira a config salva: a partir daqui quem manda é o jogador
+  console.info(`[qualidade] tier "${__tier.tier}" (${__tier.reason})` +
+    `${__tier.gpu ? ' — GPU: ' + __tier.gpu : ''} → ${JSON.stringify(__tier.preset)}`);
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, SETTINGS.res));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
@@ -292,6 +309,12 @@ function applyPixelRatio(value) {
 }
 const resScaler = createResolutionScaler({ ceiling: pixelRatioCeiling() });
 applyPixelRatio(resScaler.scale);
+
+/* Overlay de diagnóstico (F3 ou ?perf=1): p50, p1%, engasgos, draw calls,
+   triângulos e escala de resolução. Desligado não custa nada — e enquanto
+   está ligado assume o `renderer.info` (ver js/perfhud.js). */
+const perfHud = createPerfHud({ renderer,
+  getScale: () => resScaler.scale, getCeiling: () => resScaler.ceiling });
 
 /* ---- prewarm: linka os programas WebGL fora do tiroteio ---- */
 const prewarm = createPrewarm({ renderer, scene, camera });
@@ -2284,6 +2307,7 @@ function stepPhysics(dt, intendedDt = dt) {
     : 1;
 }
 function renderFrame() {
+  perfHud.beginFrame(); // zera o contador de draw calls antes dos passes do pós
   invalidateCsmDiscontinuities();
   if (csmDirty) {
     csm.updateFrustums();
@@ -2396,6 +2420,8 @@ function tick(forceDt) {
     perf.renderScaleChanges++;
   }
   perf.renderScale = resScaler.scale;
+
+  perfHud.endFrame(perf.frameMs, perf.simMs);
 
   /* contador de FPS (+ ping quando online e habilitado) */
   fpsFrames++; fpsAcc += frameDt;
@@ -2545,6 +2571,8 @@ window.__game = {
     apply: applyPixelRatio,
     ceilingOf: pixelRatioCeiling,
   },
+  perfHud,     // overlay de diagnóstico (F3 / ?perf=1) — hook de QA
+  gpuTier: __tier, // o que o auto-tier decidiu no primeiro boot
   get errors() { return __errors; },
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
   platforms, // hook de QA: plataformas/rampas pisáveis (andares e escada da torre)
