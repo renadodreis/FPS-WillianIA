@@ -275,8 +275,15 @@
     const hitGate = HitCore.createHitGate();
     const SHIP_IMMUNE_S = 8, FALL_GRACE_S = 30; // espelho de server.js (combatImmune)
     /* posição que o servidor tem de MIM: é a última que o `state` enviou
-       (carro/heli reportam o veículo), não a do frame atual */
+       (carro/heli reportam o veículo), não a do frame atual. Enquanto nada
+       foi enviado ela não pode valer [0,0,0] — isso é o CENTRO do mapa, e
+       o portão mediria alcance a partir de lá. */
     const sentPos = [0, 0, 0];
+    let sentEver = false;
+    function syncSentPos() {
+      if (sentEver) return;
+      sentPos[0] = MP.player.pos.x; sentPos[1] = MP.player.pos.y; sentPos[2] = MP.player.pos.z;
+    }
     const matchRunning = () => S.phase === 'SHIP' || S.phase === 'FALL' || S.phase === 'PLAY';
     function immuneWindow(inShip, falling, landed) {
       if (!S.plan || !S.plan.ship) return false;
@@ -309,9 +316,12 @@
       queueMicrotask(flushHits);
     }
     const _dmgAt = new THREE.Vector3();
-    let lastVerdict = null; // hook de QA: por que o último acerto passou ou não
+    // hook de QA: por que o último acerto passou ou não. Objeto REUSADO —
+    // nada é alocado por tiro no caminho quente.
+    const lastVerdict = { ok: false, reason: null, weapon: null, dist: 0, originDist: 0 };
     function flushHits() {
       hitFlush = false;
+      syncSentPos();
       const now = Date.now();
       const weapon = localWeaponCode();
       const running = matchRunning(), alive = !MP.player.dead, mineImmune = iAmImmune();
@@ -329,7 +339,8 @@
           shooterImmune: mineImmune,
           victimImmune: !!rp && remoteImmune(rp),
         });
-        lastVerdict = { ok: verdict.ok, reason: verdict.reason, weapon, dist, originDist };
+        lastVerdict.ok = verdict.ok; lastVerdict.reason = verdict.reason;
+        lastVerdict.weapon = weapon; lastVerdict.dist = dist; lastVerdict.originDist = originDist;
         if (!verdict.ok) continue;
         socket.emit('shotHit', { targetId: tid, dmg: verdict.dmg, weapon, fromPos });
         rp.hitT = 0.3;                        // pisca vermelho no alvo: só em acerto REAL
@@ -347,13 +358,16 @@
 
     /* explosivo tem protocolo próprio no servidor, mas divide as MESMAS
        janelas de flood/orçamento — por isso passa pelo mesmo portão */
+    const _impactArr = [0, 0, 0]; // scratch: granada acerta vários alvos de uma vez
     function queueBlast(targetId, dmg, kind, impact, at) {
+      syncSentPos();
       const rp = remotes.get(targetId);
       const tp = rp && rp.targetPos;
+      _impactArr[0] = impact.x; _impactArr[1] = impact.y; _impactArr[2] = impact.z;
       const verdict = hitGate.admitBlast(Date.now(), {
         kind, dmg: Math.round(dmg),
         distShooterToImpact: dist3(sentPos, impact.x, impact.y, impact.z),
-        distImpactToVictim: tp ? dist3([impact.x, impact.y, impact.z], tp.x, tp.y, tp.z) : Infinity,
+        distImpactToVictim: tp ? dist3(_impactArr, tp.x, tp.y, tp.z) : Infinity,
         playing: matchRunning(), shooterAlive: !MP.player.dead,
         victimAlive: !!(rp && rp.alive),
         shooterImmune: iAmImmune(),
@@ -1849,6 +1863,7 @@
       // memória da posição que o SERVIDOR passa a ter de mim: o portão de
       // predição precisa medir alcance com o mesmo número que ele
       sentPos[0] = p.x; sentPos[1] = p.y; sentPos[2] = p.z;
+      sentEver = true;
       socket.volatile.emit('state', st);
     }, 100);
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ');

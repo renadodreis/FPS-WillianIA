@@ -48,7 +48,9 @@ const CSS = `
 
 export function createHitFeel(deps) {
   const { ui, SFX, FX, camera, doc = typeof document === 'undefined' ? null : document } = deps;
-  if (!doc) return null;
+  // sem DOM (import fora do navegador) a camada de tela vira no-op em vez de
+  // null: quem chama nunca precisa checar
+  if (!doc) return { hitmarker() {}, tookHit() {}, armorBreak() {} };
 
   const style = doc.createElement('style');
   style.id = 'hitfeelCss';
