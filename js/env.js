@@ -9,7 +9,13 @@ import { todStep, weatherAt, windAt, goldenHourK } from './climate.js';
 
 export function createEnv(deps) {
   const { CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler,
-    worldSeed = 424242, coverAt = null } = deps;
+    worldSeed = 424242, coverAt = null, isCovered = null } = deps;
+  // por gota/floco usa a consulta que devolve BOOLEANO (sem objeto por
+  // chamada); sem ela (deps antigas/QA) cai no coverAt de sempre
+  const covered = isCovered || (coverAt ? (x, y, z) => coverAt(x, y, z).covered : null);
+  // gota/floco em posição coberta fica oculto (escala 0) — consulta O(1) na
+  // grade de telhados, nunca raycast por gota. Fechada UMA vez, não por frame.
+  const dropCovered = covered ? (x, y, z) => covered(x, y, z) : () => false;
   let camExposure = 1;      // 1 = céu aberto, 0 = coberto (suavizado)
   let camTargetExposure = 1;
   let coverAcc = 9;         // consulta de cobertura em ~7 Hz, não por frame
@@ -124,9 +130,9 @@ export function createEnv(deps) {
     // exposição ao céu: dentro de prédio/torre/nave a chuva some e abafa.
     // Consulta barata (grade de telhados) em ~7 Hz + transição suave.
     coverAcc += dt;
-    if (coverAt && coverAcc > 0.15) {
+    if (covered && coverAcc > 0.15) {
       coverAcc = 0;
-      camTargetExposure = coverAt(camera.position.x, camera.position.y, camera.position.z).covered ? 0 : 1;
+      camTargetExposure = covered(camera.position.x, camera.position.y, camera.position.z) ? 0 : 1;
     }
     camExposure = damp(camExposure, camTargetExposure, 4, dt);
     SFX.setRain({ intensity: weather === 'chuva' ? weatherK : 0, exposure: camExposure });
@@ -142,9 +148,6 @@ export function createEnv(deps) {
     if (flashT > 0) hemiLight.intensity += 2.8 * camExposure; // relâmpago não pisca dentro de casa
 
     const cp = camera.position;
-    // gota/floco em posição coberta fica oculto (escala 0) — consulta O(1)
-    // na grade de telhados, nunca raycast por gota
-    const dropCovered = (px, py, pz) => coverAt ? coverAt(px, py, pz).covered : false;
     // malha de chuva SEMPRE ativa quando chove: quem esconde gota é a
     // POSIÇÃO dela (coberta ⇒ escala 0), não a exposição da câmera —
     // pela porta/janela a chuva de fora continua visível. camExposure
@@ -154,6 +157,11 @@ export function createEnv(deps) {
     rainMesh.material.opacity = 0.42;
     if (showRain) {
       rainMesh.count = Math.max(1, Math.floor(RN * weatherK));
+      // inclinação segue o VENTO compartilhado (mesma direção da grama) — é
+      // IGUAL nas 450 hastes, então entra no dummy UMA vez por frame. Setar
+      // rotation dispara quaternion.setFromEuler; por gota isso sozinho era
+      // o maior item de CPU do three no perfil.
+      _dummy2.rotation.set(wind.dirZ * 0.09, 0, -wind.dirX * 0.09);
       for (let i = 0; i < rainMesh.count; i++) {
         const p = rainP[i];
         p.y -= (34 + (p.spd || 0)) * dt;
@@ -165,8 +173,6 @@ export function createEnv(deps) {
         // telhados (~450/frame), zero raycast; pega gota que ATRAVESSA teto
         const hidden = dropCovered(cp.x + p.x, cp.y + p.y - 8, cp.z + p.z);
         _dummy2.position.set(cp.x + p.x, cp.y + p.y - 8, cp.z + p.z);
-        // inclinação segue o VENTO compartilhado (mesma direção da grama)
-        _dummy2.rotation.set(wind.dirZ * 0.09, 0, -wind.dirX * 0.09);
         _dummy2.scale.set(1, hidden ? 0 : (p.len || 1), 1);
         _dummy2.updateMatrix();
         rainMesh.setMatrixAt(i, _dummy2.matrix);

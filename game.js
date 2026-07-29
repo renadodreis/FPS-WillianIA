@@ -2046,7 +2046,9 @@ Structures.city.onStateChange = st => {
 
 const Env = createEnv({ CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler,
   worldSeed: ((window.__MP_init && window.__MP_init.worldSeed) >>> 0) || 424242,
-  coverAt: (x, y, z) => Cover.coverAt(x, y, z) });
+  coverAt: (x, y, z) => Cover.coverAt(x, y, z),
+  // por gota/floco: booleano, sem objeto por consulta (js/cover.js)
+  isCovered: (x, y, z) => Cover.isCovered(x, y, z) });
 
 /* ================================================================
    VIDA AMBIENTE — borboletas, pássaros, pólen, fogueira, fumaça,
