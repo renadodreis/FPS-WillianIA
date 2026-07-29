@@ -45,6 +45,7 @@ import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
 import { createPrewarm } from './js/prewarm.js';
 import { createResolutionScaler } from './js/adaptivequality.js';
+import { installFastSAP } from './js/sapbroadphase.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { buildChest } from './js/chestmodel.js';
@@ -307,7 +308,12 @@ function prewarmIfIdle(nowMs) {
 
 /* ================== física (cannon-es) ================== */
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
-world.broadphase = new CANNON.SAPBroadphase(world);
+/* O collisionPairs de fábrica varre TODO par (i,j) porque estático×estático
+   dá `continue` em vez de `break`: com ~1000 colisores de cenário parados
+   era 47% da CPU do cliente. installFastSAP troca só a varredura por uma
+   equivalente O(N × ativos) — mesmos pares, mesma ordem (js/sapbroadphase.js,
+   equivalência provada em test/sap-broadphase.test.js). */
+world.broadphase = installFastSAP(new CANNON.SAPBroadphase(world));
 world.allowSleep = true;
 world.defaultContactMaterial.friction = 0.3;
 world.defaultContactMaterial.restitution = 0.05;
