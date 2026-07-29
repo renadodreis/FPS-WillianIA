@@ -111,7 +111,7 @@ export function createBoss(deps) {
     _v2.addScaledVector(player.vel, _v2.distanceTo(o.mesh.position) / 26 * 0.65); // predição
     o.vel.copy(_v2).sub(o.mesh.position).normalize().multiplyScalar(26);
     o.mesh.visible = true;
-    SFX.bossShot();
+    SFX.bossShot(o.mesh.position);
   }
   function orbExplode(o, damagePlayer = true) {
     o.live = false;
@@ -146,7 +146,7 @@ export function createBoss(deps) {
   }
   function activate() {
     B.active = true;
-    SFX.roar();
+    SFX.roar(group.position);
     addTrauma(0.45);
     showBanner('COLOSSO DESPERTOU<small>destrua o núcleo brilhante no peito</small>', 3400);
   }
@@ -161,7 +161,7 @@ export function createBoss(deps) {
     if (!B.enraged && B.hp < B.hpMax * 0.35) {
       B.enraged = true;
       mEye.emissiveIntensity = 5.5;
-      SFX.roar();
+      SFX.roar(group.position);
       showBanner('COLOSSO ENFURECIDO', 1800);
     }
     return false;
@@ -172,8 +172,8 @@ export function createBoss(deps) {
     B.respawnT = 120;
     addScore(2500, true);
     addKillFeed('<b>Você</b> ▸ <b>COLOSSO</b>');
-    SFX.explosion();
-    SFX.victory();
+    SFX.explosion(group.position);
+    SFX.victory(); // jingle de vitória é SEU: 2D, nunca panorâmico
     addTrauma(1);
     setTimeScale(0.25); // câmera lenta
     setTimeout(() => { setTimeScale(1); }, 1000);
@@ -320,7 +320,7 @@ export function createBoss(deps) {
       }
       if (!B.stompHit && k >= 0.62) {
         B.stompHit = true;
-        SFX.stomp();
+        SFX.stomp(group.position);
         addTrauma(0.8);
         for (let i = 0; i < 10; i++) { // anel de poeira
           const a = i / 10 * TAU;

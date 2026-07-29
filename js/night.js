@@ -93,7 +93,7 @@ export function createNight(deps) {
           c.hp = c.ghost ? 50 : 70;
           g.position.set(x, heightAt(x, z), z);
           g.visible = true;
-          if (c.ghost) SFX.whisper(); else SFX.groan();
+          if (c.ghost) SFX.whisper(g.position); else SFX.groan(g.position);
         }
         continue;
       }
@@ -118,7 +118,7 @@ export function createNight(deps) {
       if (dP < 1.6 && c.hitT <= 0 && !player.dead && !meleeBlocked(c.group, player.pos, Structures, obstaclesNear)) {
         c.hitT = c.ghost ? 0.8 : 1.2;
         playerDamage(c.ghost ? 7 : 13, g.position, { type: c.ghost ? 'ghost' : 'zombie' });
-        if (c.ghost) SFX.whisper();
+        if (c.ghost) SFX.whisper(g.position);
       }
       c.phase += dt * 4;
       if (c.ghost) {
@@ -133,7 +133,7 @@ export function createNight(deps) {
       c.groanT -= dt;
       if (c.groanT <= 0 && dP < 30) {
         c.groanT = rand(4, 9);
-        if (c.ghost) SFX.whisper(); else SFX.groan();
+        if (c.ghost) SFX.whisper(g.position); else SFX.groan(g.position);
       }
     }
   }

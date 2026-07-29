@@ -254,8 +254,8 @@ export function createEnemies(deps) {
   function enemyFire(e) {
     e.flashT = 0.06;
     if (e.actions && e.actions.Shoot) e.actions.Shoot.reset().play();
-    SFX.enemyShot();
     _eFrom.copy(e.group.position); _eFrom.y += 1.45;
+    SFX.enemyShot(_eFrom); // som sai do cano: dá pra achar de onde levou tiro
     _eTo.copy(player.pos); _eTo.y += lerp(1.5, 0.95, player.crouchT);
     _eDir.copy(_eTo).sub(_eFrom).normalize();
     _eDir.x += rand(-0.045, 0.045); _eDir.y += rand(-0.03, 0.03); _eDir.z += rand(-0.045, 0.045);

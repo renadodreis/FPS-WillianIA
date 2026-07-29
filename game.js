@@ -1601,6 +1601,22 @@ function rayBlockedAt(origin, dir, maxDist) {
   return wallT;
 }
 
+/* áudio espacial: listener na câmera + probe de oclusão barato.
+   O SFX só chama isto dentro de um orçamento (ver js/sfx3d.js) — nunca por
+   folha de grama, nunca por som que já morreu na distância. */
+const _occFrom = new THREE.Vector3(), _occDir = new THREE.Vector3();
+SFX.setSpatial({
+  camera,
+  occluded(pos) {
+    _occFrom.copy(camera.position);
+    _occDir.set(pos.x - _occFrom.x, (pos.y || 0) - _occFrom.y, pos.z - _occFrom.z);
+    const len = _occDir.length();
+    if (len < 0.5) return false;
+    _occDir.multiplyScalar(1 / len);
+    return rayBlockedAt(_occFrom, _occDir, len) < len - 0.4;
+  },
+});
+
 const _rayDir = new THREE.Vector3(), _rayOrig = new THREE.Vector3(), _hitPos = new THREE.Vector3();
 const _hitAgg = new THREE.Vector3();
 const _missEnd = new THREE.Vector3();
@@ -2352,7 +2368,8 @@ function tick(forceDt) {
   Water.update(t);
   Volcano.update(dt, t);
 
-  /* áudio de clima (chuva) */
+  /* áudio: listener na câmera (sai barato — parado não reagenda nada) + clima */
+  SFX.updateListener();
   SFX.musicUpdate();
 
   /* câmera + arma + HUD dinâmico (a cinemática assume a câmera sozinha) */
@@ -2407,9 +2424,18 @@ window.addEventListener('pointerlockerror', () => {
   setPaused(false);
 });
 
+/* trilha do menu: só depois do primeiro gesto (autoplay) e só se o jogo
+   ainda não começou. `once` em cada evento: a segunda chamada é no-op. */
+function unlockMenuAudio() {
+  SFX.init(); SFX.resume();
+  if (!state.started) SFX.menuMusicStart();
+}
+window.addEventListener('pointerdown', unlockMenuAudio, { once: true });
+window.addEventListener('keydown', unlockMenuAudio, { once: true });
+
 function startGame(trusted) {
   if (state.started) return;
-  SFX.init(); SFX.resume(); SFX.musicStart(); SFX.setVolumes();
+  SFX.init(); SFX.resume(); SFX.menuMusicStop(); SFX.musicStart(); SFX.setVolumes();
   state.started = true;
   updateHealthHUD(); updateAmmoHUD(); updateInvHUD(); updateSlotsHUD(); updateArmorHUD();
   // banner de boas-vindas é do modo solo; no BR o lobby já anuncia a partida
@@ -2424,6 +2450,7 @@ function startGame(trusted) {
 /* ---- menu: botões + configurações ---- */
 $('btnNew').addEventListener('click', e => {
   e.stopPropagation();
+  SFX.uiClick();
   if (__mpSocket) return; // sala online: o lobby BR assume — nada de solo por cima
   startGame(e.isTrusted);
 });
@@ -2431,8 +2458,10 @@ if (__mpSocket) { // multiplayer no ar: o botão vira aviso até o lobby abrir
   $('btnNew').classList.add('disabled');
   $('btnNew').textContent = '🌐 SALA ONLINE — ABRINDO LOBBY...';
 }
-$('btnSettings').addEventListener('click', e => { e.stopPropagation(); $('settings').classList.add('open'); });
-$('btnBack').addEventListener('click', e => { e.stopPropagation(); $('settings').classList.remove('open'); });
+$('btnSettings').addEventListener('click', e => { e.stopPropagation(); SFX.uiClick(); $('settings').classList.add('open'); });
+$('btnBack').addEventListener('click', e => { e.stopPropagation(); SFX.uiBack(); $('settings').classList.remove('open'); });
+for (const b of document.querySelectorAll('#menuBtns button, #settings button')) // foco/hover: clique seco
+  b.addEventListener('pointerenter', () => SFX.uiHover());
 $('settings').addEventListener('click', e => e.stopPropagation());
 { // bindings das configurações (aplicam ao vivo + persistem)
   const sv = $('setVol'), sr = $('setRes'), ss = $('setShadow'), sb = $('setBloom'), sp = $('setPing');
@@ -2443,7 +2472,9 @@ $('settings').addEventListener('click', e => e.stopPropagation());
   sa.value = String(+SETTINGS.autores === 0 ? 0 : 1);
   saa.value = String(+SETTINGS.aa === 0 ? 0 : 1);
   sv.oninput = () => { SETTINGS.vol = sv.value / 100; SFX.setVolumes(); persistSettings(); };
+  sv.onchange = () => SFX.uiToggle(); // no arrasto seria metralhadora: só ao soltar
   sr.onchange = () => {
+    SFX.uiToggle();
     SETTINGS.res = +sr.value;
     resScaler.setCeiling(pixelRatioCeiling());
     // escolha explícita do jogador vale AGORA: quem clica "Qualidade" quer
@@ -2453,11 +2484,13 @@ $('settings').addEventListener('click', e => e.stopPropagation());
     persistSettings();
   };
   sa.onchange = () => {
+    SFX.uiToggle();
     SETTINGS.autores = +sa.value;
     if (SETTINGS.autores === 0) { resScaler.reset(); applyPixelRatio(resScaler.scale); }
     persistSettings();
   };
   ss.onchange = () => {
+    SFX.uiToggle();
     const shadowsWereEnabled = renderer.shadowMap.enabled;
     SETTINGS.shadow = +ss.value;
     renderer.shadowMap.enabled = SETTINGS.shadow === 1;
@@ -2466,9 +2499,9 @@ $('settings').addEventListener('click', e => e.stopPropagation());
     prewarm.invalidate(); // needsUpdate relinka os programas: reaquecer
     persistSettings();
   };
-  sb.onchange = () => { SETTINGS.bloom = +sb.value; bloomPass.enabled = SETTINGS.bloom === 1; persistSettings(); };
-  saa.onchange = () => { SETTINGS.aa = +saa.value; smaaPass.enabled = SETTINGS.aa === 1; persistSettings(); };
-  sp.onchange = () => { SETTINGS.ping = +sp.value; persistSettings(); };
+  sb.onchange = () => { SFX.uiToggle(); SETTINGS.bloom = +sb.value; bloomPass.enabled = SETTINGS.bloom === 1; persistSettings(); };
+  saa.onchange = () => { SFX.uiToggle(); SETTINGS.aa = +saa.value; smaaPass.enabled = SETTINGS.aa === 1; persistSettings(); };
+  sp.onchange = () => { SFX.uiToggle(); SETTINGS.ping = +sp.value; persistSettings(); };
 }
 ui.overlay.addEventListener('click', (e) => {
   if (e.target.closest('#menuBtns') || e.target.closest('#settings')) return;

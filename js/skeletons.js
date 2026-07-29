@@ -426,7 +426,7 @@ export function createSkeletons(deps) {
       sk.groanT -= dt;
       if (sk.groanT <= 0 && dP < 28) {
         sk.groanT = rand(5, 11);
-        SFX.groan();
+        SFX.groan(sk.group.position);
       }
     }
   }

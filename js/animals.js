@@ -143,13 +143,13 @@ export function createAnimals(deps) {
         if (dP < 1.7 && a.biteT <= 0 && !biteBlocked(a)) {
           a.biteT = 1.2;
           playerDamage(8 + (Math.random() * 5 | 0), g.position, { type: 'animal' });
-          if (SFX && typeof SFX.groan === 'function') SFX.groan();
+          if (SFX && typeof SFX.groan === 'function') SFX.groan(g.position);
         }
       } else if (!a.predator && (dP < 12 || a.fleeing > 0)) { // cervo foge
         if (dP < 1.6 && a.biteT <= 0 && !biteBlocked(a)) { // encurralado: cabeçada/chifrada defensiva
           a.biteT = 1.5;
           playerDamage(6 + (Math.random() * 4 | 0), g.position, { type: 'animal' });
-          if (SFX && typeof SFX.groan === 'function') SFX.groan();
+          if (SFX && typeof SFX.groan === 'function') SFX.groan(g.position);
         }
         tx = g.position.x + (g.position.x - player.pos.x);
         tz = g.position.z + (g.position.z - player.pos.z);

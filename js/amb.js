@@ -167,7 +167,12 @@ export function createAmb(deps) {
     chirpAcc -= dt;
     if (chirpAcc <= 0) {
       chirpAcc = rand(3.5, 9);
-      if (biomeAt(player.pos.x, player.pos.z) > -0.15) SFX.chirp();
+      if (biomeAt(player.pos.x, player.pos.z) > -0.15) {
+        // o passarinho canta de ALGUM galho, não dentro da sua cabeça
+        const a = rand(TAU), r = rand(6, 22);
+        _v2.set(player.pos.x + Math.cos(a) * r, player.pos.y + rand(3, 9), player.pos.z + Math.sin(a) * r);
+        SFX.chirp(_v2);
+      }
     }
   }
   return { update };

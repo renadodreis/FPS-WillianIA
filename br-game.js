@@ -1018,7 +1018,7 @@
       MP.scene.add(mesh);
       golemOrbs.push({ mesh, velocity, life: 4 });
       golemShots++;
-      if (MP.SFX.bossShot) MP.SFX.bossShot();
+      if (MP.SFX.bossShot) MP.SFX.bossShot(mesh.position);
     }
     function stepGolemOrbs(dt) {
       for (let i = golemOrbs.length - 1; i >= 0; i--) {
@@ -1433,6 +1433,8 @@
         rp.body.weapon.scale.setScalar(Math.max(rp.wpnScale, 0.02));
       }
     });
+    /* timbre do disparo remoto por arma — mesmo catálogo do tiro local */
+    const REMOTE_SHOT = { ESCOPETA: 'shotgun', DMR: 'dmr', SNIPER: 'dmr' };
     socket.on('playerFired', d => {
       const rp = remotes.get(d.shooterId);
       if (!rp) return;
@@ -1450,6 +1452,11 @@
           if (blockD < len) to.copy(from).addScaledVector(_bp, blockD);
         }
         MP.FX.spawnTracer(from, to, 0xffe9a8);
+        // ATÉ AQUI TIRO DE OUTRO JOGADOR ERA MUDO: agora sai do cano dele,
+        // com distância e oclusão — é assim que se lê um tiroteio.
+        if (rp.heldWeapon === 'BAZUCA') MP.SFX.rocket(from);
+        else if (rp.heldWeapon === 'PLASMA') MP.SFX.laser(from);
+        else MP.SFX.shot(REMOTE_SHOT[rp.heldWeapon] || 'rifle', from);
       }
     });
     socket.on('playerLeft', d => removeRemote(d.id));

@@ -103,7 +103,7 @@ export function createMapToys(deps) {
         damage() {
           if (!t.alive) return false;
           t.alive = false; disc.visible = false; t.respawn = 0.5 + Math.random() * 0.7;
-          gal.score += 1; if (SFX.pop) SFX.pop();
+          gal.score += 1; if (SFX.pop) SFX.pop(disc.position);
           _a.copy(disc.position); FX.confetti(_a, 8);
           if (centerMsg) centerMsg(`🎯 ${gal.score} — restam ${Math.max(0, Math.ceil(gal.endT - state.gameTime))}s`, 700);
           return true; // "morreu" (pontuação é do próprio alvo, como manda o contrato)
@@ -155,8 +155,9 @@ export function createMapToys(deps) {
     for (let i = 0; i < 6; i++) {
       setTimeout(() => {
         const x = fw.spot.x + (Math.random() - 0.5) * 3, z = fw.spot.z + (Math.random() - 0.5) * 3;
-        fw.shells.push({ x, y: fw.spot.y + 3.6, z, vy: 15 + Math.random() * 5, life: 1.0 + Math.random() * 0.5 });
-        if (SFX.cannonWind) SFX.cannonWind();
+        const shell = { x, y: fw.spot.y + 3.6, z, vy: 15 + Math.random() * 5, life: 1.0 + Math.random() * 0.5 };
+        fw.shells.push(shell);
+        if (SFX.cannonWind) SFX.cannonWind(shell); // fogos são LONGE: sem posição não fazia sentido
       }, i * 180);
     }
     if (showBanner) showBanner('🎆 FOGOS!', 1400);
@@ -167,7 +168,7 @@ export function createMapToys(deps) {
       const s = fw.shells[i];
       s.life -= dt; s.vy -= 20 * dt; s.y += s.vy * dt;
       if (s.life <= 0 || s.vy <= 0) {
-        _a.set(s.x, s.y, s.z); FX.confetti(_a, 14); if (SFX.pop) SFX.pop();
+        _a.set(s.x, s.y, s.z); FX.confetti(_a, 14); if (SFX.pop) SFX.pop(_a);
         fw.shells.splice(i, 1);
       }
     }
@@ -219,7 +220,7 @@ export function createMapToys(deps) {
       if (i !== ring.next) continue; // só o próximo aro conta (ordem do curso)
       if (passedRing(ring.prev, _a, r.c, r.n, RING_R)) {
         if (!ring.running) { ring.running = true; ring.startT = t; }
-        ringGlow(i, false); if (SFX.ding) SFX.ding();
+        ringGlow(i, false); if (SFX.ding) SFX.ding(r.c);
         ring.next += 1;
         if (ring.next < ring.rings.length) ringGlow(ring.next, true);
         else {
@@ -227,7 +228,7 @@ export function createMapToys(deps) {
           const rec = ring.best === 0 || time < ring.best;
           ring.best = betterTime(ring.best, time); saveNum('callofai_ringBest', ring.best);
           _a.copy(ring.rings[ring.rings.length - 1].c); FX.confetti(_a, 20);
-          if (SFX.cannonLand) SFX.cannonLand();
+          if (SFX.cannonLand) SFX.cannonLand(_a); // _a = centro do último aro
           if (centerMsg) centerMsg(rec ? `💫 CURSO COMPLETO ${time.toFixed(1)}s — RECORDE!` : `💫 ${time.toFixed(1)}s · recorde ${ring.best.toFixed(1)}s`, 3200);
           ring.next = 0; ring.running = false; ringGlow(0, false);
         }

@@ -174,7 +174,7 @@ export function createAlien(deps) {
     }
     const dP = group.position.distanceTo(player.pos);
     if (!B.active) {
-      if (dP < 45 && !player.dead) { B.active = true; SFX.roar(); showBanner('O VISITANTE<small>algo saiu dos destroços...</small>', 3000); }
+      if (dP < 45 && !player.dead) { B.active = true; SFX.roar(group.position); showBanner('O VISITANTE<small>algo saiu dos destroços...</small>', 3000); }
       group.position.y = heightAt(group.position.x, group.position.z) + Math.sin(t * 1.2) * 0.1;
       return;
     }
@@ -216,7 +216,7 @@ export function createAlien(deps) {
         _v2.copy(player.pos); _v2.y += 1.2;
         _v2.x += rand(-2, 2) * i; _v2.z += rand(-2, 2) * i;
         o.vel.copy(_v2).sub(o.m.position).normalize().multiplyScalar(22);
-        SFX.bossShot();
+        SFX.bossShot(o.m.position);
       }
     }
   }

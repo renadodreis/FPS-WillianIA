@@ -59,7 +59,7 @@ export function createGrenades(deps) {
     return rayBlockedAt(_blastOrigin, _blastDir, len) >= len - 0.15;
   }
   function explode(p, kind = 'GRANADA') {
-    SFX.explosion();
+    SFX.explosion(p);
     boomT = 0.35;
     boomLight.position.copy(p);
     boomLight.position.y += 0.6;
@@ -145,7 +145,7 @@ export function createGrenades(deps) {
         n.vel.x *= -0.48;
         n.vel.z *= -0.48;
         n.vel.y *= 0.65;
-        SFX.bounce();
+        SFX.bounce(n.g.position);
       }
       n.g.rotation.x += n.spin * dt;
       n.g.rotation.z += n.spin * 0.7 * dt;
@@ -159,7 +159,7 @@ export function createGrenades(deps) {
         if (vn < 0) {
           n.vel.addScaledVector(_n, -1.45 * vn); // reflete com restituição
           n.vel.multiplyScalar(0.75);            // atrito
-          if (-vn > 2.5) SFX.bounce();
+          if (-vn > 2.5) SFX.bounce(n.g.position);
         }
         if (n.vel.lengthSq() < 0.4) n.vel.set(0, 0, 0);
       }
