@@ -45,6 +45,9 @@ import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
 import { createPrewarm } from './js/prewarm.js';
 import { createResolutionScaler } from './js/adaptivequality.js';
+import { installFastSAP } from './js/sapbroadphase.js';
+import { autoTierSettings } from './js/gputier.js';
+import { createPerfHud } from './js/perfhud.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { buildChest } from './js/chestmodel.js';
@@ -104,6 +107,21 @@ const SFX = createSFX({ SETTINGS, clamp, rand });
 /* ================== renderer / cena / pós ================== */
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+/* PRIMEIRO boot: a string da GPU escolhe o preset de partida (js/gputier.js).
+   Existindo configuração salva o módulo não encosta em nada — a escolha
+   manual do jogador vence e persiste. Roda ANTES do primeiro setPixelRatio
+   e antes do pós ler bloom/SMAA, senão o preset chegaria tarde demais. */
+const __tier = autoTierSettings({
+  gl: renderer.getContext(),
+  stored: (() => { try { return localStorage.getItem('callofai_cfg'); } catch { return null; } })(),
+  settings: SETTINGS,
+  search: location.search, // ?tier=alto|medio|baixo|off (suporte/QA)
+});
+if (__tier.applied) {
+  persistSettings(); // vira a config salva: a partir daqui quem manda é o jogador
+  console.info(`[qualidade] tier "${__tier.tier}" (${__tier.reason})` +
+    `${__tier.gpu ? ' — GPU: ' + __tier.gpu : ''} → ${JSON.stringify(__tier.preset)}`);
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, SETTINGS.res));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
@@ -292,6 +310,12 @@ function applyPixelRatio(value) {
 const resScaler = createResolutionScaler({ ceiling: pixelRatioCeiling() });
 applyPixelRatio(resScaler.scale);
 
+/* Overlay de diagnóstico (F3 ou ?perf=1): p50, p1%, engasgos, draw calls,
+   triângulos e escala de resolução. Desligado não custa nada — e enquanto
+   está ligado assume o `renderer.info` (ver js/perfhud.js). */
+const perfHud = createPerfHud({ renderer,
+  getScale: () => resScaler.scale, getCeiling: () => resScaler.ceiling });
+
 /* ---- prewarm: linka os programas WebGL fora do tiroteio ---- */
 const prewarm = createPrewarm({ renderer, scene, camera });
 let prewarmBusy = false, prewarmNextAt = 0;
@@ -307,7 +331,12 @@ function prewarmIfIdle(nowMs) {
 
 /* ================== física (cannon-es) ================== */
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
-world.broadphase = new CANNON.SAPBroadphase(world);
+/* O collisionPairs de fábrica varre TODO par (i,j) porque estático×estático
+   dá `continue` em vez de `break`: com ~1000 colisores de cenário parados
+   era 47% da CPU do cliente. installFastSAP troca só a varredura por uma
+   equivalente O(N × ativos) — mesmos pares, mesma ordem (js/sapbroadphase.js,
+   equivalência provada em test/sap-broadphase.test.js). */
+world.broadphase = installFastSAP(new CANNON.SAPBroadphase(world));
 world.allowSleep = true;
 world.defaultContactMaterial.friction = 0.3;
 world.defaultContactMaterial.restitution = 0.05;
@@ -1319,6 +1348,18 @@ let dmgDirT = 0;
 let breathApplied = 0; // respiração da luneta (delta aplicado no frame anterior)
 let deathK = 0;        // animação de morte (câmera tomba)
 
+/* HUD por frame: escrever uma propriedade de estilo invalida o CSSOM mesmo
+   quando o valor é o MESMO — e vinheta de cura, luneta, mira, flash de dano
+   e tinta d'água passam quase o jogo inteiro no mesmo valor. O texto
+   produzido é idêntico ao de antes; só a escrita redundante some. */
+function styleOnce(el, prop, value) {
+  const seen = el.__hudSeen || (el.__hudSeen = {});
+  if (seen[prop] === value) return;
+  seen[prop] = value;
+  el.style[prop] = value;
+}
+function setOpacityOnce(el, value) { styleOnce(el, 'opacity', value); }
+
 function applyFpsCamera(dt, t) {
   // ---- screen shake (trauma decai, intensidade = trauma²) ----
   trauma = Math.max(0, trauma - dt * 1.7);
@@ -1460,11 +1501,11 @@ function applyFpsCamera(dt, t) {
     const hk = Math.sin(Math.min(1, (1.3 - healAnimT) / 1.3) * Math.PI);
     weaponRoot.position.y -= hk * 0.16;
     weaponRoot.rotation.x -= hk * 0.35;
-    ui.healFx.style.opacity = (hk * 0.9).toFixed(2);
+    setOpacityOnce(ui.healFx, (hk * 0.9).toFixed(2));
   } else if (player.healPool > 0) {
-    ui.healFx.style.opacity = '0.35';
+    setOpacityOnce(ui.healFx, '0.35');
   } else {
-    ui.healFx.style.opacity = '0';
+    setOpacityOnce(ui.healFx, '0');
   }
 
   // ciclo pós-tiro (bomba da escopeta / ferrolho) — a fase usa a duração REAL
@@ -1497,7 +1538,7 @@ function applyFpsCamera(dt, t) {
   muzzleLight.intensity = mk * 26;
 
   // ---- luneta: overlay + sensibilidade do mouse reduzida no zoom ----
-  ui.scope.style.opacity = scopedK.toFixed(2);
+  setOpacityOnce(ui.scope, scopedK.toFixed(2));
   controls.pointerSpeed = lerp(1, gun.adsFov < 40 ? 0.36 : 0.75, ads);
 
   // ---- FOV: 75 base, 85 correndo, ADS por arma (55 / 62 / 26) ----
@@ -1514,17 +1555,18 @@ function applyFpsCamera(dt, t) {
   // ---- mira dinâmica (abre com movimento, some no ADS) ----
   const spd = Math.hypot(player.vel.x, player.vel.z);
   const gap = 7 + spd * 1.4 + trauma * 18 + (player.onGround ? 0 : 9);
-  ui.crosshair.style.setProperty('--gap', gap.toFixed(1) + 'px');
+  const gapPx = gap.toFixed(1) + 'px';
+  if (ui.crosshair.__hudGap !== gapPx) { ui.crosshair.__hudGap = gapPx; ui.crosshair.style.setProperty('--gap', gapPx); }
   // só some quando existe uma referência ADS válida na tela (faca: nunca some)
-  ui.crosshair.style.opacity = (state.driving || WeaponRig.sightRefK(gun, adsT) > 0.5) ? '0' : '1';
+  setOpacityOnce(ui.crosshair, (state.driving || WeaponRig.sightRefK(gun, adsT) > 0.5) ? '0' : '1');
 
   // flash de dano decai + indicador de direção
   flashT = Math.max(0, flashT - dt * 1.4);
-  ui.damageFlash.style.opacity = Math.min(1, flashT * 1.6).toFixed(2);
+  setOpacityOnce(ui.damageFlash, Math.min(1, flashT * 1.6).toFixed(2));
   dmgDirT = Math.max(0, dmgDirT - dt);
-  ui.dmgDir.style.opacity = dmgDirT > 0 ? '1' : '0';
+  setOpacityOnce(ui.dmgDir, dmgDirT > 0 ? '1' : '0');
   // tinta azulada quando a câmera mergulha
-  ui.waterTint.style.opacity = camera.position.y < WATER_LEVEL ? '1' : '0';
+  setOpacityOnce(ui.waterTint, camera.position.y < WATER_LEVEL ? '1' : '0');
 }
 
 /* ================================================================
@@ -2080,7 +2122,9 @@ Structures.city.onStateChange = st => {
 
 const Env = createEnv({ CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler,
   worldSeed: ((window.__MP_init && window.__MP_init.worldSeed) >>> 0) || 424242,
-  coverAt: (x, y, z) => Cover.coverAt(x, y, z) });
+  coverAt: (x, y, z) => Cover.coverAt(x, y, z),
+  // por gota/floco: booleano, sem objeto por consulta (js/cover.js)
+  isCovered: (x, y, z) => Cover.isCovered(x, y, z) });
 
 /* ================================================================
    VIDA AMBIENTE — borboletas, pássaros, pólen, fogueira, fumaça,
@@ -2110,9 +2154,16 @@ const Alien = createAlien({ rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL,
    ================================================================ */
 const Missions = (() => {
   function baseCleared() {
+    // roda por frame enquanto a missão está ativa: sem filter/every (1 array
+    // + 2 closures por base por frame), só uma varredura
     for (const b of Structures.baseSites) {
-      const guards = Enemies.list.filter(e => e.plan && e.plan.army && Math.hypot(e.plan.x - b.x, e.plan.z - b.z) < 30);
-      if (guards.length && guards.every(e => !e.alive)) return true;
+      let guards = 0, vivos = 0;
+      for (const e of Enemies.list) {
+        if (!e.plan || !e.plan.army || Math.hypot(e.plan.x - b.x, e.plan.z - b.z) >= 30) continue;
+        guards++;
+        if (e.alive) vivos++;
+      }
+      if (guards && !vivos) return true;
     }
     return false;
   }
@@ -2316,6 +2367,7 @@ function stepPhysics(dt, intendedDt = dt) {
     : 1;
 }
 function renderFrame() {
+  perfHud.beginFrame(); // zera o contador de draw calls antes dos passes do pós
   invalidateCsmDiscontinuities();
   if (csmDirty) {
     csm.updateFrustums();
@@ -2429,6 +2481,8 @@ function tick(forceDt) {
     perf.renderScaleChanges++;
   }
   perf.renderScale = resScaler.scale;
+
+  perfHud.endFrame(perf.frameMs, perf.simMs);
 
   /* contador de FPS (+ ping quando online e habilitado) */
   fpsFrames++; fpsAcc += frameDt;
@@ -2594,6 +2648,8 @@ window.__game = {
     apply: applyPixelRatio,
     ceilingOf: pixelRatioCeiling,
   },
+  perfHud,     // overlay de diagnóstico (F3 / ?perf=1) — hook de QA
+  gpuTier: __tier, // o que o auto-tier decidiu no primeiro boot
   get errors() { return __errors; },
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
   platforms, // hook de QA: plataformas/rampas pisáveis (andares e escada da torre)

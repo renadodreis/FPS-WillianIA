@@ -701,17 +701,62 @@ export function createStructures(deps) {
   const cityVisual = [cityMesh, cityTrimMesh, cityProps,
     cityInteriorMesh, cityInteriorLampMesh, cityInteriorSignMesh];
 
+  /* ---- caixas empacotadas: MESMA ordem, MESMOS números ----
+     `walls` guarda objetos de 5+ formatos diferentes (cru, `city`,
+     `noCollide`, `cityRuin`, `castle`+`part`), então `b.x0` é uma leitura
+     MEGAMÓRFICA — a pior que existe em V8. E o array é varrido inteiro por
+     frame pelo jogador + 12 inimigos + 7 esqueletos + 14 noturnos + 13
+     animais + helicóptero, e uma vez por bala em `rayHit`.
+
+     O espelho abaixo é um Float64Array com os 6 limites em sequência: a
+     varredura passa a ser leitura de typed array, na mesma ordem e com as
+     mesmas contas. Semântica intocada — só o custo por parede.
+
+     Índice espacial NÃO serve aqui: `collide` MUTA `pos` no meio do laço,
+     então o conjunto de candidatos depende da posição que ainda vai mudar;
+     pré-filtrar por região trocaria o resultado em caso de encaixe.
+
+     Revalidação: o array é EXPORTADO e recebe push/splice em runtime (as
+     ruínas no destroy da cidade, o castelo ao carregar o GLB, o QA). Trocou
+     o tamanho ou o último elemento, reempacota; `invalidateWallCache()`
+     força na mão. */
+  let wpack = new Float64Array(0), wnc = new Uint8Array(0);
+  let wpackLen = -1, wpackLast;
+  function packWalls() {
+    const n = walls.length;
+    if (wpack.length < n * 6) {
+      wpack = new Float64Array(n * 6 + 768);
+      wnc = new Uint8Array(n + 128);
+    }
+    for (let i = 0, o = 0; i < n; i++, o += 6) {
+      const b = walls[i];
+      wpack[o] = b.x0; wpack[o + 1] = b.x1;
+      wpack[o + 2] = b.y0; wpack[o + 3] = b.y1;
+      wpack[o + 4] = b.z0; wpack[o + 5] = b.z1;
+      wnc[i] = b.noCollide ? 1 : 0;
+    }
+    wpackLen = n;
+    wpackLast = walls[n - 1]; // n = 0 => undefined, e o teste abaixo bate
+  }
+  function syncWalls() {
+    if (wpackLen !== walls.length || wpackLast !== walls[walls.length - 1]) packWalls();
+    return wpackLen;
+  }
+  function invalidateWallCache() { wpackLen = -1; }
+
   /* ---- raio vs AABBs (slab test, sem alocação) ---- */
   function rayHit(o, d, maxDist) {
     let best = maxDist;
-    for (const b of walls) {
+    const n = syncWalls(), w = wpack;
+    for (let i = 0, p = 0; i < n; i++, p += 6) {
       let t0 = 0, t1 = best, ta, tb;
-      if (Math.abs(d.x) < 1e-8) { if (o.x < b.x0 || o.x > b.x1) continue; }
-      else { ta = (b.x0 - o.x) / d.x; tb = (b.x1 - o.x) / d.x; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) continue; }
-      if (Math.abs(d.y) < 1e-8) { if (o.y < b.y0 || o.y > b.y1) continue; }
-      else { ta = (b.y0 - o.y) / d.y; tb = (b.y1 - o.y) / d.y; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) continue; }
-      if (Math.abs(d.z) < 1e-8) { if (o.z < b.z0 || o.z > b.z1) continue; }
-      else { ta = (b.z0 - o.z) / d.z; tb = (b.z1 - o.z) / d.z; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) continue; }
+      const bx0 = w[p], bx1 = w[p + 1], by0 = w[p + 2], by1 = w[p + 3], bz0 = w[p + 4], bz1 = w[p + 5];
+      if (Math.abs(d.x) < 1e-8) { if (o.x < bx0 || o.x > bx1) continue; }
+      else { ta = (bx0 - o.x) / d.x; tb = (bx1 - o.x) / d.x; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) continue; }
+      if (Math.abs(d.y) < 1e-8) { if (o.y < by0 || o.y > by1) continue; }
+      else { ta = (by0 - o.y) / d.y; tb = (by1 - o.y) / d.y; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) continue; }
+      if (Math.abs(d.z) < 1e-8) { if (o.z < bz0 || o.z > bz1) continue; }
+      else { ta = (bz0 - o.z) / d.z; tb = (bz1 - o.z) / d.z; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) continue; }
       if (t0 > 0 && t0 < best) best = t0;
     }
     return best === maxDist ? Infinity : best;
@@ -727,11 +772,14 @@ export function createStructures(deps) {
 
   /* ---- empurra círculo (player/inimigo) para fora das paredes ---- */
   function collide(pos, radius, height) {
-    for (const b of walls) {
-      if (b.noCollide) continue; // lajes: pisáveis, não empurram
+    const n = syncWalls(), w = wpack;
+    for (let i = 0, p = 0; i < n; i++, p += 6) {
+      if (wnc[i]) continue; // lajes: pisáveis, não empurram
       // pés no nível do topo = está PISANDO no bloco (telhado) — não expulsa
-      if (pos.y + height < b.y0 || pos.y >= b.y1 - 0.12) continue;
-      const nx = clamp(pos.x, b.x0, b.x1), nz = clamp(pos.z, b.z0, b.z1);
+      const by0 = w[p + 2], by1 = w[p + 3];
+      if (pos.y + height < by0 || pos.y >= by1 - 0.12) continue;
+      const bx0 = w[p], bx1 = w[p + 1], bz0 = w[p + 4], bz1 = w[p + 5];
+      const nx = clamp(pos.x, bx0, bx1), nz = clamp(pos.z, bz0, bz1);
       const dx = pos.x - nx, dz = pos.z - nz;
       const d2 = dx * dx + dz * dz;
       if (d2 >= radius * radius) continue;
@@ -740,10 +788,10 @@ export function createStructures(deps) {
         pos.x = nx + dx / d * radius;
         pos.z = nz + dz / d * radius;
       } else {
-        const px = Math.min(pos.x - b.x0, b.x1 - pos.x);
-        const pz = Math.min(pos.z - b.z0, b.z1 - pos.z);
-        if (px < pz) pos.x = (pos.x - b.x0 < b.x1 - pos.x) ? b.x0 - radius : b.x1 + radius;
-        else pos.z = (pos.z - b.z0 < b.z1 - pos.z) ? b.z0 - radius : b.z1 + radius;
+        const px = Math.min(pos.x - bx0, bx1 - pos.x);
+        const pz = Math.min(pos.z - bz0, bz1 - pos.z);
+        if (px < pz) pos.x = (pos.x - bx0 < bx1 - pos.x) ? bx0 - radius : bx1 + radius;
+        else pos.z = (pos.z - bz0 < bz1 - pos.z) ? bz0 - radius : bz1 + radius;
       }
     }
   }
@@ -895,6 +943,7 @@ export function createStructures(deps) {
       for (let i = walls.length - 1; i >= 0; i--) if (walls[i].city) walls.splice(i, 1);
       for (let i = platforms.length - 1; i >= 0; i--) if (platforms[i].city) platforms.splice(i, 1);
       for (const rw of ruinWalls) walls.push(rw); // escombros: poucos colisores baixos
+      invalidateWallCache(); // o espelho empacotado descreve a cidade em pé
       if (this._world) {
         for (const b of this._bodies) this._world.removeBody(b);
         for (const b of this._ruinBodies) this._world.addBody(b);
@@ -910,6 +959,7 @@ export function createStructures(deps) {
       for (const w of this._savedWalls) walls.push(w);
       for (const p of this._savedPlatforms) platforms.push(p);
       this._savedWalls = []; this._savedPlatforms = [];
+      invalidateWallCache();
       if (this._world) {
         for (const b of this._ruinBodies) this._world.removeBody(b);
         for (const b of this._bodies) this._world.addBody(b);
@@ -917,7 +967,8 @@ export function createStructures(deps) {
     },
   };
 
-  return { sites, walls, ruinWalls, rayHit, segBlocked, collide, FORT_POS, castle, flames, smokeSpots, flags, city,
+  return { sites, walls, ruinWalls, rayHit, segBlocked, collide, invalidateWallCache,
+    FORT_POS, castle, flames, smokeSpots, flags, city,
     cityMat, carSpots, enemyCamps, chestSpots, baseSites, heliSpot, bazookaSpot, towerTopY, NEXUS_INTERIOR,
     fieldRoofs };
 }

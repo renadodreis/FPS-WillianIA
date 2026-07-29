@@ -338,23 +338,41 @@
       if (d2 > r * r) return -1;
       return Math.max(0, proj - Math.sqrt(r * r - d2));
     }
+    /* Lista de alvos do combate. Era montada DENTRO do laço de balas — 1
+       array + 1 Set + 1 objeto por alvo POR BALA. Agora reaproveita os três
+       (o Set e o array são limpos, os metas viram um pool) e o laço de balas
+       chama uma vez por frame. Quem chama não pode guardar o resultado
+       através de outra chamada — dentro de stepBullets/melee não guarda. */
+    const _ctList = [], _ctSeen = new Set(), _ctPool = [];
+    function ctPush(i, target, remote, boss) {
+      let m = _ctPool[i];
+      if (!m) m = _ctPool[i] = { target: null, remote: false, boss: false };
+      m.target = target; m.remote = remote; m.boss = boss;
+      _ctList.push(m);
+    }
     function combatTargets() {
-      const result = [], seen = new Set();
+      _ctList.length = 0;
+      _ctSeen.clear();
       for (const target of window.__MP_remotePlayers || []) {
-        if (!target || seen.has(target)) continue;
-        seen.add(target);
-        result.push({ target, remote: true, boss: !!target.isBoss });
+        if (!target || _ctSeen.has(target)) continue;
+        _ctSeen.add(target);
+        ctPush(_ctList.length, target, true, !!target.isBoss);
       }
-      const localGroups = [G.extraTargets || [], G.Bosses || [], (G.Enemies && G.Enemies.list) || []];
-      for (const group of localGroups) for (const target of group) {
-        if (!target || target.enabled === false || seen.has(target) ||
-            typeof target.hitSpheres !== 'function' || typeof target.damage !== 'function') continue;
-        seen.add(target);
-        result.push({ target, remote: false, boss: (G.Bosses || []).includes(target) });
-      }
-      return result;
+      const bosses = G.Bosses || [];
+      for (const group of [G.extraTargets || [], bosses, (G.Enemies && G.Enemies.list) || []])
+        for (const target of group) {
+          if (!target || target.enabled === false || _ctSeen.has(target) ||
+              typeof target.hitSpheres !== 'function' || typeof target.damage !== 'function') continue;
+          _ctSeen.add(target);
+          ctPush(_ctList.length, target, false, bosses.includes(target));
+        }
+      return _ctList;
     }
     function stepBullets(dt) {
+      if (!bullets.length) return;
+      // uma vez por frame, não por bala. `target.alive` continua sendo
+      // conferido a cada bala, então quem morre no meio do laço segue de fora.
+      const targets = combatTargets();
       for (let i = bullets.length - 1; i >= 0; i--) {
         const b = bullets[i];
         b.life -= dt;
@@ -363,7 +381,7 @@
         _bp.copy(b.v).normalize();
         // alvos: jogadores remotos, boss sincronizado e IAs PvE locais ativas
         let bestD = Infinity, bestMeta = null, bestPart = null;
-        for (const meta of combatTargets()) {
+        for (const meta of targets) {
           const target = meta.target;
           if (!target.alive) continue;
           const pos = target.group && target.group.position;

@@ -84,12 +84,21 @@ function buildHeightGrid(worldSize, segs = Math.round(worldSize / 5)) {
   S = { n, half, cell, data };
 }
 function sampleAt(i, j) { return S.data[j * S.n + i]; }
-/* localiza a célula e devolve os 4 cantos + coords locais (tx,tz) */
+/* localiza a célula e preenche os 4 cantos + coords locais (tx,tz).
+   Buffer ÚNICO reaproveitado: `heightAt` é chamada dezenas a centenas de
+   vezes por frame (chão, IA de todo bicho, grama, granada, e um passo por
+   1,6 m do raio de cada bala) e um objeto literal aqui virava lixo de GC
+   na mesma cadência. Os dois consumidores (heightAt/geometricNormalAt)
+   leem e devolvem no mesmo tick, sem reentrância. */
+const _cell = { tx: 0, tz: 0, ha: 0, hd: 0, hb: 0, hc: 0 };
 function cellAt(x, z) {
   const fx = (x + S.half) / S.cell, fz = (z + S.half) / S.cell;
   const i = Math.min(fx | 0, S.n - 2), j = Math.min(fz | 0, S.n - 2);
   const r0 = j * S.n + i;
-  return { tx: fx - i, tz: fz - j, ha: S.data[r0], hd: S.data[r0 + 1], hb: S.data[r0 + S.n], hc: S.data[r0 + S.n + 1] };
+  _cell.tx = fx - i; _cell.tz = fz - j;
+  _cell.ha = S.data[r0]; _cell.hd = S.data[r0 + 1];
+  _cell.hb = S.data[r0 + S.n]; _cell.hc = S.data[r0 + S.n + 1];
+  return _cell;
 }
 function heightAt(x, z) {
   if (!S || x < -S.half || x >= S.half || z < -S.half || z >= S.half)
@@ -187,22 +196,38 @@ function biomeAt(x, z) {
   const WATER_LEVEL = -5;
 
 
-/* colisores círculo (árvores/pedras/cactos) num hash espacial */
+/* colisores círculo (árvores/pedras/cactos) num hash espacial.
+   Chave NUMÉRICA (não string): `obstaclesNear` é chamada 1× por bicho por
+   frame E 1× por passo do raio de cada bala — a versão com template
+   literal produzia 9 strings por chamada só pra consultar o Map. */
 const obstacleGrid = new Map(); // hash espacial p/ colisão do player
 const OBST_CELL = 16;
+const GKEY_BIAS = 4096; // |coordenada| < 65 km cabe sem colisão de chave
+const gkey = (gx, gz) => (gx + GKEY_BIAS) * 8192 + (gz + GKEY_BIAS);
+/* vizinhança 3×3 já mesclada, por célula. Em regime (bicho parado na mesma
+   célula, bala marchando pelo mesmo quadrante) a consulta devolve a lista
+   pronta: zero array e zero string por frame. */
+const nearCache = new Map();
 function addObstacle(x, z, r, meta) {
-  const k = `${Math.floor(x / OBST_CELL)}_${Math.floor(z / OBST_CELL)}`;
+  const k = gkey(Math.floor(x / OBST_CELL), Math.floor(z / OBST_CELL));
   if (!obstacleGrid.has(k)) obstacleGrid.set(k, []);
   // meta opcional: { category, sourceId } — diagnóstico da matriz de colisão
   obstacleGrid.get(k).push(meta ? { x, z, r, ...meta } : { x, z, r });
+  nearCache.clear(); // vizinhança mudou: as listas mescladas envelheceram
 }
 function obstaclesNear(x, z) {
   const gx = Math.floor(x / OBST_CELL), gz = Math.floor(z / OBST_CELL);
+  const k = gkey(gx, gz);
+  const hit = nearCache.get(k);
+  if (hit) return hit;
   const out = [];
   for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
-    const c = obstacleGrid.get(`${gx + i}_${gz + j}`);
-    if (c) out.push(...c);
+    const c = obstacleGrid.get(gkey(gx + i, gz + j));
+    if (c) for (const o of c) out.push(o);
   }
+  // o jogador anda; o mapa de células visitadas não pode crescer sem fim
+  if (nearCache.size > 4096) nearCache.clear();
+  nearCache.set(k, out);
   return out;
 }
   return { simplex, fbm, heightAt, heightAnalytic, buildHeightGrid, groundAt,

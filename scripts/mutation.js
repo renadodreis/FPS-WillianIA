@@ -19,8 +19,9 @@ const MUTS = [
     find: 'const gy = groundAt(n.g.position.x, n.g.position.z, n.g.position.y + 0.5)',
     repl: 'const gy = heightAt(n.g.position.x, n.g.position.z)',
     test: 'test/collision.test.js', pattern: 'granada jogada em cima do prédio' },
+  // (o `b.y1` virou `by1`: `collide` lê o espelho empacotado de `walls`)
   { id: 'M2 colisão volta a cuspir do telhado', file: 'js/structures.js',
-    find: 'pos.y >= b.y1 - 0.12', repl: 'pos.y > b.y1',
+    find: 'pos.y >= by1 - 0.12', repl: 'pos.y > by1',
     test: 'test/collision.test.js', pattern: 'POUSAR nele' },
   { id: 'M3 telhado deixa de ser plataforma', file: 'js/structures.js',
     find: "      platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });",
