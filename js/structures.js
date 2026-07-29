@@ -769,18 +769,38 @@ export function createStructures(deps) {
     const mQueim = csmMat(new THREE.MeshStandardMaterial({ color: 0x191715, roughness: 1 }));
     const mViga = new THREE.MeshStandardMaterial({ color: 0x4a3f34, roughness: 0.7, metalness: 0.5 });
     const mFogo = new THREE.MeshStandardMaterial({ color: 0x200800, emissive: 0xff7a2e, emissiveIntensity: 3 });
-    // chão urbano escurecido + "rachaduras" (faixas escuras finas)
-    const chao = new THREE.Mesh(new THREE.CircleGeometry(88, 40),
+    /* chão urbano escurecido + "rachaduras" (faixas escuras finas).
+       TUDO aqui embaixo pousa no terreno LOCAL, não no gy do centro: o disco
+       tem 88 m de raio e só os ~62 m centrais são o platô urbano — do 62 pro 88
+       o terreno volta ao natural e uma laje plana em gy chegava a FLUTUAR ~5 m
+       (medido em 10 seeds). RingGeometry no lugar de CircleGeometry dá os anéis
+       intermediários pra malha seguir o relevo; é UM objeto, igual ao anterior,
+       então o consumo de UUID (4 Math.random) do stream seedado não muda. */
+    // 160×26: passo radial ~3,4 m e arco ~3,5 m na borda, ambos MENORES que a
+    // célula de 5 m do terreno — sem isso a corda entre dois anéis mergulhava
+    // abaixo do relevo e o terreno furava o decalque.
+    const chaoGeo = new THREE.RingGeometry(0.6, 88, 160, 26);
+    const chao = new THREE.Mesh(chaoGeo,
       new THREE.MeshStandardMaterial({ color: 0x14120f, roughness: 1, transparent: true, opacity: 0.85 }));
+    chao.name = 'chaoRuinas';
     chao.rotation.x = -Math.PI / 2;
     chao.position.set(cx, gy + 0.05, cz);
+    { // rotação -90° em X manda (x,y,z) local pra (x, z, -y) no mundo
+      const p = chaoGeo.attributes.position;
+      for (let i = 0; i < p.count; i++)
+        p.setZ(i, heightAt(cx + p.getX(i), cz - p.getY(i)) - gy);
+      p.needsUpdate = true;
+      chaoGeo.computeVertexNormals();
+      chaoGeo.computeBoundingSphere();
+    }
     cityRuins.add(chao);
     for (let i = 0; i < 10; i++) {
       const r = new THREE.Mesh(new THREE.PlaneGeometry(rand(14, 40), rand(0.5, 1.2)),
         new THREE.MeshBasicMaterial({ color: 0x050505 }));
       r.rotation.x = -Math.PI / 2;
       r.rotation.z = rand(TAU);
-      r.position.set(cx + rand(-70, 70), gy + 0.07, cz + rand(-70, 70));
+      const rx = cx + rand(-70, 70), rz = cz + rand(-70, 70); // MESMA ordem de rand
+      r.position.set(rx, heightAt(rx, rz) + 0.07, rz);
       cityRuins.add(r);
     }
     // stubs dos prédios: metade inferior, inclinados e chamuscados + vigas
@@ -790,23 +810,25 @@ export function createStructures(deps) {
     let li = 0;
     for (const [ox, oz, w, hOrig] of lots) {
       const h = hOrig * rand(0.28, 0.45);
+      const sy = heightAt(cx + ox, cz + oz); // pé do escombro no terreno do lote
       const stub = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.95), li % 2 ? mRuina : mQueim);
-      stub.position.set(cx + ox, gy + h / 2 - 0.4, cz + oz);
+      stub.position.set(cx + ox, sy + h / 2 - 0.4, cz + oz);
       stub.rotation.z = rand(-0.09, 0.09);
       stub.rotation.x = rand(-0.07, 0.07);
       stub.castShadow = true;
       cityRuins.add(stub);
       for (let v = 0; v < 2; v++) {
         const viga = new THREE.Mesh(new THREE.BoxGeometry(0.28, hOrig * rand(0.4, 0.7), 0.28), mViga);
-        viga.position.set(cx + ox + rand(-w / 2, w / 2), gy + viga.geometry.parameters.height / 2 - 0.3,
-          cz + oz + rand(-w / 2, w / 2));
+        const vx = cx + ox + rand(-w / 2, w / 2), vz = cz + oz + rand(-w / 2, w / 2); // MESMA ordem
+        viga.position.set(vx, heightAt(vx, vz) + viga.geometry.parameters.height / 2 - 0.3, vz);
         viga.rotation.z = rand(-0.35, 0.35);
         cityRuins.add(viga);
       }
       // colisor simplificado só nos 6 primeiros stubs: BAIXO (1,6m) — dá pra
       // pular por cima; balas passam por cima; só barra quem anda reto nele
+      // (segue o MESMO sy do visual: colisor e escombro não podem descolar)
       if (li < 6) ruinWalls.push({ x0: cx + ox - w / 2, x1: cx + ox + w / 2,
-        y0: gy - 0.4, y1: gy + 1.6, z0: cz + oz - w / 2, z1: cz + oz + w / 2, cityRuin: true });
+        y0: sy - 0.4, y1: sy + 1.6, z0: cz + oz - w / 2, z1: cz + oz + w / 2, cityRuin: true });
       li++;
     }
     // Torre Nexus severamente danificada: toco alto e torto
@@ -821,7 +843,9 @@ export function createStructures(deps) {
     const dm = new THREE.Object3D();
     for (let i = 0; i < 120; i++) {
       const a = rand(TAU), r = rand(4, 84);
-      dm.position.set(cx + Math.cos(a) * r, gy + rand(0, 0.5), cz + Math.sin(a) * r);
+      const salto = rand(0, 0.5);                 // MESMA ordem: a, r, salto
+      const dx = cx + Math.cos(a) * r, dz = cz + Math.sin(a) * r;
+      dm.position.set(dx, heightAt(dx, dz) + salto, dz); // r vai até 84: gy fixo voava
       dm.rotation.set(rand(TAU), rand(TAU), rand(TAU));
       dm.scale.setScalar(rand(0.4, 1.8));
       dm.updateMatrix();
@@ -832,11 +856,13 @@ export function createStructures(deps) {
     // focos de fogo (cones emissive) + 2 luzes dinâmicas SÓ quando visível
     for (const [fx, fz] of [[-30, -24], [18, 30], [40, 6]]) {
       const fogo = new THREE.Mesh(new THREE.ConeGeometry(0.8, 1.6, 6), mFogo);
-      fogo.position.set(cx + fx, gy + 0.8, cz + fz);
+      fogo.position.set(cx + fx, heightAt(cx + fx, cz + fz) + 0.8, cz + fz);
       cityRuins.add(fogo);
     }
-    cityRuins.add(new THREE.PointLight(0xff7a2e, 1.6, 40, 1.4).translateX(cx - 30).translateY(gy + 3).translateZ(cz - 24));
-    cityRuins.add(new THREE.PointLight(0xff9a4e, 1.2, 34, 1.4).translateX(cx + 40).translateY(gy + 3).translateZ(cz + 6));
+    cityRuins.add(new THREE.PointLight(0xff7a2e, 1.6, 40, 1.4)
+      .translateX(cx - 30).translateY(heightAt(cx - 30, cz - 24) + 3).translateZ(cz - 24));
+    cityRuins.add(new THREE.PointLight(0xff9a4e, 1.2, 34, 1.4)
+      .translateX(cx + 40).translateY(heightAt(cx + 40, cz + 6) + 3).translateZ(cz + 6));
     scene.add(cityRuins);
   }
 
