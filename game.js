@@ -1692,7 +1692,7 @@ function fire(t) {
   // faca (melee): golpe curto, sem munição/flash/som de tiro
   if (gun.melee) {
     gun.cycleT = 0.34; gun.cycleDur = 0.34;
-    addTrauma(0.06);
+    addTrauma(HitCore.shotTrauma(gun));
     recoil.kickZ += 0.12; recoil.kickRot += 0.1;
     SFX.melee();
     camera.getWorldPosition(_rayOrig);
@@ -1705,7 +1705,7 @@ function fire(t) {
   muzzleFlash(gun.pellets > 1 ? 1.5 : 1);
   if (gun.laser) SFX.laser();
   else SFX.shot(gun.pellets > 1 ? 'shotgun' : gun.adsFov < 40 ? 'dmr' : 'rifle');
-  addTrauma(0.08 + gun.kick * 1.1);
+  addTrauma(HitCore.shotTrauma(gun)); // peso por arma, com teto pra automática não saturar
   lastShotInfo.pos.copy(player.pos);
   lastShotInfo.t = t;
   // ciclo visual (bomba/ferrolho) em TODO disparo — automáticas também —
@@ -1717,7 +1717,7 @@ function fire(t) {
   // bazuca: dispara foguete físico em vez de hitscan
   if (gun.rocket) {
     SFX.rocket();
-    addTrauma(0.5);
+    addTrauma(0.28); // soma ao trauma base da arma: continua o coice mais pesado do arsenal
     recoil.pitchVel += 2.3;
     recoil.kickZ += 0.28;
     recoil.kickRot += 0.2;
