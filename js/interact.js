@@ -2,7 +2,7 @@
 import { buildChest } from './chestmodel.js';
 
 export function createInteract(deps) {
-  const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon, getMapToys } = deps;
+  const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon, getMapToys, getSecrets } = deps;
   for (const s of Structures.chestSpots) {
     // não nasce dentro de parede: empurra o spot pra fora de qualquer estrutura
     // (collide não consome rand — seguro na fase seedada). Mantém proximidade e
@@ -43,6 +43,10 @@ export function createInteract(deps) {
     if (cannon) { const cp = cannon.prompt(player.pos); if (cp) return cp; }
     const toys = getMapToys && getMapToys();
     if (toys) { const tp = toys.prompt(player.pos); if (tp) return tp; }
+    // Segredos (estojo do ninho, cofre lacrado): o próprio módulo já se
+    // fecha no BR — desbloqueio de arma é SOLO, igual à bazuca abaixo.
+    const secrets = getSecrets && getSecrets();
+    if (secrets) { const sp = secrets.prompt(player.pos); if (sp) return sp; }
     if (!window.__BR_active) { // BR: sem baú de guardar, sem bazuca grátis (loot vem dos baús BR)
       const bz = Structures.bazookaSpot;
       if (arsenal[3].locked && Math.hypot(player.pos.x - bz.x, player.pos.z - bz.z) < 2.8 && Math.abs(player.pos.y - bz.y) < 3.5)

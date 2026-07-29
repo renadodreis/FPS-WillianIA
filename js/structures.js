@@ -11,6 +11,8 @@ import {
   MAX_CASTLE_RAMP_SLOPE_DEGREES,
   measureCastleSite,
 } from './castle.js';
+import { towerPlatforms, towerSurfaces, towerSteps } from './watchtower.js';
+import * as CityInterior from './cityinterior.js';
 
 export function createStructures(deps) {
   const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
@@ -21,11 +23,28 @@ export function createStructures(deps) {
   const fortGeos = [];   // fallback legado isolado: não entra na malha mundial
   let buildingFort = false;
   const smokeSpots = []; // topos de chaminé (fumaça ambiente)
+  const towerClearings = []; // clareiras de grama sob a escada das torres (game.js)
+  const cityInteriors = []; // térreos ocos materializados {lot,bx,bz,gy,d,gfH,plan}
+  const poiMarks = [];      // pontos pro radar do minimapa (game.js: ToysRadar)
   const flags = [];      // bandeiras que tremulam
   const flagGeo = new THREE.PlaneGeometry(1.15, 0.55);
   flagGeo.translate(0.6, 0, 0); // articulada no mastro
   const flagMat = new THREE.MeshStandardMaterial({ color: 0xe8562a, side: THREE.DoubleSide, roughness: 0.7 });
   const _sc = new THREE.Color();
+  // NEUTRALIZAÇÃO DO RNG: THREE.generateUUID() consome Math.random 4× por
+  // objeto, e Math.random É o PRNG SEEDADO do worldgen (contrato do
+  // CLAUDE.md). Qualquer geometria/material criado durante a geração
+  // deslocaria tudo gerado depois (bases, baús, grama). noSeed() troca
+  // Math.random por um PRNG privado enquanto a geometria é criada — os
+  // UUIDs saem daqui e o stream seedado fica intacto.
+  // Declarado NO TOPO porque a escada das torres de vigia (a primeira
+  // coisa construída) já precisa dele; antes vivia junto da Torre Nexus.
+  let _us = 0x9E3779B9 >>> 0;
+  const noSeed = (fn) => {
+    const _R = Math.random;
+    Math.random = () => (_us = (_us * 1664525 + 1013904223) >>> 0) / 4294967296;
+    try { return fn(); } finally { Math.random = _R; }
+  };
 
   function sbox(w, h, d, x, y, z, color, solid = true) {
     const g = new THREE.BoxGeometry(w, h, d);
@@ -46,6 +65,51 @@ export function createStructures(deps) {
     (buildingFort ? fortGeos : geos).push(g);
   }
 
+  /* escada dog-leg externa + tampo pisável.
+     O contrato geométrico mora em js/watchtower.js (puro, testável em
+     node). Aqui só se materializa: `platforms` são objetos puros (não
+     tocam o RNG) e a geometria vai TODA dentro de noSeed, porque a torre
+     nasce na fase SEEDADA e cada BoxGeometry custa 4 Math.random. */
+  function towerAccess(cx, cz, y) {
+    for (const p of towerPlatforms(cx, cz, y)) platforms.push(p);
+    const s = towerSurfaces(cx, cz, y);
+    towerClearings.push({ x: cx + 2.6, z: cz - 0.6, r: 5.2 }); // grama não brota na escada
+    noSeed(() => {
+      const wood = 0x8a6238, dark = 0x6b4a2e;
+      // degraus visuais por cima da rampa lógica (padrão flight() da Nexus)
+      for (const st of towerSteps(cx, cz, y))
+        sbox(st.w, st.h, st.d, st.x, st.y, st.z, wood, false);
+      // patamares: laje visual com a espessura do degrau
+      for (const L of [s.landingN, s.landingT])
+        sbox(L.x1 - L.x0, 0.22, L.z1 - L.z0, (L.x0 + L.x1) / 2, L.y - 0.11, (L.z0 + L.z1) / 2, wood, false);
+      // longarinas inclinadas (fecham o vão embaixo dos degraus)
+      for (const f of [s.flightA, s.flightB]) {
+        const dz = f.z1 - f.z0, dy = f.y1 - f.y0, len = Math.hypot(dz, dy);
+        for (const sx of [f.x0 + 0.08, f.x1 - 0.08]) {
+          const g = new THREE.BoxGeometry(0.16, 0.42, len);
+          g.rotateX(-Math.atan2(dy, dz));
+          g.translate(sx, (f.y0 + f.y1) / 2 - 0.34, (f.z0 + f.z1) / 2);
+          paintGeometry(g, _sc.setHex(dark)); geos.push(g);
+        }
+        // corrimão externo acompanhando o lance
+        const gh = new THREE.BoxGeometry(0.08, 0.08, len);
+        gh.rotateX(-Math.atan2(dy, dz));
+        gh.translate(f.x1 - 0.08, (f.y0 + f.y1) / 2 + 0.95, (f.z0 + f.z1) / 2);
+        paintGeometry(gh, _sc.setHex(dark)); geos.push(gh);
+        for (let i = 0; i <= 3; i++) {
+          const t = i / 3, pz = f.z0 + dz * t;
+          sbox(0.08, 0.95, 0.08, f.x1 - 0.08, f.y0 + dy * t + 0.48, pz, dark, false);
+        }
+      }
+      // pés dos patamares apoiados no terreno (nada flutuando)
+      for (const [px, pz] of [[s.landingN.x0 + 0.2, s.landingN.z0 + 0.2], [s.landingN.x1 - 0.2, s.landingN.z0 + 0.2]]) {
+        const gy2 = heightAt(px, pz);
+        const hh = Math.max(0.2, s.midY - gy2); // terreno acidentado não inverte a estaca
+        sbox(0.2, hh, 0.2, px, s.midY - hh / 2, pz, dark, false);
+      }
+    });
+  }
+
   function tower(cx, cz) {
     const y = heightAt(cx, cz);
     sites.push({ x: cx, z: cz, r: 5, type: 'torre' });
@@ -58,11 +122,17 @@ export function createStructures(deps) {
     sbox(0.2, 0.2, 3.4, cx + 1.4, y + 3.6, cz, 0x8a6238, false);
     sbox(3.7, 0.28, 3.7, cx, y + H, cz, 0x8a6238);
     fieldRoofs.push({ x0: cx - 1.85, x1: cx + 1.85, z0: cz - 1.85, z1: cz + 1.85, roofY: y + H + 0.14 });
-    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz - 1.78, 0x6b4a2e, false);
-    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz + 1.78, 0x6b4a2e, false);
-    sbox(0.14, 0.5, 3.7, cx - 1.78, y + H + 0.5, cz, 0x6b4a2e, false);
-    sbox(0.14, 0.5, 3.7, cx + 1.78, y + H + 0.5, cz, 0x6b4a2e, false);
+    // Guarda-corpos agora SÓLIDOS: 6,3 m de queda sem parapeito é armadilha,
+    // e o murinho de 0,5 m também para bala (rayHit) — vira a cobertura que
+    // faz do tampo um ninho de sniper de verdade, não um pedestal exposto.
+    // A face LESTE é a boca da escada: o trecho vira 2,7 m (mesma contagem
+    // de geometria = mesmo consumo de RNG) e deixa o vão de entrada ao sul.
+    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz - 1.78, 0x6b4a2e);
+    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz + 1.78, 0x6b4a2e);
+    sbox(0.14, 0.5, 3.7, cx - 1.78, y + H + 0.5, cz, 0x6b4a2e);
+    sbox(0.14, 0.5, 2.7, cx + 1.78, y + H + 0.5, cz - 0.5, 0x6b4a2e);
     scone(3, 1.7, cx, y + H + 1.8, cz, 0xa84f35);
+    towerAccess(cx, cz, y);
   }
 
   function cabin(cx, cz, flip) {
@@ -244,17 +314,7 @@ export function createStructures(deps) {
   const cityInteriorLampGeos = []; // luminárias emissivas do interior (mesh própria)
   const cityInteriorSignGeos = []; // numeração dos andares (atlas em CanvasTexture)
   let cityInteriorSignTex;         // textura-atlas dos números (setada na geração da torre)
-  // NEUTRALIZAÇÃO DO RNG: THREE.generateUUID() consome Math.random 4× por objeto,
-  // e Math.random É o PRNG SEEDADO do worldgen (contrato do CLAUDE.md). Criar a
-  // geometria do interior da torre (centenas de objetos) deslocaria tudo gerado
-  // depois (bases, baús, grama). noSeed() troca Math.random por um PRNG privado
-  // enquanto a geometria é criada — os UUIDs saem daqui e o stream seedado fica intacto.
-  let _us = 0x9E3779B9 >>> 0;
-  const noSeed = (fn) => {
-    const _R = Math.random;
-    Math.random = () => (_us = (_us * 1664525 + 1013904223) >>> 0) / 4294967296;
-    try { return fn(); } finally { Math.random = _R; }
-  };
+  // (noSeed vive no TOPO de createStructures: as torres de vigia já o usam)
   const cityProps = new THREE.Group(); cityProps.name = 'cityProps';
   // PRNG independente pro detalhe arquitetônico: determinístico em todos os
   // clientes (seed constante) e NÃO consome o rand seedado do worldgen.
@@ -262,7 +322,11 @@ export function createStructures(deps) {
   const bp = () => (_bs = (_bs * 1664525 + 1013904223) >>> 0) / 4294967296;
   const brand = (a = 1, b) => (b === undefined ? bp() * a : a + bp() * (b - a));
   const _white = new THREE.Color(1, 1, 1);
-  function cityBox(w, h, d, x, y, z, tint, solid = true) { // caixa texturizada (UV ~ por andar)
+  /* `roof=false`: parede do TÉRREO OCO. `groundAt` varre `platforms`
+     inteiro a cada consulta (jogador + todo bicho, por frame), então as
+     ~44 paredes internas não podem virar 44 lajes pisáveis — ainda mais
+     porque o topo delas fica DENTRO do bloco maciço de cima. */
+  function cityBox(w, h, d, x, y, z, tint, solid = true, roof = true) { // caixa texturizada (UV ~ por andar)
     const g = new THREE.BoxGeometry(w, h, d);
     const uv = g.attributes.uv;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * Math.max(w, d) / 9, uv.getY(i) * h / 7);
@@ -272,8 +336,25 @@ export function createStructures(deps) {
     if (solid) {
       walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2, city: true });
       // telhado pisável: pousar de paraquedas/pular em prédio da cidade funciona
-      platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });
+      if (roof) platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });
     }
+  }
+  /* miolo dos térreos ocos: vai pro cityInteriorMesh (que some junto no
+     evento de destruição). Já houve o bug de o visual da laje vazar pro
+     mesh GLOBAL e ficar flutuando depois do destroy() — não repetir. */
+  const _icc = new THREE.Color();
+  function interiorBox(w, h, d, x, y, z, hex, solid = false, floor = false) {
+    const g = new THREE.BoxGeometry(w, h, d);
+    g.translate(x, y, z);
+    paintGeometry(g, _icc.setHex(hex));
+    cityInteriorGeos.push(g);
+    if (solid) walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2, city: true });
+    if (floor) platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });
+  }
+  function interiorLamp(w, d, x, y, z) { // mesh emissiva própria (luz de teto/placa)
+    const g = new THREE.BoxGeometry(w, 0.1, d);
+    g.translate(x, y, z);
+    cityInteriorLampGeos.push(g);
   }
   // trim urbano vertex-color: some no evento (vai pro cityTrimMesh). Decorativo
   // por padrão (sem colisão) — não cria parede invisível.
@@ -343,27 +424,86 @@ export function createStructures(deps) {
       if (arch === 'office' || arch === 'corner') { const ah = brand(2.6, 4.2); // antena
         trimBox(0.13, ah, 0.13, bx + brand(-w * 0.2, w * 0.2), py + ah / 2, bz + brand(-d * 0.2, d * 0.2), 0x20242a); }
     }
-    function building(lot) {
+    /* TÉRREO OCO: 4 lotes viram sala de verdade (js/cityinterior.js).
+       Tudo aqui nasce em noSeed — a fase é SEEDADA e cada BoxGeometry
+       custa 4 Math.random. Paredes vão pro cityGeos (fachada texturizada,
+       vista de fora continua prédio); miolo e luzes vão pro
+       cityInteriorMesh, que some junto no evento de destruição. */
+    function hollowGroundFloor(lot, bx, bz, d, gfH, tint) {
+      const plan = CityInterior.interiorPlan(lot, d, gfH);
+      noSeed(() => {
+        for (const s of plan.walls)
+          cityBox(s.w, s.h, s.d, bx + s.x, gy + s.y, bz + s.z, tint, true, false);
+        // SEM laje de piso: o cityInteriorMesh tem auto-iluminação forte
+        // (emissive 0x3b4552 @1.5 — é o que impede a Torre Nexus de ficar
+        // preta à noite), e uma laje grande dentro dele virava um espelho
+        // azul-claro que engolia os caixotes (visto na captura). O chão do
+        // footprint urbano já vem pintado e sem grama por CityLayout.
+        plan.cover.forEach((c, i) => {
+          // só o balcão central ganha laje pisável (pular nele pra atirar por
+          // cima do peitoril); os caixotes ficam só como cobertura, pra não
+          // engordar o `platforms` que groundAt varre por frame
+          interiorBox(c.w, c.h, c.d, bx + c.x, gy + c.h / 2, bz + c.z,
+            i === 0 ? 0x4a5561 : 0x7a5c30, true, i === 0);
+        });
+        for (const lp of plan.lamps)
+          interiorLamp(lp.w, lp.d, bx + lp.x, gy + lp.y, bz + lp.z);
+        // FINDABILITY: placa acesa por cima da porta + jambas de neon. Da rua
+        // a entrada tem que gritar "dá pra entrar aqui" — porta escura no meio
+        // de fachada texturizada some.
+        const sg = plan.sign, horiz = sg.face === 'N' || sg.face === 'S';
+        const nz = sg.face === 'S' ? 1 : sg.face === 'N' ? -1 : 0;
+        const nx = sg.face === 'E' ? 1 : sg.face === 'O' ? -1 : 0;
+        const sx = bx + sg.x + nx * 0.35, sz = bz + sg.z + nz * 0.35;
+        interiorLamp(horiz ? 3.2 : 0.12, horiz ? 0.12 : 3.2, sx, gy + sg.y, sz);
+        for (const k of [-1, 1]) {
+          const jx = sx + (horiz ? k * (CityInterior.INT.DOOR_W / 2 + 0.2) : 0);
+          const jz = sz + (horiz ? 0 : k * (CityInterior.INT.DOOR_W / 2 + 0.2));
+          interiorBox(0.16, CityInterior.INT.DOOR_H, 0.16, jx, gy + CityInterior.INT.DOOR_H / 2, jz, 0x9fe6ff);
+        }
+        poiMarks.push({ x: bx + sg.x + nx * 1.2, z: bz + sg.z + nz * 1.2, color: 0x9fe6ff, kind: 'interior' });
+      });
+      cityInteriors.push({ lot, bx, bz, gy, d, gfH, plan });
+    }
+
+    function building(lot, idx) {
       const { w, h, arch, face } = lot;
       const bx = cx + lot.ox, bz = cz + lot.oz, d = CityLayout.lotDepth(lot);
       const _s = rand(0.8, 1.1); void _s;              // PRESERVA o rand seedado (1 call/lote)
       const hue = arch === 'resid' ? 0.07 : arch === 'commerc' ? 0.55 : 0.6;
       const tint = new THREE.Color().setHSL(hue + brand(-0.02, 0.02), 0.06 + brand(0, 0.05), 0.6 + brand(-0.05, 0.12));
-      cityBox(w, h, d, bx, gy + h / 2, bz, tint);       // volume principal (fachada + colisor + telhado)
       const gfH = Math.min(3.4, h * 0.33);
-      trimBox(w + 0.5, gfH, d + 0.5, bx, gy + gfH / 2, bz, arch === 'commerc' ? 0x2b2f36 : 0x4a4f58); // térreo/podium
+      const oco = CityInterior.isHollowLot(idx);
+      if (oco) {
+        // volume maciço começa ACIMA do térreo; o térreo vira sala
+        cityBox(w, h - gfH, d, bx, gy + gfH + (h - gfH) / 2, bz, tint);
+        // CONTRATO DO WORLDGEN: as 3 peças do caminho maciço que deixamos de
+        // criar (pódium, moldura e vão recuado da porta falsa) consumiam
+        // 4 Math.random cada via UUID do THREE. Repor o consumo mantém
+        // bases/baús/grama IDÊNTICOS ao layout do seed — mesma técnica das
+        // 168 chamadas lá embaixo. NÃO é código morto.
+        for (let i = 0; i < CityInterior.SKIPPED_TRIMS * 4; i++) Math.random();
+        hollowGroundFloor(lot, bx, bz, d, gfH, tint);
+      } else {
+        cityBox(w, h, d, bx, gy + h / 2, bz, tint);     // volume principal (fachada + colisor + telhado)
+        trimBox(w + 0.5, gfH, d + 0.5, bx, gy + gfH / 2, bz, arch === 'commerc' ? 0x2b2f36 : 0x4a4f58); // térreo/podium
+      }
       trimBox(w + 0.7, 0.28, d + 0.7, bx, gy + gfH, bz, 0x6c727b);                                    // cornija do térreo
       const fo = faceOffset(face, w, d);
       const doorW = Math.min(2.8, w * 0.42), doorH = 2.3;
       const fx = bx + fo.ox, fz = bz + fo.oz;
       if (fo.axis === 'x') {
-        trimBox(doorW + 0.7, doorH + 0.4, 0.22, fx, gy + (doorH + 0.4) / 2, fz + fo.nz * 0.02, 0x8a909a);  // moldura
-        trimBox(doorW, doorH, 0.16, fx, gy + doorH / 2, fz + fo.nz * 0.1, 0x14161a);                       // vão recuado
+        if (!oco) {
+          trimBox(doorW + 0.7, doorH + 0.4, 0.22, fx, gy + (doorH + 0.4) / 2, fz + fo.nz * 0.02, 0x8a909a);  // moldura
+          trimBox(doorW, doorH, 0.16, fx, gy + doorH / 2, fz + fo.nz * 0.1, 0x14161a);                       // vão recuado
+        }
         if (arch === 'commerc' || arch === 'corner')
           trimBox(doorW + 1.6, 0.16, 1.2, fx, gy + doorH + 0.35, fz + fo.nz * 0.55, 0x2c3038);             // marquise
       } else {
-        trimBox(0.22, doorH + 0.4, doorW + 0.7, fx + fo.nx * 0.02, gy + (doorH + 0.4) / 2, fz, 0x8a909a);
-        trimBox(0.16, doorH, doorW, fx + fo.nx * 0.1, gy + doorH / 2, fz, 0x14161a);
+        if (!oco) {
+          trimBox(0.22, doorH + 0.4, doorW + 0.7, fx + fo.nx * 0.02, gy + (doorH + 0.4) / 2, fz, 0x8a909a);
+          trimBox(0.16, doorH, doorW, fx + fo.nx * 0.1, gy + doorH / 2, fz, 0x14161a);
+        }
         if (arch === 'commerc' || arch === 'corner')
           trimBox(1.2, 0.16, doorW + 1.6, fx + fo.nx * 0.55, gy + doorH + 0.35, fz, 0x2c3038);
       }
@@ -378,7 +518,7 @@ export function createStructures(deps) {
       trimBox(0.3, 0.7, d + 0.4, bx + w / 2, py + 0.35, bz, 0x3a3f48);
       roofUnits(bx, bz, w, d, py, arch);
     }
-    for (const lot of CityLayout.LOTS) building(lot);
+    CityLayout.LOTS.forEach((lot, i) => building(lot, i));
 
     // vagas de carros esportivos na rua
     carSpots.push({ x: cx + 14, z: cz + 26, ry: 0, type: 'sport' });          // de frente pra avenida
@@ -968,7 +1108,7 @@ export function createStructures(deps) {
   };
 
   return { sites, walls, ruinWalls, rayHit, segBlocked, collide, invalidateWallCache,
-    FORT_POS, castle, flames, smokeSpots, flags, city,
+    FORT_POS, castle, flames, smokeSpots, towerClearings, cityInteriors, poiMarks, flags, city,
     cityMat, carSpots, enemyCamps, chestSpots, baseSites, heliSpot, bazookaSpot, towerTopY, NEXUS_INTERIOR,
     fieldRoofs };
 }

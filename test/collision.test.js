@@ -215,9 +215,13 @@ describe('Colisões', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   it('dado um carro contra uma árvore, então o tronco segura o carro (regressão do AABB)', async t => {
     const r = await play(() => {
       const QA = window.QA, W = QA.MP.world, G = QA.G;
-      // tronco: Box estático baixinho
+      // tronco: o corpo da ÁRVORE, pelo sourceId (game.js: 'tree:N').
+      // A heurística antiga ("primeiro Box estático baixinho") quebrou quando
+      // os guarda-corpos das torres de vigia viraram sólidos: o find pescava
+      // um parapeito a 6,7 m do chão e o carro "penetrava" passando POR BAIXO
+      // do tampo — falso positivo. O sourceId não depende da ordem do boot.
       const tb = W.bodies.find(bd => bd.mass === 0 && bd.shapes[0] && bd.shapes[0].halfExtents &&
-        bd.shapes[0].halfExtents.y < 3 && bd.shapes[0].halfExtents.x < 1);
+        bd.userData && String(bd.userData.sourceId || '').startsWith('tree:'));
       if (!tb) return null;
       const v = G.Car.vehicles[0];
       const tx = tb.position.x, tz = tb.position.z;

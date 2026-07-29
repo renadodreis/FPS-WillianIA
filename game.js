@@ -53,6 +53,7 @@ import { createPerfHud } from './js/perfhud.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
+import { createSecrets } from './js/secrets.js';
 import { buildChest } from './js/chestmodel.js';
 
 /* ================================================================
@@ -499,6 +500,7 @@ const Structures = createStructures({ clamp, rand, TAU, heightAt, slopeAt, platf
 // seedado e aqui ainda deslocaria o stream das árvores/vegetação.
 grassClearings.push({ x: 7.5, z: -6, r: 4.5 },
   Structures.castle.clearing,
+  ...Structures.towerClearings, // escada das torres de vigia: grama não atravessa degrau
   ...Structures.carSpots.map(s => ({ x: s.x, z: s.z, r: s.type === 'truck' ? 5.5 : 4.5 })));
 
 /* paredes das construções também são sólidas pra física dos veículos —
@@ -2232,7 +2234,8 @@ const Missions = (() => {
    ================================================================ */
 let Cannon = null; // Canhão de Circo — criado no FIM do init (pós-worldgen); Interact lê via getter
 let MapToys = null; // 5 atrações do mapa — idem; Interact e playerUpdate leem via referência
-const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon, getMapToys: () => MapToys });
+let Secrets = null; // 3 segredos (armas trancadas) — depende de MapToys, vem por último
+const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets });
 
 /* ================== minimapa / radar (canvas 2D) ================== */
 const MiniMap = (() => {
@@ -2354,7 +2357,10 @@ const ToysRadar = (() => {
     _euler.setFromQuaternion(camera.quaternion);
     ctx.save(); ctx.translate(C, C); ctx.rotate(_euler.y);
     const maxR = C * 0.8;
-    for (const l of MapToys.landmarks) {
+    // atrações + POIs do mundo (entradas dos térreos ocos, segredos): mesma
+    // regra de clamp na borda, senão POI fora do alcance de 95 m some
+    const pois = MapToys.landmarks.concat(Structures.poiMarks, Secrets ? Secrets.marks : []);
+    for (const l of pois) {
       let x = (l.x - player.pos.x) / 95 * C, y = (l.z - player.pos.z) / 95 * C;
       const d = Math.hypot(x, y);
       const far = d > maxR;
@@ -2533,6 +2539,7 @@ function tick(forceDt) {
   Interact.update(dt, t);
   if (Cannon) Cannon.update(dt, t);
   if (MapToys) MapToys.update(dt, t);
+  if (Secrets) Secrets.update(dt, t);
   FX.update(dt);
   Amb.update(dt, t);
   Water.update(t);
@@ -2710,6 +2717,26 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, Structures, heig
    evitando estruturas e o canhão. */
 MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, slopeAt, WATER_LEVEL, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state, cannonSpot: Cannon.spot });
 
+/* Segredos: as 3 armas que nasciam trancadas sem fonte nenhuma no solo
+   viram prêmio de exploração. Depende de MapToys (xilofone) e das torres
+   subíveis, então vem por último; geometria em noSeed, como o resto. */
+Secrets = createSecrets({ scene, player, SFX, FX, csmMat, Structures, heightAt, CITY,
+  centerMsg, showBanner, extraTargets, arsenal, unlockWeapon, state, MapToys, platforms,
+  /* props urbanos criados DEPOIS do laço de corpos do boot precisam do seu
+     próprio corpo CANNON — sem ele o jogador e a bala param, mas o CARRO
+     ATRAVESSA. updateAABB() é obrigatório: o CANNON calcula o AABB no
+     construtor (na origem) e nunca mais. Registrado na cidade pra sumir
+     junto no evento de destruição, como qualquer parede urbana. */
+  addStaticBox(x, y, z, hx, hy, hz, sourceId) {
+    const b = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
+    b.position.set(x, y, z);
+    b.userData = { category: 'rigid', sourceId, hardForVehicle: true };
+    b.updateAABB();
+    world.addBody(b);
+    Structures.city.registerBody(b);
+    return b;
+  } });
+
 /* hooks de depuração (inofensivos em produção) */
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
@@ -2718,6 +2745,7 @@ window.__game = {
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   get Cannon() { return Cannon; },
   get MapToys() { return MapToys; },
+  get Secrets() { return Secrets; },
   buildChest, // baú compartilhado (br-game.js usa via G.buildChest)
   WeaponModels, FpBody, WeaponRig, Climate, Cover,
   csmDebug: {

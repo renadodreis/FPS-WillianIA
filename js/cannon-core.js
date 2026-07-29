@@ -46,17 +46,30 @@ export function withinAntiCheat(prof = LAUNCH, caps = ANTICHEAT) {
   return horizontalSpeed(prof) < caps.hStrike && verticalSpeed(prof) < caps.vReject;
 }
 
+/* TETO DE RAIO das atrações, medido do CENTRO DO MUNDO (0,0).
+   O anel de busca é centrado na CIDADE (-340, 130), que já está a 363 m
+   do centro; somando o anel (até 360 m) dava 700 m de alcance, e o único
+   freio era `worldHalf` — que é POR EIXO (|x|,|z| ≤ 520). Como o score
+   premia clareira, as atrações iam parar exatamente na borda vazia:
+   medido em produção, campo de tiro em x = -519 e canhão/argolas em
+   (-517, 436) — 676 m do centro, encostados na cerca (o jogador para em
+   ±539 e árvore/pedra param em ±517, então o entorno era pelado).
+   430 m mantém tudo dentro do mapa POVOADO e ainda deixa o anel com
+   candidatos de sobra em qualquer seed. */
+export const POI_MAX_RADIUS = 430;
+
 /* Escolha DETERMINÍSTICA do "ponto mais vazio" alcançável — SEM rand
    (não toca o stream seedado do worldgen; idêntico em todos os clientes
    para a mesma seed). Varre um anel ao redor da cidade e devolve o ponto
    seco, plano e mais distante de qualquer estrutura.
-     sites   : [{x,z,r}]  estruturas a evitar (Structures.sites)
-     sampler : (x,z) => { h, slope }  leitura do terreno
+     sites     : [{x,z,r}]  estruturas a evitar (Structures.sites)
+     sampler   : (x,z) => { h, slope }  leitura do terreno
+     maxRadius : teto de distância do centro do mundo (ver POI_MAX_RADIUS)
    Retorna { x, z, clearance } ou null (o chamador tem fallback). */
 export function pickSpot({
   sites = [], avoid = [], cx = 0, cz = 0, sampler, waterLevel = 0,
   ringMin = 150, ringMax = 360, step = 12, arcSteps = 48,
-  maxSlope = 0.28, worldHalf = 520,
+  maxSlope = 0.28, worldHalf = 520, maxRadius = POI_MAX_RADIUS,
 }) {
   if (typeof sampler !== 'function') return null;
   // `avoid` = pontos já ocupados por OUTRAS atrações (mesma unidade de sites);
@@ -74,6 +87,10 @@ export function pickSpot({
       const x = cx + Math.cos(a) * r;
       const z = cz + Math.sin(a) * r;
       if (Math.abs(x) > worldHalf || Math.abs(z) > worldHalf) continue;
+      // TETO RADIAL: filtro duro ANTES do score. Penalizar no score não
+      // resolvia — num anel onde tudo está longe, "menos ruim" continuava
+      // sendo a borda do mundo.
+      if (Math.hypot(x, z) > maxRadius) continue;
       const s = sampler(x, z);
       if (!s || !Number.isFinite(s.h) || s.h <= waterLevel + 1.2) continue; // seco
       let clr = Infinity;
