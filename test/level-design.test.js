@@ -75,6 +75,16 @@ describe('Higiene de level design', { skip: !CHROME && 'Chrome não encontrado' 
   });
 
   it('dados os barris dos POIs, então cada um tem corpo CANNON (carro não atravessa)', async () => {
+    // os POIs (mercado/refúgio/barris) nascem num bloco ASYNC de GLB depois do
+    // boot; com a integração o boot ficou mais pesado e o teste chegava antes
+    // do barril existir — espere a prontidão em vez de amostrar no escuro.
+    await h.page.waitForFunction(() => {
+      const G = window.QA && window.QA.G;
+      if (!G) return false;
+      const m = G.Structures.sites.find(s => s.type === 'mercado');
+      return !!m && G.obstaclesNear(m.x + 5, m.z + 4)
+        .some(o => o.sourceId === 'barrel');
+    }, { timeout: 30000, polling: 500 });
     const r = await h.play(fonte => {
       const perto = new Function('return ' + fonte)()();
       const G = window.QA.G;

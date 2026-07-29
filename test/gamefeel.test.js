@@ -23,7 +23,12 @@ describe('game feel — combate', { skip: !CHROME && 'Chrome não encontrado' },
   let hostPos = null; // onde o servidor acha que o bot está
 
   before(async () => {
-    h = await bootGame({ port: PORT, extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '300' } });
+    /* FLY_TIME curto: o backstop do servidor (zona/AFK) só arma em
+       flyTime+30 s. Se uma reconexão espúria do boot deixou um participante
+       fantasma, é o backstop quem o executa e libera o checkVictory — com o
+       flyTime padrão (55 s) isso só acontecia aos ~92 s e o cenário da
+       vitória estourava o relógio. Com 2 s, o fantasma morre aos ~52 s. */
+    h = await bootGame({ port: PORT, extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '300', FLY_TIME: '2' } });
     host = await startBRMatch(h, { serverPort: PORT });
     myId = await h.play(() => window.__MP_init.id);
     await h.play(() => {
@@ -386,8 +391,14 @@ describe('game feel — combate', { skip: !CHROME && 'Chrome não encontrado' },
   });
 
   it('7 — a VITÓRIA é encenada: câmera lenta + fanfarra antes da tabela', async () => {
-    // a kill anterior era do último adversário vivo: a partida acabou nela
-    await h.page.waitForFunction('window.__BR_debug.S.phase === "ENDED"', { timeout: 8000 });
+    // a kill anterior era do último adversário vivo: a partida acabou nela.
+    // No caminho feliz o matchEnd chega em <1 s. MAS: se o boot pesado causou
+    // uma reconexão do socket da página (corrida real de máquina fraca), o
+    // socket VELHO fica half-open no servidor como participante vivo; o
+    // checkVictory só fecha a partida quando o pingTimeout do servidor expira
+    // esse fantasma (~45-60 s) e o disconnect o remove (server.js chama
+    // checkVictory no disconnect). O timeout cobre a janela inteira.
+    await h.page.waitForFunction('window.__BR_debug.S.phase === "ENDED"', { timeout: 70000 });
     const mid = await h.play(() => ({
       scales: window.__QA_timeScale.slice(), victory: window.__QA_victory,
     }));

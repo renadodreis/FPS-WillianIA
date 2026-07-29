@@ -554,7 +554,10 @@
         Object.assign(window.__MP_init, d);  // id novo, host/roster atuais
         sendHello();                         // reapresenta nick/cores na sala
       } else {
-        location.reload();
+        // em partida o mundo já divergiu: recarregar é o caminho limpo.
+        // Hookável (padrão __MP_respawn): o harness de QA neutraliza para
+        // preservar o contexto da página e inspecionar o estado.
+        (window.__MP_reload || (() => location.reload()))();
       }
     });
 

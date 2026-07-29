@@ -125,6 +125,9 @@ async function bootGame({
       window.__MP_active = true;
       window.__BR_active = true;
       window.__MP_respawn = () => {};
+      // reconexão em partida recarrega a página em produção; o QA preserva o
+      // contexto (mesmo padrão do __MP_respawn) — o cenário degrada gracioso
+      window.__MP_reload = () => {};
     });
   const pageErrors = [];
   const consoleErrors = [];
@@ -265,8 +268,29 @@ async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort } = {}) {
     );
     await waitForBRClientReady(h);
     bot = io(`http://localhost:${serverPort || h.port}`, { transports: ['websocket'] });
-    await waitForSocketEvent(bot, 'init');
+    const botInit = await waitForSocketEvent(bot, 'init');
     bot.emit('hello', { nick: 'BotHost' });
+    /* HEARTBEAT DE VIDA. O servidor executa por INATIVIDADE quem fica 45 s
+       sem emitir `state` (anti-AFK, backstop da zona). O bot-host parado é
+       exatamente isso: em testes que passam de ~87 s de partida ele morria
+       sozinho, encerrava a partida e roubava a vitória do cenário (raiz da
+       falha tardia de test/gamefeel). Um state parado a cada 5 s é o que um
+       jogador vivo de verdade faria. unref(): o timer não segura o processo. */
+    const botSpawn = (botInit && botInit.spawn) || { x: 60, z: 60 };
+    let botLastState = { pos: [botSpawn.x || 60, 2, botSpawn.z || 60], rotY: 0 };
+    /* o pulso REPETE a última posição que o teste mandou (walkHostTo etc.);
+       reenviar o spawn teleportaria o host de volta no meio do cenário. */
+    const botEmit = bot.emit.bind(bot);
+    bot.emit = (ev, ...args) => {
+      if (ev === 'state' && args[0] && args[0].pos) botLastState = args[0];
+      return botEmit(ev, ...args);
+    };
+    const botPulse = setInterval(() => {
+      if (bot.connected) botEmit('state', botLastState);
+    }, 5000);
+    if (botPulse.unref) botPulse.unref();
+    const botClose = bot.close.bind(bot);
+    bot.close = () => { clearInterval(botPulse); return botClose(); };
     await new Promise((res, rej) => bot.timeout(4000).emit('claimHost', { code: hostCode },
       (e, d) => (e || !d || !d.ok) ? rej(new Error('claimHost falhou')) : res()));
     bot.emit('requestStart');
