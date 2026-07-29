@@ -25,11 +25,21 @@
 
 /* Um "plano" (shot) é: um alvo, um arco ao redor dele e um dolly lento.
    `at(v)` PREENCHE o vetor recebido (não devolve um novo) — é o que
-   mantém o custo por frame em zero alocação mesmo com alvo móvel. */
+   mantém o custo por frame em zero alocação mesmo com alvo móvel.
+
+   ENQUADRAMENTO: `pan`/`tilt` deslocam o PONTO DE MIRA (não a câmera) em
+   frações da distância até o alvo — mirar ao lado do assunto joga o assunto
+   pro lado oposto da tela. É assim que o castelo/vulcão saem de trás do
+   painel do menu (que ocupa a coluna esquerda) sem mexer no arco da câmera.
+   pan > 0 mira à direita  → assunto à ESQUERDA;  pan < 0 → assunto à direita.
+   tilt > 0 mira pra cima  → assunto mais BAIXO;  tilt < 0 → assunto mais alto. */
 export function createMenuCamera(deps) {
   const { THREE, camera, heightAt, shots, cutEl } = deps;
   const _target = new THREE.Vector3();
   const _pos = new THREE.Vector3();
+  const _aim = new THREE.Vector3();
+  const _right = new THREE.Vector3();
+  const _up = new THREE.Vector3(0, 1, 0);
 
   // corte: escurece rápido, troca de plano no escuro, volta devagar.
   // Sem timer: a régua é o próprio dt do tick.
@@ -75,7 +85,17 @@ export function createMenuCamera(deps) {
       if (_pos.y < floor) _pos.y = floor;
     }
     camera.position.copy(_pos);
-    camera.lookAt(_target);
+    /* mira deslocada: tudo em vetores de escratch, zero alocação por frame */
+    _aim.subVectors(_target, _pos);
+    const dist = _aim.length();
+    _right.crossVectors(_aim, _up);
+    if (_right.lengthSq() > 1e-6) {
+      _right.normalize();
+      _aim.copy(_target)
+        .addScaledVector(_right, (cur.pan || 0) * dist)
+        .addScaledVector(_up, (cur.tilt || 0) * dist);
+      camera.lookAt(_aim);
+    } else camera.lookAt(_target);
     const fov = cur.fov0 + (cur.fov1 - cur.fov0) * e;
     if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
   }
@@ -174,9 +194,13 @@ export function wireMenuUI(deps) {
     return !(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
   };
 
+  /* Com as configurações abertas a navegação fica presa nelas; fora disso o
+     escopo é o painel INTEIRO (botões + o gatilho dos controles recolhidos).
+     `offsetParent !== null` já descarta o que estiver escondido, então o
+     VOLTAR do #settings fechado nunca entra na lista. */
   function options() {
     const open = settings && settings.classList.contains('open');
-    const scope = open ? settings : $('menuBtns');
+    const scope = open ? settings : $('panel');
     if (!scope) return [];
     return Array.prototype.filter.call(scope.querySelectorAll('.mbtn'),
       b => live(b) && b.offsetParent !== null);

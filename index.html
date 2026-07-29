@@ -73,34 +73,39 @@
       <div id="titleScan" aria-hidden="true"></div>
     </div>
     <div id="subtitle"><i></i><span>MUNDO ABERTO &nbsp;·&nbsp; DIA &amp; NOITE &nbsp;·&nbsp; CLIMA DINÂMICO</span><i></i></div>
-    <div id="controls">
-      <div class="ctlGroup">
-        <h4>Movimento</h4>
-        <div class="ctl"><span class="keys"><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span></span><b>Mover</b></div>
-        <div class="ctl"><span class="keys"><span class="key wide">SHIFT</span></span><b>Correr</b></div>
-        <div class="ctl"><span class="keys"><span class="key wide">ESPAÇO</span></span><b>Pular</b></div>
-        <div class="ctl"><span class="keys"><span class="key wide">CTRL</span></span><b>Agachar / deslizar</b></div>
-      </div>
-      <div class="ctlGroup">
-        <h4>Combate</h4>
-        <div class="ctl"><span class="keys"><span class="key mouse">🖱 ESQ</span><span class="key mouse">DIR</span></span><b>Atirar / mirar</b></div>
-        <div class="ctl"><span class="keys"><span class="key">R</span></span><b>Recarregar</b></div>
-        <div class="ctl"><span class="keys"><span class="key">1</span><span class="key dash">–</span><span class="key">5</span></span><b>Trocar de arma <i>(ou scroll)</i></b></div>
-        <div class="ctl"><span class="keys"><span class="key">G</span></span><b>Granada</b></div>
-        <div class="ctl"><span class="keys"><span class="key">T</span></span><b>Acessório da mira</b></div>
-      </div>
-      <div class="ctlGroup">
-        <h4>Interação</h4>
-        <div class="ctl"><span class="keys"><span class="key">E</span></span><b>Veículo / baú</b></div>
-        <div class="ctl"><span class="keys"><span class="key">Q</span></span><b>Kit médico</b></div>
-        <div class="ctl"><span class="keys"><span class="key">F</span></span><b>Comer carne</b></div>
-        <div class="ctl"><span class="keys"><span class="key wide">TAB</span></span><b>Inventário</b></div>
-      </div>
-    </div>
     <div id="menuBtns">
       <div class="mbtn" id="btnNew" role="button" tabindex="0">NOVO JOGO</div>
       <div class="mbtn sec" id="btnSettings" role="button" tabindex="0">⚙ &nbsp;CONFIGURAÇÕES</div>
     </div>
+    <!-- controles RECOLHIDOS: ninguém precisa ler 19 teclas pra apertar NOVO
+         JOGO. <details> nativo = zero JS, teclado e ARIA de graça. -->
+    <details id="ctlBox">
+      <summary class="mbtn sec" id="btnCtl">⌨ &nbsp;CONTROLES</summary>
+      <div id="controls">
+        <div class="ctlGroup">
+          <h4>Movimento</h4>
+          <div class="ctl"><span class="keys"><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span></span><b>Mover</b></div>
+          <div class="ctl"><span class="keys"><span class="key wide">SHIFT</span></span><b>Correr</b></div>
+          <div class="ctl"><span class="keys"><span class="key wide">ESPAÇO</span></span><b>Pular</b></div>
+          <div class="ctl"><span class="keys"><span class="key wide">CTRL</span></span><b>Agachar / deslizar</b></div>
+        </div>
+        <div class="ctlGroup">
+          <h4>Combate</h4>
+          <div class="ctl"><span class="keys"><span class="key mouse">🖱 ESQ</span><span class="key mouse">DIR</span></span><b>Atirar / mirar</b></div>
+          <div class="ctl"><span class="keys"><span class="key">R</span></span><b>Recarregar</b></div>
+          <div class="ctl"><span class="keys"><span class="key">1</span><span class="key dash">–</span><span class="key">5</span></span><b>Trocar de arma <i>(ou scroll)</i></b></div>
+          <div class="ctl"><span class="keys"><span class="key">G</span></span><b>Granada</b></div>
+          <div class="ctl"><span class="keys"><span class="key">T</span></span><b>Acessório da mira</b></div>
+        </div>
+        <div class="ctlGroup">
+          <h4>Interação</h4>
+          <div class="ctl"><span class="keys"><span class="key">E</span></span><b>Veículo / baú</b></div>
+          <div class="ctl"><span class="keys"><span class="key">Q</span></span><b>Kit médico</b></div>
+          <div class="ctl"><span class="keys"><span class="key">F</span></span><b>Comer carne</b></div>
+          <div class="ctl"><span class="keys"><span class="key wide">TAB</span></span><b>Inventário</b></div>
+        </div>
+      </div>
+    </details>
     <div id="settings">
       <h4 class="shead">Áudio</h4>
       <div class="srow"><span>Volume geral</span><input type="range" id="setVol" min="0" max="100" value="50"></div>

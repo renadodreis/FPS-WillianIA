@@ -2358,24 +2358,47 @@ let menuT = 0;
    o layout do mundo (invariante do worldgen). `at(v)` preenche o vetor
    recebido, então o passeio inteiro roda com zero alocação por frame. */
 let menuFortY = 0; // chão do forte: constante, amostrado uma vez só
+/* hora travada do menu (pico do golden hour) e a hora de volta ao jogo — o
+   ciclo dinâmico é feature anunciada no próprio subtítulo, não pode ficar preso */
+const MENU_TOD = 0.715, GAME_TOD = 0.33;
 /* Ordem proposital: abre no SPAWN (íntimo, e o plano mais barato de desenhar,
    que é o que a página mostra enquanto ainda está bootando) e só então abre
    pro panorama — cidade, castelo, vulcão. */
+/* ENQUADRAMENTO. Duas coisas decidem se o passeio aparece ou não:
+
+   1) `pan`/`tilt` (ver js/menuscene.js) deslocam a MIRA, não a câmera. O
+      painel do menu mora na coluna ESQUERDA da tela, então todo plano usa
+      pan negativo: o assunto vai pro terço direito, longe do texto. Sem isso
+      o castelo nascia atrás do card de controles e cortado ao meio.
+   2) a distância: o fog do mundo começa em VIEW_DIST*0.5 = 210 m. Assunto
+      além de ~260 m vira névoa; todos os raios ficam abaixo disso.
+
+   Os ângulos iniciais (a0) foram escolhidos contra o azimute do sol do golden
+   hour (~101°, ver MENU_TOD): a luz entra de RASPÃO no assunto (sombras
+   longas, volume) em vez de estourar de frente ou virar silhueta. */
 const MENU_SHOTS = [
   { key: 'carro', dur: 9,
-    at: v => v.set(Car.group.position.x, Car.group.position.y + 1.1, Car.group.position.z),
-    r0: 16.5, r1: 9.8, h0: 5.2, h1: 2.3, a0: 0.55, spin: 0.055, fov0: 58, fov1: 64 },
+    at: v => v.set(Car.group.position.x, Car.group.position.y + 0.9, Car.group.position.z),
+    r0: 15.5, r1: 9.6, h0: 5.4, h1: 3.4, a0: 0.55, spin: 0.055, fov0: 48, fov1: 54,
+    pan: -0.20, tilt: 0.05 },
   { key: 'cidade', dur: 11,
-    at: v => v.set(Structures.heliSpot.x, Structures.heliSpot.y - 6, Structures.heliSpot.z),
-    r0: 172, r1: 118, h0: 34, h1: 12, a0: 2.35, spin: 0.030, fov0: 46, fov1: 52 },
+    // meio da Torre Nexus: a torre (38 m) vira o eixo vertical do plano
+    at: v => v.set(Structures.heliSpot.x, Structures.heliSpot.y * 0.62, Structures.heliSpot.z),
+    r0: 158, r1: 104, h0: 28, h1: 13, a0: 2.90, spin: 0.028, fov0: 44, fov1: 50,
+    pan: -0.24, tilt: -0.03 },
   { key: 'castelo', dur: 10,
     at: v => v.set(Structures.FORT_POS.x,
-      menuFortY || (menuFortY = heightAt(Structures.FORT_POS.x, Structures.FORT_POS.z) + 12),
+      menuFortY || (menuFortY = heightAt(Structures.FORT_POS.x, Structures.FORT_POS.z) + 9),
       Structures.FORT_POS.z),
-    r0: 98, r1: 64, h0: 44, h1: 21, a0: 3.95, spin: -0.036, fov0: 50, fov1: 56 },
+    r0: 88, r1: 58, h0: 32, h1: 16, a0: 0.62, spin: -0.030, fov0: 46, fov1: 52,
+    pan: -0.26, tilt: 0.02 },
   { key: 'vulcao', dur: 10,
-    at: v => v.set(VOLCANO.lavaX, VOLCANO.baseY + VOLCANO.h * 0.62, VOLCANO.lavaZ),
-    r0: 196, r1: 138, h0: 70, h1: 40, a0: 5.25, spin: 0.026, fov0: 44, fov1: 50 },
+    // câmera ABAIXO do meio do cone: o vulcão recorta contra o céu do fim de
+    // tarde e a boca de lava fica acima do centro. De cima (o plano antigo) o
+    // que se via era uma mancha escura de basalto ocupando a tela inteira.
+    at: v => v.set(VOLCANO.x, VOLCANO.baseY + VOLCANO.h * 0.66, VOLCANO.z),
+    r0: 288, r1: 224, h0: -8, h1: -26, a0: 3.30, spin: 0.024, fov0: 42, fov1: 48,
+    pan: -0.20, tilt: -0.07 },
 ];
 const MenuCam = createMenuCamera({ THREE, camera, heightAt, shots: MENU_SHOTS,
   cutEl: document.getElementById('menuCut') });
@@ -2430,6 +2453,14 @@ function tick(forceDt) {
       // vale só enquanto a partida não começou.
       weaponRoot.visible = false;
       MenuCam.update(dt);
+      /* HORA E CLIMA FIXOS NO MENU. O passeio é a vitrine do jogo e antes
+         pegava o clima que estivesse rolando — a rodada anterior caiu num céu
+         fechado e os quatro planos saíram cinzas. Golden hour (halo de Mie
+         ~10x, rayleigh 1,15 → 3,75) é o visual assinatura. Só enquanto a
+         partida NÃO começou: startGame devolve o relógio e a agenda de clima,
+         e o BR sobrescreve os dois pelo relógio da partida (skySync). */
+      Env.tod = MENU_TOD;
+      Env.weather = 'limpo';
     }
     /* A grade de grama fica ANCORADA no spawn durante o menu. Seguir a câmera
        do passeio (que salta ~800 m a cada corte) enfileiraria os 169 chunks a
@@ -2553,6 +2584,10 @@ function startGame(trusted) {
   // SÍNCRONO no setPaused (contrato coberto por test/gameplay.test.js).
   // launch() também para a trilha do menu.
   MenuUI.launch();
+  // devolve o relógio e a agenda de clima que o menu travava no golden hour
+  // (o clarão do launch cobre a virada). No BR o skySync assume no frame seguinte.
+  Env.tod = GAME_TOD;
+  Env.weather = null;
   state.started = true;
   updateHealthHUD(); updateAmmoHUD(); updateInvHUD(); updateSlotsHUD(); updateArmorHUD();
   // banner de boas-vindas é do modo solo; no BR o lobby já anuncia a partida
@@ -2614,7 +2649,9 @@ $('settings').addEventListener('click', e => e.stopPropagation());
   sp.onchange = () => { SETTINGS.ping = +sp.value; persistSettings(); };
 }
 ui.overlay.addEventListener('click', (e) => {
-  if (e.target.closest('#menuBtns') || e.target.closest('#settings')) return;
+  // clique em QUALQUER controle do menu (inclusive o gatilho dos controles
+  // recolhidos) é do menu, não "clicar na tela pra voltar ao jogo"
+  if (e.target.closest('#menuBtns, #settings, #ctlBox, .mbtn')) return;
   if (state.started && state.paused) { // clique retoma quando pausado
     SFX.resume();
     setPaused(false);
