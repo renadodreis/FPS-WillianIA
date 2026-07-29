@@ -188,6 +188,40 @@ describe('game feel — combate', { skip: !CHROME && 'Chrome não encontrado' },
     assert.ok(!r.emits.includes('shotHit'), 'shotHit em cadáver');
   });
 
+  it('1 — o GOLEM não é jogador: acerto nele continua com feedback IMEDIATO', async function (t) {
+    // o boss vive na MESMA lista de "remotos" que os jogadores, mas o dano
+    // dele vai por `bossHit` — outro handler, sem alcance nem imunidade.
+    // Passar o boss pelo portão de predição apagaria hitmarker, número e som.
+    const r = await h.play(async () => {
+      const B = window.__BR_debug.boss;
+      if (!B) return { skip: true };
+      const { G, MP, QA } = { ...window.QA, QA: window.QA };
+      const P = MP.player.pos;
+      B.alive = true;
+      B.group.position.set(P.x + 12, MP.heightAt(P.x + 12, P.z), P.z);
+      G.arsenal[1].locked = false;
+      G.switchWeapon(1);
+      const gun = G.arsenal[1];
+      const spread0 = gun.spreadHip;
+      gun.spreadHip = 0;
+      gun.mag = gun.magSize; gun.reloading = false;
+      QA.tick(20);
+      QA.aimAt(B.group.position.x, B.group.position.y + 3.1, B.group.position.z);
+      window.__QA_emits.length = 0;
+      const marker = document.getElementById('hitmarker');
+      marker.className = '';
+      G.mouse.clicked = true;
+      QA.tick(1);
+      await new Promise(r2 => setTimeout(r2, 40));
+      gun.spreadHip = spread0;
+      B.group.position.set(P.x + 900, 0, P.z + 900); // fora do caminho dos outros testes
+      return { emits: window.__QA_emits.slice(), marker: marker.className };
+    });
+    if (r.skip) { t.skip('GOLEM não existe nesta sala'); return; }
+    assert.ok(r.marker.includes('show'), 'acertar o GOLEM ficou sem hitmarker');
+    assert.ok(r.emits.includes('bossHit'), 'o dano no GOLEM não foi reportado');
+  });
+
   it('3 — levar dano mostra QUANTO foi (número na tela, não só o flash)', async () => {
     const r = await h.play(() => {
       const MP = window.QA.MP;

@@ -387,8 +387,12 @@
           if (len > 0.01 && MP.rayBlockedAt(_bv, _bp.multiplyScalar(1 / len), len) < len - 0.15) continue;
           const dmg = Math.round(maxDmg * (1 - d / radius) + 20);
           // splash é área: hitPos=null (o teste de perna tirava -20% falso).
-          // O número só aparece se o portão aceitar o dano.
-          rp.damage(dmg, null, { kind, impact: p, at: rp.group.position });
+          // Contra JOGADOR o número só aparece se o portão aceitar o dano;
+          // o GOLEM vai por `bossHit`, que não tem recusa a prever.
+          if (rp.isBoss) {
+            MP.DmgNums.spawn(rp.group.position, dmg, false);
+            rp.damage(dmg, null, { kind, impact: p });
+          } else rp.damage(dmg, null, { kind, impact: p, at: rp.group.position });
         }
       }
     };
@@ -499,16 +503,18 @@
           const head = bestPart === 'head' || bestPart === 'core';
           const dmg = b.dmg * (head ? 1.75 : 1);
           MP.FX.burst(_bv, _bp.clone().negate(), bestMeta.boss ? 'spark' : 'blood');
-          if (bestMeta.remote) {
+          if (bestMeta.remote && !bestMeta.boss) {
             // jogador remoto = predição: o portão em flushHits decide se o
             // hitmarker e o número aparecem
             bestMeta.target.damage(dmg, _bv, { head });
           } else {
-            // IA local: o acerto é autoritativo aqui, o feedback é imediato
+            // GOLEM (bossHit) e IA local: dano sem alcance nem imunidade pra
+            // recusar — o acerto é certo, o feedback é imediato
             MP.DmgNums.spawn(_bv, Math.round(dmg), head);
             MP.showHitmarker(head ? 'head' : 'hit');
             if (head) MP.SFX.headshot(); else MP.SFX.hit();
-            if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, _bp, bestPart);
+            if (bestMeta.remote) bestMeta.target.damage(dmg, _bv, { head });
+            else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, _bp, bestPart);
             else bestMeta.target.damage(dmg, _bv, _bp, head);
           }
           bullets.splice(i, 1);
@@ -542,13 +548,14 @@
         const outRemote = dmg * (head ? 1.75 : 1); // remote damage() não tem lógica de cabeça — aplica aqui (como as balas)
         _bv.copy(origin).addScaledVector(dir, bestD);
         MP.FX.burst(_bv, dir.clone().negate(), bestMeta.boss ? 'spark' : 'blood');
-        if (bestMeta.remote) {
+        if (bestMeta.remote && !bestMeta.boss) {
           bestMeta.target.damage(outRemote, _bv, { head }); // predição: portão decide
         } else {
-          MP.DmgNums.spawn(_bv, Math.round(dmg), head);
+          MP.DmgNums.spawn(_bv, Math.round(bestMeta.remote ? outRemote : dmg), head);
           MP.showHitmarker(head ? 'head' : 'hit');
           if (head) MP.SFX.headshot(); else MP.SFX.hit();
-          if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, dir, bestPart);
+          if (bestMeta.remote) bestMeta.target.damage(outRemote, _bv, { head }); // GOLEM: bossHit
+          else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, dir, bestPart);
           else bestMeta.target.damage(dmg, _bv, dir, head);
         }
       }

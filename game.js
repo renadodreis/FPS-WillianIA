@@ -1850,15 +1850,18 @@ function fire(t) {
       const head = bestPart === 'head' || bestPart === 'core';
       let dmg = head ? gun.dmg * 2 : gun.dmg;
       let died;
-      if (bestRemote) {
+      if (bestRemote && !bestRemote.isBoss) {
         // JOGADOR REMOTO: o acerto é PREDIÇÃO — o servidor ainda pode recusar
         // (alcance, imunidade, alvo já morto, orçamento). Quem decide mostrar
         // hitmarker/número é o portão em br-game.js, no flush do queueHit.
         // Aqui a mão só reporta o acerto; a tela não é avisada.
+        // (o GOLEM mora na MESMA lista, mas o dano dele vai por `bossHit`:
+        //  outro handler, sem alcance nem imunidade — feedback imediato.)
         bestRemote.damage(dmg, _hitPos, { head });
         remoteHit = true;
       } else {
-        if (bestBoss) died = bestBossObj.damage(dmg, _hitPos, _rayDir, bestPart);
+        if (bestRemote) { bestRemote.damage(dmg, _hitPos, { head }); remoteHit = true; }
+        else if (bestBoss) died = bestBossObj.damage(dmg, _hitPos, _rayDir, bestPart);
         else if (bestExtra) died = bestExtra.damage(dmg, _hitPos, _rayDir, head);
         else died = bestEnemy.damage(dmg, _hitPos, _rayDir, bestPart === 'head');
         hitAny = true; totalDmg += dmg;
