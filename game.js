@@ -1732,6 +1732,12 @@ function fire(t) {
     const zeroD = Math.max(4, Math.min(rayBlockedAt(_rayOrig, _rayDir, 240), 120));
     _v1.copy(_rayOrig).addScaledVector(_rayDir, zeroD);
     _rayDir.copy(_v1).sub(_v3).normalize();
+    // BR: até aqui a bazuca do outro jogador era INVISÍVEL E MUDA — o
+    // lançamento não gerava evento nenhum (o shotHit só nasce no acerto).
+    // Reaproveita o `shotFired` que já existe: os outros clientes ouvem o
+    // disparo sair do tubo e cronometram o estrondo pelo tempo de voo.
+    // (antes do Rockets.fire: js/rockets.js reusa o _v1 compartilhado)
+    if (window.__BR_shotMiss) window.__BR_shotMiss(_v3, _v1, 'BAZUCA');
     Rockets.fire(_v3, _rayDir);
     return;
   }

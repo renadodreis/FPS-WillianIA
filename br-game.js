@@ -1555,6 +1555,34 @@
         rp.body.weapon.scale.setScalar(Math.max(rp.wpnScale, 0.02));
       }
     });
+    /* ================================================================
+       EXPLOSIVO DOS OUTROS — antes, uma bazuca estourando a 30 m não
+       produzia nem clarão nem som: o `explosionHit` só é enviado pra
+       VÍTIMA e o lançamento não gerava evento nenhum.
+
+       Sem inventar protocolo: o lançamento viaja no `shotFired` que já
+       existia (game.js) e o estrondo é reconstruído aqui, cronometrado
+       pela velocidade real do foguete. Quem toma o dano recebe a
+       explosão pelo próprio `youWereHit`, cujo fromPos JÁ é o ponto de
+       impacto. `remoteBlast` funde os dois: um estouro só.
+       ================================================================ */
+    const _blastAt = new THREE.Vector3(), _lastBlast = new THREE.Vector3();
+    let lastBlastT = 0;
+    function remoteBlast(x, y, z) {
+      const now = Date.now();
+      if (now - lastBlastT < 700 &&
+          Math.hypot(_lastBlast.x - x, _lastBlast.y - y, _lastBlast.z - z) < 10) return;
+      lastBlastT = now;
+      _lastBlast.set(x, y, z);
+      _blastAt.set(x, y, z);
+      G.Grenades.explodeFx(_blastAt); // SÓ efeito: o dano é do servidor
+    }
+    function scheduleRemoteBlast(from, to) {
+      const ms = Math.min(6000, from.distanceTo(to) / (G.Rockets.speed || 34) * 1000);
+      const x = to.x, y = to.y, z = to.z;
+      setTimeout(() => { if (window.__BR_active) remoteBlast(x, y, z); }, ms);
+    }
+
     /* timbre do disparo remoto por arma — mesmo catálogo do tiro local */
     const REMOTE_SHOT = { ESCOPETA: 'shotgun', DMR: 'dmr', SNIPER: 'dmr' };
     socket.on('playerFired', d => {
@@ -1573,17 +1601,27 @@
           const blockD = MP.rayBlockedAt(from, _bp, len);
           if (blockD < len) to.copy(from).addScaledVector(_bp, blockD);
         }
-        MP.FX.spawnTracer(from, to, 0xffe9a8);
         // ATÉ AQUI TIRO DE OUTRO JOGADOR ERA MUDO: agora sai do cano dele,
         // com distância e oclusão — é assim que se lê um tiroteio.
-        if (rp.heldWeapon === 'BAZUCA') MP.SFX.rocket(from);
-        else if (rp.heldWeapon === 'PLASMA') MP.SFX.laser(from);
-        else MP.SFX.shot(REMOTE_SHOT[rp.heldWeapon] || 'rifle', from);
+        if (rp.heldWeapon === 'BAZUCA') {
+          // foguete não é hitscan: nada de traçante instantâneo. Sai o assobio
+          // do lançamento e o estrondo chega no TEMPO DE VOO — é esse atraso
+          // que dá ao alvo a chance de sair de perto.
+          MP.SFX.rocket(from);
+          scheduleRemoteBlast(from, to);
+        } else {
+          MP.FX.spawnTracer(from, to, 0xffe9a8);
+          if (rp.heldWeapon === 'PLASMA') MP.SFX.laser(from);
+          else MP.SFX.shot(REMOTE_SHOT[rp.heldWeapon] || 'rifle', from);
+        }
       }
     });
     socket.on('playerLeft', d => removeRemote(d.id));
     socket.on('youWereHit', d => {
       const f = d.fromPos;
+      // granada/bazuca: o fromPos É o ponto de impacto. O estouro acontece
+      // mesmo que a cobertura anule o dano — a explosão existiu ali.
+      if (d.weapon === 'GRANADA' || d.weapon === 'BAZUCA') remoteBlast(f[0], f[1], f[2]);
       _bv.set(f[0], f[1], f[2]);
       _bp.copy(MP.player.pos); _bp.y += 1;
       _bp.sub(_bv);

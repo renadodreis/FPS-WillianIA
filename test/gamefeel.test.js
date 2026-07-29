@@ -250,6 +250,76 @@ describe('game feel — combate', { skip: !CHROME && 'Chrome não encontrado' },
     assert.ok(r.breakCls.includes('hfBreak'), 'escudo acabou e o jogador não ficou sabendo');
   });
 
+  it('5 — explodeFx é SÓ o espetáculo: clarão, estrondo e tranco, zero dano', async () => {
+    const r = await h.play(() => {
+      const { G, MP } = window.QA;
+      window.QA.reset(30, 30);
+      MP.player.health = 100; MP.player.invulnUntil = 0; MP.player.armor = 0;
+      const P = MP.player.pos;
+      const at = new MP.THREE.Vector3(P.x + 2, P.y + 0.5, P.z);
+      G.Grenades.explodeFx(at);
+      const light = G.Grenades.boomLight;
+      return {
+        health: MP.player.health,
+        lit: light.position.distanceTo(at) < 1.2,
+        after: G.Grenades.boomT > 0,
+      };
+    });
+    assert.equal(r.health, 100, 'efeito visual de explosão remota não pode ferir ninguém');
+    assert.ok(r.lit, 'o clarão não foi parar no ponto do impacto');
+    assert.ok(r.after, 'a luz de explosão não acendeu');
+  });
+
+  it('5 — bazuca do OUTRO jogador vira clarão e estrondo (antes: invisível e muda)', async function (t) {
+    if (!spot) { t.skip('nenhuma linha de tiro limpa nesta seed'); return; }
+    const impact = await h.play(() => {
+      const { G, MP } = window.QA;
+      G.Grenades.boomT = 0;
+      const P = MP.player.pos;
+      return [P.x + 18, MP.heightAt(P.x + 18, P.z) + 1, P.z];
+    });
+    host.emit('shotFired', {
+      weapon: 'BAZUCA',
+      fromPos: [hostPos[0], hostPos[1] + 1.5, hostPos[2]],
+      toPos: impact,
+    });
+    // o foguete voa a 34 m/s: o estrondo chega DEPOIS, não junto do disparo —
+    // e o clarão dura só 0,35 s, então espera-se pelo evento, não pelo relógio
+    const t0 = Date.now();
+    await h.page.waitForFunction('window.__game.Grenades.boomT > 0', { timeout: 6000 })
+      .catch(() => { throw new Error('a bazuca do outro jogador continua sem clarão nenhum'); });
+    const flight = Date.now() - t0;
+    const dist = await h.play(imp => {
+      const l = window.QA.G.Grenades.boomLight;
+      return Math.hypot(l.position.x - imp[0], l.position.z - imp[2]);
+    }, impact);
+    assert.ok(dist < 2.5, `o clarão não caiu no impacto (${dist.toFixed(1)} m de erro)`);
+    assert.ok(flight > 200, `estrondo instantâneo (${flight} ms): foguete tem tempo de voo`);
+  });
+
+  it('5 — meu lançamento de bazuca é replicado pros outros (evento que já existia)', async () => {
+    const seen = [];
+    host.on('playerFired', d => { if (d.weapon === 'BAZUCA') seen.push(d); });
+    const emits = await h.play(async () => {
+      const { G, QA } = { ...window.QA, QA: window.QA };
+      G.arsenal[3].locked = false;
+      G.switchWeapon(3);                       // BAZUCA "TROVOADA"
+      const gun = G.arsenal[3];
+      gun.mag = gun.magSize; gun.reloading = false;
+      QA.tick(20);
+      QA.aimAt(window.QA.MP.player.pos.x + 60, window.QA.MP.player.pos.y + 1.6, window.QA.MP.player.pos.z);
+      window.__QA_emits.length = 0;
+      G.mouse.clicked = true;
+      QA.tick(1);
+      await new Promise(r => setTimeout(r, 40));
+      return window.__QA_emits.slice();
+    });
+    await wait(500);
+    host.off('playerFired');
+    assert.ok(emits.includes('shotFired'), 'o lançamento não foi pro fio');
+    assert.equal(seen.length, 1, 'os outros jogadores não souberam do foguete');
+  });
+
   it('2 — kill confirmada pelo servidor acende o hitmarker de KILL no PvP', async function (t) {
     if (!spot) { t.skip('nenhuma linha de tiro limpa nesta seed'); return; }
     await walkHostTo(25);

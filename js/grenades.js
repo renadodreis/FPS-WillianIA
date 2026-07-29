@@ -58,7 +58,12 @@ export function createGrenades(deps) {
     _blastDir.multiplyScalar(1 / len);
     return rayBlockedAt(_blastOrigin, _blastDir, len) >= len - 0.15;
   }
-  function explode(p, kind = 'GRANADA') {
+  /* SÓ O ESPETÁCULO: clarão, estrondo, fogo/terra e o tranco da onda de
+     choque. Sem uma linha de dano — é o que o BR chama pra explosão dos
+     OUTROS jogadores, que até aqui não produzia nem luz nem som.
+     O tranco mede distância de verdade (antes tinha piso de 0.15, e uma
+     explosão a 100 m sacudia a câmera igual a uma a 20 m). */
+  function explodeFx(p) {
     SFX.explosion(p);
     boomT = 0.35;
     boomLight.position.copy(p);
@@ -71,6 +76,10 @@ export function createGrenades(deps) {
       _v1.set(rand(-1, 1), rand(0.5, 1.4), rand(-1, 1)).normalize().multiplyScalar(rand(3, 7));
       FX.spawnParticle(p, _v1, i % 2 ? 0x776952 : 0x57544e, rand(0.35, 0.7), rand(0.6, 1.1), 5);
     }
+    addTrauma(clamp(0.9 - player.pos.distanceTo(p) * 0.04, 0, 0.9));
+  }
+  function explode(p, kind = 'GRANADA') {
+    explodeFx(p);
     const R = 7.5;
     for (const e of Enemies.list) {
       if (!e.alive) continue;
@@ -103,7 +112,6 @@ export function createGrenades(deps) {
     if (dp < 6.5 && blastClear(p, player.pos)) {
       playerDamage(Math.round(55 * (1 - dp / 6.5)), p, { type: 'explosion' });
     }
-    addTrauma(clamp(0.9 - dp * 0.04, 0.15, 0.9));
     // o carro sente a onda de choque
     const dcx = Car.chassisBody.position.x - p.x, dcy = Car.chassisBody.position.y - p.y, dcz = Car.chassisBody.position.z - p.z;
     const dc = Math.hypot(dcx, dcy, dcz);
@@ -165,5 +173,11 @@ export function createGrenades(deps) {
       }
     }
   }
-  return { throwNade, update, explode };
+  return {
+    throwNade, update, explode, explodeFx,
+    // hooks de QA: onde e por quanto tempo o clarão está aceso
+    boomLight,
+    get boomT() { return boomT; },
+    set boomT(v) { boomT = v; },
+  };
 }
