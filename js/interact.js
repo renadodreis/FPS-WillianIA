@@ -55,12 +55,22 @@ export function createInteract(deps) {
     if (near.d < 4.5) return { txt: 'ENTRAR — ' + near.v.cfg.name, fn: tryToggleCar };
     return null;
   }
+  /* o texto do prompt muda quando o jogador troca de alvo, não a 60 Hz —
+     reescrever innerHTML todo frame era um parse de HTML por frame */
+  let promptTxt = null, promptOpacity = null;
+  function setPrompt(txt) {
+    if (txt !== null && txt !== promptTxt) {
+      ui.prompt.innerHTML = `<b>E</b> &nbsp;${txt}`;
+      promptTxt = txt;
+    }
+    const op = txt === null ? '0' : '1';
+    if (op !== promptOpacity) { ui.prompt.style.opacity = op; promptOpacity = op; }
+  }
   function update(dt, t) {
     // BR: na nave/queda/espectador (freeze) não existe interação com o mundo
-    if (window.__BR_freeze) { ui.prompt.style.opacity = '0'; return; }
+    if (window.__BR_freeze) { setPrompt(null); return; }
     const c = current();
-    if (c) ui.prompt.innerHTML = `<b>E</b> &nbsp;${c.txt}`;
-    ui.prompt.style.opacity = c ? '1' : '0';
+    setPrompt(c ? c.txt : null);
     if (c && justPressed.has('KeyE') && !player.dead) c.fn();
   }
   function renderInv() {

@@ -1324,6 +1324,18 @@ let dmgDirT = 0;
 let breathApplied = 0; // respiração da luneta (delta aplicado no frame anterior)
 let deathK = 0;        // animação de morte (câmera tomba)
 
+/* HUD por frame: escrever uma propriedade de estilo invalida o CSSOM mesmo
+   quando o valor é o MESMO — e vinheta de cura, luneta, mira, flash de dano
+   e tinta d'água passam quase o jogo inteiro no mesmo valor. O texto
+   produzido é idêntico ao de antes; só a escrita redundante some. */
+function styleOnce(el, prop, value) {
+  const seen = el.__hudSeen || (el.__hudSeen = {});
+  if (seen[prop] === value) return;
+  seen[prop] = value;
+  el.style[prop] = value;
+}
+function setOpacityOnce(el, value) { styleOnce(el, 'opacity', value); }
+
 function applyFpsCamera(dt, t) {
   // ---- screen shake (trauma decai, intensidade = trauma²) ----
   trauma = Math.max(0, trauma - dt * 1.7);
@@ -1465,11 +1477,11 @@ function applyFpsCamera(dt, t) {
     const hk = Math.sin(Math.min(1, (1.3 - healAnimT) / 1.3) * Math.PI);
     weaponRoot.position.y -= hk * 0.16;
     weaponRoot.rotation.x -= hk * 0.35;
-    ui.healFx.style.opacity = (hk * 0.9).toFixed(2);
+    setOpacityOnce(ui.healFx, (hk * 0.9).toFixed(2));
   } else if (player.healPool > 0) {
-    ui.healFx.style.opacity = '0.35';
+    setOpacityOnce(ui.healFx, '0.35');
   } else {
-    ui.healFx.style.opacity = '0';
+    setOpacityOnce(ui.healFx, '0');
   }
 
   // ciclo pós-tiro (bomba da escopeta / ferrolho) — a fase usa a duração REAL
@@ -1502,7 +1514,7 @@ function applyFpsCamera(dt, t) {
   muzzleLight.intensity = mk * 26;
 
   // ---- luneta: overlay + sensibilidade do mouse reduzida no zoom ----
-  ui.scope.style.opacity = scopedK.toFixed(2);
+  setOpacityOnce(ui.scope, scopedK.toFixed(2));
   controls.pointerSpeed = lerp(1, gun.adsFov < 40 ? 0.36 : 0.75, ads);
 
   // ---- FOV: 75 base, 85 correndo, ADS por arma (55 / 62 / 26) ----
@@ -1519,17 +1531,18 @@ function applyFpsCamera(dt, t) {
   // ---- mira dinâmica (abre com movimento, some no ADS) ----
   const spd = Math.hypot(player.vel.x, player.vel.z);
   const gap = 7 + spd * 1.4 + trauma * 18 + (player.onGround ? 0 : 9);
-  ui.crosshair.style.setProperty('--gap', gap.toFixed(1) + 'px');
+  const gapPx = gap.toFixed(1) + 'px';
+  if (ui.crosshair.__hudGap !== gapPx) { ui.crosshair.__hudGap = gapPx; ui.crosshair.style.setProperty('--gap', gapPx); }
   // só some quando existe uma referência ADS válida na tela (faca: nunca some)
-  ui.crosshair.style.opacity = (state.driving || WeaponRig.sightRefK(gun, adsT) > 0.5) ? '0' : '1';
+  setOpacityOnce(ui.crosshair, (state.driving || WeaponRig.sightRefK(gun, adsT) > 0.5) ? '0' : '1');
 
   // flash de dano decai + indicador de direção
   flashT = Math.max(0, flashT - dt * 1.4);
-  ui.damageFlash.style.opacity = Math.min(1, flashT * 1.6).toFixed(2);
+  setOpacityOnce(ui.damageFlash, Math.min(1, flashT * 1.6).toFixed(2));
   dmgDirT = Math.max(0, dmgDirT - dt);
-  ui.dmgDir.style.opacity = dmgDirT > 0 ? '1' : '0';
+  setOpacityOnce(ui.dmgDir, dmgDirT > 0 ? '1' : '0');
   // tinta azulada quando a câmera mergulha
-  ui.waterTint.style.opacity = camera.position.y < WATER_LEVEL ? '1' : '0';
+  setOpacityOnce(ui.waterTint, camera.position.y < WATER_LEVEL ? '1' : '0');
 }
 
 /* ================================================================
@@ -2101,9 +2114,16 @@ const Alien = createAlien({ rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL,
    ================================================================ */
 const Missions = (() => {
   function baseCleared() {
+    // roda por frame enquanto a missão está ativa: sem filter/every (1 array
+    // + 2 closures por base por frame), só uma varredura
     for (const b of Structures.baseSites) {
-      const guards = Enemies.list.filter(e => e.plan && e.plan.army && Math.hypot(e.plan.x - b.x, e.plan.z - b.z) < 30);
-      if (guards.length && guards.every(e => !e.alive)) return true;
+      let guards = 0, vivos = 0;
+      for (const e of Enemies.list) {
+        if (!e.plan || !e.plan.army || Math.hypot(e.plan.x - b.x, e.plan.z - b.z) >= 30) continue;
+        guards++;
+        if (e.alive) vivos++;
+      }
+      if (guards && !vivos) return true;
     }
     return false;
   }

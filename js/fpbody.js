@@ -44,6 +44,14 @@ export function createFpBody(deps) {
   const _tp = new THREE.Vector3(), _pole = new THREE.Vector3(), _n = new THREE.Vector3();
   const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _tq = new THREE.Quaternion();
   const fingerAxis = { r: new THREE.Vector3(0, 0, -1), l: new THREE.Vector3(0, 0, -1) };
+  /* buffers DEDICADOS do rig (não podem ser _v/_v2/_v3: esses são
+     consumidos entre a escrita e a leitura). update() roda todo frame —
+     tudo aqui era `new THREE.Vector3()` ou `.clone()` por frame. */
+  const _sPos = new THREE.Vector3(), _ePos = new THREE.Vector3();
+  const _camPos = new THREE.Vector3();
+  const _rp = new THREE.Vector3(), _lp = new THREE.Vector3();
+  const _dirR = new THREE.Vector3(), _dirL = new THREE.Vector3();
+  let legPairs = null; // montado uma vez, quando o rig fica pronto
 
   /* dedos: [curl base, curl ponta] por estado; indicador direito no gatilho */
   const GRIP = {
@@ -193,7 +201,7 @@ export function createFpBody(deps) {
         sh.position.add(_v);
       }
     }
-    const sPos = up.getWorldPosition(_v3.set(0, 0, 0)).clone();
+    const sPos = up.getWorldPosition(_sPos);
     _tp.copy(targetPos).sub(sPos);
     const reach = len.a + len.b;
     let d = _tp.length();
@@ -217,7 +225,7 @@ export function createFpBody(deps) {
     fore.getWorldPosition(_v2).sub(sPos);
     aimBone(up, _v2, _v3.copy(_v).sub(sPos));
     // 2) cotovelo mira o alvo
-    const ePos = fore.getWorldPosition(_v2).clone();
+    const ePos = fore.getWorldPosition(_ePos);
     hand.getWorldPosition(_v3).sub(ePos);
     aimBone(fore, _v3, _v.copy(targetPos).sub(ePos));
     // (o punho é alinhado depois por alignHand — eixo dos dedos + rolagem)
@@ -228,7 +236,10 @@ export function createFpBody(deps) {
     for (const b of bones) {
       const bd = bind.get(b);
       if (!bd) continue;
-      const idx = parseInt(b.name.match(/^Finger_(\d+)/)[1], 10);
+      // o índice do dedo vem do NOME do osso e nunca muda: a regex rodava
+      // ~40 vezes por frame (e cada match aloca um array)
+      let idx = b.userData.fingerIdx;
+      if (idx === undefined) idx = b.userData.fingerIdx = parseInt(b.name.match(/^Finger_(\d+)/)[1], 10);
       const isTip = idx % 2 === 0;       // pares = segunda falange
       const digit = Math.ceil(idx / 2);  // 1..5
       let amt = isTip ? tip : base;
@@ -262,7 +273,9 @@ export function createFpBody(deps) {
     walkPh += dt * Math.min(spd, 9) * 1.35;
     const stride = Math.min(spd / 5.2, 1) * (player.onGround ? 0.55 : 0.1);
     const air = player.onGround ? 0 : 1;
-    const legPairs = [[B.pelL, B.leg1L, B.leg2L, 1], [B.pelR, B.leg1R, B.leg2R, -1]];
+    // os ossos não trocam depois que o rig carrega: montar o par a cada
+    // frame era 2 arrays internos + 1 externo de lixo por frame
+    if (!legPairs) legPairs = [[B.pelL, B.leg1L, B.leg2L, 1], [B.pelR, B.leg1R, B.leg2R, -1]];
     for (const [pel, l1, l2, s] of legPairs) {
       if (!pel || !l1 || !l2) continue;
       const sw = Math.sin(walkPh) * s * stride;
@@ -285,9 +298,9 @@ export function createFpBody(deps) {
     /* alvos das mãos (posição) + direção dos dedos (empunhadura) */
     const pose = window.__FP_pose;
     camera.getWorldQuaternion(_tq);
-    const camPos = camera.getWorldPosition(new THREE.Vector3());
-    const rp = new THREE.Vector3(), lp = new THREE.Vector3();
-    const dirR = new THREE.Vector3(), dirL = new THREE.Vector3();
+    const camPos = camera.getWorldPosition(_camPos);
+    const rp = _rp, lp = _lp;
+    const dirR = _dirR, dirL = _dirL;
     if (pose === 'chute' || pose === 'fall') { // paraquedas: mãos nas alças / caindo: braços abertos
       const up = pose === 'chute';
       rp.set(up ? 0.26 : 0.55, up ? 0.38 : -0.12, up ? -0.16 : -0.3).applyQuaternion(_tq).add(camPos);
@@ -297,13 +310,13 @@ export function createFpBody(deps) {
     } else if (gun && gun.parts && gun.parts.handR) {
       gun.parts.handR.getWorldPosition(rp);
       gun.group.getWorldQuaternion(_q2);
-      dirR.set(...TUNE.fingersR).applyQuaternion(_q2);
+      dirR.set(TUNE.fingersR[0], TUNE.fingersR[1], TUNE.fingersR[2]).applyQuaternion(_q2);
       if (gun.melee) { // faca: mão esquerda relaxada ao lado do corpo
         lp.set(-0.28, -0.52, -0.02).applyQuaternion(_tq).add(camPos);
         dirL.set(-0.1, -0.65, -0.75).applyQuaternion(_tq);
       } else {
         gun.parts.handL.getWorldPosition(lp);
-        dirL.set(...TUNE.fingersL).applyQuaternion(_q2);
+        dirL.set(TUNE.fingersL[0], TUNE.fingersL[1], TUNE.fingersL[2]).applyQuaternion(_q2);
       }
     } else return;
 

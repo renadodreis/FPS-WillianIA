@@ -87,6 +87,17 @@ function rememberRestPose(sk) {
   }
 }
 
+/* fases do golpe do frame corrente (ver animateSkeleton) */
+let _aP = -1, _aW = 0, _aC = 0, _aR = 0;
+function attackValue(carry, raised, strike) {
+  if (_aP < 0) return carry;
+  return THREE.MathUtils.lerp(
+    THREE.MathUtils.lerp(THREE.MathUtils.lerp(carry, raised, _aW), strike, _aC),
+    carry,
+    _aR
+  );
+}
+
 function poseBone(sk, bone, x = 0, y = 0, z = 0) {
   if (!bone) return;
   const rest = sk.rest.get(bone);
@@ -132,14 +143,10 @@ function animateSkeleton(sk, dt, t, moving) {
     recover = smooth01((attackP - 0.59) / 0.41);
   }
 
-  const attackValue = (carry, raised, strike) => {
-    if (attackP < 0) return carry;
-    return THREE.MathUtils.lerp(
-      THREE.MathUtils.lerp(THREE.MathUtils.lerp(carry, raised, wind), strike, cut),
-      carry,
-      recover
-    );
-  };
+  // as fases do golpe passam por variáveis de módulo e `attackValue` vive
+  // FORA da função: era uma closure nova por esqueleto POR FRAME (7 por
+  // frame). animateSkeleton não é reentrante, então o estado é seguro.
+  _aP = attackP; _aW = wind; _aC = cut; _aR = recover;
 
   // twist do torso no strike é pequeno de propósito: spine+chest giram o
   // frame do ombro inteiro e arrastariam a lâmina pra fora do eixo do player
