@@ -9,6 +9,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const puppeteer = require('puppeteer-core');
 
@@ -21,13 +22,37 @@ const SHOTS = ['cidade', 'castelo', 'vulcao', 'carro'];
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+/* Confere que quem atende na porta é O NOSSO servidor. Já custou uma rodada
+   inteira: outra checkout deixou um servidor vivo na mesma porta, o spawn daqui
+   morreu calado com EADDRINUSE e as capturas saíram do build ALHEIO — idênticas
+   às da rodada anterior, como se nada tivesse mudado. O token de boot (o mesmo
+   mecanismo de test/helpers/harness.js) transforma isso em erro na hora. */
+async function waitForOwnServer(srv, port, token, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = 'timeout';
+  while (Date.now() < deadline) {
+    if (srv.exitCode !== null)
+      throw new Error(`servidor morreu no boot (exit ${srv.exitCode}) — porta ${port} ocupada?`);
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/`);
+      const got = r.headers.get('x-qa-boot-token');
+      if (got === token) return;
+      last = got ? `token alheio (${got})` : 'sem token: servidor de OUTRA checkout na porta';
+    } catch (e) { last = e.message; }
+    await sleep(120);
+  }
+  throw new Error(`porta ${port} não é do nosso servidor: ${last}`);
+}
+
 (async () => {
   if (!CHROME) throw new Error('Chrome local não encontrado');
   fs.mkdirSync(output, { recursive: true });
+  const bootToken = crypto.randomUUID();
   const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(PORT), WORLD_SEED: '424242' }, stdio: 'ignore',
+    env: { ...process.env, PORT: String(PORT), WORLD_SEED: '424242', QA_BOOT_TOKEN: bootToken },
+    stdio: 'ignore',
   });
-  await sleep(900);
+  await waitForOwnServer(srv, PORT, bootToken);
   const errors = [];
   const browser = await puppeteer.launch({
     executablePath: CHROME, headless: 'new',
@@ -65,13 +90,28 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
       await page.screenshot({ path: path.join(output, `menu-${w}x${h}.png`) });
     }
 
-    /* 2. cada plano do passeio (framing da câmera) em 1920 */
+    /* 2. cada plano do passeio (framing da câmera) em 1920.
+       Adianta o plano até ~4,5 s DE MENTIRA (update com dt fixo) antes do
+       clique do obturador: esperar em tempo real capturaria sempre o primeiro
+       segundo, e o dolly de cada plano só fecha o enquadramento no meio. */
     await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
     for (const key of SHOTS) {
-      await page.evaluate(k => window.__game.MenuCam.goTo(k), key);
+      await page.evaluate(k => {
+        const cam = window.__game.MenuCam;
+        cam.goTo(k);
+        for (let i = 0; i < 270; i++) cam.update(1 / 60);
+      }, key);
       await sleep(1600);
       await page.screenshot({ path: path.join(output, `shot-${key}.png`) });
     }
+
+    /* 2b. controles EXPANDIDOS: recolhidos por padrão, mas o card ainda
+       precisa caber e ficar legível quando o jogador abre */
+    await page.evaluate(() => document.getElementById('btnCtl').click());
+    await sleep(500);
+    await page.screenshot({ path: path.join(output, 'controles-abertos.png') });
+    await page.evaluate(() => document.getElementById('btnCtl').click());
+    await sleep(300);
 
     /* 3. configurações abertas + estado de pausa (tem que ser sóbrio) */
     await page.evaluate(() => document.getElementById('btnSettings').click());
