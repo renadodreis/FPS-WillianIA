@@ -20,6 +20,8 @@ import { createStructures } from './js/structures.js';
 import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
+import * as HitCore from './js/hitfeel-core.js';
+import { createHitFeel } from './js/hitfeel.js';
 import { createWeapons } from './js/weapons.js';
 import { createWeaponRig } from './js/weaponrig.js';
 import { createWeaponModels } from './js/weaponmodels.js';
@@ -984,12 +986,12 @@ function showBanner(html, dur = 3500) {
   bannerTimer = setTimeout(() => ui.banner.classList.remove('show'), dur);
 }
 
-let hitmarkerTimer = null;
-function showHitmarker(kill) {
-  ui.hitmarker.classList.toggle('kill', !!kill);
-  ui.hitmarker.classList.add('show');
-  clearTimeout(hitmarkerTimer);
-  hitmarkerTimer = setTimeout(() => ui.hitmarker.classList.remove('show'), kill ? 220 : 110);
+/* camada de tela do game feel: DOM/CSS/FX próprios (index.html e style.css
+   não são desta rodada) — ver js/hitfeel.js */
+const HitFeel = createHitFeel({ ui, SFX, FX, camera });
+/* aceita sabor ('hit' | 'head' | 'kill') e o booleano antigo (compat) */
+function showHitmarker(flavor) {
+  HitFeel.hitmarker(flavor === true ? 'kill' : flavor === false || !flavor ? 'hit' : flavor);
 }
 function addKillFeed(html) {
   const div = document.createElement('div');
@@ -1691,7 +1693,7 @@ function fire(t) {
   // faca (melee): golpe curto, sem munição/flash/som de tiro
   if (gun.melee) {
     gun.cycleT = 0.34; gun.cycleDur = 0.34;
-    addTrauma(0.06);
+    addTrauma(HitCore.shotTrauma(gun));
     recoil.kickZ += 0.12; recoil.kickRot += 0.1;
     SFX.melee();
     camera.getWorldPosition(_rayOrig);
@@ -1704,7 +1706,7 @@ function fire(t) {
   muzzleFlash(gun.pellets > 1 ? 1.5 : 1);
   if (gun.laser) SFX.laser();
   else SFX.shot(gun.pellets > 1 ? 'shotgun' : gun.adsFov < 40 ? 'dmr' : 'rifle');
-  addTrauma(0.08 + gun.kick * 1.1);
+  addTrauma(HitCore.shotTrauma(gun)); // peso por arma, com teto pra automática não saturar
   lastShotInfo.pos.copy(player.pos);
   lastShotInfo.t = t;
   // ciclo visual (bomba/ferrolho) em TODO disparo — automáticas também —
@@ -1716,7 +1718,7 @@ function fire(t) {
   // bazuca: dispara foguete físico em vez de hitscan
   if (gun.rocket) {
     SFX.rocket();
-    addTrauma(0.5);
+    addTrauma(0.28); // soma ao trauma base da arma: continua o coice mais pesado do arsenal
     recoil.pitchVel += 2.3;
     recoil.kickZ += 0.28;
     recoil.kickRot += 0.2;
@@ -1731,6 +1733,12 @@ function fire(t) {
     const zeroD = Math.max(4, Math.min(rayBlockedAt(_rayOrig, _rayDir, 240), 120));
     _v1.copy(_rayOrig).addScaledVector(_rayDir, zeroD);
     _rayDir.copy(_v1).sub(_v3).normalize();
+    // BR: até aqui a bazuca do outro jogador era INVISÍVEL E MUDA — o
+    // lançamento não gerava evento nenhum (o shotHit só nasce no acerto).
+    // Reaproveita o `shotFired` que já existe: os outros clientes ouvem o
+    // disparo sair do tubo e cronometram o estrondo pelo tempo de voo.
+    // (antes do Rockets.fire: js/rockets.js reusa o _v1 compartilhado)
+    if (window.__BR_shotMiss) window.__BR_shotMiss(_v3, _v1, 'BAZUCA');
     Rockets.fire(_v3, _rayDir);
     return;
   }
@@ -1843,14 +1851,25 @@ function fire(t) {
       const head = bestPart === 'head' || bestPart === 'core';
       let dmg = head ? gun.dmg * 2 : gun.dmg;
       let died;
-      if (bestBoss) died = bestBossObj.damage(dmg, _hitPos, _rayDir, bestPart);
-      else if (bestExtra) died = bestExtra.damage(dmg, _hitPos, _rayDir, head);
-      else if (bestRemote) { died = bestRemote.damage(dmg, _hitPos, _rayDir, head); remoteHit = true; }
-      else died = bestEnemy.damage(dmg, _hitPos, _rayDir, bestPart === 'head');
-      hitAny = true; totalDmg += dmg;
-      headAny = headAny || head;
-      _hitAgg.copy(_hitPos);
-      if (died) killAny = true; // pontuação é creditada no die() do alvo
+      if (bestRemote && !bestRemote.isBoss) {
+        // JOGADOR REMOTO: o acerto é PREDIÇÃO — o servidor ainda pode recusar
+        // (alcance, imunidade, alvo já morto, orçamento). Quem decide mostrar
+        // hitmarker/número é o portão em br-game.js, no flush do queueHit.
+        // Aqui a mão só reporta o acerto; a tela não é avisada.
+        // (o GOLEM mora na MESMA lista, mas o dano dele vai por `bossHit`:
+        //  outro handler, sem alcance nem imunidade — feedback imediato.)
+        bestRemote.damage(dmg, _hitPos, { head });
+        remoteHit = true;
+      } else {
+        if (bestRemote) { bestRemote.damage(dmg, _hitPos, { head }); remoteHit = true; }
+        else if (bestBoss) died = bestBossObj.damage(dmg, _hitPos, _rayDir, bestPart);
+        else if (bestExtra) died = bestExtra.damage(dmg, _hitPos, _rayDir, head);
+        else died = bestEnemy.damage(dmg, _hitPos, _rayDir, bestPart === 'head');
+        hitAny = true; totalDmg += dmg;
+        headAny = headAny || head;
+        _hitAgg.copy(_hitPos);
+        if (died) killAny = true; // pontuação é creditada no die() do alvo
+      }
     } else {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, 240);
       FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
@@ -1862,7 +1881,7 @@ function fire(t) {
   if (!remoteHit && missEndSet && window.__BR_shotMiss) window.__BR_shotMiss(_v3, _missEnd);
   if (hitAny) {
     DmgNums.spawn(_hitAgg, Math.round(totalDmg), headAny);
-    showHitmarker(killAny);
+    showHitmarker(HitCore.hitmarkerFlavor({ kill: killAny, head: headAny }));
     if (killAny) { SFX.kill(); }
     else if (headAny) SFX.headshot();
     else SFX.hit();
@@ -1924,13 +1943,18 @@ function playerDamage(dmg, fromPos, cause) {
   // no BR online, pausar NÃO pode dar imunidade (senão vira exploit em tiroteio)
   if (player.dead || (state.paused && !window.__BR_active)) return;
   if (state.gameTime < (player.invulnUntil || 0)) return; // proteção de spawn
-  if (player.armor > 0) { // armadura azul absorve 70% do dano até quebrar
-    const absorb = Math.min(player.armor, dmg * 0.7);
-    player.armor -= absorb;
-    dmg -= absorb;
+  const shield = HitCore.armorAbsorb(player.armor, dmg); // azul absorve 70% até quebrar
+  if (shield.absorbed > 0) {
+    player.armor = shield.armor;
+    dmg = shield.dmg;
     updateArmorHUD();
   }
   player.health -= dmg;
+  // "quanto eu tomei?", "ainda tenho escudo?", "o próximo me mata?" —
+  // as três respostas saem juntas, no mesmo instante do golpe
+  const lethalNext = HitCore.lethalThreat(player.health, dmg);
+  if (dmg > 0 || shield.absorbed > 0) HitFeel.tookHit(dmg, shield.absorbed, lethalNext);
+  if (shield.broke) HitFeel.armorBreak();
   player.lastDamageT = state.gameTime;
   const causeType = cause && typeof cause.type === 'string' ? cause.type : 'environment';
   player.lastDamageCause = {
@@ -1939,8 +1963,10 @@ function playerDamage(dmg, fromPos, cause) {
     weapon: cause && cause.weapon ? String(cause.weapon) : null,
     t: Date.now(),
   };
-  damageFlash(1);
-  addTrauma(0.32);
+  // arranhão e tiro de sniper deixaram de sacudir igual: o flash e o tranco
+  // passam a medir o TAMANHO do golpe (e o golpe que quase mata bate mais forte)
+  damageFlash(lethalNext ? 1.6 : clamp(0.55 + dmg * 0.016, 0.55, 1.2));
+  addTrauma(clamp(0.14 + dmg * 0.006, 0.14, 0.55));
   SFX.hurt();
   if (fromPos) { // seta apontando de onde veio o dano
     _euler.setFromQuaternion(camera.quaternion);
@@ -2847,6 +2873,9 @@ window.__MP = {
   heightAt, groundAt, addKillFeed, showHitmarker, playerDamage,
   updateHealthHUD, updateArmorHUD, updateAmmoHUD, updateInvHUD, updateSlotsHUD,
   setTimeScale,
+  // game feel: br-game.js é script clássico e não importa ESM — o núcleo puro
+  // e a camada de tela chegam por aqui (ver js/hitfeel-core.js e js/hitfeel.js)
+  HitCore, HitFeel,
   FX, DmgNums, SFX, rayBlockedAt, weaponRoot, centerMsg, showBanner,
   WATER_LEVEL, slopeAt, justPressed, world,
   socket: __mpSocket, spawn: __mpSpawn,

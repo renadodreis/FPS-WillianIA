@@ -272,9 +272,11 @@ const arsenal = [
   makeWeapon({ name: 'PLASMA "VISITANTE"', auto: true, rpm: 430, dmg: 38, pellets: 1, magSize: 42, reserveStart: 210,
     reloadTime: 1.7, spreadHip: 0.012, spreadAds: 0.003, recoilP: 0.4, recoilY: 0.1, kick: 0.04,
     adsFov: 58, hip: [0.26, -0.235, -0.48], laser: true, locked: true }, buildPlasma),
+  // `trauma`: override de feel do screenshake (js/hitfeel-core.js). Golpe de
+  // faca é rápido e leve — a curva por coice/cadência daria tranco de fuzil.
   makeWeapon({ name: 'FACA "AURORA"', auto: false, rpm: 130, dmg: 34, pellets: 1, magSize: 1, reserveStart: 0,
     reloadTime: 0.8, spreadHip: 0, spreadAds: 0, recoilP: 0.3, recoilY: 0.06, kick: 0.07,
-    adsFov: 66, hip: [0.3, -0.25, -0.48], melee: true, locked: true }, buildKnife),
+    adsFov: 66, hip: [0.3, -0.25, -0.48], melee: true, trauma: 0.07, locked: true }, buildKnife),
   // armas novas dos assets 3D: sniper leve (ferrolho rápido, dano menor) e
   // escopeta de rajada (cadência alta, chumbo fraco) — visual vem do GLB;
   // o modelo procedural (DMR/escopeta) fica só de fallback de rede

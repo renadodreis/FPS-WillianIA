@@ -204,7 +204,7 @@
       const rp = {
         id, nick: nk || '???', alive: true, isBoss: false,
         group, body, targetPos: group.position.clone(), yaw: 0, targetYaw: 0,
-        chute: false, ship: false, fall: false, car: -1, heli: false, bot: false,
+        chute: false, ship: false, fall: false, landed: false, car: -1, heli: false, bot: false,
         carHintIdx: -1, carHintPos: null, carHintYaw: 0, // dica visual das rodas do carro remoto
         shipLocalTgt: null, shipLocalCur: null,
         heldWeapon: 'FACA', wpnScale: 0, fireT: 0, hitT: 0, deadT: 0,
@@ -221,17 +221,16 @@
           this.sphCache[2].c.set(p.x, p.y + 0.42, p.z);
           return this.sphCache;
         },
-        damage(dmg, hitPos, explosive) {
+        /* `opt`: { head } no tiro/faca, { kind, impact, at } no explosivo.
+           Nada de feedback de tela aqui — quem desenha é o portão de
+           predição (queueHit/queueBlast), depois de confirmar que o
+           servidor aceitaria este acerto. */
+        damage(dmg, hitPos, opt) {
           if (hitPos && hitPos.y < this.group.position.y + 0.78) dmg *= 0.8; // perna dói menos
           // explosivo NÃO viaja pelo shotHit: lá a arma equipada e a posição
           // do atirador seriam validadas (granada com FACA = rejeitada a 4 m)
-          if (explosive && explosive.impact) {
-            socket.emit('explosionHit', {
-              targetId: this.id, dmg: Math.round(dmg), kind: explosive.kind,
-              impactPos: [explosive.impact.x, explosive.impact.y, explosive.impact.z],
-            });
-          } else queueHit(this.id, Math.round(dmg));
-          this.hitT = 0.3;
+          if (opt && opt.impact) queueBlast(this.id, dmg, opt.kind, opt.impact, opt.at);
+          else queueHit(this.id, Math.round(dmg), opt && opt.head, hitPos);
           return false; // morte confirmada pelo dono/servidor
         },
       };
@@ -258,23 +257,129 @@
       if (i >= 0) window.__MP_remotePlayers.splice(i, 1);
     }
 
+    /* ================================================================
+       PORTÃO DE PREDIÇÃO — o hitmarker não pode mentir.
+
+       O acerto em jogador remoto é 100% predição local: o servidor ainda
+       vai validar alcance, imunidade de nave/queda, alvo já morto, teto de
+       dano, anti-flood e orçamento — e, quando recusa, recusa em silêncio.
+       O cliente mostrava hitmarker e número assim mesmo, ensinando o
+       jogador a desconfiar do próprio feedback.
+
+       A correção NÃO inventa evento de rede: aplica as MESMAS regras aqui
+       (js/hitfeel-core.js espelha server.js) antes de desenhar qualquer
+       coisa. Recusado = nada na tela E nada no fio — o cliente para até de
+       gastar mensagem que seria descartada.
+       ================================================================ */
+    const HitCore = MP.HitCore;
+    const hitGate = HitCore.createHitGate();
+    const SHIP_IMMUNE_S = 8, FALL_GRACE_S = 30; // espelho de server.js (combatImmune)
+    /* posição que o servidor tem de MIM: é a última que o `state` enviou
+       (carro/heli reportam o veículo), não a do frame atual. Enquanto nada
+       foi enviado ela não pode valer [0,0,0] — isso é o CENTRO do mapa, e
+       o portão mediria alcance a partir de lá. */
+    const sentPos = [0, 0, 0];
+    let sentEver = false;
+    function syncSentPos() {
+      if (sentEver) return;
+      sentPos[0] = MP.player.pos.x; sentPos[1] = MP.player.pos.y; sentPos[2] = MP.player.pos.z;
+    }
+    const matchRunning = () => S.phase === 'SHIP' || S.phase === 'FALL' || S.phase === 'PLAY';
+    function immuneWindow(inShip, falling, landed) {
+      if (!S.plan || !S.plan.ship) return false;
+      const t = S.matchT(), fly = S.plan.ship.flyTime;
+      if (inShip) return t <= fly + SHIP_IMMUNE_S;
+      if (falling && !landed) return t < fly + FALL_GRACE_S;
+      return false;
+    }
+    const iAmImmune = () => immuneWindow(S.phase === 'SHIP', S.phase === 'FALL', false);
+    const remoteImmune = rp => immuneWindow(rp.ship, rp.fall, rp.landed);
+    function dist3(a, bx, by, bz) { return Math.hypot(a[0] - bx, a[1] - by, a[2] - bz); }
+
     /* acertos agregados por alvo (escopeta = 1 mensagem, não 8) */
     const pendingHits = new Map();
-    let hitFlush = false;
-    function queueHit(targetId, dmg) {
-      pendingHits.set(targetId, (pendingHits.get(targetId) || 0) + dmg);
+    const _hitPool = [];
+    let hitFlush = false, hitPoolN = 0;
+    function queueHit(targetId, dmg, head, at) {
+      let e = pendingHits.get(targetId);
+      if (!e) {
+        e = _hitPool[hitPoolN] || (_hitPool[hitPoolN] = { dmg: 0, head: false, x: 0, y: 0, z: 0 });
+        hitPoolN++;
+        e.dmg = 0; e.head = false;
+        pendingHits.set(targetId, e);
+      }
+      e.dmg += dmg;
+      e.head = e.head || !!head;
+      if (at) { e.x = at.x; e.y = at.y; e.z = at.z; }
       if (hitFlush) return;
       hitFlush = true;
-      queueMicrotask(() => {
-        hitFlush = false;
-        for (const [tid, total] of pendingHits) {
-          socket.emit('shotHit', {
-            targetId: tid, dmg: Math.min(total, 95), weapon: localWeaponCode(),
-            fromPos: [MP.player.pos.x, MP.player.pos.y + 1.5, MP.player.pos.z],
-          });
-        }
-        pendingHits.clear();
+      queueMicrotask(flushHits);
+    }
+    const _dmgAt = new THREE.Vector3();
+    // hook de QA: por que o último acerto passou ou não. Objeto REUSADO —
+    // nada é alocado por tiro no caminho quente.
+    const lastVerdict = { ok: false, reason: null, weapon: null, dist: 0, originDist: 0 };
+    function flushHits() {
+      hitFlush = false;
+      syncSentPos();
+      const now = Date.now();
+      const weapon = localWeaponCode();
+      const running = matchRunning(), alive = !MP.player.dead, mineImmune = iAmImmune();
+      const fromPos = [MP.player.pos.x, MP.player.pos.y + 1.5, MP.player.pos.z];
+      const originDist = dist3(sentPos, fromPos[0], fromPos[1], fromPos[2]);
+      let head = false, any = false;
+      for (const [tid, e] of pendingHits) {
+        const rp = remotes.get(tid);
+        const tp = rp && rp.targetPos; // posição de REDE: é a que o servidor tem
+        const dist = tp ? dist3(sentPos, tp.x, tp.y, tp.z) : Infinity;
+        const verdict = hitGate.admitShot(now, {
+          weapon, dmg: Math.round(e.dmg), dist, originDist,
+          playing: running, shooterAlive: alive,
+          victimAlive: !!(rp && rp.alive),
+          shooterImmune: mineImmune,
+          victimImmune: !!rp && remoteImmune(rp),
+        });
+        lastVerdict.ok = verdict.ok; lastVerdict.reason = verdict.reason;
+        lastVerdict.weapon = weapon; lastVerdict.dist = dist; lastVerdict.originDist = originDist;
+        if (!verdict.ok) continue;
+        socket.emit('shotHit', { targetId: tid, dmg: verdict.dmg, weapon, fromPos });
+        rp.hitT = 0.3;                        // pisca vermelho no alvo: só em acerto REAL
+        _dmgAt.set(e.x, e.y, e.z);
+        MP.DmgNums.spawn(_dmgAt, verdict.dmg, e.head);
+        any = true; head = head || e.head;
+      }
+      pendingHits.clear();
+      hitPoolN = 0;
+      if (any) {
+        MP.showHitmarker(head ? 'head' : 'hit');
+        if (head) MP.SFX.headshot(); else MP.SFX.hit();
+      }
+    }
+
+    /* explosivo tem protocolo próprio no servidor, mas divide as MESMAS
+       janelas de flood/orçamento — por isso passa pelo mesmo portão */
+    const _impactArr = [0, 0, 0]; // scratch: granada acerta vários alvos de uma vez
+    function queueBlast(targetId, dmg, kind, impact, at) {
+      syncSentPos();
+      const rp = remotes.get(targetId);
+      const tp = rp && rp.targetPos;
+      _impactArr[0] = impact.x; _impactArr[1] = impact.y; _impactArr[2] = impact.z;
+      const verdict = hitGate.admitBlast(Date.now(), {
+        kind, dmg: Math.round(dmg),
+        distShooterToImpact: dist3(sentPos, impact.x, impact.y, impact.z),
+        distImpactToVictim: tp ? dist3(_impactArr, tp.x, tp.y, tp.z) : Infinity,
+        playing: matchRunning(), shooterAlive: !MP.player.dead,
+        victimAlive: !!(rp && rp.alive),
+        shooterImmune: iAmImmune(),
+        victimImmune: !!rp && remoteImmune(rp),
       });
+      if (!verdict.ok) return;
+      socket.emit('explosionHit', {
+        targetId, dmg: verdict.dmg, kind,
+        impactPos: [impact.x, impact.y, impact.z],
+      });
+      rp.hitT = 0.3;
+      if (at) { _dmgAt.copy(at); MP.DmgNums.spawn(_dmgAt, verdict.dmg, false); }
     }
 
     /* =============== balística (projéteis com queda) =============== */
@@ -295,8 +400,13 @@
           const len = _bp.length();
           if (len > 0.01 && MP.rayBlockedAt(_bv, _bp.multiplyScalar(1 / len), len) < len - 0.15) continue;
           const dmg = Math.round(maxDmg * (1 - d / radius) + 20);
-          MP.DmgNums.spawn(rp.group.position, dmg, false);
-          rp.damage(dmg, null, { kind, impact: p }); // splash é área: hitPos=null (o teste de perna tirava -20% falso)
+          // splash é área: hitPos=null (o teste de perna tirava -20% falso).
+          // Contra JOGADOR o número só aparece se o portão aceitar o dano;
+          // o GOLEM vai por `bossHit`, que não tem recusa a prever.
+          if (rp.isBoss) {
+            MP.DmgNums.spawn(rp.group.position, dmg, false);
+            rp.damage(dmg, null, { kind, impact: p });
+          } else rp.damage(dmg, null, { kind, impact: p, at: rp.group.position });
         }
       }
     };
@@ -407,12 +517,20 @@
           const head = bestPart === 'head' || bestPart === 'core';
           const dmg = b.dmg * (head ? 1.75 : 1);
           MP.FX.burst(_bv, _bp.clone().negate(), bestMeta.boss ? 'spark' : 'blood');
-          MP.DmgNums.spawn(_bv, Math.round(dmg), head);
-          MP.showHitmarker(false);
-          if (head) MP.SFX.headshot(); else MP.SFX.hit();
-          if (bestMeta.remote) bestMeta.target.damage(dmg, _bv);
-          else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, _bp, bestPart);
-          else bestMeta.target.damage(dmg, _bv, _bp, head);
+          if (bestMeta.remote && !bestMeta.boss) {
+            // jogador remoto = predição: o portão em flushHits decide se o
+            // hitmarker e o número aparecem
+            bestMeta.target.damage(dmg, _bv, { head });
+          } else {
+            // GOLEM (bossHit) e IA local: dano sem alcance nem imunidade pra
+            // recusar — o acerto é certo, o feedback é imediato
+            MP.DmgNums.spawn(_bv, Math.round(dmg), head);
+            MP.showHitmarker(head ? 'head' : 'hit');
+            if (head) MP.SFX.headshot(); else MP.SFX.hit();
+            if (bestMeta.remote) bestMeta.target.damage(dmg, _bv, { head });
+            else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, _bp, bestPart);
+            else bestMeta.target.damage(dmg, _bv, _bp, head);
+          }
           bullets.splice(i, 1);
           continue;
         }
@@ -444,12 +562,16 @@
         const outRemote = dmg * (head ? 1.75 : 1); // remote damage() não tem lógica de cabeça — aplica aqui (como as balas)
         _bv.copy(origin).addScaledVector(dir, bestD);
         MP.FX.burst(_bv, dir.clone().negate(), bestMeta.boss ? 'spark' : 'blood');
-        MP.DmgNums.spawn(_bv, Math.round(bestMeta.remote ? outRemote : dmg), head);
-        MP.showHitmarker(false);
-        if (head) MP.SFX.headshot(); else MP.SFX.hit();
-        if (bestMeta.remote) bestMeta.target.damage(outRemote, _bv);
-        else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, dir, bestPart);
-        else bestMeta.target.damage(dmg, _bv, dir, head);
+        if (bestMeta.remote && !bestMeta.boss) {
+          bestMeta.target.damage(outRemote, _bv, { head }); // predição: portão decide
+        } else {
+          MP.DmgNums.spawn(_bv, Math.round(bestMeta.remote ? outRemote : dmg), head);
+          MP.showHitmarker(head ? 'head' : 'hit');
+          if (head) MP.SFX.headshot(); else MP.SFX.hit();
+          if (bestMeta.remote) bestMeta.target.damage(outRemote, _bv, { head }); // GOLEM: bossHit
+          else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, dir, bestPart);
+          else bestMeta.target.damage(dmg, _bv, dir, head);
+        }
       }
     };
 
@@ -1438,6 +1560,9 @@
       }
       rp.chute = !!d.chute;
       rp.fall = !!d.fall;
+      // espelho de server.js: quem tocou o chão fecha a janela de
+      // invulnerabilidade da queda e não "despousa" no resto da partida
+      if (rp.alive && !rp.ship && !rp.fall) rp.landed = true;
       // só índice INTEIRO dentro da frota (NaN/Infinity/lixo viram "a pé")
       rp.car = Number.isInteger(d.car) && d.car >= 0 && d.car < G.Car.vehicles.length ? d.car : -1;
       rp.heli = !!d.heli;
@@ -1451,6 +1576,34 @@
         rp.body.weapon.scale.setScalar(Math.max(rp.wpnScale, 0.02));
       }
     });
+    /* ================================================================
+       EXPLOSIVO DOS OUTROS — antes, uma bazuca estourando a 30 m não
+       produzia nem clarão nem som: o `explosionHit` só é enviado pra
+       VÍTIMA e o lançamento não gerava evento nenhum.
+
+       Sem inventar protocolo: o lançamento viaja no `shotFired` que já
+       existia (game.js) e o estrondo é reconstruído aqui, cronometrado
+       pela velocidade real do foguete. Quem toma o dano recebe a
+       explosão pelo próprio `youWereHit`, cujo fromPos JÁ é o ponto de
+       impacto. `remoteBlast` funde os dois: um estouro só.
+       ================================================================ */
+    const _blastAt = new THREE.Vector3(), _lastBlast = new THREE.Vector3();
+    let lastBlastT = 0;
+    function remoteBlast(x, y, z) {
+      const now = Date.now();
+      if (now - lastBlastT < 700 &&
+          Math.hypot(_lastBlast.x - x, _lastBlast.y - y, _lastBlast.z - z) < 10) return;
+      lastBlastT = now;
+      _lastBlast.set(x, y, z);
+      _blastAt.set(x, y, z);
+      G.Grenades.explodeFx(_blastAt); // SÓ efeito: o dano é do servidor
+    }
+    function scheduleRemoteBlast(from, to) {
+      const ms = Math.min(6000, from.distanceTo(to) / (G.Rockets.speed || 34) * 1000);
+      const x = to.x, y = to.y, z = to.z;
+      setTimeout(() => { if (window.__BR_active) remoteBlast(x, y, z); }, ms);
+    }
+
     /* timbre do disparo remoto por arma — mesmo catálogo do tiro local */
     const REMOTE_SHOT = { ESCOPETA: 'shotgun', DMR: 'dmr', SNIPER: 'dmr' };
     socket.on('playerFired', d => {
@@ -1469,17 +1622,27 @@
           const blockD = MP.rayBlockedAt(from, _bp, len);
           if (blockD < len) to.copy(from).addScaledVector(_bp, blockD);
         }
-        MP.FX.spawnTracer(from, to, 0xffe9a8);
         // ATÉ AQUI TIRO DE OUTRO JOGADOR ERA MUDO: agora sai do cano dele,
         // com distância e oclusão — é assim que se lê um tiroteio.
-        if (rp.heldWeapon === 'BAZUCA') MP.SFX.rocket(from);
-        else if (rp.heldWeapon === 'PLASMA') MP.SFX.laser(from);
-        else MP.SFX.shot(REMOTE_SHOT[rp.heldWeapon] || 'rifle', from);
+        if (rp.heldWeapon === 'BAZUCA') {
+          // foguete não é hitscan: nada de traçante instantâneo. Sai o assobio
+          // do lançamento e o estrondo chega no TEMPO DE VOO — é esse atraso
+          // que dá ao alvo a chance de sair de perto.
+          MP.SFX.rocket(from);
+          scheduleRemoteBlast(from, to);
+        } else {
+          MP.FX.spawnTracer(from, to, 0xffe9a8);
+          if (rp.heldWeapon === 'PLASMA') MP.SFX.laser(from);
+          else MP.SFX.shot(REMOTE_SHOT[rp.heldWeapon] || 'rifle', from);
+        }
       }
     });
     socket.on('playerLeft', d => removeRemote(d.id));
     socket.on('youWereHit', d => {
       const f = d.fromPos;
+      // granada/bazuca: o fromPos É o ponto de impacto. O estouro acontece
+      // mesmo que a cobertura anule o dano — a explosão existiu ali.
+      if (d.weapon === 'GRANADA' || d.weapon === 'BAZUCA') remoteBlast(f[0], f[1], f[2]);
       _bv.set(f[0], f[1], f[2]);
       _bp.copy(MP.player.pos); _bp.y += 1;
       _bp.sub(_bv);
@@ -1515,6 +1678,10 @@
         S.myKills = d.killerKills;
         UI.toast(`☠ você eliminou <b>${esc(d.victimNick)}</b>!`, 'épico');
         MP.SFX.kill();
+        // "MATEI?" respondido no centro da tela, no mesmo instante do som.
+        // Este é o ÚNICO hitmarker do jogo que não é predição: quem confirma
+        // a morte é o servidor, e ele acabou de confirmar.
+        MP.showHitmarker('kill');
       }
       const rp = remotes.get(d.victimId);
       if (rp) { rp.alive = false; rp.deadT = 0.001; }
@@ -1546,6 +1713,7 @@
       MP.addKillFeed(`⛰ <b>${esc(d.by)}</b> derrotou o GOLEM`);
     });
     socket.on('chat', d => UI.addChat(d.nick, d.msg, d.sys));
+    const VICTORY_BEAT_MS = 1000; // câmera lenta antes da tabela de resultado
     socket.on('matchEnd', d => {
       S.phase = 'ENDED';
       window.__BR_lastGlobalTop = d.globalTop;
@@ -1560,7 +1728,12 @@
       } catch (e) {}
       const rows = d.ranking.map(r =>
         `<tr><td>#${r.placement}</td><td>${esc(r.nick)}</td><td>☠ ${r.kills}</td></tr>`).join('');
-      LOBBY.overlay(`
+      /* MOMENTO DA VITÓRIA — o `victory()` já existia no áudio e nunca era
+         tocado: ganhar caía direto na tela de resultado, sem um segundo de
+         respiro. Agora o último instante da partida roda em câmera lenta
+         (mesmo recurso da própria morte) com a fanfarra, e só então vem a
+         tabela. Só pro VENCEDOR: quem perdeu já teve a encenação da morte. */
+      const showResults = () => LOBBY.overlay(`
         <div class="brTitle" style="${won ? '' : 'color:#e8f1f8'}">${won ? '🏆 VITÓRIA MAGISTRAL!' : '🏆 FIM DE PARTIDA'}</div>
         <div class="brSub">PARTIDA #${S.matchNum}</div>
         <div style="text-align:center;font-size:19px;margin:10px 0">
@@ -1575,7 +1748,17 @@
         </div></div>
         <div style="text-align:center;margin-top:16px;font-size:13px;opacity:.75">
           próxima partida (mapa novo) em <b id="brNextIn">${d.nextIn}</b>s...</div>`);
-      LOBBY.renderGlobal(d.globalTop);
+      const finish = () => {
+        MP.setTimeScale(1);
+        showResults();
+        LOBBY.renderGlobal(d.globalTop);
+      };
+      if (won) {
+        MP.SFX.victory();
+        MP.showBanner('🏆 <b>VITÓRIA</b><small>último de pé</small>', VICTORY_BEAT_MS);
+        MP.setTimeScale(0.42);
+        setTimeout(finish, VICTORY_BEAT_MS);
+      } else finish();
       let n = d.nextIn;
       const iv = setInterval(() => {
         n--;
@@ -1677,6 +1860,10 @@
       // na nave o servidor valida e reconstrói TUDO pela posição local
       if (S.phase === 'SHIP' && shipLocalPos)
         st.shipLocal = [shipLocalPos.x, shipLocalPos.y, shipLocalPos.z];
+      // memória da posição que o SERVIDOR passa a ter de mim: o portão de
+      // predição precisa medir alcance com o mesmo número que ele
+      sentPos[0] = p.x; sentPos[1] = p.y; sentPos[2] = p.z;
+      sentEver = true;
       socket.volatile.emit('state', st);
     }, 100);
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -1974,6 +2161,13 @@
           shipWalk(dt, _shipPose);
           shipProject(_shipPose);
         },
+      },
+      /* portão de predição de acerto (js/hitfeel-core.js): por que o último
+         acerto virou hitmarker — ou por que não virou */
+      hitGate: {
+        get sentPos() { return sentPos.slice(); },
+        get last() { return lastVerdict; },
+        stats(now) { return hitGate.stats(now || Date.now()); },
       },
       jump: jumpFromShip, spect: enterSpectator, openCrate: tryOpenCrate,
       get boss() { return boss; }, get bossHp() { return bossHp; },

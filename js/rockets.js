@@ -3,6 +3,8 @@
    ================================================================ */
 import * as THREE from 'three';
 
+export const ROCKET_SPEED = 34; // m/s — o BR usa pra cronometrar a explosão remota
+
 export function createRockets(deps) {
   const { rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss, Bosses = [], extraTargets = [] } = deps;
   const pool = [];
@@ -25,7 +27,7 @@ export function createRockets(deps) {
     if (!r) return;
     r.live = true; r.m.visible = true;
     r.m.position.copy(from);
-    r.vel.copy(dir).multiplyScalar(34);
+    r.vel.copy(dir).multiplyScalar(ROCKET_SPEED);
     r.smokeAcc = 0;            // RESET: item reutilizado do pool não herda o acumulador
     r.m.lookAt(_v1.copy(from).add(dir));
   }
@@ -82,5 +84,5 @@ export function createRockets(deps) {
       if (r.live) r.m.lookAt(_v1.copy(r.m.position).add(r.vel)); // aponta na direção da velocidade
     }
   }
-  return { fire, update };
+  return { fire, update, speed: ROCKET_SPEED };
 }
