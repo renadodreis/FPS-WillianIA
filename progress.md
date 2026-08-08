@@ -768,3 +768,58 @@ golden hour no teto, faixa que floresce encolhe ≥2×, chuva aperta.
 Subir `BLOOM_THRESHOLD` resolveria o horizonte, mas afeta TODA fonte de bloom —
 janelas da cidade à noite (`emissiveIntensity` 1,6), tracer, explosão, flash de
 tiro. A correção no céu é cirúrgica: só o céu muda, e só quando o halo cresce.
+
+## Sessão 2026-08-07 — onda de integração das 6 streams + auditoria de QA
+
+Duas coisas ficaram sem registro aqui e entram juntas: a onda que mesclou as 6
+streams em `wave1/integration` (perf, menu, level design, áudio, game feel,
+conteúdo) só existia em mensagem de commit, e a auditoria de QA que rodou em
+cima dela.
+
+O relatório completo — bug a bug, com causa raiz, correção, teste e o que ficou
+aberto — está em `docs/2026-08-07-auditoria-qa.md`. Aqui fica só o que muda o
+entendimento do sistema.
+
+### O que a onda trouxe (resumo, para quem lê só o progress)
+
+Menu cinematográfico com passeio de câmera (`js/menuscene.js`) e portão de
+prewarm; som posicional com pool de vozes e oclusão (`js/sfx3d.js`); núcleo puro
+de game feel com portão de predição de acerto (`js/hitfeel-core.js`); overlay de
+perf e auto-tier de GPU (`js/perfhud.js`, `js/gputier.js`); SAP broadphase
+(`js/sapbroadphase.js`); 6 torres de vigia subíveis (`js/watchtower.js`); térreo
+oco navegável em 4 dos 12 prédios (`js/cityinterior.js`); 3 segredos que
+destrancam as armas órfãs no solo (`js/secrets.js`); teto radial de 430 m para
+os POIs.
+
+### O que a auditoria mudou no entendimento
+
+**O menu não devolvia o FOV.** `startGame()` sempre devolveu o relógio e a
+agenda de clima que o passeio travava, e a partir de agora devolve o FOV também.
+O passeio escreve `camera.fov` direto, mas o dono do FOV em jogo é `fovCur`, e
+`applyFpsCamera` só reescreve a câmera quando o alvo se AFASTA dele — no spawn a
+diferença é zero. Toda partida começava a ~48°.
+
+**Térreo oco é SALA, e sala tem pé-direito próprio.** O pé-direito do lote oco
+deixou de ser o mesmo do caminho maciço. O volume acima é um AABB que cobre todo
+o footprint, e `collide` empurra para a face mais próxima quem estiver dentro
+dele em XZ — pular no térreo teleportava o jogador para fora do prédio. A conta
+que importa é `cobertura + jogador + ápice do pulo`, não a proporção da fachada.
+`GF_H_SOLID` e `GF_H_HOLLOW` em `js/cityinterior.js` separam os dois casos.
+
+**Dica de roda de carro remoto é derivada da POSE DE REDE.** Era derivada da
+posição interpolada, e interpolação de recuperação é translação no sentido do
+alvo, não do nariz do carro — virava marcha à ré no teto do clamp. Não adianta
+gatear pelo tamanho do buraco: em regime permanente o lerp fica atrasado
+exatamente `velocidade/12`, então buraco e velocidade são a mesma grandeza.
+
+**Visual urbano nascido depois do worldgen precisa se registrar.**
+`Structures.city.registerVisual(obj)` existe agora por causa do cofre dos
+segredos, que tinha colisor urbano e visual solto na cena: sumia a colisão e
+ficava a caixa de aço de pé nos escombros. É a mesma família do bug já
+registrado ("visual da laje vaza pro mesh global") — a porta de entrada mora no
+módulo da cidade justamente para não se repetir em cada módulo novo.
+
+**Regra de sala que mexe em processo tem que respeitar o congelamento.** Todas
+as flags são congeladas em `match.plan.flags` no início da partida; a de bots
+passava por fora e `syncBots()` derruba o processo filho. Trocar o número de
+bots no meio da partida encerrava a partida.
