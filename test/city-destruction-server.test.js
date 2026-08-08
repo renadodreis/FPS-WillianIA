@@ -189,6 +189,36 @@ describe('Destruição da cidade — servidor autoritativo', () => {
     assert.ok(porMissil[0].byZone !== true);
   });
 
+  /* O ataque mata TODO MUNDO do raio no mesmo instante, e é assim que tem que
+     ser (encerrar no meio do laço coroaria alguém que também está no raio).
+     Mas o laço dava a MESMA colocação pra todas as vítimas, porque lia
+     `match.aliveCount` sem descontar as mortes que ele mesmo estava causando.
+     O placar saía "#5 #5 #5 #2 #1": as posições 3 e 4 nunca existiam e o bônus
+     global de "metade de cima" caía no balde errado. Morte simultânea ocupa a
+     FAIXA de baixo em bloco — colocações distintas, ordem interna arbitrária. */
+  it('dado o impacto matando vários de uma vez, então cada vítima recebe uma colocação DISTINTA', async t => {
+    const { cs } = await partida(t, 5);
+    const dentro = cs.slice(0, 3); // 3 no centro da cidade — morrem juntos
+    const fora = cs.slice(3);      // 2 longe — sobrevivem
+    const iv = setInterval(() => {
+      for (const [i, c] of dentro.entries())
+        c.s.volatile.emit('state', { pos: [-340 + i * 2, 4, 130], rotY: 0, car: -1 });
+      for (const [i, c] of fora.entries())
+        c.s.volatile.emit('state', { pos: [0, 4, i * 10], rotY: 0, car: -1 });
+    }, 120);
+    t.after(() => clearInterval(iv));
+    const mortes = collect(fora[0].s, 'playerKilled');
+    await sleep(3400);
+    const porMissil = mortes.filter(m => m.byCity);
+    assert.equal(porMissil.length, 3, `mortes pelo míssil: ${porMissil.length} (esperado 3)`);
+    const colocacoes = porMissil.map(m => m.placement).sort((x, y) => x - y);
+    assert.equal(new Set(colocacoes).size, 3,
+      `colocações repetidas entre vítimas simultâneas: ${JSON.stringify(colocacoes)}`);
+    // 5 vivos, 3 morrem juntos → ocupam as posições 3, 4 e 5
+    assert.deepEqual(colocacoes, [3, 4, 5],
+      `faixa de colocação errada: ${JSON.stringify(colocacoes)} (esperado [3,4,5])`);
+  });
+
   it('dada a vítima com armadura/invulnerabilidade (estado do cliente), então morre mesmo assim (decisão é do servidor)', async t => {
     // o servidor não consulta armadura/invuln — mata pela posição; este teste
     // fixa o CONTRATO: morte independe de estado defensivo do cliente

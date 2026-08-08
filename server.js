@@ -200,6 +200,7 @@ const match = {
   flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT }, // regras da sala (só o host altera)
   cityDestruction: { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null },
   countdownTimer: null, endTimer: null,
+  botsPending: false,        // troca de "bots na sala" pedida durante a partida
 };
 
 function resetRoundState() {
@@ -210,6 +211,14 @@ function resetRoundState() {
   match.bossMaxHp = 0;
   match.bossDead = !match.flags.golem;
   match.carOwners = {};
+}
+
+/* troca de "bots na sala" pedida no meio da partida só materializa quando a
+   sala volta ao lobby (ver o handler de setFlags) */
+function applyPendingBots() {
+  if (!match.botsPending) return;
+  match.botsPending = false;
+  syncBots();
 }
 
 function freeCarsOf(id) {
@@ -412,6 +421,7 @@ function endMatch(winnerId) {
     resetRoundState();
     match.phase = 'LOBBY';
     for (const p of players.values()) { p.spectator = false; p.alive = false; p.placement = 0; }
+    applyPendingBots(); // troca de "bots na sala" pedida durante a partida
     io.emit('nextMatch', { worldSeed: match.seed }); // browser recarrega; bots persistentes reconstroem o mapa
   }, NEXT_IN_S * 1000);
 }
@@ -444,11 +454,24 @@ setInterval(() => {
     cd.state = 'destroyed';
     // mortes autoritativas: última posição válida vs raio letal do centro da cidade
     const C = CityProto.CITY_CENTER, R = CityProto.CITY_KILL_RADIUS;
+    const vitimas = [];
     for (const [id, p] of players) {
       if (p.spectator || !p.alive) continue;
       if (Math.hypot(p.pos[0] - C.x, p.pos[2] - C.z) > R) continue;
+      vitimas.push([id, p]);
+    }
+    /* COLOCAÇÃO DE MORTE SIMULTÂNEA. Aqui não dá pra chamar checkVictory por
+       vítima (como fazem `died` e o laço da zona): o ataque mata todo mundo do
+       raio no MESMO instante, e encerrar no meio do laço coroaria alguém que
+       também está dentro do raio. Mas ler `match.aliveCount` sem descontar as
+       mortes que este laço está causando dava a MESMA colocação pra todas as
+       vítimas ("#5 #5 #5 #2 #1"): as posições do meio não existiam e o bônus
+       global de metade-de-cima caía no balde errado. Morte simultânea ocupa a
+       faixa de baixo em BLOCO; a ordem dentro da faixa é arbitrária de direito. */
+    let colocacao = match.aliveCount;
+    for (const [id, p] of vitimas) {
       p.alive = false;
-      p.placement = match.aliveCount;
+      p.placement = colocacao--;
       match.lastDead = id;
       freeCarsOf(id);
       io.emit('playerKilled', {
@@ -460,6 +483,9 @@ setInterval(() => {
       });
       console.log(`[CIDADE] ${p.nick} morreu no ataque de mísseis`);
     }
+    // o roster sai ANTES do checkVictory, então a contagem tem que já estar
+    // descontada aqui (o checkVictory recalcula depois, de forma idempotente)
+    match.aliveCount = colocacao;
     cityBroadcast();
     broadcastRoster();
     checkVictory();
@@ -644,7 +670,19 @@ io.on('connection', socket => {
     if (TEMPO_MODES.includes(d.tempo)) match.flags.tempo = d.tempo;
     if (Number.isInteger(d.bots)) {
       const n = Math.max(0, Math.min(8, d.bots));
-      if (n !== match.flags.bots) { match.flags.bots = n; syncBots(); }
+      if (n !== match.flags.bots) {
+        match.flags.bots = n;
+        /* `syncBots` DERRUBA o processo dos bots pra subir outro. No meio da
+           partida isso desconecta todos de uma vez, e cada disconnect roda
+           checkVictory: se os bots eram a oposição restante, a partida ENCERRA
+           na hora com um vencedor arbitrário — e os bots novos reconectam
+           durante o PLAYING, viram espectadores e ficam parados no roster.
+           Todas as outras regras já são congeladas em `match.plan.flags` no
+           início da partida (startMatch); esta passava por fora do congelamento.
+           A troca continua valendo — só que a partir da PRÓXIMA partida. */
+        if (match.phase === 'LOBBY') syncBots();
+        else match.botsPending = true;
+      }
     }
     io.emit('flags', match.flags);
   });
@@ -1016,6 +1054,7 @@ io.on('connection', socket => {
       match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
       if (match.phase === 'COUNTDOWN' && match.countdownTimer) clearInterval(match.countdownTimer);
       if (match.phase !== 'PLAYING' && match.phase !== 'ENDED') match.phase = 'LOBBY';
+      match.botsPending = false; // a sala zerou: não há troca pendente a aplicar
       syncBots(); // flags.bots voltou a 0
     }
     io.emit('playerLeft', { id: socket.id });

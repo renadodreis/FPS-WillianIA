@@ -746,6 +746,43 @@ describe('Regras da sala (flags do anfitrião)', () => {
     assert.ok(f && f.golem === false && f.animais === false && f.ciclo === 'noite');
   });
 
+  /* `syncBots` derruba o processo dos bots pra subir outro. Chamado no meio da
+     partida, desconecta todos de uma vez — e cada disconnect roda checkVictory,
+     então a partida ENCERRAVA na hora com vencedor arbitrário. Todas as outras
+     regras já são congeladas em match.plan.flags no início; a de bots passava
+     por fora. Aqui o contrato: a troca é aceita e anunciada, mas só materializa
+     na próxima partida — a corrente não pode ser encerrada por causa disso. */
+  it('dada a troca de bots NO MEIO da partida, então a partida não é encerrada por isso', async t => {
+    const srv = await spawnServer({ COUNTDOWN_S: '1' }); t.after(() => srv.stop());
+    const a = await connect(srv.port); t.after(() => a.s.close());
+    a.s.emit('hello', { nick: 'HostQA' });
+    await ack(a.s, 'claimHost', { code: 'QA123' });
+    // sala COM bots: só assim `syncBots` tem processo pra derrubar depois
+    a.s.emit('setFlags', { bots: 2 });
+    const cheia = await new Promise(res => {
+      const to = setTimeout(() => res(false), 15000);
+      const onRoster = d => {
+        if ((d.players || []).filter(p => p.bot).length >= 2) {
+          clearTimeout(to); a.s.off('roster', onRoster); res(true);
+        }
+      };
+      a.s.on('roster', onRoster);
+    });
+    assert.ok(cheia, 'os 2 bots não entraram na sala — cenário não montou');
+    const started = once(a.s, 'matchStart');
+    a.s.emit('requestStart');
+    await started;
+    // host + 2 bots vivos: derrubar os bots deixa 1 vivo = vitória instantânea
+    const fins = collect(a.s, 'matchEnd');
+    const flags = collect(a.s, 'flags');
+    a.s.emit('setFlags', { bots: 4 }); // host mexe no dropdown com a partida rolando
+    await sleep(1500);
+    assert.equal(fins.length, 0,
+      `trocar "bots" no meio da partida ENCERROU a partida (vencedor ${JSON.stringify(fins[0] && fins[0].winner)})`);
+    const f = flags[flags.length - 1];
+    assert.ok(f && f.bots === 4, `a escolha do host não foi anunciada: ${JSON.stringify(f)}`);
+  });
+
   it('dado GOLEM desligado, então a partida nasce com boss morto e o baú lendário não abre', async t => {
     const srv = await spawnServer(); t.after(() => srv.stop());
     const a = await connect(srv.port); t.after(() => a.s.close());
