@@ -37,14 +37,24 @@ describe('Rodas de carros remotos (BR)', { skip: !CHROME && 'Chrome não encontr
     }
   }
 
+  /* O avatar do remoto entra na partida no spawn dele e o carro pode estar a
+     centenas de metros. Sem PARAR nele primeiro, os quadros medidos são a
+     convergência do lerp (translação pura no sentido do alvo) e não a direção —
+     o cenário do teste vira outro. Assentar aqui é o que um jogador de verdade
+     faz: ele ANDA até o carro antes de dirigir. */
+  async function botSettlesInCar(p0) {
+    await botDrives(20, () => ({ pos: [p0[0] + 3, 4.4, p0[1]], rotY: 0, car: 1, heldWeapon: 'PISTOLA' }));
+  }
+
   it('dado um remoto dirigindo em linha reta, então as rodas do carro giram', async () => {
-    const before = await h.play(() => {
-      const v = window.QA.G.Car.vehicles[1];
-      return { rot: v.vehicle.wheelInfos.map(w => w.rotation), pos: [v.chassisBody.position.x, v.chassisBody.position.z] };
-    });
     const p0 = await h.play(() => {
       const v = window.QA.G.Car.vehicles[1];
       return [v.chassisBody.position.x, v.chassisBody.position.z];
+    });
+    await botSettlesInCar(p0);
+    const before = await h.play(() => {
+      const v = window.QA.G.Car.vehicles[1];
+      return { rot: v.vehicle.wheelInfos.map(w => w.rotation), pos: [v.chassisBody.position.x, v.chassisBody.position.z] };
     });
     // 12 m/s pra frente (+x, yaw 0), ~2 s
     await botDrives(15, f => ({
@@ -69,6 +79,43 @@ describe('Rodas de carros remotos (BR)', { skip: !CHROME && 'Chrome não encontr
       assert.ok(d < -1, `roda ${i} do carro remoto não girou pra frente (Δ=${d.toFixed(2)})`);
     }
     assert.ok(after.finito, 'rotação não finita');
+  });
+
+  /* BURACO DE REDE ≠ MARCHA À RÉ. O avatar remoto persegue `targetPos` por
+     lerp; quando abre um buraco (perda de pacote, re-ancoragem do anti-cheat
+     após lag), a perseguição é translação no sentido do ALVO, não do nariz do
+     carro — e virava velocidade REVERSA no teto do clamp, com as rodas do
+     carro do outro girando de ré a toda durante a recuperação inteira.
+     O portão antigo olhava o passo POR QUADRO (< 8 m); como o passo é
+     k·buraco com k ≈ 0,18, ele só reagia a buracos acima de ~44 m e a faixa
+     de 8 a 44 m passava batido. Este teste fixa a faixa que escapava. */
+  it('dado um buraco de rede de dezenas de metros, então as rodas não giram de RÉ a toda', async () => {
+    const p0 = await h.play(() => {
+      const v = window.QA.G.Car.vehicles[1];
+      return [v.chassisBody.position.x, v.chassisBody.position.z];
+    });
+    await botSettlesInCar(p0);
+    await h.play(() => { window.__qaHint = []; });
+    // 30 m PARA TRÁS com o nariz ainda em +x. O anti-cheat recusa o salto e
+    // re-ancora depois de 10 recusas seguidas — exatamente o caminho real.
+    for (let f = 0; f < 14; f++) {
+      bot.emit('state', { pos: [p0[0] + 3 - 30, 4.4, p0[1]], rotY: 0, car: 1, heldWeapon: 'PISTOLA' });
+      await h.play(() => new Promise(res => setTimeout(() => {
+        window.QA.tick(4, 1 / 60);
+        const v = window.QA.G.Car.vehicles[1];
+        if (v.remoteHint && v.remoteHint.ttl > 0) window.__qaHint.push(v.remoteHint.speed);
+        res();
+      }, 34)));
+    }
+    const r = await h.play(() => {
+      const v = window.QA.G.Car.vehicles[1];
+      const vMax = (v.cfg.maxKmh || 100) / 3.6 * 1.3;
+      const amostras = window.__qaHint;
+      return { vMax, pior: amostras.length ? Math.min(...amostras) : 0, n: amostras.length };
+    });
+    assert.ok(r.pior > -r.vMax * 0.5,
+      `roda girou de ré a ${r.pior.toFixed(1)} m/s (teto de ré ${(-r.vMax).toFixed(1)}) ` +
+      `durante a recuperação de um buraco de rede — ${r.n} amostras`);
   });
 
   it('dado lixo de rede (NaN, índice fora da frota, teleporte), então nada corrompe', async () => {

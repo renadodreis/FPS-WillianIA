@@ -316,6 +316,7 @@
       queueMicrotask(flushHits);
     }
     const _dmgAt = new THREE.Vector3();
+    const _missDe = new THREE.Vector3(); // origem do tiro recusado (replicação)
     // hook de QA: por que o último acerto passou ou não. Objeto REUSADO —
     // nada é alocado por tiro no caminho quente.
     const lastVerdict = { ok: false, reason: null, weapon: null, dist: 0, originDist: 0 };
@@ -341,7 +342,21 @@
         });
         lastVerdict.ok = verdict.ok; lastVerdict.reason = verdict.reason;
         lastVerdict.weapon = weapon; lastVerdict.dist = dist; lastVerdict.originDist = originDist;
-        if (!verdict.ok) continue;
+        if (!verdict.ok) {
+          /* RECUSADO ≠ INEXISTENTE. Sem `shotHit` o servidor não replica
+             `playerFired` (é dele que sai o muzzle/tracer dos outros), e o
+             game.js já tinha marcado o disparo como "acertou", então também não
+             manda o `shotFired` de erro — o tiro sumia da tela e do ouvido de
+             TODO MUNDO. Atirar em quem está de paraquedas (imune) ou no limite
+             do alcance apagava o próprio disparo: a vítima levava rajada sem
+             nenhuma pista audiovisual. Aqui ele volta a existir como o que de
+             fato é: um tiro que não entrou. */
+          if (tp && window.__BR_shotMiss) {
+            _missDe.set(fromPos[0], fromPos[1], fromPos[2]);
+            window.__BR_shotMiss(_missDe, tp, weapon);
+          }
+          continue;
+        }
         socket.emit('shotHit', { targetId: tid, dmg: verdict.dmg, weapon, fromPos });
         rp.hitT = 0.3;                        // pisca vermelho no alvo: só em acerto REAL
         _dmgAt.set(e.x, e.y, e.z);
@@ -1601,7 +1616,15 @@
     function scheduleRemoteBlast(from, to) {
       const ms = Math.min(6000, from.distanceTo(to) / (G.Rockets.speed || 34) * 1000);
       const x = to.x, y = to.y, z = to.z;
-      setTimeout(() => { if (window.__BR_active) remoteBlast(x, y, z); }, ms);
+      const daPartida = S.matchNum;
+      /* O foguete leva até 6 s pra chegar. `__BR_active` sozinho não segura o
+         estouro: ele continua true entre partidas, então clarão, estrondo e
+         SCREENSHAKE caíam na câmera lenta da vitória, na tabela de resultado ou
+         já no lobby seguinte — nas coordenadas da partida velha. */
+      setTimeout(() => {
+        if (window.__BR_active && S.matchNum === daPartida &&
+            (S.phase === 'PLAY' || S.phase === 'SPECT')) remoteBlast(x, y, z);
+      }, ms);
     }
 
     /* timbre do disparo remoto por arma — mesmo catálogo do tiro local */
@@ -1891,7 +1914,20 @@
     (function brTick() {
       requestAnimationFrame(brTick);
       const nowMs = performance.now();
-      const dt = Math.min((nowMs - lastT) / 1000, 0.1);
+      const bruto = (nowMs - lastT) / 1000;
+      const dt = Math.min(bruto, 0.1);
+      /* A QUEDA ANDA NO RELÓGIO, NÃO NO QUADRO. O cap de 0,1 s existe pra um
+         engasgo não teleportar a simulação, e está certo pro resto do laço.
+         A descida de paraquedas, porém, é cinemática pura (integração + um
+         teste de chão no fim) e precisa durar o mesmo tanto que dura no relógio
+         do SERVIDOR — que é quem abre o gás e arma o backstop da zona. Com o
+         cap, uma máquina a ~1,5 fps estica os ~17 s de descida para quase 2
+         minutos (medido: 112 s numa partida de QA) e o jogador é eliminado NO
+         AR, com `voando=true` no log do servidor. O watchdog de 500 ms não
+         cobre isso: ele só age com o rAF MORTO (aba oculta, >1,5 s sem quadro),
+         não com o rAF vivo e lento. Teto de 0,5 s porque acima disso o watchdog
+         assume. */
+      const dtQueda = Math.min(bruto, 0.5);
       lastT = nowMs;
       lastRaf = nowMs; // sinal de "aba visível" pro watchdog de segundo plano
       if (!window.__BR_active) return;
@@ -1998,33 +2034,55 @@
           const v = G.Car.vehicles[rp.car];
           if (v && !(G.state.driving && v.group === G.Car.group)) {
             const gp = rp.group.position;
-            /* dica VISUAL de giro/esterço das rodas: derivada da pose
-               interpolada já validada (nunca autoridade — só alimenta a
-               animação em js/car.js). Teleporte/troca de carro reinicia. */
+            /* Dica VISUAL de giro/esterço das rodas (nunca autoridade — só
+               alimenta a animação em js/car.js).
+
+               MEDE-SE A POSE DE REDE, NÃO A INTERPOLADA. `group.position`
+               persegue `targetPos` por lerp, e essa perseguição é translação
+               pura no sentido do ALVO, não do nariz do carro: quando abria um
+               buraco de rede (perda de pacote, re-ancoragem do anti-cheat,
+               entrar num carro longe de onde o avatar estava) a dica saía como
+               velocidade REVERSA no teto do clamp e as rodas do carro do outro
+               giravam de ré a toda durante toda a recuperação.
+
+               Não adianta gatear pelo tamanho do buraco: em regime permanente
+               o lerp fica atrasado exatamente `velocidade/12`, então buraco e
+               velocidade são a MESMA grandeza escalada — o portão recusaria
+               direção legítima rápida junto. O que separa "dirigindo" de
+               "convergindo" é a fonte: `targetPos` é a pose que o servidor
+               validou; enquanto ela não muda, não houve deslocamento nenhum,
+               só o avatar alcançando. Como bônus a conta deixa de depender do
+               dt do quadro (10 Hz de estado, dezenas de quadros por pose). */
             if (rp.carHintIdx !== rp.car || !rp.carHintPos) {
               rp.carHintIdx = rp.car;
               rp.carHintPos = rp.carHintPos || new THREE.Vector3();
-              rp.carHintPos.copy(gp);
-              rp.carHintYaw = rp.yaw;
+              rp.carHintPos.copy(rp.targetPos);
+              rp.carHintYaw = rp.targetYaw;
+              rp.carHintT = 0;
             } else {
-              const dx = gp.x - rp.carHintPos.x, dz = gp.z - rp.carHintPos.z;
-              const dtc = Math.min(Math.max(dt, 1 / 240), 0.5);
-              if (Math.hypot(dx, dz) < 8 && Number.isFinite(dx) && Number.isFinite(dz)) {
-                const fwdX = Math.cos(rp.yaw), fwdZ = -Math.sin(rp.yaw);
-                const vMax = (v.cfg.maxKmh || 100) / 3.6 * 1.3;
-                const vLong = Math.max(-vMax, Math.min(vMax, (dx * fwdX + dz * fwdZ) / dtc));
-                let dyaw = rp.yaw - rp.carHintYaw;
-                dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
-                const wheelBase = v.cfg.wheelsVis[0][0] - v.cfg.wheelsVis[2][0];
-                const steerRaw = Math.atan2((dyaw / dtc) * wheelBase, Math.max(Math.abs(vLong), 2) * (vLong < 0 ? -1 : 1));
-                const steer = Math.max(-v.cfg.steer, Math.min(v.cfg.steer, steerRaw));
-                v.remoteHint = v.remoteHint || { speed: 0, steer: 0, ttl: 0 };
-                v.remoteHint.speed = vLong;
-                v.remoteHint.steer = steer;
-                v.remoteHint.ttl = 0.35;
-              } else if (v.remoteHint) v.remoteHint.ttl = 0; // salto impossível: sem giro fantasma
-              rp.carHintPos.copy(gp);
-              rp.carHintYaw = rp.yaw;
+              rp.carHintT = (rp.carHintT || 0) + dt;
+              const dx = rp.targetPos.x - rp.carHintPos.x, dz = rp.targetPos.z - rp.carHintPos.z;
+              const andou = Math.hypot(dx, dz);
+              if (andou > 1e-4) { // chegou pose de rede nova
+                const dtc = Math.min(Math.max(rp.carHintT, 1 / 240), 0.5);
+                if (andou < 8 && Number.isFinite(dx) && Number.isFinite(dz)) {
+                  const fwdX = Math.cos(rp.targetYaw), fwdZ = -Math.sin(rp.targetYaw);
+                  const vMax = (v.cfg.maxKmh || 100) / 3.6 * 1.3;
+                  const vLong = Math.max(-vMax, Math.min(vMax, (dx * fwdX + dz * fwdZ) / dtc));
+                  let dyaw = rp.targetYaw - rp.carHintYaw;
+                  dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+                  const wheelBase = v.cfg.wheelsVis[0][0] - v.cfg.wheelsVis[2][0];
+                  const steerRaw = Math.atan2((dyaw / dtc) * wheelBase, Math.max(Math.abs(vLong), 2) * (vLong < 0 ? -1 : 1));
+                  const steer = Math.max(-v.cfg.steer, Math.min(v.cfg.steer, steerRaw));
+                  v.remoteHint = v.remoteHint || { speed: 0, steer: 0, ttl: 0 };
+                  v.remoteHint.speed = vLong;
+                  v.remoteHint.steer = steer;
+                  v.remoteHint.ttl = 0.35;
+                } else if (v.remoteHint) v.remoteHint.ttl = 0; // salto impossível: sem giro fantasma
+                rp.carHintPos.copy(rp.targetPos);
+                rp.carHintYaw = rp.targetYaw;
+                rp.carHintT = 0;
+              }
             }
             G.Car.wake(v); // callback de suspensão + AABB antes da pose direta
             v.chassisBody.position.set(gp.x, gp.y, gp.z);
@@ -2061,7 +2119,7 @@
       stepBullets(dt);
       skySync(dt);
 
-      if (S.phase === 'FALL') fallStep(dt);
+      if (S.phase === 'FALL') fallStep(dtQueda); // relógio, não quadro (ver brTick)
       if (S.phase === 'SPECT') {
         spectStep();
         MP.weaponRoot.visible = false;
