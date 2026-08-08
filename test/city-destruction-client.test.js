@@ -83,6 +83,49 @@ describe('Structures.city — troca do mundo', { skip: !CHROME && 'Chrome não e
     assert.equal(r.devolta, r.antes, 'restore não devolveu os corpos');
   });
 
+  /* O cofre dos segredos nasce DENTRO de um térreo oco da cidade e registra o
+     colisor com `city: true` — some no evento. O visual dele, porém, morava no
+     grupo `secrets`, solto na cena e fora de `cityVisual`: depois dos mísseis
+     ficava uma caixa de aço com cadeado pulsando de pé no meio dos escombros,
+     ATRAVESSÁVEL (colisor já removido) e ainda aceitando tiro. Mesma família do
+     bug já registrado no repo ("visual da laje vaza pro mesh global"). */
+  it('dado destroy(), então o cofre dos segredos some junto — visual, colisor e alvo', async () => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G, MP = QA.MP;
+      const city = G.Structures.city;
+      city.restore();
+      let cofre = null;
+      MP.scene.traverse(o => { if (o.name === 'segredo-cofre') cofre = o; });
+      if (!cofre) return { semCofre: true };
+      const centro = cofre.children[0].position;
+      const alvo = () => G.extraTargets.find(x =>
+        x && typeof x.pos === 'function' && x.hitSpheres &&
+        Math.hypot(x.pos().x - centro.x, x.pos().z - centro.z) < 2.5);
+      const paredeDoCofre = () => G.Structures.walls.some(w =>
+        w.x0 <= centro.x && w.x1 >= centro.x && w.z0 <= centro.z && w.z1 >= centro.z &&
+        (w.y1 - w.y0) < 2);
+      const foto = () => {
+        const a = alvo();
+        return { visivel: cofre.visible, parede: paredeDoCofre(), alvoAtivo: a ? a.enabled !== false : null };
+      };
+      const antes = foto();
+      city.destroy();
+      const depois = foto();
+      city.restore();
+      const voltou = foto();
+      return { antes, depois, voltou };
+    });
+    assert.ok(!r.semCofre, 'o cofre não foi encontrado na cena — cenário não montou');
+    assert.equal(r.antes.visivel, true, 'cofre já nascia invisível');
+    assert.equal(r.antes.parede, true, 'colisor do cofre não estava no mundo');
+    assert.equal(r.antes.alvoAtivo, true, 'cadeado não era alvo antes do evento');
+    assert.equal(r.depois.parede, false, 'colisor do cofre sobreviveu ao evento');
+    assert.equal(r.depois.visivel, false, 'CAIXA DE AÇO ficou de pé (e atravessável) nos escombros');
+    assert.equal(r.depois.alvoAtivo, false, 'cadeado destruído continuou aceitando tiro');
+    assert.equal(r.voltou.visivel, true, 'restore() não devolveu o cofre');
+    assert.equal(r.voltou.alvoAtivo, true, 'restore() não devolveu o alvo do cadeado');
+  });
+
   it('dado destroy(), então o FORTE (fora da cidade) continua sólido', async () => {
     const r = await play(() => {
       const QA = window.QA, G = QA.G, MP = QA.MP;

@@ -51,8 +51,22 @@ export const SKIPPED_TRIMS = 3;
 
 export function isHollowLot(index) { return HOLLOW_LOTS.includes(index); }
 
-/* pé-direito do térreo: MESMA conta do caminho maciço (js/structures.js) */
-export function groundFloorHeight(lot) { return Math.min(3.4, lot.h * 0.33); }
+/* Pé-direito do térreo.
+
+   MACIÇO (GF_H_SOLID): faixa de fachada, ninguém entra — a conta original.
+
+   OCO (GF_H_HOLLOW): é SALA, e o teto dela é a base do bloco maciço do
+   prédio, que cobre TODO o footprint. Quem encosta a cabeça nesse bloco cai
+   no ramo "dentro da parede" de Structures.collide e é empurrado para a face
+   mais próxima — teleporte lateral de ~6 m ATRAVÉS da fachada, direto na rua.
+   Como o balcão existe para pular em cima dele e atirar por cima do peitoril,
+   o pé-direito tem que caber cobertura (1,1) + jogador (1,7) + ápice do pulo
+   (8,4²/2·22 = 1,6) = 4,4 m. 4,6 dá a folga. */
+export const GF_H_SOLID = 3.4;
+export const GF_H_HOLLOW = 4.6;
+export function groundFloorHeight(lot, hollow = false) {
+  return Math.min(hollow ? GF_H_HOLLOW : GF_H_SOLID, lot.h * 0.33);
+}
 
 export function oppositeFace(f) {
   return f === 'N' ? 'S' : f === 'S' ? 'N' : f === 'E' ? 'O' : 'E';

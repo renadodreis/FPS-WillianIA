@@ -472,8 +472,11 @@ export function createStructures(deps) {
       const _s = rand(0.8, 1.1); void _s;              // PRESERVA o rand seedado (1 call/lote)
       const hue = arch === 'resid' ? 0.07 : arch === 'commerc' ? 0.55 : 0.6;
       const tint = new THREE.Color().setHSL(hue + brand(-0.02, 0.02), 0.06 + brand(0, 0.05), 0.6 + brand(-0.05, 0.12));
-      const gfH = Math.min(3.4, h * 0.33);
       const oco = CityInterior.isHollowLot(idx);
+      // o térreo OCO é sala e precisa de pé-direito de sala (ver cityinterior.js):
+      // sem isso a cabeça de quem pula entra no bloco maciço e collide() cospe
+      // o jogador pela fachada. O telhado NÃO se move (segue em gy + h).
+      const gfH = CityInterior.groundFloorHeight(lot, oco);
       if (oco) {
         // volume maciço começa ACIMA do térreo; o térreo vira sala
         cityBox(w, h - gfH, d, bx, gy + gfH + (h - gfH) / 2, bz, tint);
@@ -1066,6 +1069,17 @@ export function createStructures(deps) {
     getState() { return this._state; },
     setState(st) { if (st === 'destroyed') this.destroy(); else if (st === 'intact') this.restore(); },
     registerBody(b) { this._bodies.push(b); },
+    /* Visual urbano criado DEPOIS do worldgen — hoje o cofre dos segredos, que
+       nasce dentro de um térreo oco. Quem registra parede com `city: true` sem
+       registrar o visual perdia o colisor no evento e deixava o mesh de pé:
+       objeto atravessável, ainda clicável a bala, no meio dos escombros. É a
+       mesma família do bug já registrado ("visual da laje vaza pro mesh
+       global") — por isso a porta de entrada existe aqui, e não em cada módulo. */
+    registerVisual(obj) {
+      if (!obj) return;
+      cityVisual.push(obj);
+      if (this._state === 'destroyed') obj.visible = false;
+    },
     // Escombro é o espelho da parede urbana: a parede sai do mundo no destroy,
     // o escombro entra. Sem isto o entulho barrava jogador e bala (walls[]) mas
     // o CARRO ATRAVESSAVA — o loop de corpos do game.js só roda no boot.

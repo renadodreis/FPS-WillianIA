@@ -122,10 +122,19 @@ export function createSecrets(deps) {
     const px = it.bx + (it.lot.w / 2 - 1.6) * (it.lot.ox >= 0 ? -1 : 1);
     const pz = it.bz + (it.d / 2 - 1.6) * (it.lot.oz >= 0 ? -1 : 1);
     vault.pos = { x: px, y: it.gy, z: pz };
+    /* O COFRE É URBANO: nasce dentro de um térreo da cidade e o colisor dele
+       já vai marcado `city: true`. O visual, porém, morava no grupo `secrets`
+       solto na cena — no ataque de mísseis o colisor sumia e a caixa de aço
+       continuava de pé no meio dos escombros: atravessável e ainda clicável a
+       bala. Grupo próprio registrado em Structures.city faz visual e colisão
+       sumirem juntos (e voltarem juntos no restore). */
+    const cofre = new THREE.Group(); cofre.name = 'segredo-cofre';
+    root.add(cofre);
+    if (Structures.city && Structures.city.registerVisual) Structures.city.registerVisual(cofre);
     const corpo = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.9, 0.9), mat(0x3c4653, { metalness: 0.55, roughness: 0.4 }));
-    corpo.position.set(px, it.gy + 0.45, pz); corpo.castShadow = true; root.add(corpo);
+    corpo.position.set(px, it.gy + 0.45, pz); corpo.castShadow = true; cofre.add(corpo);
     const lid = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.14, 1.0), mat(0x545f6d, { metalness: 0.55, roughness: 0.4 }));
-    lid.position.set(px, it.gy + 0.97, pz); root.add(lid);
+    lid.position.set(px, it.gy + 0.97, pz); cofre.add(lid);
     vault.lid = lid;
     /* CADEADO virado pro miolo da sala: quem entra pela porta tem que ver o
        alvo. Deitado no topo da caixa (primeira tentativa) ele sumia — na
@@ -141,7 +150,7 @@ export function createSecrets(deps) {
     lock.add(arco);
     lock.position.set(px + nx * 0.62, it.gy + 0.55, pz + nz * 0.62);
     lock.lookAt(lock.position.x + nx, lock.position.y, lock.position.z + nz);
-    root.add(lock);
+    cofre.add(lock);
     vault.lockMesh = arco;
     vault.lockGroup = lock;
     // colisor da caixa: cobertura de verdade dentro da sala. `city: true` +
@@ -153,8 +162,14 @@ export function createSecrets(deps) {
     if (addStaticBox) addStaticBox(px, it.gy + 0.52, pz, 0.75, 0.52, 0.5, 'secret-vault');
     // O CADEADO É ALVO — mesmo contrato dos alvos do campo de tiro
     // (js/maptoys.js). Cliente puro: nada disso passa pelo servidor.
+    let alvoLigado = true;
     vault.lock = {
-      alive: true, enabled: true,
+      alive: true,
+      /* alvo só existe enquanto o cofre existe: com a cidade destruída o
+         grupo fica invisível e o cadeado para de aceitar tiro (game.js:1814 e
+         br-game.js:474 respeitam `enabled === false`). */
+      get enabled() { return alvoLigado && cofre.visible; },
+      set enabled(v) { alvoLigado = v; },
       hitSpheres() { return [{ c: lock.position, r: 0.38, part: 'body' }]; },
       pos() { return lock.position; },
       damage() {

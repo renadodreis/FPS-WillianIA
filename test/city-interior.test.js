@@ -55,6 +55,27 @@ describe('Seleção dos lotes ocos', () => {
         `lote ${i} com pé-direito ${CI.groundFloorHeight(lot)}`);
     }
   });
+
+  /* O balcão central da sala existe para "pular nele pra atirar por cima do
+     peitoril" (js/structures.js). Se o pé-direito não couber o jogador PULANDO
+     de cima dele, a cabeça entra no bloco MACIÇO do prédio — que começa exatamente
+     em gy+gfH e cobre TODO o footprint — e `Structures.collide` cai no ramo de
+     "dentro da parede", que empurra para a face mais próxima: teleporte lateral
+     de ~6 m, o jogador atravessa a fachada e cai na rua.
+     Medido em Chrome headless (lote em -356,96): pés a 1,92 m do chão já
+     disparavam empurrão de 6,12 m. */
+  it('o pé-direito do térreo oco cabe o jogador PULANDO de cima da cobertura', () => {
+    const ALTURA_JOGADOR = 1.7, GRAVIDADE = 22, VEL_PULO = 8.4; // game.js:1297,1171
+    const apice = (VEL_PULO * VEL_PULO) / (2 * GRAVIDADE);
+    const preciso = CI.INT.COVER_H + ALTURA_JOGADOR + apice;
+    for (const i of CI.HOLLOW_LOTS) {
+      const lot = L.LOTS[i];
+      const pd = CI.groundFloorHeight(lot, true);
+      assert.ok(pd >= preciso,
+        `lote ${i}: pé-direito ${pd.toFixed(2)} m < ${preciso.toFixed(2)} m necessários ` +
+        `(cobertura ${CI.INT.COVER_H} + jogador ${ALTURA_JOGADOR} + ápice do pulo ${apice.toFixed(2)})`);
+    }
+  });
 });
 
 describe('Planta do térreo — duas saídas obrigatórias', () => {
