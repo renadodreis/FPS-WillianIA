@@ -2,7 +2,11 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- viewport-fit=cover: em landscape o notch do iPhone come a LATERAL, não o
+     topo — sem `cover` o safe-area-inset-* volta 0 e não há como recuar o HUD.
+     maximum-scale=1/user-scalable=no: duplo-toque no meio do combate dava zoom
+     e desalinhava a mira do centro da tela. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Call of AI — FPS Mundo Aberto</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
@@ -124,6 +128,71 @@
 </div>
 <div id="launchFx" aria-hidden="true"></div>
 <div id="deathScreen"><div id="deathTitle">VOCÊ MORREU</div><div id="deathSub">reiniciando...</div></div>
+
+<!-- ================================================================
+     CONTROLES DE TOQUE  (mobile — dois analógicos + cluster à direita)
+
+     Fica FORA de #hud (que é pointer-events:none e mataria todo toque) e
+     FORA de #overlay (que o menu esconde inteiro). Nasce oculto: só
+     aparece com <html class="mobile playing"> — ver style.css.
+
+     A ORDEM DO DOM AQUI É CONTRATO DE TOQUE: #tcLook vem PRIMEIRO de
+     propósito, porque ele cobre a metade direita da tela inteira. Vindo
+     antes (e com z-index menor) ele fica EMBAIXO de #tcMove e de #tcBtns,
+     então o dedo que cai num botão acerta o botão, não a área de mira.
+     Prioridade resultante: .tcBtn > #tcMove > #tcLook.
+
+     A ordem dos botões segue a leitura do grid (linha por linha) para o
+     foco de teclado/leitor de tela bater com o que se vê na tela.
+     ================================================================ -->
+<div id="touchUI">
+  <div id="tcLook" aria-hidden="true"></div>
+  <div id="tcMove" aria-hidden="true"><div id="tcMoveKnob"></div></div>
+  <div id="tcBtns">
+    <button type="button" class="tcBtn" data-act="chat"   aria-label="Abrir o chat da partida">💬</button>
+    <button type="button" class="tcBtn" data-act="pause"  aria-label="Pausar">≡</button>
+    <button type="button" class="tcBtn" data-act="inv"    aria-label="Inventário">INV</button>
+    <button type="button" class="tcBtn" data-act="med"    aria-label="Usar kit médico">✚</button>
+    <button type="button" class="tcBtn" data-act="ads"    aria-label="Mirar">MIRA</button>
+    <button type="button" class="tcBtn" data-act="sight"  aria-label="Trocar o acessório de mira">🔭</button>
+    <button type="button" class="tcBtn" data-act="use"    aria-label="Usar: veículo ou baú">USAR</button>
+    <button type="button" class="tcBtn" data-act="nade"   aria-label="Jogar granada">●</button>
+    <button type="button" class="tcBtn" data-act="reload" aria-label="Recarregar">⟳</button>
+    <button type="button" class="tcBtn" data-act="fire"   aria-label="Atirar">◉</button>
+    <button type="button" class="tcBtn" data-act="eat"    aria-label="Comer carne">🍖</button>
+    <button type="button" class="tcBtn" data-act="swap"   aria-label="Trocar de arma">⇄</button>
+    <button type="button" class="tcBtn" data-act="crouch" aria-label="Agachar">⇩</button>
+    <button type="button" class="tcBtn" data-act="jump"   aria-label="Pular">⇧</button>
+  </div>
+</div>
+
+<!-- Aviso de orientação: o jogo é SÓ paisagem. Só aparece com
+     <html class="mobile"> E @media (orientation: portrait) — nunca no
+     desktop, nem numa janela mais alta que larga. Ícone em SVG inline:
+     zero asset externo, zero CDN.
+
+     O texto NÃO afirma uma causa só: "gire" não resolve quando o bloqueio
+     de rotação do sistema está ligado, nem quando o retrato vem de uma
+     janela estreita (iPad em Split View mede o VIEWPORT, não o aparelho).
+     #rgPlay é a saída pra esses dois casos — nasce escondido e só aparece
+     quando o travamento de orientação falhou (html.rgstuck, escrito por
+     js/touchcontrols.js). -->
+<div id="rotateGate" role="alertdialog" aria-modal="true" aria-labelledby="rgTitle" aria-describedby="rgSub">
+  <svg class="rgIcon" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+    <g class="rgPhone">
+      <rect x="44" y="15" width="32" height="61" rx="6"></rect>
+      <line x1="55" y1="22" x2="65" y2="22"></line>
+      <circle cx="60" cy="69" r="2.3"></circle>
+    </g>
+    <path class="rgArc" d="M28 92 A40 40 0 0 0 92 92"></path>
+    <path class="rgArc" d="M84 84 l9 8 -8 8"></path>
+  </svg>
+  <div class="rgTitle" id="rgTitle">TELA NA HORIZONTAL</div>
+  <p class="rgSub" id="rgSub">Este jogo é jogado deitado. Se girar o aparelho não resolver,
+    desligue o <b>bloqueio de rotação</b> do sistema — e, em tablet, alargue a janela
+    (tela dividida deixa a área do jogo estreita).</p>
+  <button type="button" id="rgPlay" aria-label="Jogar assim mesmo, com a tela em pé">JOGAR ASSIM</button>
+</div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script type="importmap">

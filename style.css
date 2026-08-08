@@ -414,6 +414,9 @@
       { animation: none !important; opacity: 1; transform: none; }
     #titleGlow { opacity: .55; transform: translate(-50%,-50%); }
     .mbtn { transition: none; }
+    /* o aviso de "gire o celular" para de girar e fica DEITADO: sem
+       movimento, mas o desenho ainda diz para onde virar o aparelho */
+    #rotateGate .rgPhone { animation: none; transform: rotate(-90deg); }
   }
 
   /* ===== HUD: missão / armadura / inventário ===== */
@@ -489,3 +492,491 @@
   #banner.show { opacity: 1; transform: translate(-50%,-50%) scale(1); }
   #banner small { display: block; font-size: 14px; letter-spacing: 4px; color: rgba(255,255,255,0.8);
     -webkit-text-fill-color: rgba(255,255,255,0.8); margin-top: 8px; }
+
+  /* ================================================================
+     MOBILE — CONTROLES DE TOQUE, AVISO DE ORIENTAÇÃO E HUD DE POLEGAR
+
+     COMO ISSO É LIGADO (e por que o desktop não muda):
+       · `html.mobile`  — classe escrita pelo JS. É o portão de TUDO que
+         reposiciona HUD, e o único portão do #touchUI e do #rotateGate.
+       · `html.mobile.playing` — o #touchUI só aparece EM PARTIDA.
+       · `@media (pointer: coarse)` — rede de segurança caso o JS não
+         rode. Cobre SÓ o subconjunto "cabe na tela" (larguras em min()/
+         clamp() que já valem o número do desktop em tamanho de desktop),
+         nunca o reposicionamento anti-polegar: sem `.mobile` o #touchUI
+         fica oculto, não há polegar cobrindo nada e mover HUD seria
+         estrago gratuito.
+       · Nenhuma regra daqui vale sem `html.mobile`, `(pointer: coarse)`
+         ou `(orientation: portrait)` — exceto o CSS BASE de #touchUI e
+         #rotateGate, que nascem `display: none`.
+
+     CUSTO EM GPU MÓVEL: nada de backdrop-filter, filter: blur(), sombra
+     grande espalhada nem animação de opacity/transform em elemento de
+     tela cheia. Os controles novos são borda + cor de fundo; o estado
+     `.on` troca só background-color/border-color, sem transição, para o
+     dedo ter resposta no mesmo frame.
+     ================================================================ */
+
+  /* ---- geometria: um só lugar define os números do modo toque ----
+     Vive em html.mobile de propósito: o #touchUI só é exibido sob essa
+     classe, e o bloco de HUD abaixo lê as MESMAS variáveis para saber
+     onde os polegares estão (--tcClusterW/H, --tcStick). Nunca force
+     `display` no #touchUI sem a classe: as variáveis somem com ela. */
+  html.mobile {
+    --tcb: clamp(48px, 11vmin, 74px);              /* lado de 1 botão — piso 48px = alvo de toque */
+    --tcGap: clamp(6px, 1.5vmin, 12px);
+    --tcEdgeX: clamp(10px, 2.2vw, 30px);
+    --tcEdgeY: clamp(8px, 2.4vh, 22px);
+    --tcStick: clamp(108px, 30vmin, 168px);        /* diâmetro do analógico */
+    --tcKnob: calc(var(--tcStick) * 0.4);
+    --tcClusterW: calc(var(--tcb) * 6 + var(--tcGap) * 5);
+    --tcClusterH: calc(var(--tcb) * 3 + var(--tcGap) * 2);
+    /* bordas do HUD já com o notch descontado (em landscape o recorte
+       come a LATERAL, por isso left E right) */
+    --hudT: calc(env(safe-area-inset-top, 0px) + 6px);
+    --hudR: calc(env(safe-area-inset-right, 0px) + 8px);
+    --hudB: calc(env(safe-area-inset-bottom, 0px) + 6px);
+    --hudL: calc(env(safe-area-inset-left, 0px) + 8px);
+    --mm: clamp(72px, 16vmin, 116px);              /* minimapa */
+    --zoneH: clamp(64px, 15vmin, 104px);           /* mapa da zona (BR) */
+    /* BORDAS DA ZONA DE POLEGAR, derivadas dos MESMOS números que posicionam
+       #tcMove/#tcBtns. Quem for encostar num controle mede por aqui — usar
+       --hudB/--hudL no lugar destes deixava 3px de invasão em tablet, porque
+       --tcEdgeX/Y crescem com a tela e --hudL/B não. */
+    --stickR: calc(env(safe-area-inset-left, 0px) + var(--tcEdgeX) + var(--tcStick));   /* x da borda direita do analógico */
+    --stickT: calc(env(safe-area-inset-bottom, 0px) + var(--tcEdgeY) + var(--tcStick)); /* altura ocupada pelo analógico */
+    --clusterT: calc(env(safe-area-inset-bottom, 0px) + var(--tcEdgeY) + var(--tcClusterH));
+    /* faixa livre no rodapé, entre o analógico e o cluster de botões */
+    --ammoR: calc(env(safe-area-inset-right, 0px) + var(--tcEdgeX) + var(--tcClusterW) + 12px);
+    overscroll-behavior: none;
+  }
+  /* o canvas é a única superfície que precisa recusar gesto do navegador;
+     em body/html isso mataria a rolagem do #overlay (menu longo) */
+  html.mobile canvas#game { touch-action: none; -webkit-tap-highlight-color: transparent; }
+
+  /* ================= #touchUI ================= */
+  #touchUI { position: fixed; inset: 0; z-index: 60; display: none; overflow: hidden;
+    pointer-events: none;   /* herdado: só os filhos operáveis voltam a aceitar toque */
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  html.mobile.playing #touchUI { display: block; }
+
+  /* área de mira: metade direita. PRIMEIRA no DOM e z-index 0 — fica
+     embaixo do analógico e dos botões, que por isso ganham o dedo. */
+  #tcLook { position: absolute; z-index: 0; width: 50%;
+    top: env(safe-area-inset-top, 0px); right: env(safe-area-inset-right, 0px);
+    bottom: env(safe-area-inset-bottom, 0px);
+    background: transparent; pointer-events: auto; touch-action: none; }
+
+  /* analógico esquerdo */
+  #tcMove { position: absolute; z-index: 1;
+    left: calc(env(safe-area-inset-left, 0px) + var(--tcEdgeX));
+    bottom: calc(env(safe-area-inset-bottom, 0px) + var(--tcEdgeY));
+    width: var(--tcStick); height: var(--tcStick); border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.22); background: rgba(10,14,22,0.26);
+    pointer-events: auto; touch-action: none; }
+  /* CENTRADO POR MARGEM NEGATIVA, NÃO POR TRANSFORM: o JS é dono do
+     `transform` do knob (translate3d). Um translate(-50%,-50%) aqui seria
+     apagado no primeiro movimento e a bolinha saltaria. */
+  #tcMoveKnob { position: absolute; left: 50%; top: 50%;
+    width: var(--tcKnob); height: var(--tcKnob);
+    margin-left: calc(var(--tcKnob) / -2); margin-top: calc(var(--tcKnob) / -2);
+    border-radius: 50%; background: rgba(236,246,255,0.40);
+    border: 1px solid rgba(255,255,255,0.55); will-change: transform;
+    pointer-events: none;   /* todo toque cai em #tcMove: o JS não precisa filtrar e.target */ }
+  #tcMove.on { border-color: rgba(255,215,106,0.75); }
+  #tcMove.on #tcMoveKnob { background: rgba(255,236,190,0.62); }
+
+  /* cluster direito. O grid é desenhado pelo ALCANCE DO POLEGAR: o canto
+     inferior direito é o pivô, então `fire` mora lá (e é 2x2), `ads` logo
+     acima, `jump`/`reload`/`crouch` ao lado; `pause` vai pro canto mais
+     distante — o menos urgente e o que não pode ser apertado sem querer.
+
+     A coluna de `chat`/`sight`/`eat` foi ACRESCENTADA À ESQUERDA, e não
+     enfiada no meio: o cluster é ancorado pela direita, então as nove
+     posições antigas continuam à MESMA distância do polegar, e as três novas
+     (todas situacionais) ficam na coluna mais longe dele. */
+  #tcBtns { position: absolute; z-index: 2;
+    right: calc(env(safe-area-inset-right, 0px) + var(--tcEdgeX));
+    bottom: calc(env(safe-area-inset-bottom, 0px) + var(--tcEdgeY));
+    display: grid; gap: var(--tcGap);
+    grid-template-columns: repeat(6, var(--tcb));
+    grid-template-rows: repeat(3, var(--tcb));
+    grid-template-areas:
+      "chat   pause  inv    med    ads    ads"
+      "sight  use    nade   reload fire   fire"
+      "eat    swap   crouch jump   fire   fire"; }
+  .tcBtn[data-act="chat"]   { grid-area: chat; }
+  .tcBtn[data-act="sight"]  { grid-area: sight; }
+  .tcBtn[data-act="eat"]    { grid-area: eat; }
+  .tcBtn[data-act="pause"]  { grid-area: pause; }
+  .tcBtn[data-act="inv"]    { grid-area: inv; }
+  .tcBtn[data-act="med"]    { grid-area: med; }
+  .tcBtn[data-act="ads"]    { grid-area: ads; }
+  .tcBtn[data-act="use"]    { grid-area: use; }
+  .tcBtn[data-act="nade"]   { grid-area: nade; }
+  .tcBtn[data-act="reload"] { grid-area: reload; }
+  .tcBtn[data-act="fire"]   { grid-area: fire; }
+  .tcBtn[data-act="swap"]   { grid-area: swap; }
+  .tcBtn[data-act="crouch"] { grid-area: crouch; }
+  .tcBtn[data-act="jump"]   { grid-area: jump; }
+
+  .tcBtn { pointer-events: auto; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    min-width: 48px; min-height: 48px;   /* alvo de toque REAL, não padding */
+    display: flex; align-items: center; justify-content: center;
+    -webkit-appearance: none; appearance: none; cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.30); border-radius: 14px;
+    background: rgba(10,14,22,0.40); color: rgba(240,248,255,0.92);
+    font-family: inherit; font-weight: 700; line-height: 1;
+    font-size: clamp(15px, 3.6vmin, 22px); letter-spacing: .04em;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85); }
+  .tcBtn[data-act="fire"] { border-radius: 50%; font-size: clamp(24px, 6vmin, 40px);
+    border-color: rgba(255,255,255,0.42); background: rgba(18,24,34,0.46); }
+  .tcBtn[data-act="ads"], .tcBtn[data-act="use"], .tcBtn[data-act="inv"]
+    { font-size: clamp(10px, 2.4vmin, 14px); letter-spacing: .12em; }
+  .tcBtn[data-act="med"] { color: #ff8478; }
+  .tcBtn[data-act="pause"] { font-size: clamp(17px, 4vmin, 26px); opacity: .8; }
+  /* o chat é do Battle Royale (o Enter que ele emula só é lido lá): fora do BR
+     o botão sai do grid em vez de virar um botão morto. `html.br` é escrita
+     pelo JS a partir da flag que o próprio BR publica. */
+  .tcBtn[data-act="chat"] { display: none; }
+  html.mobile.br .tcBtn[data-act="chat"] { display: flex; }
+  /* pressionado: SÓ cor. Sem filter, sem box-shadow espalhado, sem
+     transição — o dedo precisa da resposta no frame do toque. */
+  .tcBtn.on { background: rgba(255,182,66,0.42); border-color: #ffd76a; color: #fff6de; }
+  .tcBtn[data-act="med"].on { background: rgba(255,90,74,0.45); border-color: #ff8478; color: #fff; }
+  .tcBtn:focus-visible { outline: 2px solid #ffd76a; outline-offset: 2px; }
+
+  /* ================= #rotateGate ================= */
+  /* z-index 400 (e não 300): o lobby do BR (.brPanel, multiplayer-client.js)
+     é z-index 300 e entra no <body> DEPOIS deste nó — empatado, ele ficaria
+     por cima e o aviso não cobriria o lobby em retrato. */
+  #rotateGate { position: fixed; inset: 0; z-index: 400; display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: clamp(10px, 3vh, 22px); text-align: center;
+    padding: calc(env(safe-area-inset-top, 0px) + 22px) calc(env(safe-area-inset-right, 0px) + 24px)
+             calc(env(safe-area-inset-bottom, 0px) + 22px) calc(env(safe-area-inset-left, 0px) + 24px);
+    background: radial-gradient(ellipse 76% 60% at 50% 42%, #101a2a 0%, #070b12 66%);
+    color: #e8f1f8; pointer-events: auto; touch-action: none;
+    -webkit-user-select: none; user-select: none; }
+  /* CSS-FIRST no caminho comum: quem só precisa girar o aparelho nunca depende
+     de evento nenhum. O `:not(.portraitok)` é o que deixa a ESCOLHA do jogador
+     ("JOGAR ASSIM", js/touchcontrols.js) vencer a media query — sem ele, quem
+     está com o bloqueio de rotação do sistema ligado fica preso fora do jogo. */
+  @media (orientation: portrait) { html.mobile:not(.portraitok) #rotateGate { display: flex; } }
+  #rotateGate .rgIcon { width: clamp(84px, 26vmin, 148px); height: auto; flex: none; }
+  #rotateGate .rgPhone rect, #rotateGate .rgPhone line {
+    fill: rgba(255,215,106,0.08); stroke: #ffd76a; stroke-width: 3.4; stroke-linecap: round; }
+  #rotateGate .rgPhone circle { fill: #ffd76a; stroke: none; }
+  #rotateGate .rgArc { fill: none; stroke: #ffd76a; stroke-opacity: .5; stroke-width: 3.4;
+    stroke-linecap: round; stroke-linejoin: round; }
+  /* superfície minúscula: animar transform aqui é barato (o proibido é
+     animação em camada de tela cheia) */
+  #rotateGate .rgPhone { transform-box: fill-box; transform-origin: 50% 50%;
+    will-change: transform; animation: rgTurn 2.8s ease-in-out infinite; }
+  @keyframes rgTurn { 0%, 14% { transform: rotate(0deg); }
+                      46%, 74% { transform: rotate(-90deg); }
+                      96%, 100% { transform: rotate(0deg); } }
+  #rotateGate .rgTitle { font-size: clamp(20px, 6.4vmin, 34px); font-weight: 800;
+    letter-spacing: clamp(3px, 1.4vmin, 8px); color: #ffd76a; text-shadow: 0 2px 8px rgba(0,0,0,.7); }
+  #rotateGate .rgSub { font-size: clamp(11px, 3.4vmin, 15px); line-height: 1.5; max-width: 34ch;
+    color: rgba(220,234,255,0.72); letter-spacing: .03em; }
+  #rotateGate .rgSub b { color: #ffd76a; font-weight: 700; }
+  /* SAÍDA DE EMERGÊNCIA. Nasce escondida: no caminho comum girar resolve e o
+     botão nem aparece. `html.rgstuck` é escrita pelo JS SÓ depois que
+     `screen.orientation.lock('landscape')` falhou com a tela ainda em pé —
+     iOS Safari não implementa a API e rejeita sempre. Mesma linguagem visual
+     dos botões do menu (.mbtn), com alvo de toque de 48px de verdade. */
+  #rgPlay { display: none; align-items: center; justify-content: center;
+    min-height: 48px; min-width: clamp(180px, 52vw, 260px);
+    padding: 14px clamp(18px, 6vw, 32px);
+    -webkit-appearance: none; appearance: none; cursor: pointer;
+    font-family: inherit; font-weight: 700; font-size: clamp(12px, 3.4vmin, 15px);
+    letter-spacing: .28em; color: #fff; text-shadow: 0 1px 3px #000;
+    background: linear-gradient(100deg, rgba(255,154,61,0.18), rgba(255,215,106,0.06));
+    border: 1px solid rgba(255,200,120,0.46); border-radius: 10px;
+    -webkit-tap-highlight-color: transparent; }
+  html.mobile.rgstuck #rgPlay { display: inline-flex; }
+  #rgPlay:active { background: rgba(255,182,66,0.34); border-color: #ffd76a; }
+  #rgPlay:focus-visible { outline: 2px solid #ffd76a; outline-offset: 3px; }
+
+  /* ================================================================
+     HUD DE POLEGAR — só com `html.mobile`, porque só aí existe #touchUI
+     na tela para cobrir o HUD. Mapa do rodapé em landscape:
+       [ analógico ] ....... faixa livre (munição/chat) ....... [ botões ]
+     Todo elemento ancorado numa borda usa --hudT/R/B/L, que já descontam
+     env(safe-area-inset-*).
+     ================================================================ */
+
+  /* --- coluna esquerda no topo: minimapa, vida, itens --- */
+  html.mobile #minimapWrap { left: var(--hudL); top: var(--hudT);
+    width: var(--mm); height: var(--mm); border-width: 1px; box-shadow: none; }
+  html.mobile #healthWrap { top: var(--hudT); bottom: auto;
+    left: calc(var(--hudL) + var(--mm) + 10px); width: clamp(96px, 26vw, 200px); }
+  html.mobile #healthLabel { font-size: 9px; letter-spacing: 2px; margin-bottom: 3px; }
+  html.mobile #healthBar { height: 7px; }
+  html.mobile #inv { bottom: auto; top: calc(var(--hudT) + 32px);
+    left: calc(var(--hudL) + var(--mm) + 10px); gap: 6px; }
+  html.mobile .invItem { padding: 3px 8px; font-size: 12px; }
+  html.mobile .invItem .ic { font-size: 13px; }
+  html.mobile .invItem small { font-size: 9px; }
+
+  /* --- coluna esquerda, sob o minimapa: missão (solo) / mapa da zona (BR),
+         e o killfeed embaixo. O killfeed sai da direita porque lá moram o
+         roster e os toasts do BR — e para no `max-height` antes de encostar
+         no analógico. --- */
+  html.mobile #mission { left: var(--hudL); top: calc(var(--hudT) + var(--mm) + 40px);
+    max-width: clamp(118px, 32vw, 220px); font-size: 10.5px; letter-spacing: .5px; padding: 5px 8px; }
+  html.mobile #mission b { font-size: 9px; letter-spacing: 2px; }
+  html.mobile #brZoneMap { left: var(--hudL); top: calc(var(--hudT) + var(--mm) + 40px);
+    width: var(--zoneH); height: var(--zoneH); }
+  /* ANCORADO PELO RODAPÉ + column-reverse, não pelo topo. O game.js dá
+     `prepend` (mais novo primeiro no DOM) e mantém 5 entradas; em 360px de
+     altura só cabem ~2. Ancorando pelo topo, as 3 sobrando transbordavam PARA
+     BAIXO, em cima do analógico. Assim a caixa cresce para cima logo acima do
+     stick: o `overflow: hidden` corta as MAIS VELHAS (no topo) e a mais nova
+     fica sempre inteira, encostada no rodapé. A altura é MEDIDA do vão que
+     sobra, não chutada. */
+  html.mobile #killfeed { left: var(--hudL); right: auto; align-items: flex-start;
+    top: auto; bottom: calc(var(--stickT) + 8px);
+    flex-direction: column-reverse; gap: 4px;
+    max-width: clamp(130px, 30vw, 240px); overflow: hidden;
+    max-height: min(96px, calc(100vh - var(--stickT) - var(--hudT) - var(--mm) - var(--zoneH) - 56px)); }
+  /* uma linha por entrada (com reticências): dois nicks longos quebravam em 2
+     linhas e comiam metade do espaço disponível */
+  html.mobile .kf { font-size: 10.5px; padding: 3px 8px; border-left-width: 2px;
+    flex: none; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    animation-name: kfInL; }
+  @keyframes kfInL { from { transform: translateX(-6px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  /* --- topo direita: fps, pontos, roster do BR --- */
+  html.mobile #fps { top: var(--hudT); right: var(--hudR); font-size: 10px; }
+  html.mobile #score { top: calc(var(--hudT) + 15px); right: var(--hudR);
+    font-size: 11px; letter-spacing: 1px; }
+  html.mobile #score b { font-size: 14px; }
+  html.mobile #brRoster { top: calc(var(--hudT) + var(--mm) + 40px); right: var(--hudR);
+    font-size: 10.5px; min-width: 104px; max-height: clamp(58px, 20vh, 130px); }
+
+  /* --- centro, LOGO ABAIXO da faixa do minimapa/vida ---
+     No topo (top: --hudT) a barra do boss, com 420px centrados, atravessava a
+     barra de VIDA: em 640px de largura a faixa superior não tem espaço
+     horizontal para os dois. Descer uma faixa resolve sem estreitar nada, e
+     nessa altura a coluna esquerda já acabou — a barra pode continuar larga.
+     A largura em vw ainda existe para não encostar no roster do BR à direita. */
+  html.mobile #bossWrap { top: calc(var(--hudT) + var(--mm) + 8px); width: min(420px, 62vw); }
+  html.mobile #bossName { font-size: clamp(9px, 2.6vmin, 15px);
+    letter-spacing: clamp(2px, .8vmin, 6px); margin-bottom: 4px; }
+  html.mobile #bossBar { height: 8px; }
+  html.mobile #brTop { top: calc(var(--hudT) + var(--mm) + 8px); max-width: 62vw; }
+  html.mobile #brTop .pill { font-size: 11px; padding: 4px 11px; }
+  html.mobile #brBossBar { top: calc(var(--hudT) + var(--mm) + 40px); width: min(300px, 52vw); }
+
+  /* --- faixa livre do rodapé: munição/velocímetro à direita do vão,
+         chat do BR à esquerda dele. Os dois SAEM de baixo do polegar. --- */
+  html.mobile #ammoWrap, html.mobile #speedo { right: var(--ammoR); bottom: var(--hudB); }
+  html.mobile #ammoMag, html.mobile #speedVal { font-size: clamp(22px, 5.6vmin, 34px); }
+  html.mobile #ammoReserve { font-size: 12px; letter-spacing: 1px; }
+  html.mobile #weaponName { font-size: 9px; letter-spacing: 2px; margin-top: 2px; }
+  html.mobile #speedo small { font-size: 9px; letter-spacing: 2px; }
+  /* a faixa livre vira TRÊS andares empilhados: munição no rodapé, chat acima,
+     toasts acima do chat. Lado a lado não cabe — reservar 96px à direita para
+     a munição deixava o chat cruzando "| 180 / FUZIL VAGALUME" por 19px. */
+  html.mobile #brChat { bottom: calc(var(--hudB) + 72px); width: auto; font-size: 11.5px;
+    left: calc(var(--stickR) + 12px); right: calc(var(--ammoR) + 4px); }
+  /* `justify-content: flex-end` num flex de altura limitada empacota as linhas
+     no RODAPÉ: o recorte come as mais velhas (em cima) e a última mensagem
+     aparece inteira, na ordem natural do chat. Sem o teto, o log crescia até
+     cruzar os toasts. */
+  html.mobile #brChatLog { display: flex; flex-direction: column; justify-content: flex-end;
+    max-height: 46px; overflow: hidden; }
+  html.mobile #brChatLog div { font-size: 11px; padding: 2px 8px; flex: none; }
+  /* mesmo truque do killfeed: o toast dá `appendChild` (mais novo por último),
+     então ancorar pelo rodapé + recortar corta os MAIS VELHOS no topo */
+  html.mobile #brToast { right: var(--ammoR); bottom: calc(var(--hudB) + 132px);
+    font-size: 11px; max-height: clamp(52px, 18vh, 120px); overflow: hidden; }
+  html.mobile #brToast div { padding: 3px 9px; flex: none; }
+  /* ARSENAL COMPACTO. Esconder os slots apagava a ÚNICA leitura de qual arma
+     está ativa e de quais estão trancadas (🔒) — e no toque a troca é o botão
+     `swap`, que só anda pra frente: ciclar às cegas custa até 7 toques. O nome
+     completo sai (já está no #weaponName) e ficam número + cadeado, numa fita
+     horizontal no topo centro. Esse é o único vão livre em paisagem: minimapa
+     à esquerda, FPS/pontos à direita, controles todos embaixo. Continua dentro
+     de #hud (pointer-events: none), então não rouba dedo de ninguém. */
+  html.mobile #slots { right: auto; bottom: auto;
+    left: 50%; transform: translateX(-50%); top: var(--hudT);
+    flex-direction: row; align-items: center; gap: 3px;
+    max-width: 56vw; overflow: hidden; }
+  html.mobile .slot { font-size: 10px; letter-spacing: 1px; padding: 2px 5px;
+    border-right: none; border-radius: 5px; background: rgba(8,12,18,0.66); }
+  html.mobile .slot b { margin-right: 0; opacity: .9; }
+  html.mobile .slot .wn { display: none; }   /* ver updateSlotsHUD em game.js */
+  html.mobile .slot.active { font-size: 11px; color: #ffd76a; background: rgba(255,182,66,0.34); }
+
+  /* --- avisos centrais: sobem para cima do cluster de botões --- */
+  html.mobile #prompt { bottom: calc(var(--clusterT) + 14px);
+    font-size: 12px; padding: 7px 13px; }
+  html.mobile #brSpect { bottom: calc(var(--clusterT) + 14px);
+    font-size: 12px; padding: 7px 16px; }
+  html.mobile #brHint { top: auto; bottom: calc(var(--clusterT) + 46px);
+    font-size: 12.5px; padding: 6px 13px; max-width: 76vw; }
+  html.mobile #centerMsg { top: 32%; font-size: 13px; letter-spacing: 1px; }
+
+  /* --- inventário: vai pra ESQUERDA e por cima dos controles. À direita ele
+         cobriria justamente o botão `inv` que o fecha. Ancorado no TOPO (e não
+         centrado): em 360px de altura, um painel centrado com altura de
+         inventário cheio invade o analógico por 44px — não há altura para
+         centrar. Em troca ele cobre o minimapa enquanto está aberto. --- */
+  html.mobile #invPanel { left: var(--hudL); right: auto; z-index: 70;
+    top: var(--hudT); transform: none;
+    width: min(64vw, 320px); overflow: hidden;
+    /* TETO PELO CLUSTER, não só pelo analógico: o painel vive dentro de #hud
+       (pointer-events: none), então cobrir um controle não o deixa "por cima"
+       — deixa o jogador apertando um botão que não vê. --ammoR já é a distância
+       da borda direita até um pouco antes do cluster. */
+    max-width: calc(100vw - var(--hudL) - var(--ammoR));
+    max-height: calc(100vh - var(--hudT) - var(--stickT) - 10px);
+    padding: 12px 14px; font-size: 12px; }
+  html.mobile #invPanel h3 { font-size: 11px; letter-spacing: 2px; margin-bottom: 8px; }
+  html.mobile .invRow { padding: 3px 0; }
+
+  /* --- morte --- */
+  html.mobile #deathScreen { text-align: center;
+    padding: calc(env(safe-area-inset-top, 0px) + 12px) calc(env(safe-area-inset-right, 0px) + 14px)
+             calc(env(safe-area-inset-bottom, 0px) + 12px) calc(env(safe-area-inset-left, 0px) + 14px); }
+  html.mobile #deathSub { font-size: 12px; letter-spacing: 2px; margin-top: 10px; }
+
+  /* --- backdrop-filter no HUD é leitura de framebuffer por frame: no
+         celular sai TODO. A opacidade do fundo sobe para não perder
+         legibilidade. --- */
+  html.mobile #healthBar, html.mobile #prompt, html.mobile .kf, html.mobile #minimapWrap,
+  html.mobile #mission, html.mobile #invPanel, html.mobile .invItem, html.mobile #controls,
+  html.mobile #settings, html.mobile .brPanel, html.mobile #brTop .pill
+    { -webkit-backdrop-filter: none; backdrop-filter: none; }
+  html.mobile #minimapWrap { background: rgba(12,18,26,0.72); }
+  html.mobile #mission { background: rgba(10,14,22,0.72); }
+  html.mobile .invItem { background: rgba(10,14,22,0.72); }
+  html.mobile .kf { background: rgba(8,12,18,0.78); }
+  html.mobile #prompt { background: rgba(10,14,22,0.78); }
+  html.mobile #invPanel { background: rgba(8,12,20,0.94); }
+  html.mobile #brTop .pill { background: rgba(8,12,18,0.8); }
+  html.mobile .brPanel { background: rgba(5,9,14,0.97); }
+
+  /* ================================================================
+     MENU TOCÁVEL — alvos de 48px e o teclado fora do caminho
+     ================================================================ */
+  /* `padding-block: 16px` + `min-height: 48px` deixam o rótulo centrado
+     sem trocar o `display` (um summary#btnCtl virando flex quebra o
+     disclosure do <details> em Safari antigo). */
+  html.mobile .mbtn.sec { min-height: 48px; padding-block: 16px; opacity: 1; }
+  /* o botão principal cai a 45px quando a altura da tela encolhe o clamp de
+     padding — é o alvo mais importante do jogo, não pode ficar abaixo de 48 */
+  html.mobile #btnNew { min-height: 54px; }
+  html.mobile .srow { gap: 12px; font-size: 12.5px; }
+  html.mobile .srow select { min-height: 44px; padding: 8px 10px; font-size: 16px; }
+  html.mobile .srow input[type=range] { min-height: 44px; height: 44px;
+    width: clamp(120px, 34vw, 200px); }
+  html.mobile #settings { max-width: min(520px, 94vw); padding: 12px 14px; margin-top: 12px; }
+  /* lista de 19 teclas e "ESC pausa · ↑ ↓ ENTER navegam": instrução de
+     teclado que não existe no celular e rouba a altura do menu */
+  html.mobile #ctlBox, html.mobile #loadingMsg { display: none; }
+  /* lobby do BR (CSS injetado pelo multiplayer-client): a min-width de
+     560px do card estoura landscape estreito */
+  html.mobile .brCard { min-width: 0; width: min(94vw, 880px); padding: 14px 16px; max-height: 88vh; }
+  html.mobile .brTitle { font-size: 19px; letter-spacing: 3px; }
+  html.mobile .brSub { font-size: 10.5px; letter-spacing: 2px; margin: 3px 0 10px; }
+  html.mobile .brRow { gap: 12px; }
+  html.mobile .brCount { font-size: 40px; }
+  html.mobile .brBtn { min-height: 48px; margin-top: 12px; }
+  html.mobile .brInput { min-height: 44px; font-size: 16px; }
+  html.mobile #brFlags input[type=checkbox] { width: 20px; height: 20px; }
+
+  /* ================================================================
+     RETRATO LIBERADO (`html.portraitok`) — o modo de quem NÃO consegue
+     girar: bloqueio de rotação do sistema ligado, ou janela estreita.
+
+     Em pé a largura é o recurso escasso. O cluster de 6 colunas (318px)
+     sentaria EM CIMA do analógico numa tela de 390px, então ele vira 4
+     colunas x 5 linhas e as variáveis de geometria acompanham — é delas
+     que saem --ammoR e --clusterT, que posicionam munição, chat e
+     avisos. E como o vão do rodapé desaparece, esses três sobem pra
+     cima dos controles em vez de tentar caber entre eles.
+
+     Tudo aqui exige `(orientation: portrait)` E `.portraitok`: nada
+     alcança paisagem nem desktop.
+     ================================================================ */
+  @media (orientation: portrait) {
+    html.mobile.portraitok {
+      --tcb: clamp(44px, 13vmin, 60px);
+      --tcClusterW: calc(var(--tcb) * 4 + var(--tcGap) * 3);
+      --tcClusterH: calc(var(--tcb) * 5 + var(--tcGap) * 4);
+    }
+    html.mobile.portraitok #tcBtns {
+      grid-template-columns: repeat(4, var(--tcb));
+      grid-template-rows: repeat(5, var(--tcb));
+      grid-template-areas:
+        "chat   pause  inv    med"
+        "sight  eat    use    nade"
+        "swap   crouch ads    ads"
+        "reload jump   fire   fire"
+        ".      .      fire   fire"; }
+    /* a área de mira não pode ser "metade direita" numa tela em pé: o polegar
+       direito mal alcança o meio. Vira a metade de CIMA, acima dos controles. */
+    html.mobile.portraitok #tcLook { width: auto; left: env(safe-area-inset-left, 0px);
+      bottom: calc(var(--clusterT) + 8px); }
+    html.mobile.portraitok #ammoWrap,
+    html.mobile.portraitok #speedo { right: var(--hudR); bottom: calc(var(--clusterT) + 8px); }
+    html.mobile.portraitok #brChat { left: var(--hudL); right: var(--hudR);
+      bottom: calc(var(--clusterT) + 74px); }
+    html.mobile.portraitok #brToast { right: var(--hudR);
+      bottom: calc(var(--clusterT) + 134px); }
+    html.mobile.portraitok #prompt,
+    html.mobile.portraitok #brSpect { bottom: calc(var(--clusterT) + 66px); }
+    html.mobile.portraitok #brHint { bottom: calc(var(--clusterT) + 98px); }
+    /* o arsenal cabe inteiro numa tela estreita se ceder o centro */
+    html.mobile.portraitok #slots { max-width: calc(100vw - var(--hudL) - var(--hudR)); }
+  }
+
+  /* landscape curto: com os controles em 44-48px as 7 linhas de CONFIGURAÇÕES
+     viram 700px de painel em 360px de tela. Duas colunas cortam isso pela
+     metade. `#settings.open` porque é `.open` que troca o display. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    html.mobile #settings.open { display: grid; grid-template-columns: 1fr 1fr;
+      gap: 0 20px; max-width: min(780px, 96vw); }
+    html.mobile #settings.open .shead,
+    html.mobile #settings.open > .mbtn { grid-column: 1 / -1; }
+  }
+
+  /* ================================================================
+     REDE DE SEGURANÇA — vale sem `html.mobile`, para o caso do JS não
+     rodar. SÓ o subconjunto "cabe na tela": todo valor abaixo é min()/
+     clamp() que, em tamanho de desktop, resolve exatamente no número que
+     o desktop já usava (ex.: 9vmin de 1080px = 97px → clamp corta em
+     56px, o tamanho original do #deathTitle). Reposicionar HUD NÃO entra
+     aqui: sem `.mobile` o #touchUI está oculto e não há polegar cobrindo
+     nada. Espelha o bloco de cima — mudou lá, mude aqui.
+     ================================================================ */
+  @media (pointer: coarse) {
+    #bossWrap { width: min(420px, 86vw); }
+    #minimapWrap { width: clamp(76px, 17vmin, 168px); height: clamp(76px, 17vmin, 168px); }
+    #mission { max-width: clamp(118px, 32vw, 250px); }
+    #invPanel { width: min(58vw, 280px); max-height: 74vh; overflow: hidden; }
+    #deathTitle { font-size: clamp(24px, 9vmin, 56px); letter-spacing: clamp(3px, 2vmin, 16px);
+      max-width: 92vw; line-height: 1.06; }
+    #banner { font-size: clamp(20px, 6.6vmin, 42px); letter-spacing: clamp(2px, 1.6vmin, 10px);
+      max-width: min(92vw, 660px); line-height: 1.12; }
+    #banner small { font-size: clamp(10px, 2.4vmin, 14px); letter-spacing: clamp(2px, .7vmin, 4px); }
+    #settings { max-width: min(520px, 94vw); }
+    .mbtn.sec { min-height: 48px; padding-block: 16px; }
+    .srow select { min-height: 44px; }
+    .srow input[type=range] { min-height: 44px; }
+    .brCard { min-width: 0; width: min(94vw, 880px); }
+  }
+  /* os mesmos clamps sob `html.mobile`, para quem forçar o modo toque num
+     monitor grande (ex.: ?mobile=1 no desktop) — o clamp por si só ficaria
+     no valor de desktop */
+  html.mobile #deathTitle { font-size: clamp(24px, 9vmin, 56px);
+    letter-spacing: clamp(3px, 2vmin, 16px); max-width: 92vw; line-height: 1.06; }
+  html.mobile #banner { font-size: clamp(20px, 6.6vmin, 42px);
+    letter-spacing: clamp(2px, 1.6vmin, 10px); max-width: min(92vw, 660px); line-height: 1.12; }
+  html.mobile #banner small { font-size: clamp(10px, 2.4vmin, 14px);
+    letter-spacing: clamp(2px, .7vmin, 4px); }
