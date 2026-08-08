@@ -7,6 +7,9 @@
     "start": "node server.js",
     "test": "node scripts/run-tests.js",
     "build:castle": "node scripts/build-castle-model.js",
+    "build:assets": "node scripts/build-model-textures.js",
+    "assets:plan": "node scripts/build-model-textures.js --plan",
+    "assets:report": "node scripts/asset-report.js",
     "stress": "node scripts/stress.js",
     "test:e2e": "python3 tests/city-destruction-e2e.py",
     "lint": "eslint server.js game.js js/ multiplayer-client.js br-game.js city-destruction-protocol.js city-destruction-client.js scripts/ test/ eslint.config.js",
@@ -40,6 +43,7 @@
     "knip": "^6.26.0",
     "madge": "^8.0.0",
     "puppeteer-core": "^24.43.1",
+    "sharp": "^0.34.5",
     "three": "^0.185.1"
   }
 }

@@ -183,9 +183,69 @@ export function createWeaponModels(deps) {
     }
   }
 
-  const ready = Promise.all(DEFS.map(attach));
+  /* ---- carregamento priorizado ---------------------------------------
+     Antes: `Promise.all(DEFS.map(attach))` disparava as 7 armas de uma vez no
+     boot. Os bytes são os mesmos, mas a ORDEM não: num celular em 4G o modelo
+     da arma que está NA MÃO disputava banda com a bazuca que o jogador talvez
+     nunca destranque, e o decode das 7 caía junto no mesmo instante.
+
+     Agora é uma fila ordenada (arma equipada → destrancadas → trancadas) com
+     duas em voo. `request(idx)` fura a fila, e `update()` — que roda todo
+     frame — chama sozinho quando uma arma destranca ou entra na mão. Ou seja:
+     trocar de arma promove o download na hora, sem gancho novo no game.js.
+
+     `ready` continua sendo "todas resolvidas". Não dá pra antecipá-la: o
+     game.js só chama WeaponRig.attachComplements depois dela, e o perfil de
+     mira/mecanismo que o rig escolhe depende do GLB já estar no lugar —
+     resolver antes deixaria a arma inicial sem mira. Trocar isso exige um
+     gancho por arma no game.js (ver PEDIDO no relatório). */
+  const IN_FLIGHT = 2;
+
+  function rankOf(def) {
+    const gun = arsenal[def.idx];
+    if (!gun) return 3;
+    if (gun.group && gun.group.visible) return 0; // a que já está na mão
+    return gun.locked ? 2 : 1;
+  }
+
+  const pendingQueue = DEFS.slice().sort((a, b) => rankOf(a) - rankOf(b));
+  const inFlight = new Set();
+  let remaining = DEFS.length;
+  let finishAll;
+  const ready = new Promise(resolve => { finishAll = resolve; });
+
+  function start(def) {
+    inFlight.add(def.idx);
+    Promise.resolve(attach(def)).catch(() => {}).then(() => {
+      inFlight.delete(def.idx);
+      if (--remaining <= 0) finishAll();
+      else pump();
+    });
+  }
+
+  function pump() {
+    while (inFlight.size < IN_FLIGHT && pendingQueue.length) start(pendingQueue.shift());
+  }
+
+  /* Fura a fila. Estoura o limite de voo de propósito: modelo atrasado na mão
+     do jogador é pior que um download simultâneo a mais. */
+  function request(idx) {
+    const at = pendingQueue.findIndex(d => d.idx === idx);
+    if (at >= 0) start(pendingQueue.splice(at, 1)[0]);
+  }
+
+  pump();
 
   function update(dt) {
+    // destrancou ou entrou na mão: sobe pro topo da fila neste mesmo frame
+    for (let i = pendingQueue.length - 1; i >= 0; i--) {
+      const def = pendingQueue[i];
+      const gun = arsenal[def.idx];
+      if (!gun) continue;
+      if (gun.locked && !(gun.group && gun.group.visible)) continue;
+      pendingQueue.splice(i, 1);
+      start(def);
+    }
     for (const w of live) {
       const { gun, mixer, actions } = w;
       // recarga: encaixa o clipe "reload" na duração real da arma
@@ -217,8 +277,14 @@ export function createWeaponModels(deps) {
   }
 
   function status() {
-    return DEFS.map(d => ({ idx: d.idx, url: d.url, status: arsenal[d.idx] ? arsenal[d.idx].modelStatus || 'loading' : 'sem-arma' }));
+    return DEFS.map(d => ({
+      idx: d.idx,
+      url: d.url,
+      status: arsenal[d.idx]
+        ? arsenal[d.idx].modelStatus || (pendingQueue.includes(d) ? 'fila' : 'loading')
+        : 'sem-arma',
+    }));
   }
 
-  return { ready, update, status };
+  return { ready, update, status, request, get queued() { return pendingQueue.length; } };
 }

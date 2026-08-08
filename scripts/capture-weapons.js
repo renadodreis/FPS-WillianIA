@@ -1,6 +1,10 @@
 /* Captura de VALIDAÇÃO das armas: hip, ADS, tiro e recarga de cada índice,
    pra comparar antes/depois da calibração de mira (weaponrig).
-   Uso: node scripts/capture-weapons.js [porta] [pastaSaida] */
+   Uso: node scripts/capture-weapons.js [porta] [pastaSaida] [--armas=3,6] [--modos=hip,ads]
+
+   Os filtros existem porque cada quadro custa ~1,5 min sob swiftshader: a
+   varredura completa (8 armas x 4 modos) passa de 30 min, e quase sempre a
+   pergunta é sobre UMA arma. Sem filtro, o comportamento é o de sempre. */
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,8 +15,16 @@ const CHROME = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   process.env.CHROME_PATH || ''].find(p => p && fs.existsSync(p));
-const PORT = +(process.argv[2] || 3213);
-const output = path.resolve(process.argv[3] || path.join(__dirname, '..', 'output', 'weapons'));
+const args = process.argv.slice(2);
+const flag = name => {
+  const hit = args.find(a => a.startsWith(`--${name}=`));
+  return hit ? hit.slice(name.length + 3).split(',').filter(Boolean) : null;
+};
+const positional = args.filter(a => !a.startsWith('--'));
+const PORT = +(positional[0] || 3213);
+const output = path.resolve(positional[1] || path.join(__dirname, '..', 'output', 'weapons'));
+const onlyWeapons = flag('armas') && new Set(flag('armas').map(Number));
+const onlyModes = flag('modos') && new Set(flag('modos'));
 
 (async () => {
   if (!CHROME) throw new Error('Chrome local não encontrado');
@@ -54,7 +66,9 @@ const output = path.resolve(process.argv[3] || path.join(__dirname, '..', 'outpu
 
     const nWeapons = await page.evaluate(() => window.__game.arsenal.length);
     for (let i = 0; i < nWeapons; i++) {
+      if (onlyWeapons && !onlyWeapons.has(i)) continue;
       for (const mode of ['hip', 'ads', 'fire', 'reload']) {
+        if (onlyModes && !onlyModes.has(mode)) continue;
         const report = await page.evaluate(setup => {
           const G = window.__game, MP = window.__MP;
           G.arsenal[setup.idx].locked = false;
