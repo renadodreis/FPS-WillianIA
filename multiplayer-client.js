@@ -548,11 +548,26 @@
        consumido pelo bootstrap do game.js antes deste handler existir. Logo,
        todo `init` visto aqui É uma reconexão — sem depender do listener
        `reconnect` do manager (que o harness de QA remove junto com o reload). */
+    /* código do anfitrião guardado (URL ou navegador). Função declarada: o
+       handler de `init` abaixo é registrado ANTES do bloco de boot que a usa. */
+    function savedHostCode() {
+      const urlCode = new URLSearchParams(location.search).get('host');
+      if (urlCode) return urlCode;
+      try { return localStorage.getItem('br_hostcode'); } catch (e) { return null; }
+    }
+
     socket.on('init', d => {
       const preMatch = S.phase === 'LOBBY' || S.phase === 'ENDED';
       if (preMatch && window.__MP_init && d.worldSeed === window.__MP_init.worldSeed) {
         Object.assign(window.__MP_init, d);  // id novo, host/roster atuais
         sendHello();                         // reapresenta nick/cores na sala
+        /* O POSTO DE ANFITRIÃO CAIU JUNTO COM O SOCKET ANTIGO: o servidor
+           libera hostId no disconnect, e quem re-reivindica pelo código salvo
+           é o BOOT — que não roda de novo neste caminho. Sem isto a sala volta
+           sem anfitrião, o botão vira "SEM ANFITRIÃO" pra todo mundo e ninguém
+           inicia partida até alguém redigitar o código num campo vazio. */
+        const code = savedHostCode();
+        if (code) claimHost(code, true);
       } else {
         // em partida o mundo já divergiu: recarregar é o caminho limpo.
         // Hookável (padrão __MP_respawn): o harness de QA neutraliza para
@@ -577,10 +592,9 @@
       });
     }, 2000);
 
-    /* ---------- reivindica anfitrião: código salvo ou ?host=CODIGO na URL ---------- */
-    const urlCode = new URLSearchParams(location.search).get('host');
-    const savedCode = (() => { try { return localStorage.getItem('br_hostcode'); } catch (e) { return null; } })();
-    if (urlCode || savedCode) claimHost(urlCode || savedCode, true);
+    /* ---------- reivindica anfitrião: código salvo ou ?host=CODIGO na URL ----------
+       mesma fonte usada pela reconexão no lobby (ver handler de `init`) */
+    { const code = savedHostCode(); if (code) claimHost(code, true); }
 
     /* entrega tudo pra parte 2 (lógica da partida) */
     window.__BR_game.start({ MP, G, INIT, socket, S, UI, LOBBY, esc, seededRng });
