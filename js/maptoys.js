@@ -258,11 +258,19 @@ export function createMapToys(deps) {
   });
   function xyloUpdate(dt) {
     const i = plateAt(player.pos.x, player.pos.z, xyl.plates);
-    if (i >= 0 && i !== xyl.last && player.onGround) {
+    /* A PLACA SÓ CONTA QUANDO SOA. `xyl.last` era escrito fora do portão de
+       `onGround`, e ele é o que o rastreador da melodia lê (`lastPlate`, usado
+       por js/secrets.js). Resultado: pular por cima de uma placa não tocava
+       nota nenhuma e mesmo assim registrava a nota — o progresso zerava por
+       algo que o jogador nunca ouviu. Agora o que se OUVE é exatamente o que o
+       quebra-cabeça CONTA. Sair da fileira (i < 0) continua soltando o
+       debounce, senão voltar na mesma placa não tocaria de novo. */
+    if (i < 0) xyl.last = -1;
+    else if (i !== xyl.last && player.onGround) {
       if (SFX.xyloNote) SFX.xyloNote(XYLO_NOTES[i]);
       xyl.meshes[i].flash = 1;
+      xyl.last = i;
     }
-    xyl.last = i;
     for (const mm of xyl.meshes) {
       if (mm.flash > 0) { mm.flash = Math.max(0, mm.flash - dt * 3); mm.mat.emissiveIntensity = 0.1 + mm.flash * 0.8; }
     }

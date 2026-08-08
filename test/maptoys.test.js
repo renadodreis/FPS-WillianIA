@@ -140,6 +140,33 @@ describe('Atrações do mapa 🎪', () => {
     assert.equal(r.step, 2, 'não detectou a placa pisada');
   });
 
+  /* `lastPlate` é o que o rastreador da melodia lê (js/secrets.js). Ele era
+     escrito FORA do portão de `onGround`, então passar por cima de uma placa no
+     ar não tocava nota nenhuma e mesmo assim registrava a nota — o progresso do
+     segredo zerava por algo que o jogador nunca ouviu. A fileira é contígua, e
+     pular as placas do meio é justamente o jeito de tocar a melodia. */
+  it('🎹 Xilofone: placa atravessada NO AR não conta (silenciosa não registra)', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, M = G.MapToys;
+      const P = QA.MP.player;
+      G.state.cinematic = true;
+      // pisa na 2 (no chão): registra
+      P.onGround = true; P.pos.x = M.plates[2].x; P.pos.z = M.plates[2].z; QA.tick(1);
+      const pisou = M.lastPlate;
+      // passa por cima da 1 NO AR: não pode registrar
+      P.onGround = false; P.pos.x = M.plates[1].x; P.pos.z = M.plates[1].z; QA.tick(1);
+      const noAr = M.lastPlate;
+      // pousa na 0: registra
+      P.onGround = true; P.pos.x = M.plates[0].x; P.pos.z = M.plates[0].z; QA.tick(1);
+      const pousou = M.lastPlate;
+      G.state.cinematic = false;
+      return { pisou, noAr, pousou };
+    });
+    assert.equal(r.pisou, 2, 'não registrou a placa pisada no chão');
+    assert.equal(r.noAr, 2, `placa atravessada no ar registrou (lastPlate=${r.noAr})`);
+    assert.equal(r.pousou, 0, 'não registrou a placa em que pousou');
+  });
+
   it('PRODUTO: ser disparado pelo canhão atravessa o curso de argolas', async () => {
     const r = await h.play(() => {
       const G = window.__game, QA = window.QA, M = G.MapToys;
