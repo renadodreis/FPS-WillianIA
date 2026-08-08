@@ -16,6 +16,28 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
   after(async () => { if (h) await h.close(); });
   const play = (fn, ...args) => h.play(fn, ...args);
 
+  /* PRIMEIRO teste do arquivo DE PROPÓSITO: o passeio do menu escreve
+     `camera.fov` direto (js/menuscene.js), mas quem é dono do FOV em jogo é
+     `fovCur` (game.js) — e applyFpsCamera só reescreve a câmera quando o alvo
+     se AFASTA de fovCur. No spawn os dois valem 75, a diferença é zero e a
+     atribuição nunca acontece: a partida inteira rodava com o FOV do último
+     plano do menu (~48° — visão de túnel) até o primeiro ADS/sprint, que
+     então fazia o FOV SALTAR num frame. Qualquer cenário de mira rodando
+     antes mascararia a regressão, por isso este vem antes de todos. */
+  it('dado o começo da partida, então o FOV do passeio do menu não vaza pro jogo', async t => {
+    const r = await play(() => {
+      const MP = window.__MP;
+      const fovSpawn = MP.camera.fov;
+      window.QA.reset();
+      window.QA.tick(120, 1 / 60); // 2s parado: nada deveria mexer no FOV
+      return { fovSpawn, fovDepois: MP.camera.fov, started: window.__game.state.started };
+    });
+    assert.ok(r.started, 'a partida nem começou');
+    assert.ok(Math.abs(r.fovSpawn - 75) < 0.5,
+      `FOV no spawn é ${r.fovSpawn}°, esperado 75° (FOV do menu vazou pra partida)`);
+    assert.ok(Math.abs(r.fovDepois - 75) < 0.5, `FOV 2s depois é ${r.fovDepois}°, esperado 75°`);
+  });
+
   it('dado W segurado, então o jogador anda; e com SHIFT corre mais rápido', async t => {
     const r = await play(() => {
       const QA = window.QA;

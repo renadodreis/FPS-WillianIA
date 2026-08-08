@@ -2627,6 +2627,15 @@ function startGame(trusted) {
   // (o clarão do launch cobre a virada). No BR o skySync assume no frame seguinte.
   Env.tod = GAME_TOD;
   Env.weather = null;
+  // ...e devolve o FOV. O passeio do menu escreve camera.fov direto
+  // (js/menuscene.js), mas o dono do FOV em jogo é `fovCur`: applyFpsCamera só
+  // reescreve a câmera quando o alvo se AFASTA dele, e no spawn os dois valem
+  // 75 — a atribuição nunca acontecia e a partida herdava o FOV do último
+  // plano do menu (~48°) até o primeiro ADS/sprint. csmDirty porque as
+  // cascatas de sombra são dimensionadas pelo frustum.
+  camera.fov = fovCur;
+  camera.updateProjectionMatrix();
+  csmDirty = true;
   state.started = true;
   updateHealthHUD(); updateAmmoHUD(); updateInvHUD(); updateSlotsHUD(); updateArmorHUD();
   // banner de boas-vindas é do modo solo; no BR o lobby já anuncia a partida
