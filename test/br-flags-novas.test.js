@@ -16,19 +16,31 @@ const { CHROME, bootGame } = require('./helpers/harness');
 /* host de verdade: entra, dá o código, ajusta flags e inicia */
 async function startWithFlags(h, flags, port) {
   const bot = io(`http://localhost:${port}`, { transports: ['websocket'] });
-  await new Promise(r => bot.once('init', r));
-  bot.emit('hello', { nick: 'BotHost' });
-  await new Promise((res, rej) => bot.timeout(4000).emit('claimHost', { code: 'QUEDALIVRE' },
-    (e, d) => (e || !d || !d.ok) ? rej(new Error('claimHost falhou')) : res()));
-  bot.emit('setFlags', flags);
-  await new Promise(r => setTimeout(r, 150)); // flags assentam antes do start
-  bot.emit('requestStart');
-  await h.page.waitForFunction('window.__BR_debug && !!window.__BR_debug.S.plan', { timeout: 30000 });
-  await h.play(() => {
-    window.__BR_debug.S.phase = 'PLAY';
-    window.__BR_freeze = false;
-    window.QA.reset(30, 30);
-  });
+  /* Quem fecha este socket é o `after` de cada describe — e ele só recebe a
+     referência quando ESTA função retorna. Se qualquer await abaixo estourar
+     (claimHost rejeita em 4 s, o waitForFunction em 30 s), o `bot` do describe
+     fica undefined, `if (bot) bot.close()` não fecha nada, e o socket.io-client
+     segue reconectando: `node --test` nunca termina. Um flake de boot virava
+     suíte pendurada (medido: 15 min a 0,2% de CPU). Fechar aqui é o que
+     transforma isso de volta numa falha comum. */
+  try {
+    await new Promise(r => bot.once('init', r));
+    bot.emit('hello', { nick: 'BotHost' });
+    await new Promise((res, rej) => bot.timeout(4000).emit('claimHost', { code: 'QUEDALIVRE' },
+      (e, d) => (e || !d || !d.ok) ? rej(new Error('claimHost falhou')) : res()));
+    bot.emit('setFlags', flags);
+    await new Promise(r => setTimeout(r, 150)); // flags assentam antes do start
+    bot.emit('requestStart');
+    await h.page.waitForFunction('window.__BR_debug && !!window.__BR_debug.S.plan', { timeout: 30000 });
+    await h.play(() => {
+      window.__BR_debug.S.phase = 'PLAY';
+      window.__BR_freeze = false;
+      window.QA.reset(30, 30);
+    });
+  } catch (err) {
+    bot.close();
+    throw err;
+  }
   return bot;
 }
 
