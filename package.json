@@ -12,7 +12,7 @@
     "lint": "eslint server.js game.js js/ multiplayer-client.js br-game.js city-destruction-protocol.js city-destruction-client.js scripts/ test/ eslint.config.js",
     "analyze:dead": "knip",
     "analyze:duplicates": "jscpd . --pattern '**/*.js' --ignore 'node_modules/**,dist/**,coverage/**'",
-    "analyze:cycles": "madge --circular --extensions js .",
+    "analyze:cycles": "madge --circular --extensions js --exclude '^(\\.venv|output)/' .",
     "analyze:lines": "cloc . --exclude-dir=node_modules,.git,dist,coverage",
     "quality": "npm run lint && npm test",
     "refactor:check": "npm run analyze:dead && npm run analyze:cycles && npm run quality",
