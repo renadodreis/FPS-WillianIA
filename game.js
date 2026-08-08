@@ -9,7 +9,11 @@ import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { CSM } from 'three/addons/csm/CSM.js';
-import { CFG, SETTINGS, persistSettings } from './js/config.js';
+import { CFG, SETTINGS, persistSettings, applyMobileCfg, MOBILE_RES_FLOOR,
+  MOBILE_PHYSICS_MAX_STEPS, MOBILE_GRASS_REBUILD_BUDGET } from './js/config.js';
+import { isMobileEnv } from './js/mobile.js';
+import { createTouchControls, createOrientationGate, clampPitch, LOOK_RAD_PER_CSS_PX,
+  SPRINT_MAG as TOUCH_SPRINT_MAG } from './js/touchcontrols.js';
 import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } from './js/utils.js';
 import { createTerrain } from './js/terrain.js';
 import { createBiomes } from './js/biomes.js';
@@ -98,6 +102,14 @@ if (_segsQA >= 55 && _segsQA <= 880) {
   CFG.TERRAIN_SEGS = _segsQA;
   console.warn(`[A/B] TERRAIN_SEGS=${_segsQA} — mundo diverge do canônico`);
 }
+/* CELULAR — decidido ANTES de qualquer consumidor de CFG (névoa, camera.far,
+   sombra, grama): adivinhar depois é tela travada no boot. `isMobileEnv()`
+   (js/mobile.js) já respeita `?mobile=1` / `?mobile=0`, então QA liga o modo
+   celular num desktop sem tocar em código. O corte NÃO encosta em WORLD_SIZE
+   nem TERRAIN_SEGS — a grade de altura e a ordem do `rand` seedado (contrato
+   do worldgen) saem idênticas às do desktop, o mapa é o MESMO pra todos. */
+const __mobile = isMobileEnv();
+if (__mobile) console.info('[celular] preset móvel:', JSON.stringify(applyMobileCfg()));
 buildHeightGrid(CFG.WORLD_SIZE, CFG.TERRAIN_SEGS);
 // biomas centralizados: pesos/limiar únicos p/ cores, grama, clima e debug
 const Biomes = createBiomes({ simplex, heightAt, slopeAt,
@@ -120,6 +132,7 @@ const __tier = autoTierSettings({
   stored: (() => { try { return localStorage.getItem('callofai_cfg'); } catch { return null; } })(),
   settings: SETTINGS,
   search: location.search, // ?tier=alto|medio|baixo|off (suporte/QA)
+  mobile: __mobile,        // celular tem preset próprio ('mobile'), não é "GPU fraca"
 });
 if (__tier.applied) {
   persistSettings(); // vira a config salva: a partir daqui quem manda é o jogador
@@ -311,7 +324,11 @@ function applyPixelRatio(value) {
   renderer.setPixelRatio(value);
   composer.setPixelRatio(value); // sem isto o pós continua na razão antiga
 }
-const resScaler = createResolutionScaler({ ceiling: pixelRatioCeiling() });
+/* No celular o piso de desktop (0,75) não dá folga: quando o frame estoura,
+   0,75 ainda é caro demais e a escala fica presa no chão sem resolver. */
+const resScaler = createResolutionScaler(__mobile
+  ? { ceiling: pixelRatioCeiling(), floor: MOBILE_RES_FLOOR }
+  : { ceiling: pixelRatioCeiling() });
 applyPixelRatio(resScaler.scale);
 
 /* Overlay de diagnóstico (F3 ou ?perf=1): p50, p1%, engasgos, draw calls,
@@ -444,7 +461,11 @@ const Water = createWater({ CFG, WATER_LEVEL, scene, sunDir });
    qualquer reordenação muda o layout do mundo inteiro pra mesma seed. */
 const grassClearings = [];
 const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings: grassClearings, cityGrassFactor: CityLayout.cityGrassFactor,
-  worldSeed: ((window.__MP_init && window.__MP_init.worldSeed) >>> 0) || 424242, surfaceAt });
+  worldSeed: ((window.__MP_init && window.__MP_init.worldSeed) >>> 0) || 424242, surfaceAt,
+  // celular: menos chunks re-preenchidos por frame. É só PACING — o conteúdo
+  // de cada chunk é determinístico por (cx,cz) no RNG local da grama, então
+  // QUANDO ele é preenchido não muda um byte do mundo.
+  rebuildBudget: __mobile ? MOBILE_GRASS_REBUILD_BUDGET : undefined });
 
 /* ================================================================
    VEGETAÇÃO — árvores (2 LODs), pedras e flores, tudo InstancedMesh
@@ -1058,9 +1079,13 @@ function muzzleFlash(scale = 1) {
   muzzle.scale.setScalar(rand(0.8, 1.35) * scale);
 }
 
+/* O nome da arma vai num <span class="wn"> só para o celular poder escondê-lo
+   por CSS e manter número + cadeado: o arsenal é a única leitura de qual arma
+   vem e do que está trancado, e no toque a troca é o botão `swap` (que só anda
+   pra frente). No desktop o <span> é inline sem estilo — layout idêntico. */
 function updateSlotsHUD() {
   ui.slots.innerHTML = arsenal.map((w, i) =>
-    `<div class="slot${w === gun ? ' active' : ''}" style="${w.locked ? 'opacity:.35' : ''}"><b>${i + 1}</b>${w.locked ? '🔒 ' : ''}${w.name}</div>`).join('');
+    `<div class="slot${w === gun ? ' active' : ''}" style="${w.locked ? 'opacity:.35' : ''}"><b>${i + 1}</b>${w.locked ? '🔒 ' : ''}<span class="wn">${w.name}</span></div>`).join('');
 }
 function switchWeapon(idx) {
   if (arsenal[idx] === gun || state.driving) return;
@@ -1137,7 +1162,26 @@ controls.addEventListener('unlock', () => {
   if (state.started && !state.lockFailed) setPaused(true);
 });
 
+/* ================================================================
+   AVISO DE ORIENTAÇÃO. Fora do celular o módulo devolve um objeto inerte
+   (`blocking()` sempre false), então o setPaused do desktop sai idêntico.
+   Declarado ANTES do setPaused de propósito: `const` em TDZ estourava o
+   primeiro setPaused numa rodada anterior. Ver js/touchcontrols.js.
+   ================================================================ */
+const Orient = createOrientationGate({
+  isMobile: __mobile,
+  /* girar pra retrato em partida PAUSA. Retomar é do jogador (toque na tela),
+     igual ao ESC do desktop — sair do retrato não retoma sozinho. Isto não
+     congela nem desconecta o servidor: é a mesma pausa local que o ESC já era. */
+  onBlock() { if (state.started && !state.paused) setPaused(true); },
+});
+
 function setPaused(p) {
+  /* Celular em retrato bloqueado: o #rotateGate cobre a tela inteira (z 400)
+     e come todo o toque. Deixar o jogo rodando por baixo é alvo parado — nem
+     anda, nem atira, nem alcança o botão de pausa. Vale principalmente pro BR,
+     que começa a partida sem o jogador tocar em nada. */
+  if (!p && Orient.blocking()) p = true;
   state.paused = p;
   ui.overlay.classList.toggle('hidden', !p);
   ui.overlay.classList.toggle('paused', p && state.started);
@@ -1145,6 +1189,28 @@ function setPaused(p) {
   // geração da partida e o menu ficava na tela por cima do jogo
   ui.overlay.style.display = p ? 'flex' : 'none';
   ui.hud.classList.toggle('on', !p);
+  // celular: `playing` no <html> mostra/esconde os controles de toque, e sair
+  // de partida SOLTA tudo (dedo que "ficou" apertado = tiro infinito)
+  Touch.setPlaying(state.started && !p);
+}
+
+/* ================================================================
+   CONTROLES DE TOQUE (celular). Fora do celular o módulo devolve um
+   objeto inerte: nenhum listener, nenhum elemento, nada muda no
+   desktop. Ver js/touchcontrols.js.
+   ================================================================ */
+const Touch = createTouchControls({ isMobile: __mobile, mouse, state, setPaused });
+/* HUD com nome de TECLA: no celular não existe "E". Só o JS resolve texto (o
+   CSS não reescreve conteúdo), e o botão equivalente se chama USAR. */
+if (__mobile) {
+  // os espaços em volta do "·" são os MESMOS &nbsp; do index.html
+  /* "[TAB]" no título do inventário é a mesma promessa vazia: o painel abre e
+     fecha pelo BOTÃO INV. Dentro de #hud (pointer-events: none) ele nunca
+     recebe o dedo — sem essa linha parece um modal que ignora o toque. */
+  const invTitle = ui.invPanel.querySelector('h3');
+  if (invTitle) invTitle.textContent = 'INVENTÁRIO  ·  BOTÃO INV FECHA';
+  const speedoHint = ui.speedo.querySelector('small');
+  if (speedoHint) speedoHint.textContent = 'KM/H  ·  USAR PARA SAIR';
 }
 
 /* ================================================================
@@ -1200,10 +1266,17 @@ const recoil = {
 };
 
 function playerUpdate(dt, t) {
-  const sprintHeld = keys['ShiftLeft'] || keys['ShiftRight'];
+  /* CANAL ANALÓGICO DO TOQUE, somado ao teclado. Sem dedo na tela,
+     `tMove.active` é false e `tMove.mag` é 0 — o resultado do teclado sai
+     IDÊNTICO ao de antes (coberto por test/touch-controls.test.js). Correr no
+     toque é o analógico no talo, não um botão: assim deslizar e coyote time
+     continuam saindo dos MESMOS `justPressed` do teclado. */
+  const tMove = Touch.getMove();
+  const sprintHeld = keys['ShiftLeft'] || keys['ShiftRight'] || tMove.mag > TOUCH_SPRINT_MAG;
   const crouchHeld = keys['ControlLeft'] || keys['ControlRight'];
-  const fwd = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
-  const str = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
+  let fwd = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
+  let str = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
+  if (tMove.active) { fwd += tMove.y; str += tMove.x; }
 
   const sliding = player.slideT > 0;
   player.crouchT = damp(player.crouchT, (crouchHeld || sliding) ? 1 : 0, 12, dt);
@@ -1364,6 +1437,38 @@ function styleOnce(el, prop, value) {
   el.style[prop] = value;
 }
 function setOpacityOnce(el, value) { styleOnce(el, 'opacity', value); }
+
+/* ================================================================
+   OLHAR POR TOQUE. No celular NÃO existe pointer lock, então o giro que o
+   PointerLockControls fazia dentro do `mousemove` morre — aqui ele é
+   reproduzido com a MESMA matemática (Euler 'YXZ', yaw -= dx, pitch -= dy,
+   mesmo clamp de ±1,55 de applyFpsCamera).
+
+   Por que é seguro escrever na câmera aqui: `applyFpsCamera` não é dona da
+   orientação base — ela LÊ o quaternion e soma só o DELTA de recuo/respiração
+   (contra recoil.applied). Escrever antes dela é exatamente o que o
+   PointerLockControls fazia entre frames.
+
+   Uma vez POR FRAME, nunca dentro do handler de `pointermove`: rajada de
+   eventos viraria jitter e trabalho fora do frame. Roll (`_euler.z`) é
+   propriedade do applyFpsCamera (shake/lean/morte) — não se escreve aqui.
+   ================================================================ */
+function applyTouchLook() {
+  const look = Touch.takeLook();
+  if (!look.dx && !look.dy) return;
+  /* sensibilidade reduzida na mira: reusa o MESMO multiplicador que o mouse
+     usa (`controls.pointerSpeed`, escrito por applyFpsCamera:1547 a partir do
+     ADS e do zoom da arma). Um frame de atraso, zero cálculo duplicado. */
+  const ps = controls.pointerSpeed > 0 ? controls.pointerSpeed : 1;
+  const sens = LOOK_RAD_PER_CSS_PX * ps;
+  _euler.setFromQuaternion(camera.quaternion);
+  _euler.y -= look.dx * sens;
+  _euler.x = clampPitch(_euler.x - look.dy * sens);
+  camera.quaternion.setFromEuler(_euler);
+  // o balanço da arma é alimentado pelo MESMO sinal que o mousemove daria
+  mouse.swayX += look.dx;
+  mouse.swayY += look.dy;
+}
 
 function applyFpsCamera(dt, t) {
   // ---- screen shake (trauma decai, intensidade = trauma²) ----
@@ -2235,7 +2340,7 @@ const Missions = (() => {
 let Cannon = null; // Canhão de Circo — criado no FIM do init (pós-worldgen); Interact lê via getter
 let MapToys = null; // 5 atrações do mapa — idem; Interact e playerUpdate leem via referência
 let Secrets = null; // 3 segredos (armas trancadas) — depende de MapToys, vem por último
-const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets });
+const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets, isMobile: __mobile });
 
 /* ================== minimapa / radar (canvas 2D) ================== */
 const MiniMap = (() => {
@@ -2377,7 +2482,11 @@ const ToysRadar = (() => {
 /* ================== loop principal ================== */
 let lastNow = performance.now();
 let treeAcc = 9, fpsFrames = 0, fpsAcc = 0, fpsVal = 0, miniAcc = 0;
-const PHYSICS_DT = 1 / 60, PHYSICS_MAX_STEPS = 3;
+/* No celular o teto de substeps cai pra 2: com frame lento o passo fixo
+   dispara até 3 substeps por render, multiplicando CPU exatamente quando ela
+   já estourou (espiral da morte do substep fixo). */
+const PHYSICS_DT = 1 / 60;
+const PHYSICS_MAX_STEPS = __mobile ? Math.min(3, MOBILE_PHYSICS_MAX_STEPS) : 3;
 const perf = { physicsSteps: 0, physicsDroppedMs: 0, simulationCoverage: 1, frameMs: 0,
   simMs: 0, renderScale: 1, renderScaleChanges: 0 };
 const carPosV = new THREE.Vector3();
@@ -2525,6 +2634,10 @@ function tick(forceDt) {
   const t = (state.gameTime += dt);
   menuT = t;
 
+  /* toque: volante binário do carro/heli + posição do analógico na tela.
+     Antes da simulação porque js/car.js e js/heli.js leem `keys`. */
+  Touch.frame(state.driving || state.flying);
+
   /* simulação */
   Env.update(dt, t);
   if (!state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
@@ -2556,7 +2669,16 @@ function tick(forceDt) {
   SFX.musicUpdate();
 
   /* câmera + arma + HUD dinâmico (a cinemática assume a câmera sozinha) */
-  if (!state.cinematic) {
+  if (state.cinematic) {
+    /* O ACUMULADOR DE OLHAR NÃO SOBREVIVE À CINEMÁTICA. O dedo não sabe que
+       tem evento rolando e continua arrastando; o núcleo do toque acumula sem
+       saber de `state.cinematic`. Guardado, esse arrasto (~3000 px em 8 s)
+       virava ~9,6 rad de guinada NUM frame assim que endCinematic devolvia a
+       câmera. Descartar por frame é o mesmo que recusar acumular, e mantém a
+       cinemática dona da câmera sem tocar nela nem nos projéteis. */
+    Touch.takeLook();
+  } else {
+    applyTouchLook(); // ANTES do applyFpsCamera: ele só soma delta de recuo
     applyFpsCamera(dt, t);
     carCameraUpdate(dt);
   }
@@ -2605,7 +2727,9 @@ function tick(forceDt) {
 /* ================== boot ================== */
 window.addEventListener('pointerlockerror', () => {
   state.lockFailed = true;
-  centerMsg('Pointer lock indisponível — rodando sem travar o mouse', 2600);
+  // no celular não travar o mouse é o NORMAL, não uma falha: o aviso só faz
+  // sentido pra quem esperava o ponteiro capturado
+  if (!Touch.enabled) centerMsg('Pointer lock indisponível — rodando sem travar o mouse', 2600);
   setPaused(false);
 });
 
@@ -2641,11 +2765,21 @@ function startGame(trusted) {
   // banner de boas-vindas é do modo solo; no BR o lobby já anuncia a partida
   setTimeout(() => { if (!window.__BR_active) showBanner('CALL OF AI<small>siga as missões · cuidado com a noite</small>', 5200); }, 700);
   setPaused(false);
-  if (trusted) {
+  /* CELULAR NUNCA TRAVA O PONTEIRO: não existe pointer lock em toque, e pedir
+     dispara o `pointerlockerror`. `lockFailed = true` entra no modo degradado
+     que já existe (game.js:1135-1138 não pausa no unlock, e o handler de erro
+     em 2606 é o mesmo caminho) — reuso, não caminho novo. */
+  if (trusted && !Touch.enabled) {
     try { controls.lock(); } catch (err) { state.lockFailed = true; }
   } else {
     state.lockFailed = true;
   }
+  /* CELULAR: o toque em COMEÇAR é a ÚNICA janela em que o navegador aceita
+     fullscreen — e sem fullscreen ele recusa travar a orientação. Travar em
+     paisagem aqui é o que impede o aparelho de auto-rotacionar no meio do
+     tiroteio. Rejeição é caso NORMAL (iOS Safari não implementa): quem cobre
+     esse caso é o botão "JOGAR ASSIM" do #rotateGate. */
+  if (trusted && Touch.enabled) Orient.attempt(true);
 }
 /* ---- menu: botões + configurações ---- */
 $('btnNew').addEventListener('click', e => {
@@ -2700,10 +2834,13 @@ ui.overlay.addEventListener('click', (e) => {
   // clique em QUALQUER controle do menu (inclusive o gatilho dos controles
   // recolhidos) é do menu, não "clicar na tela pra voltar ao jogo"
   if (e.target.closest('#menuBtns, #settings, #ctlBox, .mbtn')) return;
-  if (state.started && state.paused) { // clique retoma quando pausado
+  if (state.started && state.paused) { // clique (ou toque) retoma quando pausado
     SFX.resume();
     setPaused(false);
-    if (e.isTrusted) { try { controls.lock(); } catch (err) { state.lockFailed = true; } }
+    // celular: retoma sem pedir pointer lock (ver startGame)
+    if (e.isTrusted && !Touch.enabled) {
+      try { controls.lock(); } catch (err) { state.lockFailed = true; }
+    }
   }
 });
 
@@ -2772,6 +2909,10 @@ window.__game = {
     get scheduledUpdateMask() { return csmLastUpdateMask; },
   },
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
+  isMobile: __mobile, // br-game.js pula o pointer lock com isto (script clássico)
+  Touch,              // QA: núcleo do toque, elementos e estado do analógico
+  Orient,             // QA: aviso de orientação (bloqueio, escape em retrato)
+  controls,           // QA: pointerSpeed é o multiplicador de ADS do olhar
   MenuCam, // QA/captura: goTo('cidade'|'castelo'|'vulcao'|'carro')
   get gun() { return gun; },
   get fps() { return fpsVal; },

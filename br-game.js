@@ -1500,14 +1500,18 @@
       hintLock();
     }
     function hintLock() {
+      // celular não tem pointer lock: o controle é o toque (js/touchcontrols.js)
+      if (G.isMobile) return;
       if (!MP.state.pointerLocked) MP.centerMsg('clique na tela pra capturar o mouse', 2600);
     }
     document.addEventListener('click', e => {
       // autoplay do navegador deixa o AudioContext suspenso até um gesto —
-      // sem isto a partida (iniciada via socket, sem clique) ficava MUDA
+      // sem isto a partida (iniciada via socket, sem clique) ficava MUDA.
+      // No celular este é o ÚNICO jeito de destravar o áudio: fica FORA do
+      // guard de pointer lock abaixo.
       try { MP.SFX.init(); MP.SFX.resume(); } catch (err) {}
       if (S.chatOpen || e.target.closest('.brPanel') || e.target.closest('#brChatInput')) return;
-      if (window.__BR_active && MP.state.started && !MP.state.paused && !MP.state.pointerLocked) {
+      if (!G.isMobile && window.__BR_active && MP.state.started && !MP.state.paused && !MP.state.pointerLocked) {
         try { document.body.requestPointerLock(); } catch (err) {}
       }
     });

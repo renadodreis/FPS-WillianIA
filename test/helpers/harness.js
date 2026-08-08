@@ -94,6 +94,13 @@ async function bootGame({
   blockRequests = [],
   delayRequests = [],
   protocolTimeout = 180000,
+  // query da URL do jogo (ex.: '?mobile=1' pro modo celular, '?tier=baixo').
+  // Vazio = comportamento histórico, byte por byte.
+  query = '',
+  /* viewport do page (ex.: paisagem de celular com hasTouch). Aplicado ANTES
+     do goto de propósito: chamar setViewport depois do boot RECRIA o contexto
+     de execução e apaga o window.QA injetado aqui. null = não chama nada. */
+  viewport = null,
 }) {
   const puppeteer = require('puppeteer-core');
   const rankFile = extraEnv.RANK_FILE || path.join(os.tmpdir(),
@@ -129,6 +136,7 @@ async function bootGame({
       // contexto (mesmo padrão do __MP_respawn) — o cenário degrada gracioso
       window.__MP_reload = () => {};
     });
+    if (viewport) await page.setViewport(viewport);
   const pageErrors = [];
   const consoleErrors = [];
   const requestFailures = [];
@@ -151,7 +159,7 @@ async function bootGame({
       await request.continue();
     });
   }
-  await page.goto(`http://localhost:${port}/`, {
+  await page.goto(`http://localhost:${port}/${query}`, {
     waitUntil: 'domcontentloaded',
     timeout: 90000,
   });

@@ -2,7 +2,15 @@
 import { buildChest } from './chestmodel.js';
 
 export function createInteract(deps) {
-  const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon, getMapToys, getSecrets } = deps;
+  const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon, getMapToys, getSecrets, isMobile } = deps;
+  /* COMO O HUD CHAMA CADA AÇÃO. No celular não existe tecla nenhuma: anunciar
+     "[F] comer" num aparelho sem teclado é prometer ação inalcançável — era
+     literalmente o caso da carne, que entrava no inventário e nunca saía. Aqui
+     o HUD passa a citar o BOTÃO do cluster de toque, no mesmo tom do
+     "USAR PARA SAIR" do velocímetro. Fora do celular nada muda. */
+  const NAMES = isMobile
+    ? { med: 'botão ✚', nade: 'botão ●', eat: 'botão 🍖', sight: 'botão 🔭', use: 'USAR' }
+    : { med: '[Q] usar', nade: '[G] lançar', eat: '[F] comer', sight: '[T] troca mira', use: 'E' };
   for (const s of Structures.chestSpots) {
     // não nasce dentro de parede: empurra o spot pra fora de qualquer estrutura
     // (collide não consome rand — seguro na fase seedada). Mantém proximidade e
@@ -64,7 +72,7 @@ export function createInteract(deps) {
   let promptTxt = null, promptOpacity = null;
   function setPrompt(txt) {
     if (txt !== null && txt !== promptTxt) {
-      ui.prompt.innerHTML = `<b>E</b> &nbsp;${txt}`;
+      ui.prompt.innerHTML = `<b>${NAMES.use}</b> &nbsp;${txt}`;
       promptTxt = txt;
     }
     const op = txt === null ? '0' : '1';
@@ -79,11 +87,11 @@ export function createInteract(deps) {
   }
   function renderInv() {
     ui.invList.innerHTML =
-      `<div class="invRow"><span>✚ Kit médico × ${inventory.medkits}</span><span class="k">[Q] usar</span></div>
-       <div class="invRow"><span>● Granada × ${inventory.nades}</span><span class="k">[G] lançar</span></div>
-       <div class="invRow"><span>🍖 Carne × ${inventory.meat}</span><span class="k">[F] comer</span></div>
+      `<div class="invRow"><span>✚ Kit médico × ${inventory.medkits}</span><span class="k">${NAMES.med}</span></div>
+       <div class="invRow"><span>● Granada × ${inventory.nades}</span><span class="k">${NAMES.nade}</span></div>
+       <div class="invRow"><span>🍖 Carne × ${inventory.meat}</span><span class="k">${NAMES.eat}</span></div>
        <div class="invRow"><span>🛡 Armadura ${Math.round(player.armor)}/${player.armorMax}</span><span class="k">do COLOSSO</span></div>
-       <div class="invRow"><span>Arsenal ${arsenal.filter(w => !w.locked).length}/5</span><span class="k">[T] troca mira</span></div>
+       <div class="invRow"><span>Arsenal ${arsenal.filter(w => !w.locked).length}/5</span><span class="k">${NAMES.sight}</span></div>
        <div class="invRow"><span>Baú: ${chest.medkits}✚ ${chest.nades}● ${chest.meat}🍖</span><span class="k">guarde em baús</span></div>`;
   }
   return { update, renderInv, chest };

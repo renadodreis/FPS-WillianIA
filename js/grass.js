@@ -3,7 +3,7 @@ import * as THREE from 'three';
 
 export function createGrass(deps) {
   const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings = [],
-    cityGrassFactor = null, worldSeed = 424242 } = deps;
+    cityGrassFactor = null, worldSeed = 424242, rebuildBudget = 6 } = deps;
   /* RNG LOCAL por chunk: (seed, cx, cz) → mesmo conteúdo SEMPRE — preencher,
      reciclar, sair e voltar produz exatamente as mesmas matrizes/fases/cores,
      sem depender da ordem global do Math.random. */
@@ -286,7 +286,9 @@ export function createGrass(deps) {
 
   let centerX = 0, centerZ = 0; // celula central atual
   let lodForcado = null;        // QA/captura: ver debugForceLod
-  const REBUILD_BUDGET = 6;     // chunks re-preenchidos por frame, no maximo
+  // chunks re-preenchidos por frame, no maximo (celular passa 3 pela fiacao:
+  // e so PACING, o conteudo de cada chunk e deterministico por (cx,cz))
+  const REBUILD_BUDGET = rebuildBudget > 0 ? rebuildBudget : 6;
   const pending = [];
 
   /* Troca APENAS os atributos de vértice compartilhados (posição, normal, uv,
