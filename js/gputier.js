@@ -19,7 +19,15 @@
    segue medindo e ajustando a resolução dentro do teto.
    ================================================================ */
 
+import { mobileOverrideFrom } from './mobile.js';
+
+/* Escada de qualidade do DESKTOP: monotônica, cada degrau só tira custo.
+   `mobile` NÃO é degrau dela — é outro perfil de hardware (ver PRESETS),
+   por isso fica fora daqui e entra em ALL_TIERS. */
 export const TIERS = ['baixo', 'medio', 'alto'];
+export const MOBILE_TIER = 'mobile';
+/* todo tier válido, pra quem precisa VALIDAR um valor (menu, ?tier=) */
+export const ALL_TIERS = [...TIERS, MOBILE_TIER];
 
 /* Presets. `alto` é EXATAMENTE o padrão histórico: quem já rodava liso
    não perde nada. Os degraus tiram primeiro o mais caro:
@@ -31,11 +39,24 @@ export const TIERS = ['baixo', 'medio', 'alto'];
      res  — teto do pixel ratio; só morde em tela HiDPI, por isso não é
             o primeiro degrau.
 
-   SOMBRA FICA LIGADA EM TODOS OS TIERS — de propósito. A medição do
-   projeto diz que sem sombra a cena cai de 365 pra 352 draw calls (4%):
-   o rodízio de cascatas já tirou o custo, e trocar a leitura do mapa
-   inteiro por 4% de draw calls é perda de imagem sem ganho de frame. */
+   SOMBRA FICA LIGADA EM TODOS OS TIERS DE DESKTOP — de propósito. A
+   medição do projeto diz que sem sombra a cena cai de 365 pra 352 draw
+   calls (4%): o rodízio de cascatas já tirou o custo, e trocar a leitura
+   do mapa inteiro por 4% de draw calls é perda de imagem sem ganho de
+   frame.
+
+   ESSE ARGUMENTO NÃO VALE NO CELULAR — e a diferença não é de grau, é de
+   natureza. No desktop a conta que sobra da sombra é DRAW CALL (custo de
+   CPU/driver), e são só 4%. Em GPU móvel (Adreno/Mali/PowerVR) o custo é
+   BANDA DE MEMÓRIA: cada cascata é um render pass extra que escreve o mapa
+   de profundidade e depois é reamostrado por pixel iluminado. GPU móvel é
+   tile-based com pouca banda e sem memória dedicada — passe extra e
+   amostragem de textura são exatamente o que ela não tem pra dar. Por isso
+   o tier `mobile` desliga sombra: NÃO é descuido nem cópia mal feita do
+   tier baixo. Se um dia alguém "consertar" isso ligando shadow aqui, o
+   celular volta pra ~30 FPS com a cena idêntica. */
 const PRESETS = {
+  mobile: { res: 1, shadow: 0, bloom: 0, aa: 0 },
   baixo: { res: 1, shadow: 1, bloom: 0, aa: 0 },
   medio: { res: 1, shadow: 1, bloom: 1, aa: 0 },
   alto: { res: 1.5, shadow: 1, bloom: 1, aa: 1 },
@@ -97,16 +118,22 @@ export function gpuStringOf(gl) {
   }
 }
 
-/* `?tier=alto|medio|baixo` força o preset (suporte/QA); `?tier=off`
+/* `?tier=alto|medio|baixo|mobile` força o preset (suporte/QA); `?tier=off`
    desliga o auto-tier. Sem parâmetro, devolve null. */
 export function tierOverrideFrom(search) {
-  const m = /[?&]tier=(alto|medio|baixo|off)\b/i.exec(String(search || ''));
+  const m = /[?&]tier=(alto|medio|baixo|mobile|off)\b/i.exec(String(search || ''));
   return m ? m[1].toLowerCase() : null;
 }
 
 /* Aplica o preset em `settings` SOMENTE quando não existe configuração
-   salva. Devolve o diagnóstico pra quem chamou registrar no console. */
-export function autoTierSettings({ gl, stored, settings, search = '' }) {
+   salva. Devolve o diagnóstico pra quem chamou registrar no console.
+
+   `mobile` é o SINAL DE DISPOSITIVO (js/mobile.js), e tem precedência
+   sobre a string da GPU: "Apple A17 Pro" e "Adreno 750" cairiam no tier
+   `baixo` pela regra de GPU móvel, e `baixo` mantém sombra ligada — o que
+   no celular custa banda, não draw calls (ver PRESETS). `?mobile=1|0`
+   sobrepõe o sinal; `?tier=` é mais específico e ganha dos dois. */
+export function autoTierSettings({ gl, stored, settings, search = '', mobile = false }) {
   const forced = tierOverrideFrom(search);
   if (forced === 'off') {
     return { applied: false, tier: null, gpu: '', reason: 'auto-tier desligado por ?tier=off' };
@@ -116,8 +143,16 @@ export function autoTierSettings({ gl, stored, settings, search = '' }) {
       reason: 'já existe configuração salva — a escolha manual manda' };
   }
   const gpu = gpuStringOf(gl);
-  const c = forced ? { tier: forced, reason: `forçado por ?tier=${forced}`, gpu: gpu || '' }
-    : classifyGpu(gpu);
+  const mobileForced = mobileOverrideFrom(search);
+  const isMobile = mobileForced === null ? !!mobile : mobileForced;
+  let c;
+  if (forced) c = { tier: forced, reason: `forçado por ?tier=${forced}`, gpu: gpu || '' };
+  else if (isMobile) {
+    c = { tier: MOBILE_TIER, gpu: gpu || '',
+      reason: mobileForced === true
+        ? 'dispositivo móvel forçado por ?mobile=1'
+        : 'dispositivo móvel detectado — sombra e pós custam banda de memória em GPU móvel' };
+  } else c = classifyGpu(gpu);
   const preset = presetFor(c.tier);
   for (const k of Object.keys(preset)) settings[k] = preset[k];
   return { applied: true, tier: c.tier, gpu: c.gpu, reason: c.reason, preset };

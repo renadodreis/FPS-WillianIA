@@ -15,9 +15,10 @@
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 
-let classifyGpu, presetFor, autoTierSettings, TIERS;
+let classifyGpu, presetFor, autoTierSettings, TIERS, ALL_TIERS, MOBILE_TIER;
 before(async () => {
-  ({ classifyGpu, presetFor, autoTierSettings, TIERS } = await import('../js/gputier.js'));
+  ({ classifyGpu, presetFor, autoTierSettings, TIERS, ALL_TIERS, MOBILE_TIER } =
+    await import('../js/gputier.js'));
 });
 
 describe('classifyGpu — string da GPU vira tier', () => {
@@ -98,7 +99,7 @@ describe('classifyGpu — string da GPU vira tier', () => {
     assert.deepEqual(presetFor('alto'), { res: 1.5, shadow: 1, bloom: 1, aa: 1 });
   });
 
-  it('SOMBRA fica ligada em todo tier — sem ela a medição dá só 4% de draw calls', () => {
+  it('SOMBRA fica ligada em todo tier de DESKTOP — sem ela a medição dá só 4% de draw calls', () => {
     for (const t of TIERS) assert.equal(presetFor(t).shadow, 1, t);
   });
 
@@ -112,6 +113,134 @@ describe('classifyGpu — string da GPU vira tier', () => {
     assert.ok(b.res <= m.res && m.res <= a.res, 'resolução não é monotônica');
     for (const k of ['shadow', 'bloom', 'aa'])
       assert.ok(b[k] <= m[k] && m[k] <= a[k], `${k} não é monotônico`);
+  });
+});
+
+/* ================================================================
+   TIER MOBILE — o celular não é "um desktop fraco".
+
+   A classificação por string de GPU não resolve celular: um iPhone 15
+   ("Apple A17 Pro") e um Snapdragon topo de linha ("Adreno 750") caem no
+   tier `baixo` pela regra de GPU móvel, e `baixo` mantém SOMBRA LIGADA.
+   Em GPU móvel a sombra custa BANDA DE MEMÓRIA (passes de profundidade
+   extra + amostragem), não draw calls — a medição dos 4% que justifica
+   manter sombra vale só pra desktop.
+
+   Daí um tier próprio, escolhido pelo sinal de dispositivo (não pela
+   string da GPU), com corte agressivo pra caber em 60 FPS.
+   ================================================================ */
+describe('tier mobile — preset agressivo e fora da escada do desktop', () => {
+  it('o preset mobile corta tudo o que é banda de memória', () => {
+    assert.deepEqual(presetFor('mobile'), { res: 1, shadow: 0, bloom: 0, aa: 0 });
+  });
+
+  it('mobile é o ÚNICO tier sem sombra — e por banda, não por draw calls', () => {
+    assert.equal(presetFor('mobile').shadow, 0);
+    for (const t of TIERS) assert.equal(presetFor(t).shadow, 1, `${t} perdeu a sombra`);
+  });
+
+  it('o preset mobile tem as MESMAS chaves de SETTINGS (nada de undefined no boot)', () => {
+    assert.deepEqual(Object.keys(presetFor('mobile')).sort(), ['aa', 'bloom', 'res', 'shadow']);
+    assert.ok(Number.isFinite(presetFor('mobile').res) && presetFor('mobile').res > 0,
+      'res inválido = tela preta');
+  });
+
+  it('mobile não entra em TIERS (escada monotônica do desktop), mas está em ALL_TIERS', () => {
+    assert.deepEqual(TIERS, ['baixo', 'medio', 'alto'], 'a escada do desktop mudou');
+    assert.ok(!TIERS.includes('mobile'), 'mobile virou degrau da escada de desktop');
+    assert.equal(MOBILE_TIER, 'mobile');
+    assert.ok(ALL_TIERS.includes('mobile'), 'quem valida tier não consegue aceitar mobile');
+    for (const t of TIERS) assert.ok(ALL_TIERS.includes(t), t);
+  });
+
+  it('mobile nunca é mais caro que o tier baixo do desktop', () => {
+    const mob = presetFor('mobile'), baixo = presetFor('baixo');
+    for (const k of ['res', 'shadow', 'bloom', 'aa'])
+      assert.ok(mob[k] <= baixo[k], `${k}: mobile ficou mais caro que baixo`);
+  });
+});
+
+describe('autoTierSettings — celular vence a string da GPU', () => {
+  const gl = renderer => ({
+    getExtension: name => (name === 'WEBGL_debug_renderer_info'
+      ? { UNMASKED_RENDERER_WEBGL: 37446 } : null),
+    getParameter: p => (p === 37446 ? renderer : 'algum vendor'),
+  });
+  const fresh = () => ({ vol: 0.5, res: 1.5, shadow: 1, bloom: 1, ping: 1, autores: 1, aa: 1 });
+
+  it('com sinal de mobile, o tier é mobile mesmo em GPU de celular topo de linha', () => {
+    for (const s of ['Apple A17 Pro GPU', 'Adreno (TM) 750', 'Mali-G715-Immortalis MC11']) {
+      const settings = fresh();
+      const r = autoTierSettings({ gl: gl(s), stored: null, settings, mobile: true });
+      assert.equal(r.applied, true, s);
+      assert.equal(r.tier, 'mobile', `${s} caiu em "${r.tier}" — sombra ligada no celular`);
+      assert.equal(settings.shadow, 0, s);
+      assert.equal(settings.res, 1, s);
+      assert.equal(settings.vol, 0.5, 'mexeu em ajuste que não é de qualidade');
+    }
+  });
+
+  it('sem sinal de mobile, a classificação por GPU continua igual (nada regrediu)', () => {
+    const settings = fresh();
+    const r = autoTierSettings({ gl: gl('Adreno (TM) 640'), stored: null, settings });
+    assert.equal(r.tier, 'baixo');
+    assert.equal(settings.shadow, 1, 'desktop perdeu sombra por causa do tier mobile');
+  });
+
+  it('mobile NÃO fura a trava: existindo configuração salva, não encosta em nada', () => {
+    const settings = { res: 2, shadow: 1, bloom: 1, aa: 1 };
+    const r = autoTierSettings({ gl: gl('Adreno (TM) 750'), stored: '{"res":2}', settings, mobile: true });
+    assert.equal(r.applied, false);
+    assert.deepEqual(settings, { res: 2, shadow: 1, bloom: 1, aa: 1 });
+  });
+
+  it('?mobile=1 força o tier mobile mesmo numa RTX (QA reproduz no desktop)', () => {
+    const settings = fresh();
+    const r = autoTierSettings({ gl: gl('NVIDIA GeForce RTX 4090'), stored: null, settings,
+      search: '?mobile=1' });
+    assert.equal(r.tier, 'mobile');
+    assert.equal(settings.shadow, 0);
+  });
+
+  it('?mobile=0 cancela a detecção errada e volta pra classificação por GPU', () => {
+    const settings = fresh();
+    const r = autoTierSettings({ gl: gl('NVIDIA GeForce RTX 4090'), stored: null, settings,
+      mobile: true, search: '?mobile=0' });
+    assert.equal(r.tier, 'alto');
+    assert.equal(settings.shadow, 1);
+  });
+
+  it('?tier= é mais específico que ?mobile: o tier forçado ganha', () => {
+    const settings = fresh();
+    const r = autoTierSettings({ gl: gl('Adreno (TM) 750'), stored: null, settings,
+      mobile: true, search: '?tier=alto' });
+    assert.equal(r.tier, 'alto');
+    assert.deepEqual(presetFor('alto'), { res: settings.res, shadow: settings.shadow,
+      bloom: settings.bloom, aa: settings.aa });
+  });
+
+  it('?tier=mobile força o preset de celular (suporte)', () => {
+    const settings = { res: 2, shadow: 1, bloom: 1, aa: 1 };
+    const r = autoTierSettings({ gl: gl('NVIDIA GeForce RTX 4090'), stored: '{"res":2}', settings,
+      search: '?tier=mobile' });
+    assert.equal(r.applied, true);
+    assert.equal(r.tier, 'mobile');
+    assert.deepEqual(settings, presetFor('mobile'));
+  });
+
+  it('?tier=off desliga o auto-tier mesmo com sinal de mobile', () => {
+    const settings = fresh();
+    const r = autoTierSettings({ gl: gl('Adreno (TM) 750'), stored: null, settings,
+      mobile: true, search: '?tier=off' });
+    assert.equal(r.applied, false);
+    assert.deepEqual(settings, fresh());
+  });
+
+  it('o motivo diz que foi o dispositivo, não a GPU (diagnóstico no console)', () => {
+    const settings = fresh();
+    const r = autoTierSettings({ gl: gl('Adreno (TM) 750'), stored: null, settings, mobile: true });
+    assert.match(r.reason, /dispositivo m[óo]vel/i, `motivo não cita o dispositivo: ${r.reason}`);
+    assert.match(r.gpu, /Adreno/);
   });
 });
 
