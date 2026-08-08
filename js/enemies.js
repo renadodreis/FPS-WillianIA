@@ -1,6 +1,7 @@
 /* IA dos soldados inimigos (FSM patrulha/persegue/ataca) — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { fuseBody } from './meshutils.js';
 
 export function createEnemies(deps) {
   const { Chars } = deps;
@@ -19,12 +20,19 @@ export function createEnemies(deps) {
   const shirtMat = csmMat(new THREE.MeshStandardMaterial({ color: 0xe8e8ea, roughness: 0.7 }));
   const tieMat   = csmMat(new THREE.MeshStandardMaterial({ color: 0x8a1620, roughness: 0.6 }));
   const skinMat  = csmMat(new THREE.MeshStandardMaterial({ color: 0xc9a182, roughness: 0.75 }));
+  /* 28 inimigos, 3 receitas de corpo: a geometria fundida é compartilhada
+     (esqueleto e esfera continuam por boneco). Ver fuseBody(). */
+  const bodyCache = new Map();
   function buildBody(heavy, suit) {
     const cloth = suit ? suitMat : heavy ? clothH : clothG;
     const armor = suit ? suitMat : heavy ? armorH : armorG;
     const g = new THREE.Group();
     const cast = m => { m.castShadow = true; return m; };
-    const parts = { armL: new THREE.Group(), armR: new THREE.Group(), legL: new THREE.Group(), legR: new THREE.Group(), head: new THREE.Group() };
+    /* Os membros eram Group e viraram Bone: mesmo Object3D, mesmo consumo de
+       UUID (contrato do Math.random seedado intacto) e as MESMAS rotações lidas
+       pelo FSM lá embaixo. A diferença é que agora o membro pode ser um osso da
+       fusão em vez de um galho da cena — ver fuseBody() em js/meshutils.js. */
+    const parts = { armL: new THREE.Bone(), armR: new THREE.Bone(), legL: new THREE.Bone(), legR: new THREE.Bone(), head: new THREE.Bone() };
 
     // tronco
     const torso = cast(new THREE.Mesh(new THREE.CapsuleGeometry(0.31, 0.52, 6, 14), cloth));
@@ -115,7 +123,23 @@ export function createEnemies(deps) {
     const flash = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.3), new THREE.MeshBasicMaterial({
       color: 0xffd9a0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
     flash.position.set(0.02, -0.62, 0.72); parts.armR.add(flash);
-    return { g, parts, flash };
+    // opacidade 0 NÃO evita a draw call: o plano só existe nos 60 ms do tiro
+    flash.visible = false;
+
+    /* PERF: até aqui o boneco são ~32 (executivo) a 38 (soldado) meshes soltos,
+       ou seja, uma draw call cada. Medido no viewport de celular, os 8
+       executivos da Torre Nexus custavam 256 das 560 draw calls do frame.
+       fuseBody junta tudo em 7–9 malhas — uma por (material, castShadow) —
+       usando os membros como ossos rígidos. Material, cor, sombra e pose ficam
+       idênticos; o flash fica de fora porque tem material próprio e é ligado/
+       desligado no tiro. O corpo tem que estar na origem e em repouso aqui,
+       que é onde o esqueleto tira as inversas. */
+    const { skeleton } = fuseBody(g, {
+      bones: [g, parts.head, parts.armL, parts.armR, parts.legL, parts.legR],
+      keep: [flash],
+      cache: bodyCache, cacheKey: suit ? 'executivo' : heavy ? 'pesado' : 'padrao',
+    });
+    return { g, parts, flash, skeleton };
   }
 
   // linha de visão barata: amostra a altura do terreno ao longo do raio
@@ -145,7 +169,7 @@ export function createEnemies(deps) {
   function makeEnemy(idx, plan) {
     const heavy = !plan && idx % 4 === 3;
     const suit = !!(plan && plan.suit);
-    const { g, parts, flash } = buildBody(heavy, suit);
+    const { g, parts, flash, skeleton } = buildBody(heavy, suit);
     if (heavy) g.scale.setScalar(1.16);
     scene.add(g);
     const e = {
@@ -154,7 +178,7 @@ export function createEnemies(deps) {
       maxHp: heavy ? 180 : suit ? 120 : 100,
       flinchT: 0,
       name: (suit ? 'Executivo' : plan && plan.army ? 'Soldado' : heavy ? 'Brutamontes' : NAMES[idx % NAMES.length]) + '-' + String(idx + 1).padStart(2, '0'),
-      group: g, parts, flash,
+      group: g, parts, flash, skeleton, // skeleton: hook de QA do corpo fundido
       alive: true, health: 100,
       fsm: 'PATRULHA',
       home: { x: 0, z: 0 }, waypoints: [], wpIdx: 0,
@@ -235,6 +259,12 @@ export function createEnemies(deps) {
         // esconde o boneco procedural, mas mantém os grupos (o FSM anima
         // parts.* e a lógica de mira/flash usa as âncoras)
         e.group.traverse(o => { if (o.isMesh) o.visible = false; });
+        /* NOTA (comportamento PRÉ-EXISTENTE, não mexido nesta rodada): o
+           traverse acima também apaga o plano do flash e nada o reacende — o
+           inimigo com o GLB do Guardião nunca mostra fogo de cano. Marcar aqui
+           impede que a troca de visibilidade nova (update) "conserte" isso por
+           acidente e mude o visual sem pedido. */
+        e.flashMuted = true;
         e.group.add(root);
         e.hasModel = true;
         e.mixer = mixer;
@@ -458,6 +488,7 @@ export function createEnemies(deps) {
         }
       }
       e.flashT = Math.max(0, e.flashT - dt);
+      e.flash.visible = e.flashT > 0 && !e.flashMuted;
       e.flash.material.opacity = e.flashT > 0 ? 0.95 : 0;
       if (e.flashT > 0) e.flash.rotation.z = rand(TAU);
     }
