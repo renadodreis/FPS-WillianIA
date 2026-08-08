@@ -215,6 +215,10 @@ export function createCar(deps) {
     mesh.castShadow = false; // CSM tem 4 cascatas: sombra por submalha quadruplicaria draw calls.
     mesh.receiveShadow = false;
     mesh.userData.importedCarModel = true;
+    /* de quais materiais do GLB esta malha veio (o rig funde os que só
+       diferem na cor). Diagnóstico e prova de que a cor de cada origem
+       continua chegando nos mesmos triângulos — ver test/car-drawcalls. */
+    mesh.userData.carFontes = part.fontes || null;
     return mesh;
   }
 

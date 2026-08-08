@@ -9,6 +9,7 @@
    Espaço do chassi: +X frente, +Y cima, +Z direita — o mesmo do
    RaycastVehicle (indexForwardAxis 0, indexUpAxis 1, indexRightAxis 2). */
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const WELD = 1e4; // solda vértices por posição quantizada (0,1 mm)
 
@@ -116,6 +117,117 @@ function detectBakedSteer(positions /* [{x,z}] relativos ao pivô */) {
   return -bestTheta; // yaw que estava aplicado na geometria
 }
 
+/* ---- fusão de peças que só diferem na COR difusa ----------------------
+
+   O recorte acima é por (malha × material), e os GLB de veículo trazem
+   dezenas de materiais que são o MESMO shader com outra cor: o RX-7 tem 20
+   (13 na carroceria, 7 por roda) e gastava 41 draw calls sozinho — a frota
+   inteira, 155 (17 % do frame num viewport de celular, medido).
+
+   Peças com a mesma CHAVE DE RENDER (tudo que o shader/estado enxerga menos
+   a cor difusa) viram UMA geometria com atributo `color` por vértice e um
+   material branco com vertexColors. O three faz `diffuseColor.rgb *= vColor`
+   sem nenhuma conversão, e `material.color.r/g/b` já está no espaço linear
+   de trabalho: branco × cor-do-vértice devolve exatamente a mesma cor que o
+   material dava. O pixel não muda; só o número de draw calls.
+
+   Roda 1× por URL (o chamador cacheia), então não custa nada por frame, e a
+   geometria fundida continua COMPARTILHADA entre os veículos do mesmo GLB. */
+
+// não entram na chave: identidade, contador de recompilação e a própria cor
+const FUSE_IGNORA = new Set(['uuid', 'id', 'name', 'version', 'userData', '_listeners', 'color']);
+
+/* Chave conservadora: varre as propriedades PRÓPRIAS do material, então
+   nada fica de fora por esquecimento. O que não dá pra descrever devolve
+   null — e null nunca funde. */
+function fuseKey(m) {
+  const p = [m.type];
+  for (const k of Object.keys(m).sort()) {
+    if (FUSE_IGNORA.has(k)) continue;
+    const v = m[k];
+    if (typeof v === 'function') continue;
+    if (v === null || v === undefined || typeof v !== 'object') { p.push(`${k}=${v}`); continue; }
+    if (v.isTexture) {
+      // textura + amostragem: dois objetos distintos NÃO fundem (conservador)
+      p.push(`${k}=T${v.uuid}#${v.offset.x},${v.offset.y},${v.repeat.x},${v.repeat.y},` +
+        `${v.rotation},${v.center.x},${v.center.y},${v.wrapS},${v.wrapT},${v.flipY},` +
+        `${v.colorSpace},${v.channel},${v.magFilter},${v.minFilter}`);
+      continue;
+    }
+    if (v.isColor) { p.push(`${k}=C${v.getHex()}`); continue; }
+    if (v.isVector2 || v.isVector3 || v.isVector4) { p.push(`${k}=V${v.toArray().join(',')}`); continue; }
+    if (v.isMatrix3 || v.isMatrix4) { p.push(`${k}=M${v.elements.join(',')}`); continue; }
+    try { p.push(`${k}=J${JSON.stringify(v)}`); } catch { return null; }
+  }
+  return p.join('|');
+}
+
+function partSource(p) {
+  const g = p.geometry;
+  const c = p.material.color;
+  return {
+    nome: p.material.name || p.material.type,
+    hex: c.getHexString(),
+    rgb: [c.r, c.g, c.b],
+    tris: (g.getIndex() ? g.getIndex().count : g.attributes.position.count) / 3,
+  };
+}
+
+function fuseGroup(parts) {
+  const fontes = parts.map(partSource);
+  const base = parts[0].material;
+  const cores = parts.map(p => p.material.color);
+  const variaCor = cores.some(c => !c.equals(cores[0]));
+  const geos = parts.map(p => p.geometry);
+  if (variaCor) {
+    for (let i = 0; i < geos.length; i++) {
+      const n = geos[i].attributes.position.count, c = cores[i];
+      const arr = new Float32Array(n * 3);
+      for (let v = 0; v < n; v++) { arr[v * 3] = c.r; arr[v * 3 + 1] = c.g; arr[v * 3 + 2] = c.b; }
+      geos[i].setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    }
+  }
+  const merged = mergeGeometries(geos, false);
+  if (!merged) { // atributos incompatíveis: desfaz e deixa as peças separadas
+    if (variaCor) for (const g of geos) g.deleteAttribute('color');
+    return null;
+  }
+  for (const g of geos) g.dispose();
+  const material = base.clone();
+  material.name = `${base.name || base.type}+${parts.length - 1}`;
+  if (variaCor) { material.color.setRGB(1, 1, 1); material.vertexColors = true; }
+  return { geometry: merged, material, fontes };
+}
+
+/* `protegido` = material que o chamador repinta por veículo (cfg.bodyMaterial):
+   fica sempre sozinho, senão o tint sumiria dentro do vertex color. */
+function fuseParts(parts, protegido) {
+  const assinatura = g => Object.keys(g.attributes).sort()
+    .map(n => `${n}:${g.attributes[n].itemSize}`).join(',') + (g.getIndex() ? '|idx' : '');
+  const grupos = new Map();
+  const ordem = [];
+  for (const p of parts) {
+    const m = p.material;
+    /* fora da fusão: a lataria repintada por veículo; material TRANSPARENTE
+       (DoubleSide vira dois passes e a ordem de mistura importa); material
+       que já usa cor por vértice; geometria que já tem atributo `color`. */
+    const fixo = !m || Array.isArray(m) || m.transparent || m.vertexColors ||
+      (protegido && m.name === protegido) || !!p.geometry.getAttribute('color');
+    const k = fixo ? null : fuseKey(m);
+    const chave = k === null ? `sozinho:${ordem.length}` : `${k}||${assinatura(p.geometry)}`;
+    let g = grupos.get(chave);
+    if (!g) { g = []; grupos.set(chave, g); ordem.push(g); }
+    g.push(p);
+  }
+  const saida = [];
+  for (const g of ordem) {
+    const fundida = g.length > 1 ? fuseGroup(g) : null;
+    if (fundida) { saida.push(fundida); continue; }
+    for (const p of g) saida.push({ geometry: p.geometry, material: p.material, fontes: [partSource(p)] });
+  }
+  return saida;
+}
+
 /* Inventário das ilhas de geometria no espaço do chassi — usado pela
    calibração de cfg.wheelsVis e pelos testes (ex.: provar que a carroceria
    não ficou com uma roda estática duplicada). Só ilhas com minTris+. */
@@ -220,11 +332,13 @@ export function buildCarRig(scaledRoot, cfg) {
   }
 
   /* pós-processa cada roda: pivô no centro real, desfaz esterço de fábrica,
-     valida raio/largura/centro contra a calibração */
+     valida raio/largura/centro contra a calibração. A fusão vem ANTES: o
+     recorte por material já terminou e o resto do pipeline (bbox, esterço de
+     fábrica, centragem) opera sobre a mesma nuvem de vértices. */
   const wheels = [];
   const all = new THREE.Box3(), _size = new THREE.Vector3();
   for (let k = 0; k < 4; k++) {
-    const parts = wheelParts[k];
+    const parts = wheelParts[k] = fuseParts(wheelParts[k], cfg.bodyMaterial);
     const w = wheelCfg[k];
     let tris = 0;
     all.makeEmpty();
@@ -271,5 +385,5 @@ export function buildCarRig(scaledRoot, cfg) {
     wheels.push({ center, radius, width, bakedSteer, tris, parts, islands: captured[k] });
   }
   if (!bodyParts.length) throw new Error(`carroceria vazia após extração em ${cfg.modelUrl}`);
-  return { bodyParts, wheels };
+  return { bodyParts: fuseParts(bodyParts, cfg.bodyMaterial), wheels };
 }

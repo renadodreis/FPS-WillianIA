@@ -119,49 +119,64 @@ describe('Veículos assentados e com as cores do modelo', { skip: !CHROME && 'Ch
     }
   });
 
+  /* Os dois testes abaixo leem as CORES REALMENTE DESENHADAS, não "quantos
+     materiais sobraram". O rig funde peças que só diferem na cor difusa numa
+     geometria com atributo `color` (js/carwheels.js), então contar material
+     passou a subestimar o que vai pra tela. Ler a cor de onde ela sai —
+     material OU vertex color — mede o mesmo invariante ("não virou bloco de
+     uma cor só") nas duas implementações; que o pixel é o mesmo está provado
+     em test/car-drawcalls.test.js e por diff de captura. */
   it('dados os DOIS esportivos, então cada um tem lataria de cor própria (vidros/rodas preservados)', async () => {
     const r = await h.play(async () => {
-      const G = window.QA.G;
+      const G = window.QA.G, THREE = window.QA.MP.THREE;
       await G.Car.ready;
-      const esportivos = G.Car.vehicles.filter(x => x.cfg.name === 'ESPORTIVO GT');
-      return esportivos.map(v => {
-        let lataria = null, outros = 0;
+      const C = new THREE.Color();
+      return G.Car.vehicles.filter(x => x.cfg.name === 'ESPORTIVO GT').map(v => {
+        let lataria = null;
+        const cores = new Set();
         v.group.traverse(o => {
           if (!o.isMesh || !o.userData.importedCarModel) return;
           const m = o.material;
-          if (m.name === v.cfg.bodyMaterial) lataria = m.color.getHexString();
-          else outros++;
+          if (m.name === v.cfg.bodyMaterial) { lataria = m.color.getHexString(); return; }
+          const cor = o.geometry.getAttribute('color');
+          if (m.vertexColors && cor) {
+            for (let i = 0; i < cor.count; i++)
+              cores.add(C.setRGB(cor.getX(i), cor.getY(i), cor.getZ(i)).getHexString());
+          } else cores.add(m.color.getHexString());
         });
-        return { lataria, outros };
+        return { lataria, outros: cores.size };
       });
     });
     assert.ok(r.length >= 2, 'menos de 2 esportivos na frota');
     const cores = new Set(r.map(x => x.lataria));
     assert.ok(!cores.has(null) && !cores.has(undefined), 'lataria não encontrada em algum esportivo');
     assert.ok(cores.size >= 2, `todos os esportivos com a mesma lataria: ${[...cores].join(',')}`);
-    for (const x of r) assert.ok(x.outros > 5, 'detalhes do modelo sumiram junto com o tint');
+    for (const x of r)
+      assert.ok(x.outros > 5, `detalhes do modelo sumiram junto com o tint (${x.outros} cores fora da lataria)`);
   });
 
-  it('dado o esportivo, então mantém os materiais do modelo (não vira um bloco de uma cor só)', async () => {
+  it('dado o esportivo, então mantém as cores do modelo (não vira um bloco de uma cor só)', async () => {
     const r = await h.play(async () => {
-      const G = window.QA.G;
+      const G = window.QA.G, THREE = window.QA.MP.THREE;
       await G.Car.ready;
       const v = G.Car.vehicles.find(x => x.cfg.name === 'ESPORTIVO GT');
-      const cores = new Set();
-      let pretos = 0, total = 0;
+      const cores = new Set(), C = new THREE.Color();
       v.group.traverse(o => {
         if (!o.isMesh || !o.userData.importedCarModel) return;
         for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
           if (!m || !m.color) continue;
-          total++;
-          const hex = m.color.getHexString();
-          cores.add(hex);
-          if (hex === '000000') pretos++;
+          const cor = o.geometry.getAttribute('color');
+          if (m.vertexColors && cor) {
+            for (let i = 0; i < cor.count; i++)
+              cores.add(C.setRGB(cor.getX(i), cor.getY(i), cor.getZ(i)).getHexString());
+          } else cores.add(m.color.getHexString());
         }
       });
-      return { cores: [...cores].slice(0, 8), unicas: cores.size, pretos, total };
+      const lista = [...cores];
+      return { cores: lista.slice(0, 8), unicas: lista.length,
+        pretos: lista.filter(hex => hex === '000000').length };
     });
     assert.ok(r.unicas >= 3, `esportivo monocromático (${r.unicas} cor: ${r.cores.join(',')})`);
-    assert.ok(r.pretos < r.total, 'todos os materiais do esportivo estão pretos');
+    assert.ok(r.pretos < r.unicas, 'todas as cores do esportivo estão pretas');
   });
 });
