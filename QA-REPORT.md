@@ -126,7 +126,7 @@ por parede, limites do mundo e empurrão entre jogadores (com bot de rede real).
 Nota: ninguém percebeu antes porque jogador e balas usam colisão própria em
 JS (funcionava); só a física dos veículos dependia do broadphase do CANNON.
 
-## Rodada das hipóteses (TEST-PLAN-HIPOTESES.md) — 4 bugs + 2 blindagens
+## Rodada das hipóteses (docs/2026-07-11-test-plan-hipoteses.md) — 4 bugs + 2 blindagens
 
 | # | Sev. | Bug (BDD) | Correção | Teste |
 |---|------|-----------|----------|-------|
