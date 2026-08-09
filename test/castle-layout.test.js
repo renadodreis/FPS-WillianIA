@@ -650,8 +650,22 @@ describe('Castelo GLB — layout síncrono e worldgen', {
       const scale = new THREE.Vector3();
       let insideInstances = 0;
       const visibleInstances = [];
+      /* Vida ambiente e clima seguem o PLAYER, não o worldgen: as asas de
+         borboleta vagueiam num anel de 7-42 m em volta dele (reanchor, em
+         js/amb.js) e chuva/neve são partículas presas à câmera. Como este
+         cenário planta o player NO MEIO do castelo, elas passam sobre a
+         fundação POR DESIGN — nada a ver com a decoração que
+         excludesDecoration precisa esconder (y = -100 + escala 0,0001).
+         Enquanto as 44 asas eram Mesh comum elas escapavam deste filtro por
+         ACIDENTE, não por mérito: sempre voaram sobre o castelo; fundi-las
+         numa InstancedMesh só as tornou visíveis para esta varredura.
+         Lista fechada e por NOME, a mesma convenção de 'rainFx'/'snowFx' em
+         js/env.js e de 'borboletas' em test/butterfly-drawcalls.test.js —
+         InstancedMesh nova e anônima continua sendo cobrada. */
+      const AMBIENTE = new Set(['borboletas', 'rainFx', 'snowFx']);
       QA.MP.scene.traverse(obj => {
-        if (!obj.isInstancedMesh || !obj.visible || obj.material === G.Grass.material) return;
+        if (!obj.isInstancedMesh || !obj.visible || obj.material === G.Grass.material ||
+            AMBIENTE.has(obj.name)) return;
         for (let owner = obj; owner; owner = owner.parent) {
           if (owner === castle.foundationRoot || owner === castle.fallbackRoot ||
               owner === castle.modelRoot) return;
