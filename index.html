@@ -167,7 +167,30 @@
   </div>
 </div>
 <div id="launchFx" aria-hidden="true"></div>
-<div id="deathScreen"><div id="deathTitle">VOCÊ MORREU</div><div id="deathSub">reiniciando...</div></div>
+<!-- ================================================================
+     MORTE. O #deathScreen é `position: fixed` no z-index 200 e recebe
+     ponteiro (não declara pointer-events) — é ELE que come o clique/toque
+     enquanto está na tela, e por isso a saída precisa morar aqui dentro:
+     no celular não existe ESC, o botão de pausa some com `html.playing` e o
+     #hud é pointer-events:none. Antes daqui a única saída do solo era o
+     `location.reload()` — 15 MB de GLB de novo a cada morte.
+
+     #deathBtns NASCE ESCONDIDO de propósito: em partida ONLINE o desfecho é
+     do servidor (recap → espectador) e "JOGAR DE NOVO" ali seria um caminho
+     de reset de estado numa partida autoritativa. Quem revela é o game.js,
+     só no solo (procure por Morte.mostrar).
+
+     Os estilos inline são só LAYOUT (empilhar e afastar do subtítulo) — a
+     aparência vem do .mbtn que o menu já usa; ver style.css, que tem outro
+     dono. Mesmo padrão do #btnMpBack aqui em cima. -->
+<div id="deathScreen">
+  <div id="deathTitle">VOCÊ MORREU</div>
+  <div id="deathSub">reiniciando...</div>
+  <div id="deathBtns" hidden style="margin-top:34px">
+    <div class="mbtn" id="btnRetry" role="button" tabindex="0">▶ &nbsp;JOGAR DE NOVO</div>
+    <div class="mbtn sec" id="btnDeathMenu" role="button" tabindex="0" style="margin:12px auto 0">VOLTAR AO MENU</div>
+  </div>
+</div>
 
 <!-- ================================================================
      CONTROLES DE TOQUE  (mobile — dois analógicos + cluster à direita)

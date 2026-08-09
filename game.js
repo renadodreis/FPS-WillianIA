@@ -84,7 +84,13 @@ const MenuGate = {
    isso o portão além de receber o empurrão (__MP_onlineDown) também PUXA
    a bandeira que aquele arquivo deixa em window. */
 const brQuebrado = () => MenuGate.broken || window.__BR_loadFailed || null;
-const salaNoAr = () => !!__mpSocket && !MenuGate.dropped && !brQuebrado() && !MenuGate.soloChosen;
+/* `__MP_soloOnly` entra junto com `MenuGate.soloChosen` porque os dois são
+   levantados no MESMO clique (ver o handler do #btnNew) — só que o de window é
+   o público, o que o multiplayer-client.js lê pra não tomar a tela. Derivar
+   dos dois deixa o menu correto mesmo quando a escolha de solo chega de fora
+   (QA, ou um caminho novo que esqueça o interno). */
+const salaNoAr = () => !!__mpSocket && !MenuGate.dropped && !brQuebrado()
+  && !MenuGate.soloChosen && !window.__MP_soloOnly;
 function paintMenu() {
   const btn = document.getElementById('btnNew');
   if (!btn) return;
@@ -1133,6 +1139,7 @@ const ui = {
   bossWrap: $('bossWrap'), bossFill: $('bossFill'), dmgDir: $('dmgDir'), banner: $('banner'),
   scope: $('scope'), waterTint: $('waterTint'), healFx: $('healFx'), armorFill: $('armorFill'),
   missionText: $('missionText'), invPanel: $('invPanel'), invList: $('invList'), deathScreen: $('deathScreen'),
+  deathSub: $('deathSub'), deathBtns: $('deathBtns'),
 };
 let bannerTimer = null;
 function showBanner(html, dur = 3500) {
@@ -1333,12 +1340,80 @@ const Orient = createOrientationGate({
   onBlock() { if (state.started && !state.paused) setPaused(true); },
 });
 
+/* ================================================================
+   MORTO — o terceiro dono de tela, e o único que fica ACIMA do menu.
+
+   O #deathScreen é `position: fixed` no z-index 200; o #overlay (menu E
+   pausa) vive no 100 e o #deathScreen não declara `pointer-events`. Ou
+   seja: com os dois na tela ao mesmo tempo o menu fica interativo,
+   INVISÍVEL e inalcançável por trás da morte. MORTO e PAUSA passam a ser
+   mutuamente exclusivos, e a regra de quem cede é diferente por modo:
+
+   · SOLO — a tela de morte É a saída (JOGAR DE NOVO / VOLTAR AO MENU).
+     Pausar por cima dela mostraria um menu cujo único botão grande
+     (#btnNew) está travado com a partida em andamento: jogador preso.
+     Então a pausa é RECUSADA enquanto a saída está na tela.
+   · ONLINE — o desfecho é do SERVIDOR (recap da eliminação → resultado →
+     espectador) e ele precisa ser lido. Aí a morte é quem sai de cena.
+     Era isso que o multiplayer-client.js fazia na mão dentro de
+     LOBBY.overlay; agora sai de graça em qualquer caminho que pause.
+
+   Nada aqui guarda estado próprio: os dois estados são LIDOS do DOM
+   (classe `.show` e o `hidden` dos botões). É o que mantém correto o
+   caminho legado de br-game.js, que tira o `.show` direto no elemento.
+
+   DECLARADO ANTES do setPaused de propósito — o setPaused lê `Morte` e
+   `const` em TDZ já estourou o primeiro setPaused numa rodada anterior
+   (ver o comentário do Orient logo acima). Os corpos dos métodos citam
+   `MENU`, `Touch` e `controls`, que só existem mais abaixo: eles só
+   rodam em tempo de partida, muito depois de tudo estar montado.
+   ================================================================ */
+const Morte = {
+  get naTela() { return ui.deathScreen.classList.contains('show'); },
+  // a tela de morte tem saída própria? (só o solo tem)
+  get temSaida() { return Morte.naTela && !!ui.deathBtns && !ui.deathBtns.hidden; },
+  mostrar() {
+    /* Mesma condição do fluxo de morte: online quem manda no desfecho é o
+       servidor, e oferecer "JOGAR DE NOVO" ali seria reset de estado numa
+       partida autoritativa (ver restartMatch). */
+    const solo = !(window.__MP_active || window.__BR_active);
+    // o menu sai ANTES da morte entrar (é a metade "entrar em MORTO" da regra)
+    if (state.paused) setPaused(false);
+    MENU.close();
+    if (ui.deathBtns) ui.deathBtns.hidden = !solo;
+    if (ui.deathSub) {
+      ui.deathSub.textContent = solo
+        ? 'o mundo continua o mesmo — escolha como seguir'
+        : 'reiniciando...';
+    }
+    ui.deathScreen.classList.add('show');
+    if (!solo) return;
+    /* SOLTA O PONTEIRO. Nada soltava o pointer lock na morte: o jogador
+       seguia olhando (e, até o gate do playerUpdate, andando e pulando) por
+       trás do "VOCÊ MORREU", e o mouse não alcançava botão nenhum.
+       Depois do `.show` de propósito: o `unlock` chama setPaused(true), que
+       agora recusa porque a saída já está na tela. */
+    Touch.setPlaying(false); // celular: solta dedo preso e tira os analógicos
+    try { controls.unlock(); } catch (e) {}
+    const b = document.getElementById('btnRetry');
+    if (b && b.focus) b.focus();
+  },
+  esconder() {
+    ui.deathScreen.classList.remove('show');
+    if (ui.deathBtns) ui.deathBtns.hidden = true;
+  },
+};
+
 function setPaused(p) {
   /* Celular em retrato bloqueado: o #rotateGate cobre a tela inteira (z 400)
      e come todo o toque. Deixar o jogo rodando por baixo é alvo parado — nem
      anda, nem atira, nem alcança o botão de pausa. Vale principalmente pro BR,
      que começa a partida sem o jogador tocar em nada. */
   if (!p && Orient.blocking()) p = true;
+  if (p && Morte.naTela) {
+    if (Morte.temSaida) return;  // SOLO: a saída está na tela; nada sobe atrás dela
+    Morte.esconder();            // ONLINE: o desfecho do servidor tem prioridade
+  }
   __paused = p; // ÚNICA escrita do valor (ver o acessor de state.paused)
   ui.overlay.classList.toggle('hidden', !p);
   ui.overlay.classList.toggle('paused', p && state.started);
@@ -2248,9 +2323,12 @@ function playerDamage(dmg, fromPos, cause) {
     SFX.deathSting();
     timeScale = 0.35; // câmera lenta enquanto cai
     addKillFeed('<b>Você</b> caiu em combate');
-    setTimeout(() => ui.deathScreen.classList.add('show'), 600);
-    if (window.__MP_active || window.__BR_active) setTimeout(() => window.__MP_respawn(), 3600); // online: fluxo da sessão
-    else setTimeout(() => location.reload(), 3600); // solo: reinicia do zero
+    setTimeout(() => Morte.mostrar(), 600);
+    /* ONLINE segue igual: o desfecho é do servidor (recap → espectador).
+       SOLO não recarrega mais a página — a tela de morte ganhou saída
+       própria e JOGAR DE NOVO reinicia a PARTIDA, não o MUNDO (o worldgen
+       não roda de novo: a ordem de consumo do rand seedado é contrato). */
+    if (window.__MP_active || window.__BR_active) setTimeout(() => window.__MP_respawn(), 3600);
   }
 }
 
@@ -2799,7 +2877,11 @@ function tick(forceDt) {
 
   /* simulação */
   Env.update(dt, t);
-  if (!state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
+  /* `player.dead` entra na MESMA lista de reloadBlocked() e do gate de tiro.
+     As três eram quase iguais e não concordavam: sem esta checagem o jogador
+     continuava andando, pulando e olhando com "VOCÊ MORREU" na tela. O corpo
+     para onde caiu (o tombo da câmera é do applyFpsCamera, que segue rodando). */
+  if (!player.dead && !state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
   shootUpdate(dt, t);
   stepPhysics(dt, intendedDt);
   Car.update(dt, t);
@@ -2977,6 +3059,9 @@ const MENU = {
     if (!state.started || state.paused) return false;
     MENU._pausaNossa = true;
     setPaused(true);
+    // a tela de morte do SOLO recusa ceder a frente (ver Morte): sem esta
+    // verificação MENU._pausaNossa ficaria mentindo que existe pausa nossa
+    if (!state.paused) { MENU._pausaNossa = false; return false; }
     return true;
   },
   esconder() { // ...e devolve a tela — só se a pausa tiver sido NOSSA
@@ -2987,7 +3072,231 @@ const MENU = {
   },
 };
 
+/* ================================================================
+   REINÍCIO DE PARTIDA — "JOGAR DE NOVO" reinicia a PARTIDA, não o MUNDO.
+
+   O que o `location.reload()` da morte solo fazia de graça era jogar o
+   processo inteiro fora. O preço era baixar de novo ~15 MB de GLB a cada
+   morte — no celular, a diferença entre jogar e desistir.
+
+   REGENERAR O MUNDO ESTÁ FORA DE COGITAÇÃO: a ordem de consumo do
+   `Math.random` seedado é contrato (CLAUDE.md). O worldgen roda uma vez,
+   no carregamento do módulo, e qualquer coisa que consumisse o stream de
+   novo mudaria o layout E quebraria a reconstrução que bots/servidor
+   fazem a partir da mesma seed. Por isso o reinício é RESTAURAÇÃO DE
+   INSTANTÂNEO: `capturarInicio()` guarda, no fim do boot, o estado que um
+   reload com a mesma seed reproduziria, e o reinício copia de volta.
+   Consumo de `rand` no reinício: ZERO — e há teste medindo
+   (test/morte-sem-reload).
+
+   O QUE NÃO VOLTA (não é esquecimento, é escolha — ver o relatório):
+   · `state.gameTime` segue correndo. Zerar o relógio jogaria pro futuro
+     todos os prazos já agendados em tempo absoluto (nextVolley do boss,
+     nextBurst do inimigo, lastShot da arma) e eles nunca venceriam.
+   · Armas destrancadas por exploração CONTINUAM destrancadas. Re-trancar
+     sem reabrir baús/segredos deixaria a arma inalcançável pra sempre.
+   · Baús já abertos, segredos já achados, cidade destruída, partículas de
+     FX e a trilha sonora seguem como estão.
+   · Esqueletos: os vivos voltam com vida cheia; os mortos voltam pelo
+     respawn do próprio módulo (o spawn deles consome o rand seedado).
+   ================================================================ */
+let __inicio = null;
+const _xyz = o => [o.x, o.y, o.z];
+// cópia rasa só dos campos escalares: estado de boss/alien é objeto plano
+const _planos = o => {
+  const c = {};
+  for (const k in o) { const v = o[k]; if (v === null || typeof v !== 'object' && typeof v !== 'function') c[k] = v; }
+  return c;
+};
+function capturarInicio() {
+  __inicio = {
+    player: _planos(player), playerPos: _xyz(player.pos),
+    inventory: { ...inventory },
+    arsenal: arsenal.map(w => ({ mag: w.mag, reserve: w.reserve })),
+    missao: Missions.idx, mflags: { ...MFlags },
+    tod: GAME_TOD,
+    enemies: Enemies.list.map(e => ({
+      alive: e.alive, health: e.health, fsm: e.fsm, yaw: e.yaw, wpIdx: e.wpIdx,
+      home: { x: e.home.x, z: e.home.z },
+      waypoints: e.waypoints.map(w => ({ x: w.x, z: w.z })),
+      pos: _xyz(e.group.position), escala: e.group.scale.y,
+    })),
+    animals: Animals.list.map(a => ({
+      alive: a.alive, enabled: a.enabled, hp: a.hp, yaw: a.yaw, pos: _xyz(a.group.position),
+    })),
+    boss: _planos(Boss.state), bossPos: _xyz(Boss.pos()),
+    alien: _planos(Alien.state), alienPos: _xyz(Alien.pos()),
+    // loot inicial das cabanas/ruínas: o spawn é público e não consome rand
+    pickups: Pickups.actives().map(p => ({ type: p.type, x: p.root.position.x, z: p.root.position.z })),
+    veiculos: Car.vehicles.map(v => ({
+      pos: _xyz(v.chassisBody.position),
+      quat: [v.chassisBody.quaternion.x, v.chassisBody.quaternion.y, v.chassisBody.quaternion.z, v.chassisBody.quaternion.w],
+    })),
+    heli: _xyz(Heli.group.position),
+  };
+}
+function resetarPartida() {
+  if (!__inicio) return false;
+  const I = __inicio;
+  /* fora de veículo ANTES de tudo: sair reposiciona o player e mexe no HUD */
+  if (state.driving || state.flying) tryToggleCar();
+
+  /* ---- jogador ---- */
+  Object.assign(player, I.player);
+  player.pos.set(I.playerPos[0], I.playerPos[1], I.playerPos[2]);
+  player.vel.set(0, 0, 0);
+  player.lastDamageCause = null;
+  player.lastDamageT = -99;
+  setTimeScale(1);
+  recoil.pitch = recoil.pitchVel = recoil.yaw = recoil.yawVel = 0;
+  recoil.applied = recoil.appliedYaw = recoil.kickZ = recoil.kickRot = 0;
+  flashT = 0; dmgDirT = 0; healAnimT = 0;
+
+  /* ---- entrada (dedo/tecla presos não sobrevivem ao reinício) ---- */
+  for (const k in keys) keys[k] = false;
+  justPressed.clear();
+  mouse.shooting = mouse.aiming = mouse.clicked = false;
+  mouse.swayX = mouse.swayY = 0;
+  Touch.releaseAll();
+
+  /* ---- pontuação, inventário, arsenal ---- */
+  score = 0; kills = 0;
+  Object.assign(inventory, I.inventory);
+  for (let i = 0; i < arsenal.length; i++) {
+    const w = arsenal[i], s = I.arsenal[i];
+    if (!s) continue;
+    w.mag = s.mag; w.reserve = s.reserve;
+    w.reloading = false; w.lastShot = -99;
+    // `locked` de propósito FORA daqui: ver o cabeçalho deste bloco
+  }
+  switchWeapon(0);
+  switchAnim = 1;
+
+  /* ---- inimigos e bichos ---- */
+  for (let i = 0; i < Enemies.list.length; i++) {
+    const e = Enemies.list[i], s = I.enemies[i];
+    if (!s) break;
+    e.alive = s.alive; e.health = s.health; e.fsm = s.fsm; e.yaw = s.yaw; e.wpIdx = s.wpIdx;
+    e.home = { x: s.home.x, z: s.home.z };
+    e.waypoints = s.waypoints.map(w => ({ x: w.x, z: w.z }));
+    e.deadT = 0; e.respawnT = 0; e.flinchT = 0; e.losT = 0; e.alertT = 0;
+    e.burstLeft = 0; e.nextShot = 0; e.flashT = 0;
+    e.ragVel.set(0, 0, 0); e.ragSpin = 0;
+    e.group.position.set(s.pos[0], s.pos[1], s.pos[2]);
+    e.group.rotation.set(0, s.yaw, 0);
+    e.group.scale.setScalar(s.escala);
+    if (e.mixer) e.mixer.timeScale = 1;
+  }
+  for (let i = 0; i < Animals.list.length; i++) {
+    const a = Animals.list[i], s = I.animals[i];
+    if (!s) break;
+    a.alive = s.alive; a.enabled = s.enabled; a.hp = s.hp; a.yaw = s.yaw;
+    a.group.position.set(s.pos[0], s.pos[1], s.pos[2]);
+    a.group.visible = s.alive;
+  }
+  // criaturas da noite nascem TODAS dormentes: quem as acorda é a noite fechada
+  for (const c of Night.list) { c.alive = false; c.hp = 0; c.group.visible = false; c.group.scale.y = 1; }
+  /* esqueletos: o HP cheio não é exportado, e o spawn deles sorteia posição
+     (consome o rand seedado). Cura quem está de pé — o maior HP vivo É o
+     cheio — e deixa o respawn do módulo cuidar dos caídos. */
+  const skCheio = Skeletons.list.reduce((m, s) => Math.max(m, s.hp), 0);
+  if (skCheio > 0) for (const sk of Skeletons.list) {
+    if (!sk.alive) continue;
+    sk.hp = skCheio; sk.attacking = false; sk.attackT = 0; sk.attackHit = false; sk.hitT = 0;
+  }
+
+  /* ---- bosses ---- */
+  Object.assign(Boss.state, I.boss);
+  Boss.pos().set(I.bossPos[0], I.bossPos[1], I.bossPos[2]);
+  Object.assign(Alien.state, I.alien);
+  Alien.pos().set(I.alienPos[0], I.alienPos[1], I.alienPos[2]);
+  Object.assign(MFlags, I.mflags);
+  Missions.idx = I.missao;
+
+  /* ---- projéteis e loot ---- */
+  Grenades.clear();
+  Rockets.clear();
+  for (const p of Pickups.actives()) { p.live = false; p.root.visible = false; }
+  for (const s of I.pickups) Pickups.spawn({ x: s.x, z: s.z }, s.type);
+
+  /* ---- veículos (posição E sono do Cannon) ---- */
+  for (let i = 0; i < Car.vehicles.length; i++) {
+    const v = Car.vehicles[i], s = I.veiculos[i];
+    if (!s) break;
+    const b = v.chassisBody;
+    b.position.set(s.pos[0], s.pos[1], s.pos[2]);
+    b.quaternion.set(s.quat[0], s.quat[1], s.quat[2], s.quat[3]);
+    b.velocity.set(0, 0, 0);
+    b.angularVelocity.set(0, 0, 0);
+    b.force.set(0, 0, 0);
+    b.torque.set(0, 0, 0);
+    Car.wake(v);
+  }
+  Heli.group.position.set(I.heli[0], I.heli[1], I.heli[2]);
+
+  /* ---- relógio e clima: mesma devolução que o startGame faz ---- */
+  Env.tod = I.tod;
+  Env.weather = null;
+
+  /* ---- HUD ---- */
+  updateHealthHUD(); updateArmorHUD(); updateAmmoHUD(); updateInvHUD(); updateSlotsHUD();
+  addScore(0); // repinta pontos/abates zerados
+  ui.killfeed.innerHTML = '';
+  clearTimeout(bannerTimer);
+  ui.banner.classList.remove('show');
+  clearTimeout(msgTimer);
+  ui.centerMsg.style.opacity = '0';
+  ui.invPanel.classList.remove('open');
+  ui.dmgDir.style.opacity = '0';
+  return true;
+}
+/* JOGAR DE NOVO. Devolve `false` (e não faz NADA) quando a partida é do
+   servidor: em BR o estado é autoritativo lá, e um reinício local seria cura,
+   reaparecimento e zeragem de cooldown de graça no meio de um tiroteio. Os
+   botões nem chegam a aparecer online (index.html, #deathBtns nasce hidden) —
+   isto aqui é a segunda tranca, a que vale pra QA, console e caminho novo. */
+function restartMatch() {
+  if (window.__MP_active || window.__BR_active) {
+    console.warn('[morte] JOGAR DE NOVO é do modo solo — em partida online o estado é do servidor');
+    return false;
+  }
+  if (!resetarPartida()) return false;
+  Morte.esconder();
+  state.started = true;
+  setPaused(false);
+  return true;
+}
+function voltarAoMenu() {
+  resetarPartida();
+  Morte.esconder();
+  state.started = false;
+  MENU.close();
+  setPaused(true);
+  try { controls.unlock(); } catch (e) {}
+}
+
 /* ---- menu: botões + painéis ---- */
+$('btnRetry').addEventListener('click', e => {
+  e.stopPropagation();
+  if (!restartMatch()) return;
+  // celular nunca trava o ponteiro (ver startGame); no desktop o clique é a
+  // janela em que o navegador aceita o pedido de lock
+  if (e.isTrusted && !Touch.enabled) {
+    try { controls.lock(); } catch (err) { state.lockFailed = true; }
+  }
+});
+$('btnDeathMenu').addEventListener('click', e => { e.stopPropagation(); voltarAoMenu(); });
+/* ENTER/ESPAÇO nos botões da morte. A navegação por teclado do menu
+   (js/menuscene.js) tem escopo no #panel e só vale com o #overlay na tela —
+   e aqui o #overlay está FORA, de propósito. Sem isto os botões seriam
+   focáveis e mudos pra quem joga no teclado. */
+ui.deathScreen.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const b = e.target && e.target.closest ? e.target.closest('.mbtn') : null;
+  if (!b) return;
+  e.preventDefault();
+  b.click();
+});
 $('btnNew').addEventListener('click', e => {
   e.stopPropagation();
   if (salaNoAr()) return; // sala online de pé: o multijogador é a porta, não o solo
@@ -3115,6 +3424,12 @@ Secrets = createSecrets({ scene, player, SFX, FX, csmMat, Structures, heightAt, 
     return b;
   } });
 
+/* INSTANTÂNEO DA PARTIDA ZERO — aqui, e não antes: é o último ponto do boot
+   em que nada foi jogado ainda. É este estado que "JOGAR DE NOVO" restaura, e
+   é o mesmo que um reload com a mesma seed reproduziria. Só LÊ (nenhuma
+   chamada de rand): a ordem de consumo do stream seedado fica intacta. */
+capturarInicio();
+
 /* hooks de depuração (inofensivos em produção) */
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
@@ -3136,6 +3451,8 @@ window.__game = {
   },
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   MENU,      // painéis do menu único (multiplayer-client.js e QA)
+  Morte,     // tela de morte: dona da frente (z 200) — br-game.js e QA
+  restartMatch, voltarAoMenu, // saídas da morte no SOLO (recusam em partida online)
   setPaused, // ÚNICO escritor de state.paused (QA/testes usam este caminho)
   isMobile: __mobile, // br-game.js pula o pointer lock com isto (script clássico)
   Touch,              // QA: núcleo do toque, elementos e estado do analógico

@@ -1353,8 +1353,9 @@
       P.health = P.maxHealth;
       P.invulnUntil = Infinity;
       MP.updateHealthHUD();
-      const ds = document.getElementById('deathScreen');
-      if (ds) ds.classList.remove('show');
+      // a tela de morte tem dono no jogo (game.js, Morte): tirar o `.show` na
+      // mão daqui deixava os botões do solo escondidos e o estado meio-limpo
+      G.Morte.esconder();
       MP.setTimeScale(1);
       LOBBY.hide();
       UI.spectBar.style.display = 'block';

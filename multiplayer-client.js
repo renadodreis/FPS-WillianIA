@@ -604,15 +604,12 @@
       overlay(html) { // telas de eliminação/fim de partida usam o mesmo painel
         if (soloEscolhido()) return;
         soltarMouse();
-        /* A TELA DE MORTE SAI DE CENA. Ela é `position: fixed` no z-index 200
-           e o menu inteiro vive no 100: com o painel dentro do menu, deixar o
-           "VOCÊ MORREU" no ar esconderia justamente o recap que o explica.
-           Quem manda agora é este painel — e a fase de espectador já limpava
-           esta classe 4 s depois, aqui só antecipa. (O acerto geral do
-           #deathScreen — pointer-events e ordem com o menu — é da etapa da
-           morte sem reload; ver docs/2026-08-09-menu-unico.md, item 5.) */
-        const ds = document.getElementById('deathScreen');
-        if (ds) ds.classList.remove('show');
+        /* A TELA DE MORTE SAI DE CENA SOZINHA. Ela é `position: fixed` no
+           z-index 200 e o menu inteiro vive no 100: deixar o "VOCÊ MORREU" no
+           ar esconderia justamente o recap que o explica. Isto era tirado aqui
+           na mão; agora MORTO e PAUSA são mutuamente exclusivos no setPaused
+           (game.js, ver Morte) e o G.MENU.mostrar() logo abaixo já resolve —
+           por qualquer caminho que traga o menu pra frente, não só por este. */
         setLobbyHtml(`<div class="brCard">${html}</div>`);
         lobby.style.display = 'flex';
         G.MENU.open('mp');

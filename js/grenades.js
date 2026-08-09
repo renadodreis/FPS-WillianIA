@@ -173,8 +173,16 @@ export function createGrenades(deps) {
       }
     }
   }
+  /* Apaga o que está NO AR sem explodir: é o reinício de partida (o
+     `location.reload()` da morte solo levava o pool embora de graça). Sem
+     isto uma granada arremessada no último segundo de vida detonaria em cima
+     do jogador recém-reiniciado. Só zera o pool — não toca em inventário,
+     dano nem no clarão que já estiver aceso. */
+  function clear() {
+    for (const n of pool) { n.live = false; n.g.visible = false; n.fuse = 0; n.vel.set(0, 0, 0); }
+  }
   return {
-    throwNade, update, explode, explodeFx,
+    throwNade, update, explode, explodeFx, clear,
     // hooks de QA: onde e por quanto tempo o clarão está aceso
     boomLight,
     get boomT() { return boomT; },

@@ -106,6 +106,14 @@ async function bootGame({
      jeito: é o único modo de testar o próprio menu (botão travado, aviso de
      queda, clique que inicia o solo). Nada mais muda. */
   autoStart = true,
+  /* true (padrão histórico) = a página nasce com __MP_active e __BR_active
+     ligados, como sempre foi: a IA solo fica fora do caminho e a morte cai no
+     fluxo de sessão online. false = modo SOLO DE VERDADE — é o único jeito de
+     alcançar a branch de morte solo, que com as duas bandeiras sempre ligadas
+     era matematicamente inalcançável em CI (ver docs/2026-08-09-menu-unico.md,
+     "lacunas de teste"). Com false os inimigos, a noite e o boss VOLTAM a
+     rodar: é o jogo solo, não um cenário controlado. */
+  online = true,
 }) {
   const puppeteer = require('puppeteer-core');
   const rankFile = extraEnv.RANK_FILE || path.join(os.tmpdir(),
@@ -131,16 +139,24 @@ async function bootGame({
         '--use-gl=angle', '--use-angle=swiftshader', '--mute-audio', '--window-size=800,600'],
     });
     const page = await browser.newPage();
-    // A flag existe antes do primeiro tick: sob máquina carregada, uma morte
-    // no boot não pode agendar location.reload e destruir o contexto do QA.
-    await page.evaluateOnNewDocument(() => {
-      window.__MP_active = true;
-      window.__BR_active = true;
-      window.__MP_respawn = () => {};
+    // As flags existem antes do primeiro tick: sob máquina carregada, uma morte
+    // no boot não pode cair no fluxo errado e destruir o contexto do QA.
+    await page.evaluateOnNewDocument(onlineNaPagina => {
+      if (onlineNaPagina) {
+        window.__MP_active = true;
+        window.__BR_active = true;
+        window.__MP_respawn = () => {};
+      } else {
+        /* SOLO DE VERDADE. O servidor de QA está no ar (ele serve a página),
+           então sem esta bandeira o cliente BR bootaria e publicaria
+           __MP_active — e a branch solo seguiria inalcançável. É a MESMA
+           bandeira que o botão SOLO do menu levanta em produção. */
+        window.__MP_soloOnly = true;
+      }
       // reconexão em partida recarrega a página em produção; o QA preserva o
       // contexto (mesmo padrão do __MP_respawn) — o cenário degrada gracioso
       window.__MP_reload = () => {};
-    });
+    }, online);
     if (viewport) await page.setViewport(viewport);
   const pageErrors = [];
   const consoleErrors = [];
@@ -169,7 +185,7 @@ async function bootGame({
     timeout: 90000,
   });
   await page.waitForFunction('!!window.__game && !!window.__MP', { timeout: 90000 });
-    await page.evaluate(autoStartNaPagina => {
+    await page.evaluate((autoStartNaPagina, onlineNaPagina) => {
       const G = window.__game, MP = window.__MP;
       // Loops manuais longos podem bloquear o heartbeat do socket. Em
       // produção o reconnect recarrega a página de propósito; no QA removemos
@@ -178,13 +194,15 @@ async function bootGame({
         if (typeof MP.socket.io.off === 'function') MP.socket.io.off('reconnect');
         if (typeof MP.socket.io.reconnection === 'function') MP.socket.io.reconnection(true);
       }
-      // morte no solo agenda location.reload — no QA o respawn é neutralizado
-    window.__MP_active = true;
-    window.__QA_originalRespawn = window.__MP_respawn;
-    window.__MP_respawn = () => {};
-    // IA fora do caminho: __BR_active desliga Enemies/Night/Boss no tick
-    // (o hitscan continua acertando os bonecos parados) e os animais morrem
-    window.__BR_active = true;
+      // a morte online devolve o fluxo pro servidor — no QA o respawn é neutro
+    if (onlineNaPagina) {
+      window.__MP_active = true;
+      window.__QA_originalRespawn = window.__MP_respawn;
+      window.__MP_respawn = () => {};
+      // IA fora do caminho: __BR_active desliga Enemies/Night/Boss no tick
+      // (o hitscan continua acertando os bonecos parados) e os animais morrem
+      window.__BR_active = true;
+    }
     // PERF do QA: mecânica não precisa de pixels — render vira no-op
     MP.composer.render = () => {};
     if (autoStartNaPagina) G.forceStart();
@@ -225,7 +243,7 @@ async function bootGame({
       },
       pos() { const P = window.QA.MP.player.pos; return [P.x, P.z, P.y]; },
     };
-  }, autoStart);
+  }, autoStart, online);
 
   return {
     browser, page, srv, port, pageErrors, consoleErrors, requestFailures,

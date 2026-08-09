@@ -84,5 +84,10 @@ export function createRockets(deps) {
       if (r.live) r.m.lookAt(_v1.copy(r.m.position).add(r.vel)); // aponta na direção da velocidade
     }
   }
-  return { fire, update, speed: ROCKET_SPEED };
+  /* Tira do ar sem detonar — reinício de partida (ver createGrenades.clear).
+     Detonar aqui aplicaria dano de área no jogador que acabou de reaparecer. */
+  function clear() {
+    for (const r of pool) { r.live = false; r.m.visible = false; r.vel.set(0, 0, 0); r.smokeAcc = 0; }
+  }
+  return { fire, update, clear, speed: ROCKET_SPEED };
 }
