@@ -334,3 +334,184 @@ describe('Grama — LOD de lâmina (Chrome headless)', { skip: !CHROME && 'Chrom
     assert.equal(r.depois, false, 'chunk ficou reduzido mesmo colado no jogador');
   });
 });
+
+/* ================================================================
+   ESFERA DE CULLING POR CHUNK — a que o renderer REALMENTE testa.
+
+   `Frustum.intersectsObject` (three r185) usa `object.boundingSphere`
+   quando a propriedade EXISTE, e `InstancedMesh` a define. Se ela ficar
+   nula, o three chama `InstancedMesh.computeBoundingSphere()`, que UNE
+   `geometry.boundingSphere` aplicada a CADA matriz de instância — ou
+   seja, espalha a esfera da geometria pelos 1005 pontos do chunk.
+
+   Os dois lados são fixados aqui, e é a combinação que vale:
+     - TETO: a esfera não pode passar do pior caso derivado das
+       constantes do shader (senão o culling engrossa de graça);
+     - PISO: nenhuma lâmina, com vento e dobra no MÁXIMO, pode ficar
+       fora dela (senão grama visível some — o wallhack proibido).
+   ================================================================ */
+describe('Grama — esfera de culling por chunk (Chrome headless)', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  let h, dados;
+
+  /* Pior caso do vertex shader, derivado das constantes de js/grass.js e
+     js/env.js — recalculado AQUI, de propósito, para não copiar a conta da
+     implementação. Se as duas contas divergirem, o teste acusa. */
+  const WIND_STRENGTH = 0.55, SIZE = 10;
+  const VENTO_MAX = 1.125 * (WIND_STRENGTH + 0.5) + 0.055; // js/env.js:117 escreve uWind
+  const DOBRA_MAX = 1.05 + 1.4;              // bendAway do player + do carro, somados
+  const DESLOC_H = VENTO_MAX + DOBRA_MAX;    // deslocamento horizontal máximo de uma lâmina
+  const QUEDA_MAX = 0.16 * (WIND_STRENGTH + 0.5) + 0.3 + 0.42; // afundamento máximo
+  const ALCANCE = Math.hypot(SIZE / 2, SIZE / 2) + 0.45 + DESLOC_H;
+  const DESLOC = { h: DESLOC_H, queda: QUEDA_MAX };
+
+  /* Perfil por chunk: a esfera que o RENDERER testa (mesmo caminho de
+     Frustum.intersectsObject, inclusive o cálculo tardio quando ela é nula)
+     e os extremos REAIS das instâncias. Uma fonte só para os dois cenários
+     (grade recém-criada e grade reciclada). */
+  const PERFIL = desloc => {
+    const G = window.QA.G, MP = window.QA.MP, THREE = MP.THREE;
+    const malhas = [];
+    MP.scene.traverse(o => {
+      if (o.isInstancedMesh && o.material === G.Grass.material) malhas.push(o);
+    });
+    const esf = new THREE.Sphere(), p = new THREE.Vector3();
+    // caixa local da LÂMINA: PlaneGeometry(0.1, 1) afunilada + curva de 0.18 em z
+    const canto = [];
+    for (const sx of [-0.05, 0.05]) for (const sy of [0, 1]) for (const sz of [0, 0.18])
+      canto.push([sx, sy, sz]);
+    const e = new Float32Array(16);
+    return malhas.map(m => {
+      if (m.boundingSphere === null) m.computeBoundingSphere();
+      esf.copy(m.boundingSphere).applyMatrix4(m.matrixWorld);
+      p.setFromMatrixPosition(m.matrixWorld);
+      const arr = m.instanceMatrix.array;
+      let raizMin = Infinity, topoMax = -Infinity, pior = 0;
+      for (let i = 0; i < m.count; i++) {
+        for (let k = 0; k < 16; k++) e[k] = arr[i * 16 + k];
+        /* colunas da matriz LIDAS DIRETO (quirk r185: decompose de matriz
+           singular — lâmina colapsada com escala ~0 — devolve escala (1,1,1)
+           falsa e mentiria sobre a altura). */
+        const rx = e[12] + p.x, ry = e[13] + p.y, rz = e[14] + p.z;
+        if (ry < raizMin) raizMin = ry;
+        for (const [cx, cy, cz] of canto) {
+          const wx = rx + e[0] * cx + e[4] * cy + e[8] * cz;
+          const wy = ry + e[1] * cx + e[5] * cy + e[9] * cz;
+          const wz = rz + e[2] * cx + e[6] * cy + e[10] * cz;
+          if (wy > topoMax) topoMax = wy;
+          // vento e dobra empurram no plano XZ e afundam em Y
+          const dxz = Math.hypot(wx - esf.center.x, wz - esf.center.z) + desloc.h;
+          const d = Math.max(Math.hypot(dxz, wy - esf.center.y),
+            Math.hypot(dxz, wy - desloc.queda - esf.center.y));
+          if (d > pior) pior = d;
+        }
+      }
+      return {
+        cx: Math.round(p.x / 10), cz: Math.round(p.z / 10),
+        raio: esf.radius, centroY: esf.center.y,
+        centroXZ: Math.hypot(esf.center.x - p.x, esf.center.z - p.z),
+        raizMin, topoMax, pior, laminas: m.count,
+      };
+    });
+  };
+
+  /* TETO do raio: alcance horizontal do pior caso + a metade da faixa
+     vertical REAL do chunk + 0,5 m de folga. É a soma, não a hipotenusa, de
+     propósito: o teto é a rede contra culling grosso, não uma reimplementação
+     da fórmula (essa é fixada pelo PISO do teste anti-trapaça). */
+  const conferir = (perfil, rotulo) => {
+    const teto = c => ALCANCE + (c.topoMax - c.raizMin) / 2 + QUEDA_MAX / 2 + 0.5;
+    const grandes = perfil.filter(c => c.raio > teto(c))
+      .sort((a, b) => (b.raio - teto(b)) - (a.raio - teto(a)));
+    assert.deepEqual(grandes.slice(0, 3).map(c =>
+      `(${c.cx},${c.cz}) raio ${c.raio.toFixed(2)} > teto ${teto(c).toFixed(2)}`), [],
+    `${rotulo}: ${grandes.length}/${perfil.length} chunks com esfera maior que o pior caso do shader`);
+    /* o centro tem que ser o do CHUNK. Quando o three calcula sozinho, a
+       matriz de instância translada o centro da esfera da geometria junto e
+       ele vai parar perto de 2x a altura do terreno. */
+    const fora = perfil.filter(c =>
+      c.centroY < c.raizMin - 1.5 || c.centroY > c.topoMax + 1.5 || c.centroXZ > 0.01);
+    assert.deepEqual(fora.slice(0, 3).map(c =>
+      `(${c.cx},${c.cz}) centro em ${c.centroY.toFixed(2)}, chunk de ${c.raizMin.toFixed(2)} a ${c.topoMax.toFixed(2)} (dXZ ${c.centroXZ.toFixed(2)})`), [],
+    `${rotulo}: ${fora.length}/${perfil.length} chunks com o centro da esfera fora do próprio chunk`);
+  };
+
+  before(async () => {
+    h = await bootGame({ port: 3242 });
+    dados = await h.play(arg => {
+      window.QA.reset(0, 0);
+      window.QA.tick(200); // drena a fila de refill
+      return (0, eval)('(' + arg.src + ')')(arg.desloc);
+    }, { src: PERFIL.toString(), desloc: DESLOC });
+  });
+  after(async () => { if (h) await h.close(); });
+
+  it('a esfera de culling é do tamanho do CHUNK, não da união por instância', () => {
+    assert.ok(dados.length > 100, `grade de chunks inesperada: ${dados.length}`);
+    conferir(dados, 'grade inicial');
+  });
+
+  it('ANTI-TRAPAÇA: nenhuma lâmina fica fora da esfera nem com vento e dobra no máximo', () => {
+    const estouram = dados.filter(c => c.pior > c.raio + 1e-4)
+      .sort((a, b) => (b.pior - b.raio) - (a.pior - a.raio));
+    assert.deepEqual(estouram.slice(0, 3).map(c =>
+      `(${c.cx},${c.cz}) lâmina a ${c.pior.toFixed(3)} m do centro, esfera de ${c.raio.toFixed(3)} m`), [],
+    `${estouram.length}/${dados.length} chunks com lâmina fora da esfera — grama visível seria descartada`);
+    // a folga tem que ser MEDIDA, não confortável por acidente
+    const folga = Math.min(...dados.map(c => c.raio - c.pior));
+    assert.ok(folga >= 0 && folga < 3,
+      `folga da esfera fora da faixa medida: ${folga.toFixed(3)} m (negativa = corta lâmina, larga = culling grosso)`);
+  });
+
+  it('chunk reciclado refaz a esfera (o three só calcula quando ela é nula)', async () => {
+    const r = await h.play(arg => {
+      const G = window.QA.G, MP = window.QA.MP;
+      window.QA.reset(0, 0); window.QA.tick(200);
+      // relevo BEM diferente do spawn: a grade inteira é reciclada por lá
+      MP.player.pos.set(420, G.heightAt(420, -420) + 1, -420);
+      window.QA.tick(400);
+      return (0, eval)('(' + arg.src + ')')(arg.desloc);
+    }, { src: PERFIL.toString(), desloc: DESLOC });
+    conferir(r, 'grade reciclada');
+    const estouram = r.filter(c => c.pior > c.raio + 1e-4);
+    assert.equal(estouram.length, 0,
+      `${estouram.length}/${r.length} chunks reciclados com lâmina fora da esfera`);
+  });
+
+  it('CONTRATO DO PRNG: o consumo do stream seedado na criação da grama não mudou', async () => {
+    const r = await h.play(async () => {
+      const { createGrass } = await import('/js/grass.js');
+      const THREE = window.QA.MP.THREE;
+      const scene = new THREE.Scene();
+      let randCalls = 0, mathCalls = 0;
+      const originalRandom = Math.random;
+      Math.random = () => { mathCalls++; return 0.5; };
+      try {
+        const grass = createGrass({
+          CFG: { GRASS_CHUNKS: 3, GRASS_TOTAL: 45, GRASS_CHUNK_SIZE: 10,
+            GRASS_HEIGHT: 0.95, WIND_STRENGTH: 0.55 },
+          rand: (a, b) => { randCalls++; return b === undefined ? a * 0.5 : a + (b - a) * 0.5; },
+          TAU: Math.PI * 2,
+          heightAt: () => 2, biomeAt: () => 0.1, WATER_LEVEL: -5,
+          simplex: { noise: () => 0 },
+          scene, sunDir: new THREE.Vector3(0, 1, 0),
+          CITY: null, VOLCANO: null, clearings: [], cityGrassFactor: null,
+          worldSeed: 424242,
+        });
+        const out = { randCalls, mathCalls };
+        scene.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+        grass.material.dispose();
+        return out;
+      } finally { Math.random = originalRandom; }
+    });
+    /* 3x3 chunks x floor(45/9) = 5 lâminas.
+       `rand`: legacyConsume (js/grass.js:184-198) gasta 8 por lâmina.
+       `Math.random`: 1 por lâmina no mesmo legacyConsume (o 2º, do deserto,
+       não dispara com biomeAt=0.1) MAIS 4 por UUID do three — e o three
+       gera 22 UUIDs aqui (9 geometrias + 9 InstancedMesh + material + as
+       duas lâminas base + a Scene). Ou seja: este teste fixa as DUAS coisas
+       que deslocam o mundo com o mesmo seed — a contagem do legacyConsume E
+       quantos objetos do three a grama cria. */
+    assert.deepEqual(r, { randCalls: 9 * 5 * 8, mathCalls: 9 * 5 * 1 + 22 * 4 },
+      'o consumo do rand/Math.random global mudou — o layout do mundo anda com o mesmo seed');
+  });
+});

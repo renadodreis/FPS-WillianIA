@@ -46,8 +46,34 @@ export function createGrass(deps) {
      altura e alcance da grama são idênticos e nunca viram configuração do
      jogador — grama mais rala é wallhack contra quem está deitado no mato. */
   const loBlade = bladeGeometry(2);
+  /* esfera da LÂMINA (não do chunk). Ela vai junto no clone de cada chunk e é
+     o que `InstancedMesh.computeBoundingSphere` usaria como unidade se algum
+     dia precisasse recalcular. As duas lâminas têm a MESMA extensão (o LOD só
+     tira subdivisão), então a do baseBlade serve para as duas. */
+  baseBlade.computeBoundingSphere();
   const LOD_RING = CFG.GRASS_LOD_RING || 4; // chunks além deste anel usam a reduzida
   const bladeTriangles = geo => (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
+
+  /* ================= ESFERA DE CULLING DO CHUNK =====================
+     Alcance HORIZONTAL máximo de uma lâmina a partir do centro do chunk.
+     Cada parcela sai de uma constante deste arquivo ou do js/env.js — nada
+     de margem chutada, porque é ela que separa "culling correto" de
+     "grama visível descartada" (wallhack).
+
+       meia-diagonal do chunk  hypot(SIZE/2, SIZE/2): a raiz mais distante
+       lâmina 0.45             meia-largura 0.0625 + curva 0.18 + o tombo de
+                               0.13 rad em x e z sobre 1.33 m de altura
+       vento                   (0.85 + 0.275)*uWind + sway 0.055, com uWind
+                               no MÁXIMO que js/env.js:117 escreve
+       dobra                   bendAway do player (1.05) + do carro (1.4),
+                               somados: o pior caso é o jogador DENTRO do
+                               carro, quando as duas empurram para o mesmo lado
+     A queda (`AFUNDA`) é vertical e só para baixo: vento (0.16*uWind) mais
+     as duas dobras (0.3 e 0.42). */
+  const VENTO_MAX = 1.125 * (CFG.WIND_STRENGTH + 0.5) + 0.055;
+  const ALCANCE = Math.hypot(SIZE / 2, SIZE / 2) + 0.45 + VENTO_MAX + (1.05 + 1.4);
+  const AFUNDA = 0.16 * (CFG.WIND_STRENGTH + 0.5) + 0.3 + 0.42;
+  const ALTURA_MAX = 1.4 * CFG.GRASS_HEIGHT;   // maior escala Y que fillChunk sorteia
 
   const uniforms = {
     uTime:        { value: 0 },
@@ -257,9 +283,22 @@ export function createGrass(deps) {
     phase.needsUpdate = true;
     tint.needsUpdate = true;
     chunk.mesh.instanceMatrix.needsUpdate = true;
-    const midY = (minY + maxY) / 2;
-    chunk.mesh.geometry.boundingSphere.center.set(0, midY, 0);
-    chunk.mesh.geometry.boundingSphere.radius = SIZE * 0.75 + (maxY - minY) * 0.5 + 2;
+    /* CULLING: a esfera tem que ser a do MESH, não a da geometria. O three
+       r185 (Frustum.intersectsObject) usa `object.boundingSphere` sempre que
+       a propriedade existe — e InstancedMesh a define. Deixá-la nula fazia o
+       three chamar computeBoundingSphere(), que UNE a esfera da geometria
+       aplicada a CADA uma das 1005 instâncias: com uma esfera do tamanho do
+       chunk na geometria, o resultado saía com o dobro do raio necessário e
+       com o centro perto de 2x a altura do terreno (a matriz de instância
+       translada o centro junto). Medido no celular: raio médio 20,49 m onde
+       11,38 m bastam, 87,8 draw calls onde 72,7 bastam.
+       Escrever aqui, e não uma vez só, é obrigatório: o three só calcula
+       quando a esfera está nula, e chunk reciclado muda de terreno. */
+    const yBase = minY - AFUNDA, yTopo = maxY + ALTURA_MAX;
+    const esfera = chunk.mesh.boundingSphere ||
+      (chunk.mesh.boundingSphere = new THREE.Sphere());
+    esfera.center.set(0, (yBase + yTopo) / 2, 0);
+    esfera.radius = Math.hypot(ALCANCE, (yTopo - yBase) / 2);
   }
 
   function makeChunk(cx, cz) {
@@ -267,7 +306,6 @@ export function createGrass(deps) {
     geo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(new Float32Array(PER_CHUNK), 1));
     geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(new Float32Array(PER_CHUNK * 3), 3));
     geo.setAttribute('aTrack', new THREE.InstancedBufferAttribute(new Float32Array(PER_CHUNK).fill(-1e4), 1));
-    geo.boundingSphere = new THREE.Sphere();
     const mesh = new THREE.InstancedMesh(geo, material, PER_CHUNK);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = true;   // culling por chunk
