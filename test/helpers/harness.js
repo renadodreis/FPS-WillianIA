@@ -101,6 +101,11 @@ async function bootGame({
      do goto de propósito: chamar setViewport depois do boot RECRIA o contexto
      de execução e apaga o window.QA injetado aqui. null = não chama nada. */
   viewport = null,
+  /* true (padrão histórico) = o harness chama G.forceStart() e entrega a
+     página JÁ em jogo. false = para no MENU, com window.QA montado do mesmo
+     jeito: é o único modo de testar o próprio menu (botão travado, aviso de
+     queda, clique que inicia o solo). Nada mais muda. */
+  autoStart = true,
 }) {
   const puppeteer = require('puppeteer-core');
   const rankFile = extraEnv.RANK_FILE || path.join(os.tmpdir(),
@@ -164,7 +169,7 @@ async function bootGame({
     timeout: 90000,
   });
   await page.waitForFunction('!!window.__game && !!window.__MP', { timeout: 90000 });
-    await page.evaluate(() => {
+    await page.evaluate(autoStartNaPagina => {
       const G = window.__game, MP = window.__MP;
       // Loops manuais longos podem bloquear o heartbeat do socket. Em
       // produção o reconnect recarrega a página de propósito; no QA removemos
@@ -182,7 +187,7 @@ async function bootGame({
     window.__BR_active = true;
     // PERF do QA: mecânica não precisa de pixels — render vira no-op
     MP.composer.render = () => {};
-    G.forceStart();
+    if (autoStartNaPagina) G.forceStart();
     for (const a of (G.Animals && G.Animals.list) || []) a.alive = false;
     window.QA = {
       G, MP,
@@ -220,7 +225,7 @@ async function bootGame({
       },
       pos() { const P = window.QA.MP.player.pos; return [P.x, P.z, P.y]; },
     };
-  });
+  }, autoStart);
 
   return {
     browser, page, srv, port, pageErrors, consoleErrors, requestFailures,

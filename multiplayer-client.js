@@ -6,16 +6,74 @@
 (function () {
   'use strict';
 
+  /* ---------------------------------------------------------------
+     A PARTE 2 PODE NÃO CHEGAR — E ISSO NÃO PODE TRAVAR O JOGO.
+     O <script> era injetado sem `onerror` e o poll não tinha teto: um
+     404 (ou rede caindo) deixava o poll girando pra sempre, boot() nunca
+     rodava, o lobby nunca aparecia e o menu ficava com o botão travado
+     em "ABRINDO LOBBY..." eternamente, sem erro visível.
+
+     Agora há três desfechos, e nenhum deles prende o jogador:
+     · FALHA DEFINITIVA (erro do <script>, ou script que carrega sem
+       publicar __BR_game): desiste na hora e o menu libera o solo.
+     · DEMORA: passado o teto, o menu LIBERA O SOLO mas o poll continua —
+       download lento não é motivo pra amputar o online. Se a parte 2
+       chegar depois (e o jogador não tiver escolhido solo), o BR boota
+       normalmente e o menu volta ao normal (__MP_onlineUp).
+     · DESISTÊNCIA: passado o prazo longo, o poll para de vez.
+     --------------------------------------------------------------- */
+  const ESPERA_BR_MS = 20000;       // libera o menu (contado do RESTO já pronto)
+  const DESISTIR_BR_MS = 180000;    // e aqui o poll para de girar de vez
+  let poll = null, esperaDesde = 0, liberado = false;
+
+  function viraSolo(motivo, definitivo) {
+    if (definitivo && poll) clearInterval(poll);
+    if (liberado) return;
+    liberado = true;
+    console.warn('[BR] modo online fora do ar — o jogo segue solo:', motivo);
+    /* bandeira PUXADA pelo menu: este arquivo é script clássico e roda
+       ANTES do game.js (módulo, deferido), então o gancho abaixo pode
+       nem existir ainda quando a falha acontece. */
+    window.__BR_loadFailed = motivo;
+    if (typeof window.__MP_onlineDown === 'function') window.__MP_onlineDown(motivo);
+  }
+  function voltouOnline() { // a parte 2 chegou atrasada, mas chegou
+    if (!liberado) return;
+    liberado = false;
+    window.__BR_loadFailed = null;
+    if (typeof window.__MP_onlineUp === 'function') window.__MP_onlineUp();
+  }
+
   /* carrega a parte 2 (lógica da partida) */
   const s2 = document.createElement('script');
   s2.src = 'br-game.js';
+  s2.onerror = () => viraSolo('br-game.js não carregou (404 ou rede)', true);
+  // script que estoura ANTES de publicar __BR_game dispara `load`, não `error`
+  s2.onload = () => {
+    if (!window.__BR_game) viraSolo('br-game.js carregou sem publicar __BR_game', true);
+  };
   document.body.appendChild(s2);
 
-  const poll = setInterval(() => {
+  poll = setInterval(() => {
+    if (window.__MP_soloOnly) { // jogador já escolheu solo: o BR não toma a tela
+      clearInterval(poll);
+      console.log('[BR] jogo solo escolhido pelo jogador — BR não assume');
+      return;
+    }
     if (!window.__MP) return;
     if (window.__MP.socket && window.__MP_init) {
-      if (!window.__BR_game) return; // espera br-game.js carregar
+      if (!window.__BR_game) { // espera br-game.js carregar — mas com prazo
+        // a contagem só começa aqui: em máquina fraca o worldgen sozinho passa
+        // fácil de 20 s e não é culpa do download da parte 2.
+        if (!esperaDesde) esperaDesde = Date.now();
+        const esperando = Date.now() - esperaDesde;
+        if (esperando > DESISTIR_BR_MS) viraSolo('br-game.js nunca chegou', true);
+        else if (esperando > ESPERA_BR_MS)
+          viraSolo(`br-game.js não respondeu em ${ESPERA_BR_MS / 1000}s`, false);
+        return;
+      }
       clearInterval(poll);
+      voltouOnline();
       boot(window.__MP, window.__game, window.__MP_init);
     } else {
       clearInterval(poll);
@@ -533,6 +591,38 @@
       if (window.__BR_syncFlagsUI) window.__BR_syncFlagsUI();
     });
     socket.emit('hello', { nick: S.nick, colors: S.myColors });
+
+    /* ---------- a sala caiu com o lobby na tela ----------
+       O lobby cobre a tela inteira (z-index 300) e não tinha NENHUM
+       tratamento de queda: com o socket morto ele seguia dizendo
+       "AGUARDANDO O ANFITRIÃO..." e o jogador ficava sem saída nenhuma.
+       Duas respostas, nesta ordem:
+       1. imediata — o botão conta a verdade;
+       2. passada a carência, ainda no LOBBY (nenhuma partida em curso), o
+          lobby SAI DA FRENTE e o menu base volta a ser alcançável, onde o
+          #btnNew já libera o solo (game.js/paintMenu).
+       Voltando o socket, o lobby volta com ele — a não ser que o jogador
+       já tenha escolhido solo. Escada provisória até o menu único. */
+    const CARENCIA_QUEDA_MS = 8000;
+    let quedaT = null, lobbyEscondidoPelaQueda = false;
+    socket.on('disconnect', () => {
+      const btn = document.getElementById('brStartBtn');
+      if (btn) { btn.disabled = true; btn.textContent = '⚠ CONEXÃO CAIU — RECONECTANDO...'; }
+      clearTimeout(quedaT);
+      quedaT = setTimeout(() => {
+        if (socket.connected || S.phase !== 'LOBBY' || lobby.style.display === 'none') return;
+        lobbyEscondidoPelaQueda = true;
+        LOBBY.hide();
+      }, CARENCIA_QUEDA_MS);
+    });
+    socket.on('connect', () => {
+      clearTimeout(quedaT);
+      if (window.__MP_soloOnly) return; // o jogador já saiu pro solo: não sequestrar a tela
+      if (lobbyEscondidoPelaQueda && S.phase === 'LOBBY') {
+        lobbyEscondidoPelaQueda = false;
+        LOBBY.show();
+      } else refreshLobbyRoster();
+    });
 
     /* ---------- reconexão ----------
        O servidor emite um `init` FRESCO em toda conexão. Uma reconexão ainda

@@ -61,6 +61,64 @@ import { createSecrets } from './js/secrets.js';
 import { buildChest } from './js/chestmodel.js';
 
 /* ================================================================
+   PORTÃO DO MENU — o estado dos botões é DERIVADO do estado ATUAL.
+
+   Antes o #btnNew era travado UMA vez no boot, por um instantâneo de
+   `__mpSocket`: se a sala caísse depois, ou se o br-game.js nunca
+   carregasse, o botão ficava morto com "ABRINDO LOBBY..." PARA SEMPRE e
+   nada avisava (é o "trava" relatado pelo dono). Agora quem decide é
+   paintMenu(), chamado por quem MUDA o estado — boot, queda/volta de
+   socket e falha do carregamento do BR.
+
+   Declarado ANTES do bootstrap de propósito: os handlers de socket lá
+   embaixo chamam paintMenu() e não podem pegar TDZ.
+   ================================================================ */
+const MenuGate = {
+  wired: false,      // os listeners do menu já existem (fim deste módulo)
+  dropped: false,    // socket caído AGORA (a reconexão automática segue tentando)
+  broken: null,      // sala online inutilizável de vez (br-game.js não carregou)
+  soloChosen: false, // o jogador já escolheu solo com a sala fora do ar
+};
+/* multiplayer-client.js é script CLÁSSICO e roda ANTES deste módulo
+   (deferido): a falha do br-game.js pode ser anterior ao boot daqui. Por
+   isso o portão além de receber o empurrão (__MP_onlineDown) também PUXA
+   a bandeira que aquele arquivo deixa em window. */
+const brQuebrado = () => MenuGate.broken || window.__BR_loadFailed || null;
+const salaNoAr = () => !!__mpSocket && !MenuGate.dropped && !brQuebrado() && !MenuGate.soloChosen;
+function paintMenu() {
+  const btn = document.getElementById('btnNew');
+  if (!btn) return;
+  const cfg = document.getElementById('btnSettings');
+  const aviso = document.getElementById('menuNotice');
+  // com a partida em andamento o #overlay é tela de PAUSA: prometer "NOVO
+  // JOGO" ali é mentira (startGame recusa). Etiqueta de pausa é da etapa 2.
+  const jogando = !!(window.__game && window.__game.state.started);
+  let texto = null, travado = true, motivo = '';
+  if (!MenuGate.wired) texto = 'CARREGANDO O MUNDO...';
+  else if (salaNoAr()) texto = '🌐 SALA ONLINE — ABRINDO LOBBY...';
+  else if (!jogando) { travado = false; texto = __mpSocket ? 'NOVO JOGO — SOLO' : 'NOVO JOGO'; }
+  if (MenuGate.wired && brQuebrado())
+    motivo = '⚠ A SALA ONLINE NÃO CARREGOU — DÁ PRA JOGAR SOLO AGORA.';
+  else if (MenuGate.wired && MenuGate.dropped)
+    motivo = '⚠ CONEXÃO COM A SALA CAIU — TENTANDO VOLTAR. DÁ PRA JOGAR SOLO ENQUANTO ISSO.';
+  if (texto !== null && btn.textContent !== texto) btn.textContent = texto;
+  btn.classList.toggle('disabled', travado);
+  btn.setAttribute('aria-disabled', String(travado));
+  if (cfg) {
+    cfg.classList.toggle('disabled', !MenuGate.wired);
+    cfg.setAttribute('aria-disabled', String(!MenuGate.wired));
+  }
+  if (aviso) { aviso.textContent = motivo; aviso.hidden = !motivo; }
+}
+/* ganchos do multiplayer-client.js: a sala online caiu / voltou (o BR pode
+   chegar atrasado, e nesse caso o menu volta a ser dele) */
+window.__MP_onlineDown = motivo => {
+  MenuGate.broken = String(motivo || 'sala online indisponível');
+  paintMenu();
+};
+window.__MP_onlineUp = () => { MenuGate.broken = null; paintMenu(); };
+
+/* ================================================================
    MULTIPLAYER — bootstrap aditivo. Conecta ANTES da geração do mundo
    pra receber a seed da sala: mesma seed => mapa idêntico pra todos.
    Sem servidor (window.io ausente ou timeout de 3s), segue 100% solo.
@@ -111,6 +169,14 @@ if (window.io) {
         if ((d.worldSeed >>> 0) === __worldSeed) Object.assign(window.__MP_init, d);
         else (window.__MP_reload || (() => location.reload()))();
       });
+      /* QUEDA DE SOCKET — o cliente inteiro não tratava isto em lugar
+         nenhum. Sem estes dois handlers a sala podia morrer e o menu
+         seguia dizendo "ABRINDO LOBBY..." num botão travado, sem saída.
+         Só mexem em pintura de menu: nada de estado de jogo, nada de
+         dano, nada de reload (o reconnect do socket.io continua dono da
+         volta por si). */
+      __mpSocket.on('disconnect', () => { MenuGate.dropped = true; paintMenu(); });
+      __mpSocket.on('connect', () => { MenuGate.dropped = false; paintMenu(); });
     } else { __mpSocket.close(); __mpSocket = null; }
   } catch (e) { console.warn('[MP] servidor indisponível — modo solo', e); __mpSocket = null; }
 }
@@ -2812,13 +2878,16 @@ function startGame(trusted) {
 /* ---- menu: botões + configurações ---- */
 $('btnNew').addEventListener('click', e => {
   e.stopPropagation();
-  if (__mpSocket) return; // sala online: o lobby BR assume — nada de solo por cima
+  if (salaNoAr()) return; // sala online de pé: o lobby BR assume — nada de solo por cima
+  /* Sala fora do ar e o jogador escolheu SOLO: a partir daqui o BR não pode
+     sequestrar a tela se o servidor voltar. multiplayer-client.js lê
+     __MP_soloOnly antes de bootar o BR e antes de reabrir o lobby. */
+  if (__mpSocket && !state.started) {
+    MenuGate.soloChosen = true;
+    window.__MP_soloOnly = true;
+  }
   startGame(e.isTrusted);
 });
-if (__mpSocket) { // multiplayer no ar: o botão vira aviso até o lobby abrir
-  $('btnNew').classList.add('disabled');
-  $('btnNew').textContent = '🌐 SALA ONLINE — ABRINDO LOBBY...';
-}
 $('btnSettings').addEventListener('click', e => { e.stopPropagation(); $('settings').classList.add('open'); });
 $('btnBack').addEventListener('click', e => { e.stopPropagation(); $('settings').classList.remove('open'); });
 $('settings').addEventListener('click', e => e.stopPropagation());
@@ -2858,6 +2927,11 @@ $('settings').addEventListener('click', e => e.stopPropagation());
   saa.onchange = () => { SETTINGS.aa = +saa.value; smaaPass.enabled = SETTINGS.aa === 1; persistSettings(); };
   sp.onchange = () => { SETTINGS.ping = +sp.value; persistSettings(); };
 }
+/* DAQUI PRA FRENTE O MENU TEM DONO: os handlers existem, então os botões
+   podem destravar. Antes deste ponto eles ficam com o motivo na etiqueta
+   (index.html nasce com .disabled) em vez de aceitar clique que não faz nada. */
+MenuGate.wired = true;
+paintMenu();
 ui.overlay.addEventListener('click', (e) => {
   // clique em QUALQUER controle do menu (inclusive o gatilho dos controles
   // recolhidos) é do menu, não "clicar na tela pra voltar ao jogo"
