@@ -650,14 +650,23 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
           { get: () => el, configurable: true });
         document.dispatchEvent(new Event('pointerlockchange'));
       };
-      MP.state.paused = false;
+      /* MONTAGEM DO CENÁRIO PELO CAMINHO DO JOGO. Este teste escrevia
+         `MP.state.paused` cru, e escrita crua é justamente o que o contrato
+         do menu proibiu: troca o valor sem tocar no #overlay nem no
+         Touch.setPlaying (no celular isso deixa o jogador sem saída, porque
+         lá o botão de pausa some junto com `html.playing`). O fallback existe
+         só pra este arquivo continuar rodando contra commits anteriores a
+         MP.setPaused — a asserção não mudou. */
+      const pausar = v => (typeof MP.setPaused === 'function'
+        ? MP.setPaused(v) : (MP.state.paused = v));
+      pausar(false);
       mockLock(document.body);   // jogador clicou: lock OK (controls usam body)
       const lockou = MP.state.pointerLocked === true;
       mockLock(null);            // apertou ESC: lock caiu
       const pausou = MP.state.paused === true;
       const overlayPausa = !document.getElementById('overlay').classList.contains('hidden');
       // limpa: despausa pro resto da suite
-      MP.state.paused = false;
+      pausar(false);
       document.getElementById('overlay').classList.add('hidden');
       return { lockou, pausou, overlayPausa };
     });
@@ -672,7 +681,11 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
     const r = await play(() => {
       const MP = window.QA.MP;
       const ov = document.getElementById('overlay');
-      MP.state.paused = true; // simula estado de menu
+      // estado de menu montado pelo caminho do jogo (ver o teste do ESC acima:
+      // escrita crua em state.paused dessincroniza overlay e controles)
+      const pausar = v => (typeof MP.setPaused === 'function'
+        ? MP.setPaused(v) : (MP.state.paused = v));
+      pausar(true);
       ov.classList.remove('hidden');
       ov.style.display = '';
       window.__game.forceStart(); // já started: forceStart não repete
@@ -687,7 +700,7 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
         { get: () => null, configurable: true });
       document.dispatchEvent(new Event('pointerlockchange'));
       const voltouNaPausa = getComputedStyle(ov).display !== 'none';
-      MP.state.paused = false;
+      pausar(false);
       ov.classList.add('hidden');
       return { escondidoJa, voltouNaPausa };
     });

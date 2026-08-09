@@ -197,9 +197,12 @@ export function wireMenuUI(deps) {
      fora antes de tocar em qualquer tecla do jogo. --- */
   const visible = () => {
     if (!overlay || overlay.style.display === 'none' || overlay.classList.contains('hidden')) return false;
-    // lobby do BR por cima (z-index 300): as teclas são dele, não do menu base
-    const lobby = $('brLobby');
-    if (lobby && lobby.style.display && lobby.style.display !== 'none') return false;
+    /* O lobby do BR já foi uma camada de tela cheia POR CIMA deste menu, e
+       aqui o teclado era desligado enquanto ele estivesse visível. Hoje o
+       lobby é um painel DENTRO do #panel (index.html, #mpPanel): as setas
+       precisam continuar valendo pra que o SOLO ao lado dele siga alcançável
+       sem mouse. Quem digita nick/código/chat continua protegido pela linha
+       abaixo — campo de texto em foco tem prioridade sobre a navegação. */
     const a = document.activeElement;
     return !(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
   };
@@ -230,8 +233,12 @@ export function wireMenuUI(deps) {
     } else if (e.key === 'Enter' || e.key === ' ') {
       const a = document.activeElement;
       if (a && a.classList && a.classList.contains('mbtn')) { e.preventDefault(); a.click(); }
-    } else if (e.key === 'Escape' && settings && settings.classList.contains('open')) {
-      const back = $('btnBack');
+    } else if (e.key === 'Escape') {
+      // ESC fecha o painel aberto (configurações têm prioridade: elas podem
+      // ter sido abertas DE DENTRO do multijogador e o VOLTAR devolve o lobby)
+      const aberto = settings && settings.classList.contains('open') ? 'btnBack'
+        : ($('mpPanel') && !$('mpPanel').hidden ? 'btnMpBack' : null);
+      const back = aberto && $(aberto);
       if (back) back.click();
     }
   });

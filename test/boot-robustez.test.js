@@ -176,27 +176,40 @@ describe('queda de socket com o menu na tela (Chrome headless)', { skip: !CHROME
     assert.match(m.texto, /SALA ONLINE/i, `etiqueta não voltou pra sala: "${m.texto}"`);
   });
 
-  /* ÚLTIMO da suíte de propósito: inicia o jogo solo e não dá pra voltar. */
-  it('dado o socket caído além da carência, então o lobby sai da frente e o solo fica alcançável', async () => {
+  /* ÚLTIMO da suíte de propósito: inicia o jogo solo e não dá pra voltar.
+
+     O QUE ESTE TESTE GARANTE: com a sala morta, o jogador CHEGA ao solo. O
+     COMO mudou na etapa 2 e o teste é de propósito indiferente a ele — antes
+     o lobby cobria a tela inteira e precisava se esconder sozinho depois de
+     uma carência; hoje ele divide o #panel com o resto do menu e nunca cobre
+     nada. Nos dois casos a pergunta é a mesma: o botão está livre, DEBAIXO
+     DO DEDO (nada por cima) e o clique inicia a partida? */
+  it('dado o socket caído com o lobby na tela, então o jogador CHEGA ao solo', async () => {
     await h.page.waitForFunction(salaNoArNoMenu, { timeout: 30000, polling: 200 });
-    const cobrindo = await h.play(() => {
-      const l = document.getElementById('brLobby');
-      return !!l && l.style.display !== 'none';
-    });
-    assert.ok(cobrindo, 'pré-condição inválida: o lobby já não estava na frente');
     await h.play(() => window.__MP.socket.disconnect());
-    const saiu = await h.page.waitForFunction(
-      () => {
-        const l = document.getElementById('brLobby');
-        return !!l && l.style.display === 'none';
-      }, { timeout: 30000, polling: 250 }).then(() => true).catch(() => false);
-    assert.ok(saiu, 'lobby morto continuou cobrindo a tela — jogador sem saída');
+    const alcancavel = () => {
+      const b = document.getElementById('btnNew');
+      if (!b || b.classList.contains('disabled')) return false;
+      const r = b.getBoundingClientRect();
+      const alvo = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !!(alvo && alvo.closest && alvo.closest('#btnNew'));
+    };
+    const chegou = await h.page.waitForFunction(alcancavel, { timeout: 30000, polling: 250 })
+      .then(() => true).catch(() => false);
+    const diag = await h.play(() => {
+      const b = document.getElementById('btnNew');
+      const r = b.getBoundingClientRect();
+      const alvo = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { texto: (b.textContent || '').trim(), travado: b.classList.contains('disabled'),
+        porCima: alvo ? (alvo.id || alvo.className || alvo.tagName) : null };
+    });
+    assert.ok(chegou, `sala morta e o solo segue inalcançável: ${JSON.stringify(diag)}`);
     const r = await h.play(() => {
       const antes = window.__game.state.started;
       document.getElementById('btnNew').click();
       return { antes, depois: window.__game.state.started };
     });
     assert.equal(r.antes, false, 'cenário inválido: já estava em jogo');
-    assert.ok(r.depois, 'com o lobby fora da frente o clique ainda não inicia o solo');
+    assert.ok(r.depois, 'com a sala morta o clique ainda não inicia o solo');
   });
 });

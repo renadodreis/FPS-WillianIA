@@ -89,14 +89,21 @@ function paintMenu() {
   const btn = document.getElementById('btnNew');
   if (!btn) return;
   const cfg = document.getElementById('btnSettings');
+  const mult = document.getElementById('btnMulti');
   const aviso = document.getElementById('menuNotice');
+  /* `state` só existe a partir da metade deste módulo, e paintMenu só é
+     chamado do fim dele em diante (MenuGate.wired) ou de callbacks — mas
+     ler por window.__game evita depender dessa ordem. Sem estado ainda =
+     boot: não iniciado e, portanto, sem pausa. */
+  const S = window.__game ? window.__game.state : null;
+  const jogando = !!(S && S.started);
+  const pausado = !!(S && S.paused);
   // com a partida em andamento o #overlay é tela de PAUSA: prometer "NOVO
-  // JOGO" ali é mentira (startGame recusa). Etiqueta de pausa é da etapa 2.
-  const jogando = !!(window.__game && window.__game.state.started);
+  // JOGO" ali é mentira (startGame recusa).
   let texto = null, travado = true, motivo = '';
   if (!MenuGate.wired) texto = 'CARREGANDO O MUNDO...';
-  else if (salaNoAr()) texto = '🌐 SALA ONLINE — ABRINDO LOBBY...';
-  else if (!jogando) { travado = false; texto = __mpSocket ? 'NOVO JOGO — SOLO' : 'NOVO JOGO'; }
+  else if (salaNoAr()) texto = '🌐 SALA ONLINE — ENTRE EM MULTIJOGADOR';
+  else if (!jogando) { travado = false; texto = __mpSocket ? '▶ JOGAR SOLO' : '▶ NOVO JOGO — SOLO'; }
   if (MenuGate.wired && brQuebrado())
     motivo = '⚠ A SALA ONLINE NÃO CARREGOU — DÁ PRA JOGAR SOLO AGORA.';
   else if (MenuGate.wired && MenuGate.dropped)
@@ -108,7 +115,39 @@ function paintMenu() {
     cfg.classList.toggle('disabled', !MenuGate.wired);
     cfg.setAttribute('aria-disabled', String(!MenuGate.wired));
   }
+  /* MULTIJOGADOR: só abre painel quando existe sala pra mostrar. Fora isso o
+     rótulo conta o motivo em vez de aceitar um clique que não faria nada. */
+  if (mult) {
+    // o espaço duplo do rótulo é o mesmo espaço-duro do index.html (&nbsp;):
+    // sem ele o texto "pula" na primeira repintura
+    const podeMp = MenuGate.wired && salaNoAr();
+    let mtexto = '🌐  MULTIJOGADOR';
+    if (!MenuGate.wired) mtexto = '🌐  MULTIJOGADOR — CARREGANDO...';
+    else if (MenuGate.soloChosen) mtexto = '🌐  MULTIJOGADOR — RECARREGUE A PÁGINA';
+    else if (!podeMp) mtexto = '🌐  MULTIJOGADOR — SALA FORA DO AR';
+    if (mult.textContent !== mtexto) mult.textContent = mtexto;
+    mult.classList.toggle('disabled', !podeMp);
+    mult.setAttribute('aria-disabled', String(!podeMp));
+  }
   if (aviso) { aviso.textContent = motivo; aviso.hidden = !motivo; }
+
+  /* ---- painel de pausa: no BR a partida NÃO para, e isso é dito ----
+     A partida é autoritativa no SERVIDOR. Parar o brTick local daria
+     imunidade e dessincronizaria (é o vetor que playerDamage protege), então
+     em vez de fingir congelamento a pausa conta a verdade. `brlive` é o
+     gancho pro visual encolher o painel — ver docs/2026-08-09-menu-unico.md. */
+  const ov = document.getElementById('overlay');
+  const tag = document.getElementById('pausedTagText');
+  const warn = document.getElementById('pausedWarn');
+  const brAoVivo = jogando && pausado && !!window.__BR_active;
+  if (ov) ov.classList.toggle('brlive', brAoVivo);
+  if (tag) tag.textContent = brAoVivo ? '— MENU ABERTO · A PARTIDA CONTINUA —' : '— PAUSADO —';
+  if (warn) {
+    warn.textContent = brAoVivo
+      ? 'A partida é do servidor: o gás, os tiros e o GOLEM não param enquanto este menu está aberto.'
+      : '';
+    warn.hidden = !brAoVivo;
+  }
 }
 /* ganchos do multiplayer-client.js: a sala online caiu / voltou (o BR pode
    chegar atrasado, e nesse caso o menu volta a ser dele) */
@@ -1200,10 +1239,34 @@ weaponRoot.position.copy(gun.hipV);
 const controls = new PointerLockControls(camera, document.body);
 
 const state = {
-  started: false, paused: true, pointerLocked: false, lockFailed: false,
+  started: false, pointerLocked: false, lockFailed: false,
   driving: false, flying: false, gameTime: 0,
   cinematic: false, // destruição da cidade: timeline assume a câmera/input
 };
+/* ================================================================
+   PAUSA TEM UM ESCRITOR SÓ: setPaused.
+
+   Era convenção — e convenção não segura ninguém: o valor cru era
+   escrito direto em vários lugares (os próprios testes faziam isso).
+   Escrever `state.paused` sem passar pelo setPaused troca o valor sem
+   mexer no #overlay nem no Touch.setPlaying, e no CELULAR isso deixa o
+   jogador SEM SAÍDA: não existe ESC, o único jeito de pausar é o botão
+   de toque, que some junto com `html.playing`.
+
+   O valor real mora aqui fora; a propriedade é um acessor que DELEGA a
+   escrita crua pro único escritor. Assim a dessincronia deixa de ser
+   possível — quem insistir no caminho antigo recebe o comportamento
+   correto e um aviso no console.
+   ================================================================ */
+let __paused = true;
+Object.defineProperty(state, 'paused', {
+  enumerable: true,
+  get() { return __paused; },
+  set(v) {
+    console.warn('[menu] state.paused escrito direto — delegado a setPaused()');
+    setPaused(!!v);
+  },
+});
 
 const keys = {};
 const justPressed = new Set();
@@ -1276,7 +1339,7 @@ function setPaused(p) {
      anda, nem atira, nem alcança o botão de pausa. Vale principalmente pro BR,
      que começa a partida sem o jogador tocar em nada. */
   if (!p && Orient.blocking()) p = true;
-  state.paused = p;
+  __paused = p; // ÚNICA escrita do valor (ver o acessor de state.paused)
   ui.overlay.classList.toggle('hidden', !p);
   ui.overlay.classList.toggle('paused', p && state.started);
   // display síncrono: a transição de opacity trava junto com o hitch da
@@ -1286,6 +1349,8 @@ function setPaused(p) {
   // celular: `playing` no <html> mostra/esconde os controles de toque, e sair
   // de partida SOLTA tudo (dedo que "ficou" apertado = tiro infinito)
   Touch.setPlaying(state.started && !p);
+  // o painel precisa contar a verdade do estado NOVO (em BR a partida segue)
+  paintMenu();
 }
 
 /* ================================================================
@@ -2875,10 +2940,57 @@ function startGame(trusted) {
      esse caso é o botão "JOGAR ASSIM" do #rotateGate. */
   if (trusted && Touch.enabled) Orient.attempt(true);
 }
-/* ---- menu: botões + configurações ---- */
+/* ================================================================
+   MENU — UMA SUPERFÍCIE SÓ.
+
+   O #overlay é a ÚNICA tela cheia de menu do jogo. Dentro do #panel há
+   UM painel por vez: nenhum, 'mp' (lobby do BR) ou 'settings'. O lobby
+   deixou de ser uma camada `position: fixed` por cima de tudo, e o
+   #settings deixou de ser MOVIDO pra dentro dele — os dois são irmãos
+   e ninguém reparenta ninguém, então nenhum innerHTML do lobby pode
+   destruir as configurações do jogo (era acidente esperando acontecer,
+   protegido só por convenção).
+
+   MENU.mostrar()/esconder() existem porque telas de FIM DE PARTIDA
+   (eliminação, resultado) precisam aparecer por cima de um jogo em
+   andamento. Menu na tela = PAUSA, sempre: é isso que mantém
+   `state.paused`, o #overlay e os controles de toque em sincronia. Em
+   BR a pausa não congela nada — o painel avisa (ver paintMenu).
+   ================================================================ */
+const MENU = {
+  painel: null,      // null | 'mp' | 'settings'
+  _volta: null,      // pra onde o VOLTAR do painel atual retorna
+  _pausaNossa: false, // a pausa em curso foi pedida por MENU.mostrar()
+  _pinta() {
+    const mp = $('mpPanel'), st = $('settings');
+    if (mp) mp.hidden = MENU.painel !== 'mp';
+    if (st) st.classList.toggle('open', MENU.painel === 'settings');
+    const bm = $('btnMulti'), bs = $('btnSettings');
+    if (bm) bm.setAttribute('aria-expanded', String(MENU.painel === 'mp'));
+    if (bs) bs.setAttribute('aria-expanded', String(MENU.painel === 'settings'));
+    paintMenu();
+  },
+  open(nome, volta) { MENU.painel = nome; MENU._volta = volta || null; MENU._pinta(); },
+  close() { MENU.painel = null; MENU._volta = null; MENU._pinta(); },
+  voltar() { const v = MENU._volta; MENU._volta = null; if (v) MENU.open(v); else MENU.close(); },
+  mostrar() { // traz o menu pra frente de uma partida em andamento
+    if (!state.started || state.paused) return false;
+    MENU._pausaNossa = true;
+    setPaused(true);
+    return true;
+  },
+  esconder() { // ...e devolve a tela — só se a pausa tiver sido NOSSA
+    if (!MENU._pausaNossa) return false;
+    MENU._pausaNossa = false;
+    if (state.started && state.paused) setPaused(false);
+    return true;
+  },
+};
+
+/* ---- menu: botões + painéis ---- */
 $('btnNew').addEventListener('click', e => {
   e.stopPropagation();
-  if (salaNoAr()) return; // sala online de pé: o lobby BR assume — nada de solo por cima
+  if (salaNoAr()) return; // sala online de pé: o multijogador é a porta, não o solo
   /* Sala fora do ar e o jogador escolheu SOLO: a partir daqui o BR não pode
      sequestrar a tela se o servidor voltar. multiplayer-client.js lê
      __MP_soloOnly antes de bootar o BR e antes de reabrir o lobby. */
@@ -2886,11 +2998,23 @@ $('btnNew').addEventListener('click', e => {
     MenuGate.soloChosen = true;
     window.__MP_soloOnly = true;
   }
+  MENU.close();
   startGame(e.isTrusted);
 });
-$('btnSettings').addEventListener('click', e => { e.stopPropagation(); $('settings').classList.add('open'); });
-$('btnBack').addEventListener('click', e => { e.stopPropagation(); $('settings').classList.remove('open'); });
+$('btnMulti').addEventListener('click', e => {
+  e.stopPropagation();
+  if (!salaNoAr()) return;
+  /* redesenha o lobby ANTES de abrir: o painel pode estar com a tela de
+     resultado da partida anterior. Sem BR carregado o painel abre vazio, e
+     por isso o botão só destrava com salaNoAr(). */
+  if (window.__MP_lobby) window.__MP_lobby.show();
+  else MENU.open('mp');
+});
+$('btnMpBack').addEventListener('click', e => { e.stopPropagation(); MENU.close(); });
+$('btnSettings').addEventListener('click', e => { e.stopPropagation(); MENU.open('settings'); });
+$('btnBack').addEventListener('click', e => { e.stopPropagation(); MENU.voltar(); });
 $('settings').addEventListener('click', e => e.stopPropagation());
+$('mpPanel').addEventListener('click', e => e.stopPropagation());
 { // bindings das configurações (aplicam ao vivo + persistem)
   const sv = $('setVol'), sr = $('setRes'), ss = $('setShadow'), sb = $('setBloom'), sp = $('setPing');
   const sa = $('setAutoRes'), saa = $('setAA');
@@ -2935,7 +3059,7 @@ paintMenu();
 ui.overlay.addEventListener('click', (e) => {
   // clique em QUALQUER controle do menu (inclusive o gatilho dos controles
   // recolhidos) é do menu, não "clicar na tela pra voltar ao jogo"
-  if (e.target.closest('#menuBtns, #settings, #ctlBox, .mbtn')) return;
+  if (e.target.closest('#menuBtns, #settings, #ctlBox, #mpPanel, .mbtn')) return;
   if (state.started && state.paused) { // clique (ou toque) retoma quando pausado
     SFX.resume();
     setPaused(false);
@@ -3011,6 +3135,8 @@ window.__game = {
     get scheduledUpdateMask() { return csmLastUpdateMask; },
   },
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
+  MENU,      // painéis do menu único (multiplayer-client.js e QA)
+  setPaused, // ÚNICO escritor de state.paused (QA/testes usam este caminho)
   isMobile: __mobile, // br-game.js pula o pointer lock com isto (script clássico)
   Touch,              // QA: núcleo do toque, elementos e estado do analógico
   Orient,             // QA: aviso de orientação (bloqueio, escape em retrato)
@@ -3156,6 +3282,8 @@ window.render_game_to_text = () => {
 /* MULTIPLAYER: referências pro multiplayer-client.js (aditivo) */
 window.__MP = {
   THREE, scene, camera, renderer, composer, player, state, CFG,
+  setPaused, // pausa é do menu: escritor único (ver o acessor de state.paused)
+  MENU,      // menu único: painéis do #panel (o lobby do BR mora num deles)
   heightAt, groundAt, addKillFeed, showHitmarker, playerDamage,
   updateHealthHUD, updateArmorHUD, updateAmmoHUD, updateInvHUD, updateSlotsHUD,
   setTimeScale,

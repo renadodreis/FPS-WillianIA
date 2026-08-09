@@ -85,7 +85,10 @@
          handlers (procure por MenuGate/paintMenu). -->
     <div id="menuBtns">
       <div class="mbtn disabled" id="btnNew" role="button" tabindex="0" aria-disabled="true">CARREGANDO O MUNDO...</div>
-      <div class="mbtn sec disabled" id="btnSettings" role="button" tabindex="0" aria-disabled="true">⚙ &nbsp;CONFIGURAÇÕES</div>
+      <div class="mbtn sec disabled" id="btnMulti" role="button" tabindex="0" aria-disabled="true"
+        aria-controls="mpPanel" aria-expanded="false">🌐 &nbsp;MULTIJOGADOR</div>
+      <div class="mbtn sec disabled" id="btnSettings" role="button" tabindex="0" aria-disabled="true"
+        aria-controls="settings" aria-expanded="false">⚙ &nbsp;CONFIGURAÇÕES</div>
     </div>
     <!-- controles RECOLHIDOS: ninguém precisa ler 19 teclas pra apertar NOVO
          JOGO. <details> nativo = zero JS, teclado e ARIA de graça. -->
@@ -116,6 +119,25 @@
         </div>
       </div>
     </details>
+    <!-- ================================================================
+         MULTIJOGADOR — o lobby do BR mora AQUI, dentro do #panel.
+
+         Antes ele era uma camada `position: fixed` de tela cheia (.brPanel,
+         z-index 300) por cima do menu: eram DOIS menus disputando a tela, o
+         menu base ficava inalcançável por baixo, e as CONFIGURAÇÕES do jogo
+         só eram acessíveis MOVENDO o nó #settings pra dentro do card do
+         lobby — qualquer innerHTML no lobby destruía o painel inteiro, sem
+         erro no console.
+
+         Agora #mpPanel e #settings são IRMÃOS: ocupam o mesmo lugar do
+         painel, um de cada vez, e ninguém reparenta ninguém. O
+         multiplayer-client.js só escreve dentro de #brLobby; o VOLTAR mora
+         FORA dele, por isso nenhuma reescrita do lobby pode engoli-lo.
+         ================================================================ -->
+    <div id="mpPanel" hidden>
+      <div id="brLobby" class="brPanel"></div>
+      <div class="mbtn sec" id="btnMpBack" role="button" tabindex="0" style="margin-top:14px">VOLTAR</div>
+    </div>
     <div id="settings">
       <h4 class="shead">Áudio</h4>
       <div class="srow"><span>Volume geral</span><input type="range" id="setVol" min="0" max="100" value="50"></div>
@@ -135,7 +157,13 @@
          linha. Escrito só pelo paintMenu do game.js. -->
     <div id="loadingMsg">ESC pausa o jogo &nbsp;·&nbsp; ↑ ↓ e ENTER navegam o menu<div
       id="menuNotice" role="status" aria-live="polite" hidden></div></div>
-    <div id="pausedTag">— PAUSADO —</div>
+    <!-- PAUSA HONESTA. No BR a partida é do SERVIDOR: parar o laço local
+         daria imunidade e dessincronizaria (ver o comentário de playerDamage
+         em game.js). Então o painel não finge congelar o mundo — ele avisa.
+         Os dois textos são escritos por paintMenu() no game.js, e #pausedTag
+         só aparece com o #overlay em modo pausa (style.css). -->
+    <div id="pausedTag"><span id="pausedTagText">— PAUSADO —</span><span
+      id="pausedWarn" role="status" aria-live="polite" hidden></span></div>
   </div>
 </div>
 <div id="launchFx" aria-hidden="true"></div>

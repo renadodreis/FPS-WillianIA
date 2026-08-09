@@ -125,10 +125,15 @@
     /* ---------- CSS ---------- */
     const css = document.createElement('style');
     css.textContent = `
-      .brPanel { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center;
-        background: rgba(5,9,14,.88); backdrop-filter: blur(6px); color: #e8f1f8; font-family: system-ui, sans-serif; }
+      /* O LOBBY NÃO É MAIS UMA CAMADA DE TELA CHEIA. Ele mora dentro do
+         #panel (index.html, #mpPanel), como as configurações: o #overlay é a
+         única superfície de menu em tela cheia do jogo. Era o position fixed
+         com z-index 300 que cobria o menu base e obrigava a esconder o lobby
+         pra devolver o menu ao jogador. */
+      .brPanel { display: block; width: 100%; color: #e8f1f8; font-family: system-ui, sans-serif; }
       .brCard { background: rgba(14,20,28,.95); border: 1px solid rgba(255,255,255,.14); border-radius: 14px;
-        padding: 26px 32px; min-width: 560px; max-width: 880px; max-height: 92vh; overflow: auto; }
+        padding: 20px 24px; min-width: 0; width: 100%; box-sizing: border-box;
+        max-height: min(62vh, 640px); overflow: auto; }
       .brTitle { font-size: 26px; font-weight: 800; letter-spacing: 6px; color: #ffd76a; text-align: center; }
       .brSub { text-align: center; opacity: .7; font-size: 12px; letter-spacing: 3px; margin: 4px 0 14px; }
       .brRow { display: flex; gap: 20px; align-items: flex-start; }
@@ -262,9 +267,18 @@
     const deathSub = document.getElementById('deathSub');
     if (deathSub) deathSub.textContent = 'calculando colocação...';
 
-    /* ---------- LOBBY ---------- */
-    const lobby = div('brLobby');
-    lobby.className = 'brPanel';
+    /* ---------- LOBBY ----------
+       O nó vem do index.html, DENTRO do #panel (#mpPanel). Ele não é mais
+       criado aqui de propósito: quem define onde o lobby mora é a estrutura
+       da página, não este arquivo. O fallback cobre um index.html antigo em
+       cache — nesse caso o lobby entra no #panel mesmo assim. */
+    const lobby = document.getElementById('brLobby') || (() => {
+      const d = document.createElement('div');
+      d.id = 'brLobby'; d.className = 'brPanel';
+      (document.getElementById('mpPanel') || document.getElementById('panel')
+        || document.body).appendChild(d);
+      return d;
+    })();
     lobby.style.display = 'none';
 
     function lobbyHtml(extra) {
@@ -306,7 +320,6 @@
             <div id="brHostMsg" style="font-size:11px;opacity:.75;margin-top:4px"></div>
             <button class="brBtn" id="brCfgBtn"
               style="background:#3a4250;color:#e8f1f8;margin-top:10px">⚙ GRÁFICOS &amp; ÁUDIO</button>
-            <div id="brCfgHolder"></div>
           </div>
           <div class="brCol">
             <div class="brH">🏆 RANKING GLOBAL</div>
@@ -530,45 +543,55 @@
       const hIn = document.getElementById('brHostCode'), hBtn = document.getElementById('brHostBtn');
       if (hBtn) hBtn.addEventListener('click', () => claimHost(hIn.value));
       if (hIn) hIn.addEventListener('keydown', e => { if (e.key === 'Enter') claimHost(hIn.value); });
-      // configurações de gráfico/áudio do jogo, acessíveis direto do lobby:
-      // o painel #settings do menu base é "emprestado" pro card e devolvido no VOLTAR
-      const cfgBtn = document.getElementById('brCfgBtn'), holder = document.getElementById('brCfgHolder');
-      const stEl = document.getElementById('settings');
-      if (cfgBtn && stEl) {
-        cfgBtn.addEventListener('click', () => { holder.appendChild(stEl); stEl.classList.add('open'); });
-        const back = document.getElementById('btnBack');
-        if (back && !window.__BR_cfgBackWired) {
-          window.__BR_cfgBackWired = true;
-          back.addEventListener('click', () => {
-            if (stEl.parentElement && stEl.parentElement.id === 'brCfgHolder') {
-              stEl.classList.remove('open');
-              const panel = document.getElementById('panel');
-              if (panel) panel.appendChild(stEl);
-            }
-          });
-        }
-      }
+      /* Configurações de gráfico/áudio direto do lobby. ANTES o nó #settings
+         era MOVIDO pra dentro do card e devolvido no VOLTAR — o painel de
+         configurações do jogo inteiro morava, por alguns cliques, dentro de
+         um elemento que este arquivo reescreve com innerHTML. Agora os dois
+         painéis são irmãos dentro do #panel e só se revezam: o menu troca
+         qual está aberto, ninguém move nada, e o VOLTAR das configurações
+         devolve o lobby (game.js, MENU.voltar). */
+      const cfgBtn = document.getElementById('brCfgBtn');
+      if (cfgBtn) cfgBtn.addEventListener('click', () => G.MENU.open('settings', 'mp'));
       renderGlobal(window.__BR_lastGlobalTop || INIT.globalTop);
       refreshLobbyRoster();
     }
-    /* o painel #settings do jogo é "emprestado" pro lobby; antes de qualquer
-       innerHTML no lobby ele PRECISA voltar pro menu, senão é destruído junto */
-    function rescueSettings() {
+    /* ÚNICO lugar do arquivo que reescreve o conteúdo do lobby. Antes havia
+       dois, e cada um precisava LEMBRAR de resgatar o #settings emprestado —
+       esquecer destruía as configurações do jogo sem um erro no console.
+       Hoje o #settings é irmão do lobby (nunca filho) e a asserção abaixo é
+       só a rede: se algum dia alguém voltar a enfiá-lo aqui dentro, o
+       estrago aparece no console em vez de sumir em silêncio. */
+    function setLobbyHtml(html) {
       const st = document.getElementById('settings');
-      if (st && st.closest('#brLobby')) {
-        st.classList.remove('open');
-        const panel = document.getElementById('panel');
-        if (panel) panel.appendChild(st);
-      }
+      if (st && st.closest('#brLobby'))
+        console.error('[BR] #settings está DENTRO do lobby — reescrever aqui destrói o painel do jogo');
+      lobby.innerHTML = html;
     }
     const soltarMouse = () => {
       // painel na tela exige mouse livre: sem isto, quem entrou com o jogo
       // rodando (pointer lock) ficava preso sem conseguir clicar/editar
       try { if (document.pointerLockElement) document.exitPointerLock(); } catch (e) {}
     };
+    /* O jogador já escolheu jogo SOLO: o BR não pode tomar a tela quando o
+       servidor volta ou quando uma partida começa sem ele. */
+    const soloEscolhido = () => !!window.__MP_soloOnly;
     const LOBBY = {
-      show(extra) { soltarMouse(); rescueSettings(); lobby.innerHTML = lobbyHtml(extra); lobby.style.display = 'flex'; wireLobby(); },
-      hide() { rescueSettings(); lobby.style.display = 'none'; },
+      show(extra) {
+        if (soloEscolhido()) return;
+        soltarMouse();
+        setLobbyHtml(lobbyHtml(extra));
+        lobby.style.display = 'flex';
+        /* NÃO chama MENU.mostrar(): o lobby nunca interrompe uma partida em
+           andamento. Com o jogo rodando ele fica pronto dentro do menu e
+           aparece quando o jogador abrir o menu. */
+        G.MENU.open('mp');
+        wireLobby();
+      },
+      hide() {
+        lobby.style.display = 'none';
+        if (G.MENU.painel === 'mp') G.MENU.close();
+        G.MENU.esconder(); // devolve a tela se a pausa tiver sido do painel
+      },
       setRoster(list) { lastRosterList = list; refreshLobbyRoster(); },
       renderGlobal,
       countdown(n) {
@@ -578,13 +601,28 @@
         if (!c) { c = document.createElement('div'); c.id = 'brCountBig'; c.className = 'brCount'; card.insertBefore(c, card.children[2]); }
         c.textContent = n > 0 ? n : 'VAI!';
       },
-      overlay(html) { // telas de morte/vitória usam o mesmo painel
+      overlay(html) { // telas de eliminação/fim de partida usam o mesmo painel
+        if (soloEscolhido()) return;
         soltarMouse();
-        rescueSettings();
-        lobby.innerHTML = `<div class="brCard">${html}</div>`;
+        /* A TELA DE MORTE SAI DE CENA. Ela é `position: fixed` no z-index 200
+           e o menu inteiro vive no 100: com o painel dentro do menu, deixar o
+           "VOCÊ MORREU" no ar esconderia justamente o recap que o explica.
+           Quem manda agora é este painel — e a fase de espectador já limpava
+           esta classe 4 s depois, aqui só antecipa. (O acerto geral do
+           #deathScreen — pointer-events e ordem com o menu — é da etapa da
+           morte sem reload; ver docs/2026-08-09-menu-unico.md, item 5.) */
+        const ds = document.getElementById('deathScreen');
+        if (ds) ds.classList.remove('show');
+        setLobbyHtml(`<div class="brCard">${html}</div>`);
         lobby.style.display = 'flex';
+        G.MENU.open('mp');
+        /* ...estas SIM interrompem: são o desfecho da partida do jogador e
+           precisam ser vistas. Menu na tela = pausa (e em BR a pausa avisa
+           que a partida continua). */
+        G.MENU.mostrar();
       },
     };
+    window.__MP_lobby = LOBBY; // hook de QA/menu: redesenhar o lobby de fora
 
     socket.on('flags', f => {
       S.flags = f;
@@ -593,35 +631,19 @@
     socket.emit('hello', { nick: S.nick, colors: S.myColors });
 
     /* ---------- a sala caiu com o lobby na tela ----------
-       O lobby cobre a tela inteira (z-index 300) e não tinha NENHUM
-       tratamento de queda: com o socket morto ele seguia dizendo
-       "AGUARDANDO O ANFITRIÃO..." e o jogador ficava sem saída nenhuma.
-       Duas respostas, nesta ordem:
-       1. imediata — o botão conta a verdade;
-       2. passada a carência, ainda no LOBBY (nenhuma partida em curso), o
-          lobby SAI DA FRENTE e o menu base volta a ser alcançável, onde o
-          #btnNew já libera o solo (game.js/paintMenu).
-       Voltando o socket, o lobby volta com ele — a não ser que o jogador
-       já tenha escolhido solo. Escada provisória até o menu único. */
-    const CARENCIA_QUEDA_MS = 8000;
-    let quedaT = null, lobbyEscondidoPelaQueda = false;
+       Não havia NENHUM tratamento de queda: com o socket morto o lobby seguia
+       dizendo "AGUARDANDO O ANFITRIÃO..." pra sempre. Agora o botão conta a
+       verdade na hora, e é só isso que precisa acontecer: o lobby divide o
+       #panel com o resto do menu, então o SOLO segue na tela e alcançável do
+       lado dele. (A etapa 1 precisava ESCONDER o lobby depois de 8 s pra
+       devolver o menu ao jogador — escada que o menu único aposentou.) */
     socket.on('disconnect', () => {
       const btn = document.getElementById('brStartBtn');
       if (btn) { btn.disabled = true; btn.textContent = '⚠ CONEXÃO CAIU — RECONECTANDO...'; }
-      clearTimeout(quedaT);
-      quedaT = setTimeout(() => {
-        if (socket.connected || S.phase !== 'LOBBY' || lobby.style.display === 'none') return;
-        lobbyEscondidoPelaQueda = true;
-        LOBBY.hide();
-      }, CARENCIA_QUEDA_MS);
     });
     socket.on('connect', () => {
-      clearTimeout(quedaT);
       if (window.__MP_soloOnly) return; // o jogador já saiu pro solo: não sequestrar a tela
-      if (lobbyEscondidoPelaQueda && S.phase === 'LOBBY') {
-        lobbyEscondidoPelaQueda = false;
-        LOBBY.show();
-      } else refreshLobbyRoster();
+      refreshLobbyRoster();
     });
 
     /* ---------- reconexão ----------
