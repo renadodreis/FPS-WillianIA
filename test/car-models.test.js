@@ -99,6 +99,41 @@ describe('Veículos assentados e com as cores do modelo', { skip: !CHROME && 'Ch
   before(async () => { h = await bootGame({ port: 3194 }); });
   after(async () => { if (h) await h.close(); });
 
+  /* O placeholder de cada veículo (js/car.js:buildPlaceholder) nasce com um
+     material NOVO registrado no CSM. Quando o GLB assume, o placeholder é
+     descartado — e o registro tem que cair junto. Sem isso são 6 materiais
+     mortos presos em csmMaterials/csm.shaders pra sempre: uniforme atualizado
+     todo frame por nada, e csmDebug.materialCount (dourado de teste da rodada
+     de personagens) subindo sozinho.
+
+     A conta não usa número mágico: material registrado no CSM que não está em
+     NENHUM objeto da cena é órfão por definição. */
+  it('dado o GLB no lugar do placeholder, então nenhum material fica órfão no CSM', async () => {
+    const r = await h.play(async () => {
+      const G = window.QA.G, MP = window.QA.MP;
+      await G.Car.ready;
+      const naCena = new Set();
+      MP.scene.traverse(o => {
+        const mm = o.material;
+        if (!mm) return;
+        for (const m of Array.isArray(mm) ? mm : [mm]) if (m) naCena.add(m);
+      });
+      let registradosNaCena = 0;
+      for (const m of naCena) if (G.csmDebug.hasMaterial(m)) registradosNaCena++;
+      return {
+        registrados: G.csmDebug.materialCount, registradosNaCena,
+        veiculos: G.Car.vehicles.length,
+        modelosProntos: G.Car.vehicles.filter(v => v.modelStatus === 'ready').length,
+      };
+    });
+    assert.equal(r.modelosProntos, r.veiculos,
+      'algum veículo ficou no placeholder: o teste não exercita a troca');
+    assert.equal(r.registrados - r.registradosNaCena, 0,
+      `${r.registrados - r.registradosNaCena} materiais registrados no CSM não estão em ` +
+      `nenhum objeto da cena (${r.registrados} registrados, ${r.registradosNaCena} vivos) — ` +
+      `vazamento; o suspeito de sempre é o placeholder dos ${r.veiculos} veículos`);
+  });
+
   it('dado o mundo com física assentada, então nenhum carro fica enterrado no chão', async () => {
     const r = await h.play(async () => {
       const G = window.QA.G, MP = window.QA.MP, THREE = MP.THREE;
@@ -155,28 +190,48 @@ describe('Veículos assentados e com as cores do modelo', { skip: !CHROME && 'Ch
       assert.ok(x.outros > 5, `detalhes do modelo sumiram junto com o tint (${x.outros} cores fora da lataria)`);
   });
 
+  /* CUIDADO ao mexer: a rede de proteção contra "o carro ficou preto" precisa
+     de uma contagem que possa CRESCER. Contar hex distintos num Set não serve:
+     lá o preto entra no máximo uma vez, então "pretos < unicas" passa a ser
+     verdade automática assim que existem 3 cores. A conta que falha de
+     verdade é POR VÉRTICE DESENHADO — se a fusão pintar a carroceria toda de
+     preto e sobrar cor só nos faróis, a fração de preto sobe e denuncia. */
   it('dado o esportivo, então mantém as cores do modelo (não vira um bloco de uma cor só)', async () => {
     const r = await h.play(async () => {
       const G = window.QA.G, THREE = window.QA.MP.THREE;
       await G.Car.ready;
       const v = G.Car.vehicles.find(x => x.cfg.name === 'ESPORTIVO GT');
       const cores = new Set(), C = new THREE.Color();
+      let vertices = 0, pretos = 0;
       v.group.traverse(o => {
         if (!o.isMesh || !o.userData.importedCarModel) return;
+        const cor = o.geometry.getAttribute('color');
+        const nPos = o.geometry.getAttribute('position').count;
         for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
           if (!m || !m.color) continue;
-          const cor = o.geometry.getAttribute('color');
           if (m.vertexColors && cor) {
-            for (let i = 0; i < cor.count; i++)
-              cores.add(C.setRGB(cor.getX(i), cor.getY(i), cor.getZ(i)).getHexString());
-          } else cores.add(m.color.getHexString());
+            for (let i = 0; i < cor.count; i++) {
+              const hex = C.setRGB(cor.getX(i), cor.getY(i), cor.getZ(i)).getHexString();
+              cores.add(hex);
+              vertices++;
+              if (hex === '000000') pretos++;
+            }
+          } else {
+            const hex = m.color.getHexString();
+            cores.add(hex);
+            vertices += nPos;
+            if (hex === '000000') pretos += nPos;
+          }
         }
       });
       const lista = [...cores];
-      return { cores: lista.slice(0, 8), unicas: lista.length,
-        pretos: lista.filter(hex => hex === '000000').length };
+      return { cores: lista.slice(0, 8), unicas: lista.length, vertices, pretos };
     });
     assert.ok(r.unicas >= 3, `esportivo monocromático (${r.unicas} cor: ${r.cores.join(',')})`);
-    assert.ok(r.pretos < r.unicas, 'todas as cores do esportivo estão pretas');
+    assert.ok(r.vertices > 1000, `amostra vazia: ${r.vertices} vértices desenhados`);
+    const fracao = r.pretos / r.vertices;
+    assert.ok(fracao < 0.25,
+      `${(fracao * 100).toFixed(1)}% dos vértices desenhados do esportivo saem pretos ` +
+      `(${r.pretos}/${r.vertices}) — as cores do modelo colapsaram`);
   });
 });

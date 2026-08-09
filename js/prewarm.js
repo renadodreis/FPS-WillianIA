@@ -13,10 +13,32 @@
    visual: só antecipa trabalho que aconteceria de qualquer jeito.
 
    Limite conhecido e honesto: `renderer.compile` não prepara os
-   materiais de profundidade do shadow map. Objetos que entram na cena
-   depois ainda podem linkar o programa de sombra no primeiro frame em
-   que projetam sombra — por isso `schedule`/`flush` existem, pra levar
-   os GLBs tardios de volta a uma janela segura.
+   materiais de profundidade do shadow map — ele só chama prepareMaterial
+   no material do próprio objeto. Objetos que entram na cena depois ainda
+   podem linkar o programa de sombra no primeiro frame em que projetam
+   sombra — por isso `schedule`/`flush` existem, pra levar os GLBs
+   tardios de volta a uma janela segura.
+
+   POR QUE ISSO NÃO É AQUECIDO AQUI (medido, não suposto). A fusão do
+   corpo dos inimigos (js/meshutils.js:fuseBody) criou a permutação
+   MeshDepthMaterial+USE_SKINNING, que antes não existia: nenhum rig do
+   jogo projetava sombra. Ela É de fato invisível pro compile — um
+   `flush()` sozinho não acrescenta nenhum programa de profundidade.
+   Só que ela JÁ nasce na janela do menu: em boot cru, sem QA e sem
+   nenhum clique, `renderer.info.programs` mostra os 2 programas
+   `depth`+skinning por volta do frame 40 (3 de 3 execuções), muito antes
+   de o jogador conseguir começar a partida — o menu renderiza a cena do
+   mundo com as cascatas do CSM, e os inimigos caem na cascata 0.
+
+   Aquecer explicitamente foi implementado e MEDIDO: sósias dos casters
+   na cena real + um `shadowMap.render`, porque a chave do programa
+   carrega a contagem de luzes da CENA e uma cena auxiliar linkaria outra
+   permutação, inútil. Ganho medido: zero (já estava linkado), ao custo
+   de acoplar este módulo a internas do renderer. Recusado por isso.
+   O que invalidaria a conta: o menu deixar de renderizar a cena do
+   mundo, ou aparecer um caster SKINADO que só entra em cena depois do
+   menu (hoje os rigs de GLB nascem com castShadow=false em
+   js/meshutils.js:prepRiggedMesh).
    ================================================================ */
 
 /* Texturas moram em props variadas (map, normalMap, emissiveMap,

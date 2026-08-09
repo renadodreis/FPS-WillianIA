@@ -108,6 +108,8 @@ export function createCar(deps) {
   }
 
   // Visual barato enquanto o GLB chega (e fallback se houver erro de rede).
+  // ATENÇÃO: o material nasce AQUI, um por chamada — nunca é compartilhado
+  // entre veículos. É o que autoriza `dropPlaceholder` a dar baixa nele.
   function buildPlaceholder(half, color) {
     const group = new THREE.Group();
     const mesh = new THREE.Mesh(
@@ -118,6 +120,38 @@ export function createCar(deps) {
     group.add(mesh);
     scene.add(group);
     return group;
+  }
+
+  /* Baixa do placeholder quando o GLB assume. `csmMat.unregister` tira o
+     material de csmMaterials E de csm.shaders (js/castle.js:571 usa o mesmo
+     gancho): sem isso ficavam 6 materiais mortos — um por veículo — presos no
+     CSM pra sempre, com uniforme atualizado todo frame e estragando
+     csmDebug.materialCount, que é dourado de teste.
+
+     `dispose()` do MATERIAL fica de fora DE PROPÓSITO, e não por descuido:
+     `attachModel` roda quando o GLB chega, que é exatamente a janela em que
+     `renderer.compileAsync` do prewarm está fazendo polling em
+     `properties.get(material).currentProgram`. Descartar o material apaga
+     essas properties, o polling do three estoura DENTRO do próprio setTimeout
+     (fora do alcance de qualquer try/catch nosso) e a promise do compileAsync
+     nunca resolve — o prewarm morre travado. Medido: 4 de 6 boots com erro de
+     página `Cannot read properties of undefined (reading 'isReady')`, contra
+     0 de 4 sem o dispose. O material fica sem referência forte (properties é
+     WeakMap) e o programa de GL dele é uma permutação comum, compartilhada com
+     dezenas de outros materiais — não sobra nada mensurável.
+     A geometria continua sendo descartada: geometria ninguém consulta depois. */
+  const releaseMaterial = csmMat && typeof csmMat.unregister === 'function'
+    ? material => csmMat.unregister(material)
+    : null;
+  function dropPlaceholder(group) {
+    const materiais = new Set();
+    group.traverse(obj => {
+      if (!obj.isMesh || obj.userData.importedCarModel) return;
+      if (obj.geometry) obj.geometry.dispose();
+      for (const m of Array.isArray(obj.material) ? obj.material : [obj.material])
+        if (m) materiais.add(m);
+    });
+    if (releaseMaterial) for (const m of materiais) releaseMaterial(m);
   }
 
   function removeAuxiliaryNodes(root) {
@@ -226,7 +260,7 @@ export function createCar(deps) {
     try {
       const tpl = await prepareTemplate(v.cfg);
       // Remove só o placeholder; o grupo é a identidade usada pela física/multiplayer.
-      v.group.traverse(obj => { if (obj.isMesh && !obj.userData.importedCarModel) obj.geometry.dispose(); });
+      dropPlaceholder(v.group);
       v.group.clear();
       v.modelMetrics = tpl.metrics;
       if (tpl.rig) {

@@ -37,8 +37,30 @@ export function noSeed(fn) {
 }
 
 const _toRoot = new THREE.Matrix4();
-const _sphere = new THREE.Sphere();
 const MERGEABLE = ['position', 'normal', 'uv'];
+
+/* Bandeiras de render que moram na PEÇA, não no material. Tudo que não entra
+   na chave do balde é descartado sem erro, sem warning e sem teste falhando —
+   então entra tudo, e a malha fundida sai com o valor do balde. Peças que
+   divergem em qualquer uma delas simplesmente não se fundem (uma draw call a
+   mais é barato perto de perder uma sombra ou um renderOrder em silêncio). */
+function renderFlags(o) {
+  return {
+    castShadow: !!o.castShadow, receiveShadow: !!o.receiveShadow,
+    visible: o.visible !== false, renderOrder: o.renderOrder || 0,
+    frustumCulled: o.frustumCulled !== false, layers: o.layers.mask,
+  };
+}
+const flagKey = f => `${+f.castShadow}|${+f.receiveShadow}|${+f.visible}|` +
+  `${f.renderOrder}|${+f.frustumCulled}|${f.layers}`;
+function applyFlags(mesh, f) {
+  mesh.castShadow = f.castShadow;
+  mesh.receiveShadow = f.receiveShadow;
+  mesh.visible = f.visible;
+  mesh.renderOrder = f.renderOrder;
+  mesh.frustumCulled = f.frustumCulled;
+  mesh.layers.mask = f.layers;
+}
 
 /* Prepara UMA cópia da geometria da peça já no espaço do corpo, com os
    atributos que a fusão aceita. RoundedBoxGeometry nasce SEM índice (ela chama
@@ -76,9 +98,11 @@ function pieceGeometry(piece, boneIndex) {
    custavam 256 draw calls num frame de 560.
 
    Como funde sem mudar o que o jogador vê:
-     - agrupa por (material, castShadow). Material igual => cor, rugosidade,
-       metalicidade e registro no CSM ficam EXATAMENTE os mesmos; separar por
-       castShadow preserva a silhueta da sombra peça por peça.
+     - agrupa por (material + bandeiras de render da peça). Material igual =>
+       cor, rugosidade, metalicidade e registro no CSM ficam EXATAMENTE os
+       mesmos; separar por castShadow preserva a silhueta da sombra peça por
+       peça, e as outras bandeiras entram na chave pra nunca sumirem calado
+       (ver renderFlags acima).
      - membros que giram (braços, pernas, cabeça) viram OSSOS RÍGIDOS: cada
        vértice pesa 1 no osso do membro a que pertencia, então a pose é
        idêntica à da hierarquia de Group que existia antes. Sem os ossos, a
@@ -89,8 +113,10 @@ function pieceGeometry(piece, boneIndex) {
 
    Armadilha do three r185 já registrada no projeto: a esfera delimitadora de
    SkinnedMesh não acompanha os ossos. Aqui ela é calculada UMA vez em repouso
-   e inflada por `boundsFactor` — mesma solução de js/skeletons.js:312-316. Sem
-   isso o inimigo desaparece quando levanta o braço pra mirar.
+   (centro da caixa + maior distância REAL a um vértice) e inflada por
+   `boundsFactor` — mesma solução de js/skeletons.js:312-316. Sem isso o
+   inimigo desaparece quando levanta o braço pra mirar; com folga demais ele
+   volta a desenhar fora da tela.
 
    `cache`+`cacheKey`: corpos iguais (os 28 inimigos são 3 receitas: padrão,
    pesado e executivo) compartilham a MESMA geometria fundida. Cada boneco
@@ -98,7 +124,7 @@ function pieceGeometry(piece, boneIndex) {
    Sem isso a fusão custaria +5,1 MB de atributo de vértice em vez de −5,8 MB.
    ================================================================ */
 export function fuseBody(root, {
-  bones = null, keep = [], boundsFactor = 1.4, cache = null, cacheKey = null } = {}) {
+  bones = null, keep = [], boundsFactor = 1.5, cache = null, cacheKey = null } = {}) {
   return noSeed(() => {
     root.updateMatrixWorld(true);
     _toRoot.copy(root.matrixWorld).invert();
@@ -122,8 +148,9 @@ export function fuseBody(root, {
         for (let n = o.parent; n && n !== root; n = n.parent)
           if (boneIdx.has(n)) { bi = boneIdx.get(n); break; }
       }
-      const key = `${o.material.uuid}|${o.castShadow ? 1 : 0}`;
-      const entry = buckets.get(key) || { material: o.material, cast: !!o.castShadow, geos: [] };
+      const flags = renderFlags(o);
+      const key = `${o.material.uuid}|${flagKey(flags)}`;
+      const entry = buckets.get(key) || { material: o.material, flags, geos: [] };
       entry.geos.push(pieceGeometry(
         { mesh: o, matrix: new THREE.Matrix4().multiplyMatrices(_toRoot, o.matrixWorld) }, bi));
       buckets.set(key, entry);
@@ -143,10 +170,29 @@ export function fuseBody(root, {
         }
         merged.computeBoundingBox();
         bounds.union(merged.boundingBox);
-        receita.partes.push({ geometry: merged, material: g.material, cast: g.cast });
+        receita.partes.push({ geometry: merged, material: g.material, flags: g.flags });
       }
-      bounds.getBoundingSphere(receita.esfera);
-      receita.esfera.radius *= boundsFactor; // membros giram além do repouso
+      /* Esfera do corpo em repouso. O centro é o da caixa, mas o raio é a
+         MAIOR distância real a um vértice — Box3.getBoundingSphere devolve a
+         meia-diagonal, que sobra 18-25 % de graça (medido nos três corpos).
+         Cada centímetro aqui é culling perdido: um inimigo parado logo fora da
+         borda da tela volta a custar as 7-9 draw calls, o skeleton.update() e
+         o reupload da bone texture, vezes as 4 cascatas do CSM.
+         `boundsFactor` cobre o quanto os membros giram ALÉM do repouso —
+         medido em test/enemy-drawcalls: 1,33 no pior caso (o braço de mira do
+         executivo), daí 1,5 com folga honesta. */
+      bounds.getCenter(receita.esfera.center);
+      const c = receita.esfera.center;
+      let maxSq = 0;
+      for (const p of receita.partes) {
+        const pos = p.geometry.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          const dx = pos.getX(i) - c.x, dy = pos.getY(i) - c.y, dz = pos.getZ(i) - c.z;
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > maxSq) maxSq = d2;
+        }
+      }
+      receita.esfera.radius = Math.sqrt(maxSq) * boundsFactor;
       if (cache && cacheKey !== null) cache.set(cacheKey, receita);
     }
 
@@ -154,7 +200,7 @@ export function fuseBody(root, {
     for (const p of receita.partes) {
       const mesh = bones ? new THREE.SkinnedMesh(p.geometry, p.material)
         : new THREE.Mesh(p.geometry, p.material);
-      mesh.castShadow = p.cast;
+      applyFlags(mesh, p.flags);
       root.add(mesh);
       meshes.push(mesh);
     }
