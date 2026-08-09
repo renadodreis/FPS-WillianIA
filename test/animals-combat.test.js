@@ -37,9 +37,26 @@ describe('Animais — orientação, lifecycle e mordida física',
         wolf.group.updateMatrixWorld(true);
 
         const movement = wolf.group.position.clone().sub(before).setY(0).normalize();
-        const visualHead = new THREE.Vector3();
-        wolf.group.children[1].getWorldPosition(visualHead);
-        const visualForward = visualHead.sub(wolf.group.position).setY(0).normalize();
+        /* FOCINHO PELA GEOMETRIA, não por índice de filho: a malha é montada
+           olhando pra +X do grupo, então o vértice mais avançado nesse eixo é
+           a ponta do focinho. Vale com as peças soltas e com o corpo fundido
+           (as peças viram 2 malhas e as pernas viram ossos — ver
+           js/meshutils.js:fuseBody), que é o ponto: o que se afirma aqui é
+           para onde o BICHO aponta, não como ele está montado. */
+        const v = new THREE.Vector3(), focinho = new THREE.Vector3();
+        let maisAFrente = -Infinity;
+        wolf.group.traverse(o => {
+          if (!(o.isMesh || o.isSkinnedMesh)) return;
+          const pos = o.geometry.attributes.position;
+          for (let i = 0; i < pos.count; i++) {
+            if (o.isSkinnedMesh) o.getVertexPosition(i, v);
+            else v.fromBufferAttribute(pos, i);
+            wolf.group.worldToLocal(v.applyMatrix4(o.matrixWorld));
+            if (v.x > maisAFrente) { maisAFrente = v.x; focinho.copy(v); }
+          }
+        });
+        const visualForward = wolf.group.localToWorld(focinho)
+          .sub(wolf.group.position).setY(0).normalize();
         const headSphere = wolf.hitSpheres().find(s => s.part === 'head');
         const hitboxForward = headSphere.c.clone().sub(wolf.group.position).setY(0).normalize();
         return {

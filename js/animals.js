@@ -1,5 +1,6 @@
 /* animais (veados, lobos) — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
+import { fuseBody } from './meshutils.js';
 
 export function createAnimals(deps) {
   const { clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups,
@@ -58,7 +59,11 @@ export function createAnimals(deps) {
     g.add(tail);
     const legs = [];
     for (const [lx, lz] of [[0.32, 0.14], [0.32, -0.14], [-0.32, 0.14], [-0.32, -0.14]]) {
-      const lg = new THREE.Group();
+      /* A perna era Group e virou Bone: mesmo Object3D, mesmo consumo de UUID
+         (4 sorteios — contrato do `Math.random` seedado intacto) e a MESMA
+         rotation.x que o update escreve lá embaixo. A diferença é que agora
+         ela pode ser osso da fusão em vez de galho da cena. */
+      const lg = new THREE.Bone();
       lg.position.set(lx * size, 0.5 * size, lz * size);
       const l = new THREE.Mesh(new THREE.CylinderGeometry(0.045 * size, 0.04 * size, 0.5 * size, 6), mat);
       l.position.y = -0.25 * size;
@@ -66,7 +71,31 @@ export function createAnimals(deps) {
       g.add(lg);
       legs.push(lg);
     }
-    return { g, legs };
+    /* PERF: até aqui o bicho são 12 (cervo) ou 10 (lobo) meshes soltos, uma
+       draw call cada. Medido no viewport de celular (844×390 @2, ?mobile=1,
+       seed 424242), os 13 animais custavam 44 das 365 draw calls do frame — e
+       esse custo é PERMANENTE, porque eles estão espalhados pelo mapa inteiro.
+       fuseBody junta tudo em 4 (cervo) ou 2 (lobo) malhas — uma por
+       (material, castShadow) — usando as PERNAS como ossos rígidos de peso 1.
+       Material, cor, sombra e pose ficam idênticos; o corpo continua sendo a
+       única peça com castShadow, então o passe de sombra não muda de tamanho.
+       Os dois chifres do cervo ficam em baldes separados porque cada um nasce
+       com material PRÓPRIO (o `new MeshStandardMaterial` está dentro do laço):
+       unificar mexeria em quantos objetos o worldgen cria, ou seja, no
+       contrato do `Math.random` seedado.
+       O corpo tem que estar na origem e em repouso aqui, que é onde o
+       esqueleto tira as inversas.
+       boundsFactor 1,08 é medido, não chutado: varrendo todo vértice em 13
+       poses da faixa que o update produz (sw de −0,55 a +0,55), a pata mais
+       afastada chega a 1,042× o raio de repouso no maior cervo e 1,003× no
+       lobo — a perna gira em torno do quadril, quase não sai da silhueta. Com
+       1,08 a esfera fica com 0,69 m (lobo) a 0,93 m (maior cervo) e sobra
+       3 a 5 cm sobre o vértice mais distante de toda a varredura. O inimigo
+       precisa de 1,5 porque o braço de mira se estica pra frente; repetir
+       esse número aqui compraria ~0,4 m de esfera à toa, e cada centímetro é
+       animal desenhado depois de sair da tela. */
+    const { skeleton } = fuseBody(g, { bones: [g, ...legs], boundsFactor: 1.08 });
+    return { g, legs, skeleton };
   }
   function spawnPos() {
     for (let i = 0; i < 30; i++) {
@@ -78,12 +107,13 @@ export function createAnimals(deps) {
   }
   function makeAnimal(predator) {
     const size = predator ? 0.85 : rand(0.9, 1.15);
-    const { g, legs } = quadruped(predator ? 0x4a4a52 : 0x9a6b42, size, predator);
+    const { g, legs, skeleton } = quadruped(predator ? 0x4a4a52 : 0x9a6b42, size, predator);
     scene.add(g);
     const s = spawnPos();
     g.position.set(s.x, heightAt(s.x, s.z), s.z);
     const a = {
       predator, size, group: g, legs,
+      skeleton, // hook de QA do corpo fundido (test/animal-drawcalls.test.js)
       alive: true, enabled: true, hp: predator ? 70 : 40,
       yaw: rand(TAU), phase: rand(TAU), speedF: 0,
       side: list.length % 2 ? 1 : -1,
