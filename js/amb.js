@@ -1,6 +1,7 @@
 /* vida ambiente: borboletas, pássaros, fogueira, bandeiras — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+import { noSeed } from './meshutils.js';
 
 export function createAmb(deps) {
   const { rand, TAU, _v1, _v2, heightAt, biomeAt, addObstacle, SFX, FX, scene, csmMat, Structures, player } = deps;
@@ -9,14 +10,84 @@ export function createAmb(deps) {
   const wingGeo = new THREE.PlaneGeometry(0.16, 0.12);
   wingGeo.translate(0.08, 0, 0); // dobradiça no corpo
   const bColors = [0xffd24d, 0xff8ac2, 0x9ad9ff, 0xfff3c4, 0xcf9aff];
+  /* Este laço NÃO pode encolher: cada Group, Material e Mesh come 4 sorteios do
+     `Math.random` seedado pelo UUID, e js/amb.js roda no MEIO do worldgen
+     (game.js:2267 — animais, esqueletos, noite e alien vêm depois). Os 22
+     grupos e as 44 malhas continuam nascendo com o mesmo consumo; o que muda é
+     que NENHUM deles entra na cena — viram só portadores de transformação,
+     lidos pela fusão logo abaixo. Mesmo contrato de fuseBody() em
+     js/meshutils.js. Os 22 materiais também ficam de pé (é por eles que a cor
+     de cada asa é lida na fusão) e de propósito NÃO recebem dispose: eles nunca
+     chegaram à GPU, e a rodada anterior registrou que dispose de material na
+     janela do prewarm derruba o compileAsync (ver 091d5a7 item 7). */
   for (let i = 0; i < 22; i++) {
     const g = new THREE.Group();
     const mat = new THREE.MeshBasicMaterial({ color: bColors[i % bColors.length], side: THREE.DoubleSide, transparent: true, opacity: 0.95 });
     const w1 = new THREE.Mesh(wingGeo, mat);
     const w2 = new THREE.Mesh(wingGeo, mat); w2.scale.x = -1;
     g.add(w1, w2);
-    scene.add(g);
     bflies.push({ g, w1, w2, anchor: new THREE.Vector3(), phase: rand(TAU), speed: rand(0.5, 1.2), life: 0 });
+  }
+  /* ---- FUSÃO DAS ASAS: 88 draw calls viram 1 -----------------------------
+     Cada asa era `new THREE.Mesh` com MATERIAL PRÓPRIO (22 materiais para 5
+     cores) e custava DUAS draw calls, não uma: `transparent` + `DoubleSide`
+     faz o three renderizar o objeto em dois passes (BackSide e depois
+     FrontSide, WebGLRenderer.renderObject), marcando `material.needsUpdate`
+     nos dois. Medido no celular: 24 draw calls no solo e 76 no BR — 19 % do
+     frame do BR só de borboleta.
+
+     Vira UMA InstancedMesh de 44 instâncias com cor por instância. O argumento
+     de cor é o do commit dos veículos: o three faz `diffuseColor *= vColor` sem
+     conversão nenhuma e `material.color` já está no espaço de trabalho linear,
+     então BRANCO × cor da instância dá exatamente a mesma cor. `instanceColor`
+     usa o mesmo caminho — o prefixo de fragmento define USE_COLOR quando
+     `instancingColor` está ligado (WebGLProgram.js:737).
+
+     `forceSinglePass`: o quad é PLANO, então back e front face nunca aparecem
+     ao mesmo tempo; hoje um dos dois passes já sai inteiro descartado pelo
+     culling de face e só gasta a draw call. Desenhar DoubleSide num passe só
+     produz o mesmo pixel por uma call.
+
+     `frustumCulled = false`: a esfera de uma InstancedMesh não acompanha as
+     instâncias (armadilha do three r185 já registrada em js/meshutils.js) e as
+     44 asas cobrem um anel de 42 m em volta do player — a esfera honesta nunca
+     seria culled de qualquer jeito. Melhor 1 call fixa que sumir da tela. */
+  const _bw = new THREE.Matrix4();
+  const wings = noSeed(() => {
+    const m = new THREE.InstancedMesh(wingGeo, new THREE.MeshBasicMaterial({
+      side: THREE.DoubleSide, transparent: true, opacity: 0.95, forceSinglePass: true,
+    }), bflies.length * 2);
+    m.name = 'borboletas';
+    m.frustumCulled = false;
+    /* Ordenação: um transparente é ordenado pela posição da MALHA, e a malha
+       instanciada fica na origem enquanto as asas estão a 7-42 m do player —
+       a profundidade de ordenação viraria a distância do player à origem do
+       mundo, ou seja, aleatória. `renderOrder = -1` tira a loteria: as asas
+       desenham SEMPRE primeiro entre os transparentes e, como escrevem
+       profundidade com alpha 0,95, o resto do passe se resolve pelo depth test
+       (efeito aditivo atrás some, efeito na frente soma por cima). Medido: com
+       a origem decidindo, um quadro aditivo à frente das asas mudava até 71 de
+       255; com renderOrder = -1 o mesmo quadro dá zero. Nada mais no projeto
+       usa renderOrder (tudo é 0), então -1 é o primeiro da fila e só isso. */
+    m.renderOrder = -1;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    bflies.forEach((b, i) => {
+      m.setColorAt(i * 2, b.w1.material.color);
+      m.setColorAt(i * 2 + 1, b.w2.material.color);
+      b.g.remove(b.w1, b.w2);
+      escreveAsas(m, i, b); // repouso na origem: mesmo estado do 1º frame de antes
+    });
+    m.instanceColor.needsUpdate = true;
+    scene.add(m);
+    return m;
+  });
+  /* A matriz de instância é a matrixWorld que a asa teria: o grupo era filho
+     direto da cena (identidade) e a asa filha do grupo. Compõe na mão porque os
+     dois saíram do grafo — assim ninguém paga updateMatrixWorld duas vezes. */
+  function escreveAsas(m, i, b) {
+    b.g.updateMatrix(); b.w1.updateMatrix(); b.w2.updateMatrix();
+    m.setMatrixAt(i * 2, _bw.multiplyMatrices(b.g.matrix, b.w1.matrix));
+    m.setMatrixAt(i * 2 + 1, _bw.multiplyMatrices(b.g.matrix, b.w2.matrix));
   }
   function reanchor(b) {
     const a = rand(TAU), r = rand(7, 42);
@@ -106,7 +177,8 @@ export function createAmb(deps) {
 
   function update(dt, t) {
     // borboletas vagueiam em volta de uma âncora
-    for (const b of bflies) {
+    for (let i = 0; i < bflies.length; i++) {
+      const b = bflies[i];
       b.life -= dt;
       if (b.life <= 0 || b.anchor.distanceToSquared(player.pos) > 85 * 85) reanchor(b);
       b.phase += dt * b.speed;
@@ -118,7 +190,9 @@ export function createAmb(deps) {
       const flap = 0.3 + Math.abs(Math.sin(t * 16 + b.phase * 7)) * 1.0;
       b.w1.rotation.y = flap;
       b.w2.rotation.y = -flap;
+      escreveAsas(wings, i, b);
     }
+    wings.instanceMatrix.needsUpdate = true;
     // pássaros circulam batendo asas
     for (const b of birds) {
       b.a += b.sp * dt;
