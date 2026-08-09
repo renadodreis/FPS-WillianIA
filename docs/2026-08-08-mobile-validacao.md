@@ -965,3 +965,257 @@ pequena) num caminho que os testes unitários não exercitam.
 6. **Uma execução por configuração**, com uma exceção deliberada: `R4` e `R5b`
    são a mesma configuração em execuções separadas e bateram em 0,3 %, o que dá
    uma noção do ruído desta rodada (bem menor que os ±8 % da manhã).
+
+---
+---
+
+# Medição pós-rodada de draw call
+
+Data: 2026-08-08, sessão da noite. **ANTES = `11dde4d`** (o commit que fechou a
+seção anterior deste documento), medido num `git worktree` fora do repositório;
+**DEPOIS = `HEAD` = `091d5a7`**. Os quatro commits sob medição são `7f4ed3e`
+(veículos), `d06609f` (personagens), `fe3870a` (animais) e `091d5a7` (acertos da
+auditoria). Máquina ociosa, um cenário por vez, nunca em paralelo.
+
+O motor de medição é o mesmo das seções `F*`: servidor com `WORLD_SEED=424242`,
+Chrome `--use-angle=swiftshader`, viewport de celular 844×390 `deviceScaleFactor
+2` + `hasTouch` + `isMobile`, `?perf=1&mobile=1`, e a técnica do `js/perfhud.js`
+(`autoReset = false` + `beginFrame`/`endFrame`) — sem ela o composer zera
+`renderer.info` por passe e a leitura mente. A decomposição é **por dono**:
+`renderBufferDirect` interceptado, subindo a cadeia de parents até uma etiqueta
+posta por identidade de objeto (`Enemies.list[i].group`, `Car.vehicles[i].group`,
+…), nunca por heurística de nome.
+
+**Nenhuma conclusão desta seção usa FPS.** Swiftshader é rasterizador de
+software: draw calls, triângulos e geometria são fiéis; milissegundos de frame
+não são transferíveis para celular. FPS não foi medido de propósito.
+
+## G0. Correção de método: o "mundo novo (20 s)" de `F1`/`F2`/`Q1` era de ~92 s
+
+Antes de qualquer número novo, um erro da rodada anterior que precisa ser
+registrado porque muda a leitura das tabelas `F`.
+
+O cenário `F2` está rotulado "mundo novo (20 s)". Ele não era. O código de
+medição espera "rede parada" **antes** de aplicar o assentamento de 20 s, e o
+detector de rede parada **nunca fecha** por causa de `/js/minimap-worker.js`
+(armadilha `O2`, já registrada). Resultado: o teto de espera é consumido
+inteiro e o assentamento de 20 s vira um `while` que já nasce satisfeito.
+
+Idade real do mundo no instante do `forceStart`, medida agora e gravada em cada
+execução:
+
+```
+dcf-antes-solo-1.json  {"worldMs":8542,"idleMs":98680,"idleOk":false,"idadeMundoMs":91698}
+dcf-antes-solo-2.json  {"worldMs":8927,"idleMs":99055,"idleOk":false,"idadeMundoMs":91697}
+dcf-depois-br-1.json   {"worldMs":9352,"idleMs":99500,"idleOk":false,"idadeMundoMs":100947}
+```
+
+**`idleOk: false` em 10 de 10 execuções** com o filtro antigo. Ou seja: `F1`,
+`F2` e `Q1` mediram um mundo de **~90 s**, não de 20 s. Com o Worker também
+ignorado no detector, a rede fecha de verdade (`emVooNoStart: 0`) e dá pra
+assentar em 20 s de propósito.
+
+E os dois regimes são **muito** diferentes, porque a câmera do menu gira
+enquanto o jogador espera — a direção em que o `forceStart` deixa o olhar é
+função da idade do mundo:
+
+| idade do mundo no `forceStart` | `camDir` | draw p50 (ANTES) |
+|---|---|---|
+| 22 s | `[-0.719, -0.278, -0.637]` | **314** |
+| 92 s | `[-0.863, -0.281, -0.420]` | **761** |
+
+Não é dispersão de inimigo: é **enquadramento**. Aos 92 s a câmera aponta para
+a Torre Nexus e os 8 Executivos procedurais entram no frustum; aos 22 s eles
+estão fora. Por isso esta rodada mede **três** regimes e diz sempre qual é.
+
+## G1. Draw calls no solo — ANTES × DEPOIS, três regimes
+
+Cada configuração rodou **duas vezes** (o regime controlado, quatro).
+
+### G1a. Estado em que o jogador realmente entra — mundo de 20 s, rede parada
+
+`emVooNoStart: 0` nas quatro execuções, e `meshPorInimigo` já é `[10,2]` no
+DEPOIS / `[38,2]` no ANTES: os GLB já substituíram o corpo procedural antes da
+contagem (armadilha do GLB tardio fechada).
+
+| | ANTES (`11dde4d`) | DEPOIS (`HEAD`) | delta |
+|---|---|---|---|
+| **draw calls p50** | **314 / 315** | **284 / 268** | **−12,2 %** |
+| soma da decomposição | 318 / 319 | 289 / 271 | |
+| triângulos p50 | 654 957 / 658 977 | 654 973 / 631 581 | ~0 |
+| malhas visíveis | 1 879 / 1 880 | 1 442 / 1 440 | −23,4 % |
+| malhas na cena | 3 091 | 2 103 | −32,0 % |
+| geometrias vivas (`info.memory`) | 563 | 250 / 246 | −55,9 % |
+
+### G1b. Mundo de ~92 s — o regime que `F1`/`F2`/`Q1` mediram de fato
+
+Protocolo idêntico ao de `F2` (inclusive o detector de rede antigo), para
+comparar com o **782** publicado.
+
+| | ANTES (`11dde4d`) | DEPOIS (`HEAD`) | delta |
+|---|---|---|---|
+| **draw calls p50** | **761 / 780** | **460 / 440** | **−41,6 %** |
+| soma da decomposição | 772 / 792 | 479 / 442 | |
+| triângulos p50 | 705 932 / 729 332 | 727 488 / 705 916 | ~0 |
+| malhas visíveis | 1 881 / 1 880 | 1 439 / 1 439 | −23,5 % |
+| geometrias vivas | 904 | 310 / 309 | −65,8 % |
+
+O ANTES (761/780) reproduz o `F2` da tarde (**782**) dentro de 1,5 % — é a
+prova de que o motor de medição é o mesmo.
+
+### G1c. Cenário CONTROLADO — o A/B reprodutível
+
+O enquadramento natural depende da idade do mundo (§G0), então o número que
+mede *o que a rodada comprou* sai de um cenário fixo: jogador teleportado para
+`(60, 60)`, câmera com **yaw 0** (olhando −Z), `Enemies.update`,
+`Animals.update`, `Car.update` e `Skeletons.update` transformados em no-op, e
+**os 28 inimigos + 13 animais + 6 veículos** postos numa grade fixa a 10–52 m à
+frente. Todos visíveis, nos dois builds, sempre.
+
+| | ANTES | DEPOIS | delta |
+|---|---|---|---|
+| **frame inteiro** | **971 / 958 / 964 / 970** | **561 / 561 / 575 / 565** | **−41,5 %** |
+| inimigos (28) | 296 | 112 | −62,2 % |
+| animais (13) | 146 | 42 | −71,2 % |
+| veículos (6) | 155 | 50 | −67,7 % |
+| grama | 129 | 129 | 0 |
+
+Os 112 do DEPOIS batem com a aritmética dos commits: 20 soldados com o GLB do
+Guardião × 2 + 8 Executivos procedurais × 9 = 40 + 72 = 112. No ANTES,
+20 × 2 + 8 × 32 = 296.
+
+## G2. Battle royale (`startBRMatch` do `test/helpers/harness.js`)
+
+| Cenário BR | ANTES | DEPOIS | delta |
+|---|---|---|---|
+| **entrada (mundo de 20 s → 29–30 s reais)** | **505 / 505** | **440 / 440** | **−12,9 %** |
+| **mundo de ~101 s** (protocolo do `D2`, que deu 671) | **660 / 669 / 659** | **539 / 514 / 512** | **−21,3 %** |
+| triângulos p50 (entrada) | 672 851 / 672 867 | 672 899 / 672 899 | **+0,007 %** |
+| malhas visíveis | 2 454 / 2 456 | 2 016 / 2 017 | −17,9 % |
+| geometrias vivas | 724 / 725 | 378 / 378 | −47,8 % |
+
+Decomposição do BR (entrada, total 504 → 439): **veículos 66 → 31**,
+**animais 44 → 12**, grama 83 → 83, resto 293 → 295. No mundo de ~101 s os
+veículos vão de **148 → 43** (−70,9 %) e os animais de 56–59 → 16–20.
+
+No BR os 28 inimigos do modo solo estão mortos (`inimigosVivos: 0`), então o
+corte de personagens não aparece: **o ganho do BR é inteiramente de veículos e
+animais.**
+
+## G3. Dispersão — o número vale?
+
+| Cenário | execuções | spread |
+|---|---|---|
+| BR entrada, ANTES | 505 / 505 | **0,0 %** |
+| BR entrada, DEPOIS | 440 / 440 | **0,0 %** |
+| solo 20 s, ANTES | 314 / 315 | 0,3 % |
+| solo ~92 s, ANTES | 761 / 780 | 2,5 % |
+| controlado, DEPOIS | 561 / 561 / 575 / 565 | 2,5 % |
+| solo 20 s, DEPOIS | 284 / 268 | **5,8 %** |
+| BR ~101 s, DEPOIS | 539 / 514 / 512 | 5,2 % |
+
+O maior espalhamento (5,8 %) é menor que o menor delta reportado (12,2 %), então
+**todos os deltas desta seção sobrevivem à dispersão**. Duas ressalvas honestas:
+o BR com mundo de ~101 s tem uma execução (`539`) cujo `camDir` divergiu das
+outras duas (`[-0.963,-0.081,0.256]` contra `[-0.867,-0.281,-0.411]`) e por isso
+também acusou 916 945 triângulos contra 706 449 — **triângulo de BR com mundo
+velho não é número confiável**; draw call é. O regime de entrada do BR, ao
+contrário, é bit a bit reprodutível.
+
+## G4. Decomposição por dono no frame (não no grafo de cena)
+
+Solo, mundo de ~92 s (o pior enquadramento natural), soma conferida contra
+`info.render.calls` no mesmo regime (479 vs 476; 442 vs 439 — 0,6 %):
+
+| dono | ANTES | DEPOIS | delta |
+|---|---|---|---|
+| inimigos | **296** | **112** | −62,2 % |
+| veículos | **130** | **25** | −80,8 % |
+| animais | **44** | **12** | −72,7 % |
+| grama | 86 | 86 / 87 | 0 |
+| esqueletos | 4 / 20 | 4 / 16 | ruído |
+| arma em primeira pessoa | 5 | 5 | 0 |
+| resto (cenário, cidade, castelo, ambiente, pós) | 207 / 211 | 198 / 222 | 0 |
+| **total** | **772 / 792** | **479 / 442** | **−41,6 %** |
+
+**As três categorias que a rodada tocou caíram 470 → 149 draw calls (−68,3 %);
+nada mais mudou**, o que é exatamente o esperado de quatro commits que só mexem
+em `js/enemies.js`, `js/animals.js`, `js/car.js`, `js/carwheels.js`,
+`js/meshutils.js`, `js/night.js` e `js/prewarm.js`.
+
+## G5. Veredito sobre 60 FPS travados em Adreno 6xx / Mali-G57
+
+> **O teto de draw call desabou, mas o alvo não foi alcançado: continua
+> implausível no battle royale e em combate cheio, e passou a ser plausível só
+> no solo com enquadramento de entrada.** O pico do jogo saiu de ~970 para
+> ~565 draw calls e o estado de entrada de 315 para 276 (solo) e 505 para 440
+> (BR). Com textura já em 54,0 MB e draw call cortado, **o próximo teto medido é
+> a grama — e agora ela é o maior item nos dois eixos ao mesmo tempo.**
+
+### O que é MEDIÇÃO
+
+1. Solo, estado de entrada (mundo de 20 s): **314/315 → 284/268 draw calls**
+   (−12,2 %).
+2. Solo, mundo de ~92 s (o regime que `F2` publicava como 782):
+   **761/780 → 460/440** (−41,6 %).
+3. Solo, cenário controlado com tudo visível: **971/958/964/970 → 561/561/575/565**
+   (−41,5 %).
+4. BR, entrada: **505/505 → 440/440** (−12,9 %). BR, ~101 s:
+   **660/669/659 → 539/514/512** (−21,3 %).
+5. Por dono, no frame: inimigos **296 → 112**, veículos **130 → 25**,
+   animais **146 → 42** (controlado) / **44 → 12** (natural).
+6. **Triângulos não mudaram**: 672 851/672 867 → 672 899/672 899 no BR
+   (+0,007 %), e iguais dentro do ruído de enquadramento no solo.
+7. Malhas visíveis **1 880 → 1 440** no solo (−23,4 %) e **2 455 → 2 016** no BR
+   (−17,9 %); malhas na cena **3 091 → 2 103**; geometrias vivas **904 → 309**
+   (−65,8 %).
+8. Triângulos do frame por dono (HEAD, solo, 20 s; soma das categorias
+   625 585 contra `info.render.triangles` 643 261 — 97,2 %):
+   **grama 379 108 tri (59 %) em 85,6 draw calls**; terreno + borboletas
+   (`PlaneGeometry`) 98 636; GLB de cenário 76 328; inimigos 17 053;
+   veículos 10 428; animais 2 691.
+
+### O que é INFERÊNCIA
+
+- A faixa prática de **100–300 draw calls por frame** em Adreno 6xx / Mali-G57
+  antes de o custo de driver/binning dominar é a mesma inferência da rodada
+  anterior, e **continua não confirmada em aparelho**. É ela que sustenta o
+  veredito.
+- Contra essa faixa: **276 (solo, entrada)** encosta no topo dela;
+  **440 (BR, entrada)** está ~50 % acima; **565 (combate cheio)** está ~90 %
+  acima. Antes da rodada os mesmos três eram 315, 505 e 966.
+- **643 mil triângulos a 60 Hz ≈ 39 M tri/s** em arquitetura tile-based, com
+  59 % disso sendo grama alpha/vertex-shader. Esse número **a rodada não
+  tocou** — e por construção não podia, já que fusão de malha preserva
+  triângulo.
+- A memória de textura (54,0 MB RGBA8 / 72,0 com mipmap, §F1) **não foi
+  remedida**: nenhum dos quatro commits toca `assets/`, então o número de F1
+  continua valendo por construção.
+
+## G6. Próximo gargalo, reordenado pelo que foi medido agora
+
+| # | Gargalo | Número medido | Por que está nesta posição |
+|---|---|---|---|
+| 1 | **Grama** | **85,6 draw calls e 379 108 triângulos por frame — 32,5 % das draw calls do frame de entrada e 59 % dos triângulos** | Subiu de 5º para 1º sem mudar de tamanho: os itens à frente dela sumiram. É o único item que lidera os **dois** eixos. O custo de mexer está medido em §F7 (LOD por chunk, `updateRanges`, QA) e **não** envolve o contrato do PRNG. |
+| 2 | **Os 8 Executivos procedurais da Torre Nexus** | **72 dos 112 draw calls de inimigo** (9 cada, contra 2 do soldado com GLB) | É o que faz o frame saltar de 271 para 442 quando a câmera vira pra torre. Já caiu 32 → 9; se eles chegassem aos 2 do soldado com GLB, os 72 virariam 16 e o pior caso de combate cairia de 565 para ~509. |
+| 3 | **Borboletas e pássaros de `js/amb.js`** | bloco `PlaneGeometry`+`MeshBasicMaterial` de **24 draw calls no solo e 82 no BR**; 22 borboletas × 2 asas, **cada borboleta com material próprio** (`js/amb.js:14`), mais 15 pássaros (`js/amb.js:31-38`) | Custo puramente decorativo e quase sem triângulo: o bloco `PlaneGeometry` inteiro soma 98 636 tri, dos quais **96 800 são o terreno** (`TERRAIN_SEGS 220` → 220² × 2, `js/config.js:13`), sobrando ~1 800 para bicho. Um `InstancedMesh` por espécie levaria as 44+15 malhas a 2. O excedente do BR (82 − 59) **não foi rastreado**. |
+| 4 | **GLB de cenário (raiz `Sketchfab_Scene`)** | **25–65 draw calls e 76 328 triângulos**, constantes em todos os cenários | Custo fixo do frame, independente de onde o jogador olhe. Não foi investigado se é castelo, nave ou ruína — só que é GLB e que é constante. |
+| 5 | **Veículos** | 7–50 draw calls (eram 66–155) | Saiu da lista de emergência: no BR, onde era o maior item de todos (148), agora é 31–43. |
+
+## G7. O que ficou NÃO MEDIDO nesta rodada, e por quê
+
+1. **FPS em GPU móvel** — impossível no ambiente (swiftshader), e nenhuma
+   conclusão depende dele. Deliberado.
+2. **Memória de textura** — não remedida; os quatro commits não tocam
+   `assets/`, então §F1 vale por construção.
+3. **CPU de simulação sob throttle** — fora do escopo desta rodada; a fusão de
+   malha não muda física, e o custo de `Skeleton.update()` já foi medido em
+   `091d5a7` (0,018 ms/frame para 28 esqueletos).
+4. **Quem é o GLB de raiz `Sketchfab_Scene`** e **o excedente de
+   `PlaneGeometry`+`MeshBasicMaterial` no BR** — identificados como blocos, não
+   como donos nominais.
+5. **Triângulos por dono no BR e no ANTES** — a medição por dono de triângulo
+   rodou uma vez, só no `HEAD` e só no solo.
+6. **Enquadramento único por regime** — o cenário controlado é reprodutível por
+   construção, mas os regimes naturais dependem da idade do mundo (§G0); os
+   números naturais só valem com a idade declarada ao lado.
