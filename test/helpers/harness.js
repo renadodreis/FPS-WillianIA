@@ -262,7 +262,9 @@ async function waitForBRClientReady(h) {
   );
 }
 
-async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort } = {}) {
+/* `flags`: regras da sala (gas, alien, zumbis…) aplicadas pelo anfitrião
+   ANTES do início — mesmo caminho do lobby real (setFlags do host). */
+async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort, flags = null } = {}) {
   const { io } = require('socket.io-client');
   let bot = null;
   try {
@@ -301,6 +303,14 @@ async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort } = {}) {
     bot.close = () => { clearInterval(botPulse); return botClose(); };
     await new Promise((res, rej) => bot.timeout(4000).emit('claimHost', { code: hostCode },
       (e, d) => (e || !d || !d.ok) ? rej(new Error('claimHost falhou')) : res()));
+    if (flags) {
+      /* o servidor aplica e ECOA as regras pra sala inteira (io.emit('flags')).
+         Esperar o eco — em vez de dormir um tanto — é o que garante que o
+         requestStart abaixo já pegue a partida com as regras novas. */
+      const aplicadas = waitForSocketEvent(bot, 'flags', 5000);
+      bot.emit('setFlags', flags);
+      await aplicadas;
+    }
     bot.emit('requestStart');
     await h.page.waitForFunction('window.__BR_debug && !!window.__BR_debug.S.plan', {
       timeout: 60000,

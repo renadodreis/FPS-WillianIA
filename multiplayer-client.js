@@ -547,7 +547,12 @@
     /* O servidor SÓ emite `init` no evento de conexão, e o primeiro já foi
        consumido pelo bootstrap do game.js antes deste handler existir. Logo,
        todo `init` visto aqui É uma reconexão — sem depender do listener
-       `reconnect` do manager (que o harness de QA remove junto com o reload). */
+       `reconnect` do manager (que o harness de QA remove junto com o reload).
+       O listener de socket vive lá no game.js desde o boot do módulo, porque
+       br-game.js pode demorar a baixar e a reconexão não espera por ele; aqui
+       o BR só ASSUME o posto, que é quem conhece a fase da partida. Preencher
+       o slot (em vez de registrar um segundo listener) é a guarda contra
+       adotar o mesmo init duas vezes. */
     /* código do anfitrião guardado (URL ou navegador). Função declarada: o
        handler de `init` abaixo é registrado ANTES do bloco de boot que a usa. */
     function savedHostCode() {
@@ -556,7 +561,7 @@
       try { return localStorage.getItem('br_hostcode'); } catch (e) { return null; }
     }
 
-    socket.on('init', d => {
+    window.__MP_onInit = d => {
       const preMatch = S.phase === 'LOBBY' || S.phase === 'ENDED';
       if (preMatch && window.__MP_init && d.worldSeed === window.__MP_init.worldSeed) {
         Object.assign(window.__MP_init, d);  // id novo, host/roster atuais
@@ -574,7 +579,7 @@
         // preservar o contexto da página e inspecionar o estado.
         (window.__MP_reload || (() => location.reload()))();
       }
-    });
+    };
 
     /* ---------- ping (mostrado ao lado do FPS quando habilitado) ---------- */
     setInterval(() => {

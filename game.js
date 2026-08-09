@@ -76,13 +76,41 @@ if (window.io) {
     if (__mpInit) {
       __mpSpawn = __mpInit.spawn;
       window.__MP_init = __mpInit;
-      let __mpS = __mpInit.worldSeed >>> 0; // mulberry32 seedado no lugar do Math.random
+      const __worldSeed = __mpInit.worldSeed >>> 0; // a seed que MONTOU este mundo
+      let __mpS = __worldSeed; // mulberry32 seedado no lugar do Math.random
       Math.random = function () {
         __mpS = (__mpS + 0x6D2B79F5) | 0;
         let t = Math.imul(__mpS ^ (__mpS >>> 15), 1 | __mpS);
         t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
       };
+      /* RECONEXÃO ANTES DE O CLIENTE BR EXISTIR. O servidor manda um `init`
+         FRESCO (id novo) a cada conexão, e o transporte do engine.io cai com
+         facilidade durante o boot — a main thread fica travada montando o
+         mundo. Quem adotava esse init era o multiplayer-client.js, que só
+         boota depois de br-game.js terminar de baixar: nessa janela NINGUÉM
+         escutava `init`, e o window.__MP_init ficava órfão do socket para
+         sempre. Consequência real: o servidor sabe que este socket é o
+         anfitrião, mas o cliente compara com um id morto e o botão de começar
+         nunca destrava; pelo mesmo caminho, os eventos que o servidor manda
+         pra TODOS endereçados por id (playerKilled, matchEnd) deixam de se
+         reconhecer. Este é o ÚNICO listener de `init` do cliente: o BR assume
+         o posto preenchendo window.__MP_onInit no boot — um slot, e não um
+         segundo addListener, senão o mesmo init seria adotado duas vezes. */
+      window.__MP_onInit = null;
+      __mpSocket.on('init', d => {
+        if (window.__MP_onInit) { window.__MP_onInit(d); return; }
+        if (!d) return;
+        /* Mesma seed = mesma sala e MESMO mundo: só a identidade mudou, e
+           adotá-la é local (o servidor nunca confia em id declarado pelo
+           cliente; `init` só chega do próprio socket). A seed seguindo igual,
+           o Math.random seedado acima NÃO é refeito — a ordem de consumo do
+           worldgen é contrato. Seed diferente = o mundo divergiu e recarregar
+           é o caminho limpo (hookável como __MP_respawn: o QA preserva o
+           contexto da página em vez de recarregar). */
+        if ((d.worldSeed >>> 0) === __worldSeed) Object.assign(window.__MP_init, d);
+        else (window.__MP_reload || (() => location.reload()))();
+      });
     } else { __mpSocket.close(); __mpSocket = null; }
   } catch (e) { console.warn('[MP] servidor indisponível — modo solo', e); __mpSocket = null; }
 }

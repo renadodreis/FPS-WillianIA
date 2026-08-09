@@ -10,46 +10,26 @@
 'use strict';
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { io } = require('socket.io-client');
-const { CHROME, bootGame } = require('./helpers/harness');
+const { CHROME, bootGame, startBRMatch } = require('./helpers/harness');
 
-/* host de verdade: entra, dá o código, ajusta flags e inicia */
-async function startWithFlags(h, flags, port) {
-  const bot = io(`http://localhost:${port}`, { transports: ['websocket'] });
-  /* Quem fecha este socket é o `after` de cada describe — e ele só recebe a
-     referência quando ESTA função retorna. Se qualquer await abaixo estourar
-     (claimHost rejeita em 4 s, o waitForFunction em 30 s), o `bot` do describe
-     fica undefined, `if (bot) bot.close()` não fecha nada, e o socket.io-client
-     segue reconectando: `node --test` nunca termina. Um flake de boot virava
-     suíte pendurada (medido: 15 min a 0,2% de CPU). Fechar aqui é o que
-     transforma isso de volta numa falha comum. */
-  try {
-    await new Promise(r => bot.once('init', r));
-    bot.emit('hello', { nick: 'BotHost' });
-    await new Promise((res, rej) => bot.timeout(4000).emit('claimHost', { code: 'QUEDALIVRE' },
-      (e, d) => (e || !d || !d.ok) ? rej(new Error('claimHost falhou')) : res()));
-    bot.emit('setFlags', flags);
-    await new Promise(r => setTimeout(r, 150)); // flags assentam antes do start
-    bot.emit('requestStart');
-    await h.page.waitForFunction('window.__BR_debug && !!window.__BR_debug.S.plan', { timeout: 30000 });
-    await h.play(() => {
-      window.__BR_debug.S.phase = 'PLAY';
-      window.__BR_freeze = false;
-      window.QA.reset(30, 30);
-    });
-  } catch (err) {
-    bot.close();
-    throw err;
-  }
-  return bot;
-}
+/* host de verdade: entra, dá o código, ajusta as regras da sala e inicia.
+   Aqui morava uma CÓPIA CASEIRA do start do BR que emitia `requestStart`
+   assim que o bootGame voltava — e o bootGame só espera window.__game e
+   window.__MP. Nessa janela o cliente BR ainda não publicou o listener de
+   matchStart (br-game.js boota no poll de 120 ms do multiplayer-client) e o
+   socket da página pode estar reconectando depois da queda de transporte do
+   boot. Com COUNTDOWN_S=1 o servidor dispara matchStart ~1,2 s depois: o
+   evento se perdia e a próxima chance era NEXT_IN_S — daí o timeout redondo.
+   O helper compartilhado espera o cliente BR ficar pronto (e o socket vivo)
+   antes de reivindicar o anfitrião, e ainda fecha o bot se algo estourar. */
+const startWithFlags = (h, flags) => startBRMatch(h, { flags });
 
 describe('Sala — gás desligado', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   let h, bot;
   const PORT = 3166;
   before(async () => {
     h = await bootGame({ port: PORT, extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '300' } });
-    bot = await startWithFlags(h, { gas: 'off' }, PORT);
+    bot = await startWithFlags(h, { gas: 'off' });
   });
   after(async () => { if (bot) bot.close(); if (h) await h.close(); });
 
@@ -74,7 +54,7 @@ describe('Sala — gás inverso', { skip: !CHROME && 'Chrome não encontrado' },
   const PORT = 3165;
   before(async () => {
     h = await bootGame({ port: PORT, extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '300' } });
-    bot = await startWithFlags(h, { gas: 'inversa' }, PORT);
+    bot = await startWithFlags(h, { gas: 'inversa' });
   });
   after(async () => { if (bot) bot.close(); if (h) await h.close(); });
 
@@ -108,7 +88,7 @@ describe('Sala — Visitante alienígena no BR', { skip: !CHROME && 'Chrome não
   const PORT = 3164;
   before(async () => {
     h = await bootGame({ port: PORT, extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '300' } });
-    bot = await startWithFlags(h, { gas: 'off' }, PORT); // sem gás: só o alien mexe na vida
+    bot = await startWithFlags(h, { gas: 'off' }); // sem gás: só o alien mexe na vida
   });
   after(async () => { if (bot) bot.close(); if (h) await h.close(); });
 
