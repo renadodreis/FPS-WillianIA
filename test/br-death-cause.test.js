@@ -94,6 +94,13 @@ describe('Dano — causa explícita e compatível', { skip: !CHROME && 'Chrome n
         targetId: victim.id, dmg: 20, weapon: 'FUZIL',
         fromPos: [victim.pos[0] + 2, victim.pos[1] + 1.5, victim.pos[2]],
       });
+      /* 3000 ms aqui NÃO é chute: o que falta medir é só a ida e volta
+         shotHit → youWereHit → playerDamage. Medido em 45 execuções com
+         instrumentação na página: p50 7 ms, p95 13 ms, pior caso 34 ms — o
+         teto é ~230× o p95, folga de sobra pra main thread engasgada. O que
+         fazia esta espera estourar não era lentidão e sim o servidor RECUSAR
+         o tiro enquanto ainda achava a página dentro da nave; quem fecha essa
+         janela é o waitServerSawLanding do harness, antes de o teste começar. */
       await h.page.waitForFunction('window.__game.player.dead === true', { timeout: 3000 });
       lateAttacker.emit('shotHit', {
         targetId: victim.id, dmg: 5, weapon: 'DMR',

@@ -262,6 +262,48 @@ async function waitForBRClientReady(h) {
   );
 }
 
+/* O SERVIDOR NÃO ACREDITA NO TELEPORTE DO HARNESS.
+   Pular a nave (S.phase = 'PLAY' + QA.reset) move o boneco da cabine — ou do
+   spawn do lobby — direto pro chão, num salto de centenas de metros num frame.
+   O anti-teleporte de server.js (`state`: hSpd > 90 m/s) rejeita esse `state`
+   e, enquanto rejeita, NÃO atualiza pos/ship/fall: a visão do servidor sobre a
+   página continua "dentro da nave, a ~700 m daqui". Nessa janela todo
+   `shotHit` contra a página é descartado em silêncio por DOIS portões —
+   combatImmune(victim) e o alcance de 320 m — e o cenário morre sem sintoma:
+   nenhum `youWereHit`, nenhuma morte, só o timeout de quem esperava.
+   (Medido: 5 falhas em 50 execuções de test/br-death-cause; em 100% delas o
+   último estado ACEITO da página era ship=true a 695 m. Aumentar o tempo de
+   espera não salva nenhuma — o tiro não atrasa, ele é recusado.)
+   `playerUpdate` só é transmitido a partir de estado ACEITO, então o bot-host
+   vendo a página no chão na posição pedida é a prova de que o servidor e o
+   cliente finalmente concordam sobre onde ela está. */
+async function waitServerSawLanding(h, bot, x, z, timeoutMs = 10000) {
+  const pageId = await h.play(() => window.__MP.socket.id);
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      bot.off('playerUpdate', onUpdate);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onUpdate = d => {
+      if (!d || d.id !== pageId || d.ship || d.fall || !Array.isArray(d.pos)) return;
+      if (Math.hypot(d.pos[0] - x, d.pos[2] - z) > 2) return;
+      finish(null);
+    };
+    const timer = setTimeout(
+      () => finish(new Error(
+        `o servidor não aceitou o pouso da página em (${x}, ${z}) em ${timeoutMs}ms ` +
+        '— anti-teleporte ainda rejeitando o estado')),
+      timeoutMs,
+    );
+    bot.on('playerUpdate', onUpdate);
+  });
+}
+
 /* `flags`: regras da sala (gas, alien, zumbis…) aplicadas pelo anfitrião
    ANTES do início — mesmo caminho do lobby real (setFlags do host). */
 async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort, flags = null } = {}) {
@@ -321,6 +363,7 @@ async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort, flags = nu
       window.__BR_freeze = false;
       window.QA.reset(30, 30);
     });
+    await waitServerSawLanding(h, bot, 30, 30);
     return bot; // fica vivo na partida — quem chamou fecha com bot.close()
   } catch (error) {
     if (bot) bot.close();
