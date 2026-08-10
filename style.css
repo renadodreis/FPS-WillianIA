@@ -274,8 +274,41 @@
 
   #loadingMsg { margin-top: clamp(10px, 2vh, 22px); color: rgba(178,203,238,.72); text-shadow: 0 1px 4px rgba(0,0,0,.8);
     font-size: clamp(9px, .72vw, 12px); letter-spacing: .18em; animation: riseIn .5s ease-out both .66s; }
-  #pausedTag { display: none; margin-top: 10px; color: #ff9a3d; letter-spacing: .3em; font-size: 13px;
+  /* AVISO DO MENU (#menuNotice): "a sala não carregou", "a conexão caiu",
+     "você está em solo, o MULTIJOGADOR te leva de volta". Mora dentro do
+     #loadingMsg — que é a linha de status de 10 px com as teclas — e sem
+     tratamento próprio nascia com o mesmo peso de "ESC pausa o jogo".
+     É uma FAIXA: largura do botão principal, filete âmbar à esquerda, fundo
+     próprio. Serve tanto pro ⚠ quanto pro ⏳/🔌 (nem todo aviso é falha), por
+     isso âmbar e não vermelho.
+     `[hidden]` é obrigatório: quem apaga o aviso é o ATRIBUTO, escrito pelo
+     paintMenu — sem esta linha o `display: block` o deixaria pra sempre na
+     tela com texto vazio. */
+  #menuNotice { display: block; max-width: clamp(250px, 33vw, 430px);
+    margin-top: 10px; padding: 8px 12px; border-left: 3px solid #ffb257;
+    border-radius: 0 8px 8px 0; letter-spacing: .06em; line-height: 1.45;
+    /* o menu inteiro vira `text-align: center` em tela estreita; texto
+       corrido de duas linhas com filete à esquerda precisa continuar
+       alinhado à esquerda pra parecer um aviso, e não um subtítulo */
+    text-align: left;
+    font-size: clamp(10px, .74vw, 12.5px); color: #ffdcae;
+    background: linear-gradient(90deg, rgba(96,50,8,0.62), rgba(96,50,8,0.10)); }
+  #menuNotice[hidden] { display: none; }
+  /* PAUSA. O container só aparece com o #overlay em modo pausa; o pulso é do
+     TEXTO, não da caixa — o aviso de partida ao vivo abaixo não pode piscar
+     (texto corrido pulsando é ilegível). */
+  #pausedTag { display: none; margin-top: clamp(10px, 1.6vh, 16px); }
+  #pausedTagText { display: block; color: #ff9a3d; letter-spacing: .3em; font-size: 13px;
     animation: pulse 1.8s ease-in-out infinite; }
+  /* "A PARTIDA CONTINUA": é aviso, e precisa ler como aviso. Mesmo idioma do
+     #menuNotice, um tom mais quente porque o custo aqui é imediato (o gás
+     queima enquanto este painel está aberto). `[hidden]`: mesma armadilha. */
+  #pausedWarn { display: block; margin-top: 10px; max-width: 46ch; text-align: left;
+    padding: 9px 12px; border-left: 3px solid #ff9a3d; border-radius: 0 8px 8px 0;
+    color: #ffdcb4; font-size: clamp(11px, .78vw, 13px); letter-spacing: .04em;
+    line-height: 1.5; text-shadow: 0 1px 3px rgba(0,0,0,.7);
+    background: linear-gradient(90deg, rgba(104,44,6,0.68), rgba(104,44,6,0.14)); }
+  #pausedWarn[hidden] { display: none; }
   @keyframes pulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
   #overlay.paused #pausedTag { display: block; }
 
@@ -283,7 +316,8 @@
      por partida, repetir a entrada cinematográfica seria irritante. */
   #overlay.paused #panel, #overlay.paused #subtitle, #overlay.paused #controls,
   #overlay.paused #menuBtns, #overlay.paused #ctlBox, #overlay.paused #loadingMsg, #overlay.paused #title .ln,
-  #overlay.paused #titleGlow, #overlay.paused #titleScan::after, #overlay.paused #settings.open
+  #overlay.paused #titleGlow, #overlay.paused #titleScan::after, #overlay.paused #settings.open,
+  #overlay.paused #mpPanel
     { animation: none; opacity: 1; transform: none; }
   #overlay.paused #titleGlow { opacity: .42; transform: translate(-50%,-50%) scale(1); }
   #overlay.paused #titleScan::after { display: none; }
@@ -343,6 +377,72 @@
   .mbtn.sec:hover, .mbtn.sec:focus-visible { opacity: 1; }
   .mbtn.disabled { pointer-events: none; opacity: .45; cursor: default; letter-spacing: .12em; }
 
+  /* ===== MULTIJOGADOR é a SEGUNDA PORTA, não um item de lista =====
+     O jogo tem dois modos, e o menu tinha um botão gigante (SOLO) e um
+     item de lista do tamanho de CONTROLES. Agora os dois têm a MESMA
+     largura — SOLO cheio de âmbar (o padrão), MULTIJOGADOR contornado —
+     e CONFIGURAÇÕES/CONTROLES continuam sendo o rodapé do menu.
+     Sem `padding` aqui de propósito: o alvo de toque de 48 px do celular
+     vem de `html.mobile .mbtn.sec { padding-block: 16px }`, e um padding
+     com #id apagaria aquela regra. */
+  #btnMulti { min-width: clamp(250px, 33vw, 430px);
+    font-size: clamp(11px, .92vw, 16px); letter-spacing: .3em; opacity: 1;
+    color: #ffe9c4; border-color: rgba(255,200,120,0.55); border-radius: 12px;
+    background: linear-gradient(100deg, rgba(255,154,61,0.20), rgba(255,215,106,0.06)); }
+  #btnMulti:hover, #btnMulti:focus-visible {
+    color: #fff6de; border-color: #ffd76a;
+    background: linear-gradient(100deg, rgba(255,154,61,0.38), rgba(255,215,106,0.14)); }
+  #btnMulti.disabled { border-color: rgba(255,255,255,0.24);
+    background: rgba(20,28,40,0.42); color: #fff; }
+
+  /* ================================================================
+     TRAVADO NÃO É QUEBRADO — carregando ≠ desabilitado
+
+     Dois motivos muito diferentes deixavam o botão principal com a MESMA
+     cara de lápide (`.mbtn.disabled`, opacity .45): o mundo carregando —
+     ~30 s de boot, em que o menu já está na tela — e a partida em curso
+     (o #overlay virou tela de pausa). O jogador lia "quebrado" nos dois.
+
+     COMO O CSS SABE QUAL É QUAL, sem tocar no JS (que tem outro dono):
+       · CARREGANDO ⇔ `#btnSettings.disabled`. O paintMenu (game.js) trava
+         as CONFIGURAÇÕES por UM motivo só — `!MenuGate.wired`, ou seja,
+         "os handlers ainda não existem" — e as destrava para sempre
+         quando existem. É o único sinal de boot legível por seletor.
+         test/menu-visual.test.js prende esse contrato no fonte do game.js:
+         se a regra mudar, o teste cai aqui e não no visual do jogador.
+       · PAUSA ⇔ `#overlay.paused`. Aí o botão está travado mesmo, e o que
+         ele precisa é PARAR de gritar: vira etiqueta, não tijolo cinza.
+     `.mbtn.loading` entra no mesmo bloco de propósito: se o dono do
+     game.js preferir marcar o estado com uma classe explícita, o visual
+     já está pronto e este `:has()` pode sair sem trocar nada de lugar.
+     ================================================================ */
+  #menuBtns:has(#btnSettings.disabled) .mbtn.disabled { opacity: .68; cursor: progress; }
+  #menuBtns:has(#btnSettings.disabled) #btnNew.disabled, #btnNew.loading {
+    opacity: 1; cursor: progress; color: #ffe9c4; text-shadow: 0 1px 3px #000;
+    background: linear-gradient(100deg, rgba(255,154,61,0.26), rgba(255,215,106,0.08));
+    border-color: rgba(255,205,120,0.62);
+    box-shadow: 0 0 22px rgba(255,150,50,0.14), 0 8px 22px rgba(0,0,0,0.34); }
+  /* varredura infinita = "trabalhando". Só `transform` anima (contrato de
+     custo do topo do arquivo) e reusa a MESMA camada ::after do brilho de
+     hover — nenhum nó, nenhuma pintura nova. */
+  #menuBtns:has(#btnSettings.disabled) #btnNew.disabled::after, #btnNew.loading::after {
+    transition: none; animation: btnLoading 1.6s linear infinite; }
+  @keyframes btnLoading { from { transform: translateX(-120%); } to { transform: translateX(120%); } }
+  /* PAUSA É SÓBRIA (mesma regra do bloco de animação lá em cima: este painel
+     reaparece dezenas de vezes por partida). Nenhuma ação primária aqui — a
+     ação primária da pausa é VOLTAR AO JOGO, que é o clique/ESC/toque na
+     tela. Então a segunda porta encolhe pro tamanho das outras... */
+  #overlay.paused #btnMulti { min-width: clamp(180px, 20vw, 260px);
+    font-size: clamp(10px, .78vw, 12.5px); letter-spacing: .26em; }
+  /* ...e "▶ JOGAR SOLO" travado, que é rótulo velho e não ação, vira placa. */
+  #overlay.paused #btnNew.disabled {
+    min-width: clamp(200px, 26vw, 340px);
+    padding: clamp(7px, 1vh, 11px) clamp(16px, 2vw, 26px);
+    font-size: clamp(10px, .76vw, 13px); letter-spacing: .2em;
+    opacity: .8; color: rgba(255,214,150,0.9);
+    background: none; border-style: dashed; border-color: rgba(255,200,120,0.3);
+    border-radius: 10px; box-shadow: none; }
+
   /* "entrando no jogo": o #overlay some SÍNCRONO (contrato do setPaused),
      então o feedback mora aqui fora, por cima e sem pointer-events */
   #launchFx { position: fixed; inset: 0; z-index: 150; pointer-events: none; opacity: 0;
@@ -373,6 +473,139 @@
     padding: 4px 8px; cursor: pointer; transition: border-color .15s ease; }
   .srow select:hover, .srow select:focus-visible { border-color: #ffd76a; outline: none; }
 
+  /* ================================================================
+     MULTIJOGADOR (#mpPanel) — o lobby do BR dentro do menu
+
+     O painel é IRMÃO do #settings e ocupa o mesmo lugar do #panel, um de
+     cada vez. Quem alterna é o ATRIBUTO `hidden` (game.js, MENU._pinta),
+     e é por isso que este bloco não declara `display` nenhum: o
+     `[hidden]` do navegador continua mandando. A linha explícita abaixo
+     existe como TRAVA — no dia em que alguém precisar de um `display`
+     aqui, a regra de fechar já está escrita (sem ela o painel nunca mais
+     fecharia, e o sintoma seria "o menu travou").
+     ================================================================ */
+  /* Coluna: o cartão do lobby ocupa a largura toda e o VOLTAR fica do
+     tamanho do rótulo (era um div de bloco, ou seja, uma barra de 900 px).
+     `align-items` acompanha o menu — à esquerda no desktop, centrado na
+     tela estreita (ver o @media de 960px). */
+  #mpPanel { display: flex; flex-direction: column; align-items: flex-start;
+    margin-top: clamp(12px, 2.2vh, 22px); }
+  #mpPanel > #brLobby { align-self: stretch; }
+  #mpPanel[hidden] { display: none; }
+  /* Com o lobby aberto o painel é a TELA do multijogador: o cartão precisa
+     de largura (são duas colunas) e a moldura do menu solo sai da frente.
+     Os botões continuam na tela — alcançá-los de dentro do lobby é
+     contrato (test/menu-unico) — mas viram uma fita, não uma pilha. */
+  #overlay:has(#mpPanel:not([hidden])) #panel { max-width: min(900px, 94vw); }
+  #overlay:has(#mpPanel:not([hidden])) #ctlBox,
+  #overlay:has(#mpPanel:not([hidden])) #subtitle { display: none; }
+  #overlay:has(#mpPanel:not([hidden])) #title { font-size: clamp(26px, min(4.6vw, 7vh), 62px); }
+  #overlay:has(#mpPanel:not([hidden])) #titleWrap { padding-bottom: 0; }
+  #overlay:has(#mpPanel:not([hidden])) #menuBtns {
+    flex-flow: row wrap; align-items: center; gap: 8px; margin-top: clamp(6px, 1.2vh, 12px); }
+  #overlay:has(#mpPanel:not([hidden])) #menuBtns .mbtn {
+    min-width: 0; font-size: clamp(9.5px, .72vw, 12px); letter-spacing: .18em; }
+
+  /* ---- o lobby falando o idioma do menu ----
+     O CSS do lobby é INJETADO em runtime por multiplayer-client.js (outro
+     dono) e nasce de outro produto: system-ui, cartão azulado, título
+     largo, botão amarelo chapado. Estas regras não substituem aquele
+     arquivo — ganham dele por especificidade (#mpPanel .brX) e trazem o
+     cartão pro mesmo idioma do #settings: mesma moldura, mesma família,
+     mesmos rótulos âmbar, mesmo botão principal.
+     ESCOPO É PROPOSITAL: tudo aqui está preso a #mpPanel, então nada
+     alcança o HUD do BR (#brTop, #brRoster, #brChat, #brToast vivem no
+     <body>, fora do menu). Sem backdrop-filter: o cartão já é opaco, e
+     blur em cartão grande é o custo que o topo deste arquivo proíbe. */
+  #mpPanel .brPanel { font-family: inherit; }
+  #mpPanel .brCard { width: 100%; min-width: 0;
+    padding: clamp(14px, 2vh, 22px) clamp(16px, 2.2vw, 28px);
+    max-height: min(60vh, 620px);
+    background: linear-gradient(180deg, rgba(13,21,33,0.92), rgba(7,12,20,0.88));
+    border: 1px solid rgba(255,205,120,0.18); border-radius: 14px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 14px 34px rgba(0,0,0,0.34); }
+  #mpPanel .brTitle { font-size: clamp(17px, 1.6vw, 24px); font-weight: 800; letter-spacing: .3em;
+    color: #ffd76a; text-shadow: 0 2px 10px rgba(0,0,0,.6); }
+  #mpPanel .brSub { font-size: clamp(9px, .72vw, 11.5px); letter-spacing: .28em;
+    opacity: .6; margin: 5px 0 14px; }
+  #mpPanel .brH { font-size: 9.5px; font-weight: 700; letter-spacing: .34em; text-transform: uppercase;
+    color: #ffb257; opacity: 1; padding-bottom: 5px; margin: 14px 0 8px;
+    border-bottom: 1px solid rgba(255,180,90,0.18); }
+  #mpPanel .brInput { background: #1a2434; color: #fff;
+    border: 1px solid rgba(255,255,255,0.3); border-radius: 6px; transition: border-color .15s ease; }
+  #mpPanel .brInput:hover, #mpPanel .brInput:focus-visible { border-color: #ffd76a; outline: none; }
+  #mpPanel select.brInput { background: #1a2434; }
+  #mpPanel .brBtn { border-radius: 10px; letter-spacing: .26em; font-weight: 700;
+    color: #180d02; text-shadow: 0 1px 0 rgba(255,236,190,0.45);
+    background: linear-gradient(100deg, #ffd97e 0%, #ffab4a 52%, #ff8c22 100%);
+    border: 1px solid rgba(255,236,190,0.85);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.5);
+    transition: filter .16s ease, box-shadow .16s ease; }
+  #mpPanel .brBtn:hover:not(:disabled) { filter: brightness(1.07);
+    box-shadow: 0 0 26px rgba(255,170,60,0.28), 0 8px 20px rgba(0,0,0,0.35); }
+  #mpPanel .brBtn:focus-visible { outline: 2px solid #ffd76a; outline-offset: 3px; }
+  #mpPanel .brBtn:disabled { color: rgba(226,238,255,0.55); text-shadow: none;
+    background: rgba(20,28,40,0.5); border-color: rgba(255,255,255,0.16); box-shadow: none; }
+  /* GRÁFICOS & ÁUDIO é secundário e já traz a cor no `style=` (inline vence
+     tudo daqui): só a moldura precisa parar de prometer ação principal. */
+  #mpPanel #brCfgBtn { border-color: rgba(255,255,255,0.22); box-shadow: none;
+    color: #e8f1f8; text-shadow: none; }
+  #mpPanel .brCount { color: #ffd76a; }
+  #mpPanel .brKeys b { background: rgba(255,255,255,.09); border-color: rgba(178,205,242,0.26);
+    color: #ffd76a; }
+  #mpPanel .brTable th { letter-spacing: .24em; color: #ffb257; opacity: .8; }
+  /* VOLTAR mora FORA do #brLobby de propósito (nenhuma reescrita do lobby
+     pode engoli-lo) — o que ele precisa daqui é só não colar no cartão. */
+  #btnMpBack { min-width: clamp(160px, 18vw, 200px); }
+
+  /* ================================================================
+     PAUSA COM PARTIDA AO VIVO  (#overlay.brlive)
+
+     No BR a partida é do SERVIDOR e NÃO para com o menu aberto: o gás
+     queima, os tiros chegam e o GOLEM anda (ver paintMenu em game.js).
+     Um menu de tela cheia aqui não é só feio, é injusto — esconde a
+     partida que continua cobrando do jogador.
+
+     Então em `brlive`: o scrim SAI (o #overlay fica transparente), o
+     painel vira um CARTÃO pequeno no canto com o aviso em primeiro lugar,
+     o passeio de câmera e a moldura do menu solo somem, e o HUD volta —
+     vida, munição, minimapa e o mapa da zona são exatamente o que decide
+     se dá pra ficar mais um segundo no menu. A mira sai: não se atira
+     daqui, e um retículo no meio da tela prometeria que sim.
+     ================================================================ */
+  #overlay.brlive { background: none; }
+  #overlay.brlive #menuCut { display: none; }
+  body:has(#overlay.brlive) #hud { opacity: 1; }
+  /* `visibility` e não `opacity`: a opacidade da mira é escrita INLINE pelo
+     game.js (setOpacityOnce, no laço de HUD) e ganharia de qualquer regra
+     daqui — só um !important venceria, e a propriedade que o JS não disputa
+     resolve igual sem essa dívida. */
+  body:has(#overlay.brlive) #crosshair, body:has(#overlay.brlive) #hitmarker { visibility: hidden; }
+  /* O cartão anda para a DIREITA do minimapa (fixo em left:22 + 168 px) em
+     vez de sentar em cima dele: o mapa e o mapa da zona são metade do motivo
+     de o HUD voltar. Em tela estreita o menu inteiro é centrado e a conta não
+     vale — o @media de 960px devolve o `margin-inline: auto`. */
+  #overlay.brlive #panel { display: flex; flex-direction: column;
+    max-width: min(430px, 92vw); margin-top: clamp(10px, 3vh, 34px);
+    margin-left: clamp(200px, 14vw, 240px);
+    padding: clamp(12px, 2vh, 20px) clamp(14px, 1.8vw, 24px);
+    background: linear-gradient(180deg, rgba(10,16,26,0.92), rgba(6,10,17,0.86));
+    border: 1px solid rgba(255,154,61,0.34); border-left-width: 3px; border-radius: 14px;
+    box-shadow: 0 18px 44px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05); }
+  #overlay.brlive #titleWrap, #overlay.brlive #subtitle,
+  #overlay.brlive #ctlBox, #overlay.brlive #loadingMsg { display: none; }
+  /* o rótulo travado aqui diria "▶ JOGAR SOLO" no meio de uma partida
+     online: some, em vez de ocupar meio cartão prometendo o impossível */
+  #overlay.brlive #btnNew.disabled { display: none; }
+  /* o aviso é o assunto do cartão: vai pro TOPO (o nó é o último do #panel) */
+  #overlay.brlive #pausedTag { order: -1; margin: 0 0 12px; }
+  #overlay.brlive #pausedWarn { max-width: none; }
+  #overlay.brlive #menuBtns { margin-top: 0; gap: 8px; }
+  #overlay.brlive #settings { margin-top: 12px; }
+  /* com um painel aberto o cartão precisa caber o painel — e só então */
+  #overlay.brlive:has(#settings.open) #panel,
+  #overlay.brlive:has(#mpPanel:not([hidden])) #panel { max-width: min(620px, 94vw); }
+
   /* ---- telas curtas: o menu inteiro precisa caber sem rolagem ---- */
   @media (max-height: 780px) {
     #panel { margin-top: clamp(18px, 7vh, 60px); }
@@ -401,6 +634,11 @@
     #menuBtns { align-items: center; }
     #ctlBox { margin-inline: auto; }
     #ctlBox > summary { margin-inline: auto; }
+    /* o painel do multijogador segue a mesma coluna centrada do menu */
+    #mpPanel { align-items: center; }
+    /* o desvio que tira o cartão de pausa de cima do minimapa é conta de
+       tela larga; aqui a coluna é centrada e o minimapa é pequeno */
+    #overlay.brlive #panel { margin-inline: auto; }
   }
   @media (max-width: 560px) {
     #title { white-space: normal; }
@@ -409,9 +647,13 @@
   }
   /* acessibilidade: quem pediu menos movimento recebe o menu parado */
   @media (prefers-reduced-motion: reduce) {
-    #panel, #subtitle, #controls, #menuBtns, #ctlBox, #loadingMsg, #pausedTag,
-    #title .ln, #titleGlow, #titleScan::after, #settings.open, .mbtn.hit, #launchFx.go
+    #panel, #subtitle, #controls, #menuBtns, #ctlBox, #loadingMsg, #pausedTag, #pausedTagText,
+    #title .ln, #titleGlow, #titleScan::after, #settings.open, #mpPanel, .mbtn.hit, #launchFx.go
       { animation: none !important; opacity: 1; transform: none; }
+    /* a varredura de "carregando" para, mas NÃO fica estacionada em cima do
+       botão: sem transform ela viraria um lençol âmbar permanente */
+    #btnNew.loading::after, #menuBtns:has(#btnSettings.disabled) #btnNew.disabled::after
+      { animation: none !important; transform: translateX(-120%); }
     #titleGlow { opacity: .55; transform: translate(-50%,-50%); }
     .mbtn { transition: none; }
     /* o aviso de "gire o celular" para de girar e fica DEITADO: sem
@@ -442,6 +684,29 @@
   #deathScreen.show { display: flex; opacity: 1; }
   #deathTitle { font-size: 56px; font-weight: 800; letter-spacing: 16px; color: #ff4030; text-shadow: 0 0 40px rgba(255,40,20,0.6); }
   #deathSub { color: rgba(255,255,255,0.7); letter-spacing: 3px; font-size: 14px; margin-top: 14px; }
+  /* ---- saída da morte (só no SOLO: online quem manda no desfecho é o
+     servidor, e o game.js só revela o bloco lá — index.html, #deathBtns).
+     `[hidden]` de novo: quem alterna é o ATRIBUTO. Sem esta linha o
+     `display: flex` deixaria "JOGAR DE NOVO" na tela no meio de uma
+     partida online, por cima do recap do servidor. ---- */
+  #deathBtns { display: flex; flex-direction: column; align-items: center; }
+  #deathBtns[hidden] { display: none; }
+  /* JOGAR DE NOVO é a ação da tela: mesmo âmbar cheio do NOVO JOGO, num
+     corpo menor (aqui ele não disputa com um título de 116 px). */
+  #btnRetry { min-width: clamp(230px, 24vw, 300px); min-height: 52px; border-radius: 12px;
+    padding: clamp(12px, 1.8vh, 17px) clamp(20px, 2.6vw, 34px);
+    font-size: clamp(13px, 1.02vw, 17px); letter-spacing: .3em;
+    color: #180d02; text-shadow: 0 1px 0 rgba(255,236,190,0.45);
+    background: linear-gradient(100deg, #ffd97e 0%, #ffab4a 52%, #ff8c22 100%);
+    border-color: rgba(255,236,190,0.85);
+    box-shadow: 0 0 30px rgba(255,150,50,0.26), 0 10px 24px rgba(0,0,0,0.45),
+                inset 0 1px 0 rgba(255,255,255,0.55); }
+  #btnRetry:hover, #btnRetry:focus-visible { color: #180d02; border-color: #fff3d2;
+    background: linear-gradient(100deg, #ffe6a2 0%, #ffbe62 52%, #ff9c34 100%);
+    box-shadow: 0 0 42px rgba(255,168,64,0.44), 0 12px 28px rgba(0,0,0,0.45),
+                inset 0 1px 0 rgba(255,255,255,0.6); }
+  #btnRetry::before { background: linear-gradient(180deg, #fff6de, #ffe0a0); }
+  #btnDeathMenu { min-height: 48px; min-width: clamp(200px, 20vw, 260px); }
 
   /* cura: vinheta verde */
   #healFx { position: fixed; inset: 0; pointer-events: none; z-index: 6; opacity: 0; transition: opacity .3s;
@@ -871,23 +1136,49 @@
   /* o botão principal cai a 45px quando a altura da tela encolhe o clamp de
      padding — é o alvo mais importante do jogo, não pode ficar abaixo de 48 */
   html.mobile #btnNew { min-height: 54px; }
+  /* mesma conta do #btnNew, agora que MULTIJOGADOR tem o corpo de segunda
+     porta e JOGAR DE NOVO existe: nenhum dos dois pode cair abaixo de 48 */
+  html.mobile #btnMulti { min-height: 48px; padding-block: 16px; }
+  html.mobile #btnRetry { min-height: 54px; }
+  /* a placa de pausa NÃO é alvo de toque (o `.disabled` já a deixa sem
+     ponteiro): manter os 54 px do botão deixava a etiqueta boiando no topo
+     de uma caixa vazia — o texto não está centrado porque .mbtn é bloco */
+  html.mobile #overlay.paused #btnNew.disabled { min-height: 0; }
   html.mobile .srow { gap: 12px; font-size: 12.5px; }
   html.mobile .srow select { min-height: 44px; padding: 8px 10px; font-size: 16px; }
   html.mobile .srow input[type=range] { min-height: 44px; height: 44px;
     width: clamp(120px, 34vw, 200px); }
   html.mobile #settings { max-width: min(520px, 94vw); padding: 12px 14px; margin-top: 12px; }
   /* lista de 19 teclas e "ESC pausa · ↑ ↓ ENTER navegam": instrução de
-     teclado que não existe no celular e rouba a altura do menu */
-  html.mobile #ctlBox, html.mobile #loadingMsg { display: none; }
-  /* lobby do BR (CSS injetado pelo multiplayer-client): a min-width de
-     560px do card estoura landscape estreito */
-  html.mobile .brCard { min-width: 0; width: min(94vw, 880px); padding: 14px 16px; max-height: 88vh; }
-  html.mobile .brTitle { font-size: 19px; letter-spacing: 3px; }
-  html.mobile .brSub { font-size: 10.5px; letter-spacing: 2px; margin: 3px 0 10px; }
-  html.mobile .brRow { gap: 12px; }
-  html.mobile .brCount { font-size: 40px; }
-  html.mobile .brBtn { min-height: 48px; margin-top: 12px; }
-  html.mobile .brInput { min-height: 44px; font-size: 16px; }
+     teclado que não existe no celular e rouba a altura do menu.
+     O #loadingMsg NÃO some inteiro: o aviso do menu (#menuNotice) mora
+     DENTRO dele, e `display: none` no pai apagava do celular justamente a
+     linha que explica por que o botão está fazendo outra coisa ("a sala
+     não carregou", "você está em solo"). `font-size: 0` come só o texto
+     solto do pai — nó de texto não tem seletor — e o filho volta ao corpo
+     dele. Sem aviso na tela o bloco fica com altura zero, como antes. */
+  html.mobile #ctlBox { display: none; }
+  html.mobile #loadingMsg { font-size: 0; letter-spacing: 0; margin-top: 0; }
+  html.mobile #menuNotice { font-size: 11.5px; letter-spacing: .04em;
+    max-width: min(94vw, 430px); margin-top: 8px; padding: 7px 10px; }
+  /* pausa com partida AO VIVO: no celular a tela inteira é o campo de visão
+     e os dedos já moram nas bordas — o cartão encolhe mais um passo */
+  html.mobile #overlay.brlive #panel { max-width: min(360px, 62vw); }
+  html.mobile #overlay.brlive #pausedWarn { font-size: 11px; padding: 7px 10px; }
+  /* lobby do BR (CSS injetado pelo multiplayer-client). O escopo virou
+     #mpPanel porque o cartão mudou de casa — e porque as regras de coesão
+     lá em cima também são `#mpPanel .brX`: sem o mesmo id aqui, elas
+     venceriam por especificidade e o celular perderia estes números.
+     `width: min(94vw, 880px)` saiu junto com a mudança: dentro do #panel
+     (660 px no máximo) aquele número transbordava o painel. */
+  html.mobile #mpPanel .brCard { min-width: 0; width: 100%; padding: 12px 14px; max-height: 84vh; }
+  html.mobile #mpPanel .brTitle { font-size: 17px; letter-spacing: .18em; }
+  html.mobile #mpPanel .brSub { font-size: 10px; letter-spacing: .18em; margin: 3px 0 10px; }
+  html.mobile #mpPanel .brH { margin: 10px 0 6px; }
+  html.mobile #mpPanel .brRow { gap: 12px; }
+  html.mobile #mpPanel .brCount { font-size: 40px; }
+  html.mobile #mpPanel .brBtn { min-height: 48px; margin-top: 12px; }
+  html.mobile #mpPanel .brInput { min-height: 44px; font-size: 16px; }
   html.mobile #brFlags input[type=checkbox] { width: 20px; height: 20px; }
 
   /* ================================================================
@@ -967,9 +1258,13 @@
     #banner small { font-size: clamp(10px, 2.4vmin, 14px); letter-spacing: clamp(2px, .7vmin, 4px); }
     #settings { max-width: min(520px, 94vw); }
     .mbtn.sec { min-height: 48px; padding-block: 16px; }
+    #btnMulti { min-height: 48px; padding-block: 16px; }
+    #btnRetry { min-height: 52px; }
     .srow select { min-height: 44px; }
     .srow input[type=range] { min-height: 44px; }
-    .brCard { min-width: 0; width: min(94vw, 880px); }
+    #mpPanel .brCard { min-width: 0; width: 100%; max-height: min(72vh, 620px); }
+    #mpPanel .brBtn { min-height: 48px; }
+    #mpPanel .brInput { min-height: 44px; }
   }
   /* os mesmos clamps sob `html.mobile`, para quem forçar o modo toque num
      monitor grande (ex.: ?mobile=1 no desktop) — o clamp por si só ficaria
