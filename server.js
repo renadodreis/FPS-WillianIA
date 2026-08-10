@@ -163,6 +163,19 @@ const connByIp = new Map();
 // tentativas erradas de código de anfitrião contadas POR IP (o cooldown
 // sobrevive a reconexão, ao contrário de um contador por-socket).
 const claimFailByIp = new Map();
+/* O COOLDOWN NÃO PODE MORRER COM A CONEXÃO. Antes, a ÚLTIMA conexão de um IP
+   saindo levava o histórico de tentativas junto (era higiene de memória junto
+   com o contador de conexões): quem errava 5 códigos ganhava 5 tentativas
+   novas só reconectando — e agora existe um botão que desconecta (SOLO), o
+   que deixaria o zerador a um clique. Aqui só sai o que JÁ EXPIROU, então o
+   mapa segue limitado aos IPs com tentativa viva dentro da janela. */
+function pruneClaimFails(now = Date.now()) {
+  for (const [k, ts] of claimFailByIp) {
+    const vivas = ts.filter(t => now - t < CLAIM_COOLDOWN_MS);
+    if (vivas.length) claimFailByIp.set(k, vivas);
+    else claimFailByIp.delete(k);
+  }
+}
 const KILL_CREDIT_WINDOW_MS = 10000; // crédito de kill só com acerto validado nos últimos 10s
 function clientIp(socket) {
   const xff = socket.handshake.headers['x-forwarded-for'];
@@ -1042,8 +1055,10 @@ io.on('connection', socket => {
     const ipc = socket.data.ipCounted;
     if (ipc && connByIp.has(ipc)) {
       const n = connByIp.get(ipc) - 1;
-      if (n <= 0) { connByIp.delete(ipc); claimFailByIp.delete(ipc); } else connByIp.set(ipc, n);
+      if (n <= 0) connByIp.delete(ipc); else connByIp.set(ipc, n);
     }
+    // o histórico de tentativas de anfitrião NÃO sai junto: só o que expirou
+    pruneClaimFails();
     const p = players.get(socket.id);
     players.delete(socket.id);
     // host não migra pra gente aleatória: fica vago até alguém dar o código de novo

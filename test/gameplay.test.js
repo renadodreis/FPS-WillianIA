@@ -708,20 +708,36 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
     assert.ok(r.voltouNaPausa, 'menu de pausa não volta a aparecer');
   });
 
-  it('dado multiplayer ativo, então NOVO JOGO fica desabilitado (clique não pode iniciar solo por cima do lobby)', async t => {
-    // bug de playtest: clicar em NOVO JOGO antes do lobby BR aparecer
-    // iniciava jogo solo com pointer lock — jogador preso, só ESC salvava
+  it('dada uma partida em andamento, então NOVO JOGO fica desabilitado (clique não reinicia por cima dela)', async t => {
+    /* bug de playtest: clicar em NOVO JOGO antes do lobby BR aparecer
+       iniciava jogo solo com pointer lock — jogador preso, só ESC salvava.
+
+       O QUE TRAVA O BOTÃO MUDOU: era "existe multiplayer"; hoje é "existe
+       PARTIDA em andamento" — o SOLO passou a valer sempre no menu, porque em
+       produção o servidor está sempre no ar e travá-lo por isso deixava um
+       botão morto (ver test/solo-com-sala). A proteção que este teste guarda é
+       a mesma: com o jogo rodando, o clique não pode começar nada. */
     const r = await play(() => {
       const btn = document.getElementById('btnNew');
+      const soloAntes = !!window.__MP_soloOnly;
+      btn.click(); // .click() ignora pointer-events: mede o HANDLER, não o CSS
       return {
         temSocket: !!window.__MP.socket,
+        emPartida: window.__game.state.started,
         desabilitado: btn.classList.contains('disabled'),
         semClique: getComputedStyle(btn).pointerEvents === 'none',
+        soloAntes, soloDepois: !!window.__MP_soloOnly,
+        conectado: !!(window.__MP.socket && window.__MP.socket.connected),
       };
     });
     assert.ok(r.temSocket, 'harness sem multiplayer — teste inválido');
-    assert.ok(r.desabilitado, 'NOVO JOGO continua clicável com multiplayer ativo');
+    assert.ok(r.emPartida, 'cenário inválido: não havia partida em andamento');
+    assert.ok(r.desabilitado, 'NOVO JOGO continua clicável com a partida rodando');
     assert.ok(r.semClique, 'botão desabilitado ainda recebe cliques');
+    assert.equal(r.soloDepois, r.soloAntes,
+      'o clique em NOVO JOGO trocou a partida em andamento por jogo solo');
+    assert.ok(r.conectado,
+      'o clique em NOVO JOGO desconectou o jogador no meio da partida');
   });
 
   it('dado o lobby aparecendo com o mouse capturado, então o pointer lock é solto (dá pra editar sem ESC)', async t => {

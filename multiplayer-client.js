@@ -54,12 +54,23 @@
   };
   document.body.appendChild(s2);
 
+  let avisouSolo = false;
   poll = setInterval(() => {
-    if (window.__MP_soloOnly) { // jogador já escolheu solo: o BR não toma a tela
-      clearInterval(poll);
-      console.log('[BR] jogo solo escolhido pelo jogador — BR não assume');
+    /* JOGADOR EM SOLO: o BR não toma a tela — mas ESPERA, não desiste.
+       Antes havia um clearInterval aqui: a escolha de solo era de mão única e
+       voltar pro multijogador exigia recarregar a página. Como o SOLO agora é
+       reversível (o menu reconecta o socket), cancelar o poll deixaria o
+       lobby impossível de subir na volta. O laço custa uma leitura de
+       propriedade a cada 120 ms enquanto o solo durar. */
+    if (window.__MP_soloOnly) {
+      esperaDesde = 0; // o relógio do "br-game.js demorou" não corre no solo
+      if (!avisouSolo) {
+        avisouSolo = true;
+        console.log('[BR] jogo solo escolhido pelo jogador — BR aguarda a volta');
+      }
       return;
     }
+    avisouSolo = false;
     if (!window.__MP) return;
     if (window.__MP.socket && window.__MP_init) {
       if (!window.__BR_game) { // espera br-game.js carregar — mas com prazo

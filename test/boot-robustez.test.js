@@ -55,15 +55,20 @@ const botaoLiberado = () => {
 };
 /* Sala online DE PÉ e o menu já sabendo disso. Esperar (em vez de ler uma
    vez) é obrigatório: o boot pesado derruba o transporte do engine.io com
-   facilidade, e nessa janela o menu — corretamente — está oferecendo solo.
+   facilidade, e nessa janela o menu — corretamente — anuncia a sala fora do ar.
    AUTOCONTIDA de propósito: o puppeteer serializa só o corpo desta função,
    então chamar um helper daqui de fora vira ReferenceError DENTRO da página
-   (e o waitForFunction morre de timeout mentindo sobre a causa). */
+   (e o waitForFunction morre de timeout mentindo sobre a causa).
+
+   QUEM DENUNCIA A SALA agora é o #btnMulti, não o #btnNew: o SOLO passou a
+   valer SEMPRE (em produção o servidor está sempre no ar, e travar o SOLO por
+   isso deixava um botão morto no menu — ver test/solo-com-sala). */
 const salaNoArNoMenu = () => {
-  const b = document.getElementById('btnNew');
+  const b = document.getElementById('btnMulti');
   const socket = window.__MP && window.__MP.socket;
   return !!(socket && socket.connected) && !window.__BR_loadFailed
-    && !!b && b.classList.contains('disabled');
+    && !!b && !b.classList.contains('disabled')
+    && !/FORA DO AR|VOLTAR|CARREGANDO/i.test(b.textContent || '');
 };
 
 describe('menu nasce sem handler (index.html)', () => {
@@ -133,13 +138,15 @@ describe('queda de socket com o menu na tela (Chrome headless)', { skip: !CHROME
   });
   after(async () => { if (h) await h.close(); });
 
-  it('controle: com a sala no ar o solo segue barrado, mas CONFIGURAÇÕES já responde', async () => {
+  it('controle: com a sala no ar o solo E as configurações respondem', async () => {
     const noAr = await h.page.waitForFunction(salaNoArNoMenu, { timeout: 30000, polling: 200 })
       .then(() => true).catch(() => false);
     const m = await h.play(leiaMenu);
     assert.ok(noAr, `sala online nunca estabilizou no menu: ${JSON.stringify(m)}`);
-    assert.ok(m.desabilitado, `sala online no ar e #btnNew clicável: "${m.texto}"`);
-    assert.match(m.texto, /SALA ONLINE/i, `etiqueta inesperada: "${m.texto}"`);
+    // decisão do dono: SOLO vale SEMPRE (ver test/solo-com-sala) — travá-lo
+    // com o servidor no ar deixava um botão morto no menu de produção
+    assert.equal(m.desabilitado, false, `sala online no ar e #btnNew travado: "${m.texto}"`);
+    assert.match(m.texto, /solo/i, `etiqueta inesperada: "${m.texto}"`);
     assert.equal(m.cfgDesabilitado, false, 'CONFIGURAÇÕES continua travado depois do boot');
     assert.equal(m.brFalhou, null, 'br-game.js foi dado como perdido sem motivo');
   });
@@ -148,10 +155,14 @@ describe('queda de socket com o menu na tela (Chrome headless)', { skip: !CHROME
     // pré-condição: sala de pé (senão o cenário mede a queda de outra pessoa)
     await h.page.waitForFunction(salaNoArNoMenu, { timeout: 30000, polling: 200 });
     await h.play(() => window.__MP.socket.disconnect());
-    const liberou = await h.page.waitForFunction(botaoLiberado, { timeout: 15000, polling: 100 })
-      .then(() => true).catch(() => false);
+    const avisou = await h.page.waitForFunction(() => {
+      const a = document.getElementById('menuNotice');
+      const b = document.getElementById('btnNew');
+      return !!a && !a.hidden && /CAIU/i.test(a.textContent || '')
+        && !!b && !b.classList.contains('disabled');
+    }, { timeout: 15000, polling: 100 }).then(() => true).catch(() => false);
     const caiu = await h.play(leiaMenu);
-    assert.ok(liberou, `socket caiu e #btnNew seguiu travado: ${JSON.stringify(caiu)}`);
+    assert.ok(avisou, `queda de socket sem aviso no menu: ${JSON.stringify(caiu)}`);
     assert.ok(caiu.aviso.length > 8, `queda sem aviso no menu: "${caiu.aviso}"`);
     assert.ok(caiu.clicavel, 'aviso na tela mas o botão continua morto');
 
@@ -166,14 +177,16 @@ describe('queda de socket com o menu na tela (Chrome headless)', { skip: !CHROME
 
   it('dado o socket voltando, então o menu retoma a sala online sozinho', async () => {
     await h.play(() => window.__MP.socket.connect());
-    const voltou = await h.page.waitForFunction(
-      () => {
-        const b = document.getElementById('btnNew');
-        return !!b && b.classList.contains('disabled');
-      }, { timeout: 20000, polling: 100 }).then(() => true).catch(() => false);
-    const m = await h.play(leiaMenu);
-    assert.ok(voltou, `menu ficou preso no modo solo depois de reconectar: ${JSON.stringify(m)}`);
-    assert.match(m.texto, /SALA ONLINE/i, `etiqueta não voltou pra sala: "${m.texto}"`);
+    const voltou = await h.page.waitForFunction(salaNoArNoMenu, { timeout: 20000, polling: 100 })
+      .then(() => true).catch(() => false);
+    const m = await h.play(() => {
+      const b = document.getElementById('btnMulti');
+      const aviso = document.getElementById('menuNotice');
+      return { multi: (b.textContent || '').trim(), travado: b.classList.contains('disabled'),
+        aviso: aviso && !aviso.hidden ? (aviso.textContent || '').trim() : '' };
+    });
+    assert.ok(voltou, `MULTIJOGADOR ficou morto depois de reconectar: ${JSON.stringify(m)}`);
+    assert.equal(m.aviso, '', `o aviso de queda ficou na tela com a sala de volta: "${m.aviso}"`);
   });
 
   /* ÚLTIMO da suíte de propósito: inicia o jogo solo e não dá pra voltar.

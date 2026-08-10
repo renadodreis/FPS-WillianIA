@@ -75,10 +75,12 @@ import { buildChest } from './js/chestmodel.js';
    ================================================================ */
 const MenuGate = {
   wired: false,      // os listeners do menu já existem (fim deste módulo)
-  dropped: false,    // socket caído AGORA (a reconexão automática segue tentando)
+  dropped: false,    // socket caído SEM ninguém pedir (a reconexão segue tentando)
   broken: null,      // sala online inutilizável de vez (br-game.js não carregou)
-  soloChosen: false, // o jogador já escolheu solo com a sala fora do ar
+  soloChosen: false, // o jogador escolheu SOLO e SAIU da sala (reversível)
+  voltando: false,   // clicou em MULTIJOGADOR vindo do solo: reconectando
 };
+let __voltaTimer = 0;
 /* multiplayer-client.js é script CLÁSSICO e roda ANTES deste módulo
    (deferido): a falha do br-game.js pode ser anterior ao boot daqui. Por
    isso o portão além de receber o empurrão (__MP_onlineDown) também PUXA
@@ -89,8 +91,12 @@ const brQuebrado = () => MenuGate.broken || window.__BR_loadFailed || null;
    o público, o que o multiplayer-client.js lê pra não tomar a tela. Derivar
    dos dois deixa o menu correto mesmo quando a escolha de solo chega de fora
    (QA, ou um caminho novo que esqueça o interno). */
-const salaNoAr = () => !!__mpSocket && !MenuGate.dropped && !brQuebrado()
-  && !MenuGate.soloChosen && !window.__MP_soloOnly;
+const emSolo = () => MenuGate.soloChosen || !!window.__MP_soloOnly;
+/* EXISTE uma sala pra usar (mesmo com o socket fechado de propósito pelo
+   solo). É o que decide se MULTIJOGADOR tem pra onde levar o jogador. */
+const temSala = () => !!__mpSocket && !brQuebrado();
+// ...e a sala está ATIVA agora: conectado, inteiro e com o jogador dentro dela
+const salaNoAr = () => temSala() && !MenuGate.dropped && !emSolo();
 function paintMenu() {
   const btn = document.getElementById('btnNew');
   if (!btn) return;
@@ -104,13 +110,20 @@ function paintMenu() {
   const S = window.__game ? window.__game.state : null;
   const jogando = !!(S && S.started);
   const pausado = !!(S && S.paused);
-  // com a partida em andamento o #overlay é tela de PAUSA: prometer "NOVO
-  // JOGO" ali é mentira (startGame recusa).
+  /* SOLO VALE SEMPRE. Ele já foi travado enquanto `salaNoAr()` fosse
+     verdadeiro — e em produção o servidor está SEMPRE no ar, então o botão
+     nunca era clicável: o menu tinha um botão morto. Hoje o único motivo pra
+     travar é não ter dono (boot) ou já haver partida em andamento — com a
+     partida rodando o #overlay é tela de PAUSA, e prometer "NOVO JOGO" ali
+     seria mentira (startGame recusa). */
   let texto = null, travado = true, motivo = '';
   if (!MenuGate.wired) texto = 'CARREGANDO O MUNDO...';
-  else if (salaNoAr()) texto = '🌐 SALA ONLINE — ENTRE EM MULTIJOGADOR';
   else if (!jogando) { travado = false; texto = __mpSocket ? '▶ JOGAR SOLO' : '▶ NOVO JOGO — SOLO'; }
-  if (MenuGate.wired && brQuebrado())
+  if (MenuGate.wired && MenuGate.voltando)
+    motivo = '⏳ VOLTANDO PRA SALA ONLINE... SE O MAPA JÁ TIVER MUDADO, A PÁGINA RECARREGA.';
+  else if (MenuGate.wired && emSolo() && temSala())
+    motivo = '🔌 JOGO SOLO — VOCÊ NÃO ESTÁ NA SALA ONLINE. MULTIJOGADOR TE LEVA PRA LÁ.';
+  else if (MenuGate.wired && brQuebrado())
     motivo = '⚠ A SALA ONLINE NÃO CARREGOU — DÁ PRA JOGAR SOLO AGORA.';
   else if (MenuGate.wired && MenuGate.dropped)
     motivo = '⚠ CONEXÃO COM A SALA CAIU — TENTANDO VOLTAR. DÁ PRA JOGAR SOLO ENQUANTO ISSO.';
@@ -122,15 +135,19 @@ function paintMenu() {
     cfg.setAttribute('aria-disabled', String(!MenuGate.wired));
   }
   /* MULTIJOGADOR: só abre painel quando existe sala pra mostrar. Fora isso o
-     rótulo conta o motivo em vez de aceitar um clique que não faria nada. */
+     rótulo conta o motivo em vez de aceitar um clique que não faria nada.
+     Vindo do SOLO ele é a PORTA DE VOLTA — antes dizia "RECARREGUE A PÁGINA",
+     que era a confissão de que a escolha de solo era de mão única. */
   if (mult) {
     // o espaço duplo do rótulo é o mesmo espaço-duro do index.html (&nbsp;):
     // sem ele o texto "pula" na primeira repintura
-    const podeMp = MenuGate.wired && salaNoAr();
+    const podeMp = MenuGate.wired && temSala() && !MenuGate.dropped && !MenuGate.voltando;
     let mtexto = '🌐  MULTIJOGADOR';
     if (!MenuGate.wired) mtexto = '🌐  MULTIJOGADOR — CARREGANDO...';
-    else if (MenuGate.soloChosen) mtexto = '🌐  MULTIJOGADOR — RECARREGUE A PÁGINA';
-    else if (!podeMp) mtexto = '🌐  MULTIJOGADOR — SALA FORA DO AR';
+    else if (MenuGate.voltando) mtexto = '🌐  VOLTANDO PRA SALA...';
+    else if (!temSala() || MenuGate.dropped) mtexto = '🌐  MULTIJOGADOR — SALA FORA DO AR';
+    else if (emSolo() && jogando) mtexto = '🌐  MULTIJOGADOR — SAIR DO SOLO E VOLTAR';
+    else if (emSolo()) mtexto = '🌐  MULTIJOGADOR — VOLTAR PRA SALA';
     if (mult.textContent !== mtexto) mult.textContent = mtexto;
     mult.classList.toggle('disabled', !podeMp);
     mult.setAttribute('aria-disabled', String(!podeMp));
@@ -220,8 +237,17 @@ if (window.io) {
          Só mexem em pintura de menu: nada de estado de jogo, nada de
          dano, nada de reload (o reconnect do socket.io continua dono da
          volta por si). */
-      __mpSocket.on('disconnect', () => { MenuGate.dropped = true; paintMenu(); });
-      __mpSocket.on('connect', () => { MenuGate.dropped = false; paintMenu(); });
+      /* `dropped` significa "caiu SEM ninguém pedir". O botão SOLO agora fecha
+         o socket de propósito (entrarEmSolo): tratar isso como queda faria o
+         menu avisar "CONEXÃO CAIU — TENTANDO VOLTAR" numa saída voluntária, e
+         travaria justamente o MULTIJOGADOR, que é a porta de volta. */
+      __mpSocket.on('disconnect', () => { MenuGate.dropped = !emSolo(); paintMenu(); });
+      __mpSocket.on('connect', () => {
+        MenuGate.dropped = false;
+        // volta do solo: quem abre o lobby é o chegouNaSala (declaração de
+        // função, içada — ela mora lá embaixo, junto dos botões do menu)
+        if (MenuGate.voltando) chegouNaSala(); else paintMenu();
+      });
     } else { __mpSocket.close(); __mpSocket = null; }
   } catch (e) { console.warn('[MP] servidor indisponível — modo solo', e); __mpSocket = null; }
 }
@@ -3297,21 +3323,106 @@ ui.deathScreen.addEventListener('keydown', e => {
   e.preventDefault();
   b.click();
 });
+/* ================================================================
+   SOLO E SALA ONLINE — UM DE CADA VEZ, E A TROCA É REVERSÍVEL.
+
+   O SOLO ficava travado enquanto a sala estivesse de pé. Em produção o
+   servidor está SEMPRE no ar: o botão nunca era clicável e o menu tinha um
+   botão morto. Agora SOLO vale sempre — e entrar nele é SAIR DA SALA de
+   verdade, fechando o socket.
+
+   POR QUE FECHAR O SOCKET (e não "marcar como não-listado" no servidor):
+   · o servidor já tem UM caminho, testado, pra "este jogador foi embora": o
+     `disconnect` tira do `players`, libera o posto de anfitrião, devolve os
+     carros, recalcula a vitória e reemite o roster. Nada de evento novo,
+     nada de identidade nova, nenhuma superfície de autoridade a mais.
+   · a alternativa exigiria um evento novo que APAGA alguém do roster
+     MANTENDO a conexão — que é exatamente o fantasma: invisível pros
+     outros e ainda recebendo `playerUpdate` de todo mundo (wallhack de
+     graça). O caminho descartado era o inseguro, não o mais trabalhoso.
+
+   RECUSAR EM PARTIDA é a segunda tranca: sumir do roster no meio de um
+   tiroteio não pode ser um botão do menu. Fechar a aba continua possível — e
+   o servidor trata os dois casos igual: quem sai PERDE (alive=false +
+   checkVictory), não fica invisível.
+   ================================================================ */
+function entrarEmSolo() {
+  // partida em andamento (solo OU do servidor) não é hora de trocar de modo
+  if (state.started) return false;
+  MenuGate.soloChosen = true;
+  window.__MP_soloOnly = true; // multiplayer-client.js lê pra não tomar a tela
+  MenuGate.voltando = false;
+  clearTimeout(__voltaTimer);
+  if (__mpSocket) {
+    /* `__MP_active` é do br-game.js e quer dizer "o desfecho da morte é do
+       SERVIDOR". Deixá-lo ligado no solo esconderia os botões da tela de
+       morte (#deathBtns nasce hidden) e faria o restartMatch recusar: o
+       jogador morreria sem saída. Quem religa é a volta pra sala. */
+    window.__MP_active = false;
+    try { __mpSocket.disconnect(); } catch (e) {}
+  }
+  paintMenu();
+  return true;
+}
+/* VOLTAR PRA SALA sem recarregar a página. Só é seguro porque o mundo NÃO é
+   regenerado: `voltarAoMenu()` restaura o instantâneo do boot (consumo de rand
+   ZERO — a ordem do stream seedado é contrato) e o socket reconecta com a
+   MESMA seed. Se a seed do servidor tiver mudado (partida nova rodou enquanto
+   o jogador estava no solo), quem decide é o caminho que já existe: o handler
+   de `init` recarrega a página — e o aviso do menu diz isso ANTES. */
+function voltarParaSala() {
+  if (!temSala()) return false;
+  if (state.started) {
+    /* SÓ O SOLO QUE ESTE MENU INICIOU pode ser abandonado daqui. `soloChosen`
+       é levantado pelo entrarEmSolo, que já recusa com partida em andamento —
+       logo `soloChosen && started` só existe em partida SOLO. Uma bandeira de
+       solo vinda de fora (`__MP_soloOnly` por QA/console) com uma partida do
+       SERVIDOR rodando viraria, sem isto, um reset local de graça: cura,
+       reaparecimento no spawn e inventário cheio (é o mesmo motivo pelo qual
+       o restartMatch recusa online). */
+    if (!MenuGate.soloChosen) return false;
+    voltarAoMenu(); // abandona o solo e devolve o mundo ao instantâneo do boot
+  }
+  MenuGate.soloChosen = false;
+  window.__MP_soloOnly = false;
+  /* DERIVADO, não guardado: o dono de `__MP_active` é o br-game.js, que só o
+     liga dentro do mesmo `start()` que publica o `__MP_lobby`. Um instantâneo
+     guardado no entrarEmSolo apagaria a si mesmo em dois cliques seguidos de
+     SOLO e devolveria `false` pra uma sala viva. */
+  window.__MP_active = !!window.__MP_lobby;
+  MenuGate.voltando = true;
+  clearTimeout(__voltaTimer);
+  __voltaTimer = setTimeout(() => { // não deu: para de prometer e conta a verdade
+    MenuGate.voltando = false;
+    MenuGate.dropped = !(__mpSocket && __mpSocket.connected);
+    paintMenu();
+  }, 15000);
+  try { if (!__mpSocket.connected) __mpSocket.connect(); } catch (e) {}
+  if (__mpSocket.connected) chegouNaSala(); else paintMenu();
+  return true;
+}
+function chegouNaSala() {
+  MenuGate.voltando = false;
+  clearTimeout(__voltaTimer);
+  /* O lobby só existe depois que br-game.js carrega e boota. Quando o jogador
+     escolhe solo ANTES disso, o multiplayer-client.js segue esperando (o poll
+     deixou de ser cancelado de vez) e boota assim que __MP_soloOnly cai — e é
+     o próprio boot que abre o lobby. Até lá o painel abre vazio, com o rótulo
+     do botão contando que a volta está em curso. */
+  if (window.__MP_lobby) window.__MP_lobby.show();
+  else MENU.open('mp');
+  paintMenu();
+}
 $('btnNew').addEventListener('click', e => {
   e.stopPropagation();
-  if (salaNoAr()) return; // sala online de pé: o multijogador é a porta, não o solo
-  /* Sala fora do ar e o jogador escolheu SOLO: a partir daqui o BR não pode
-     sequestrar a tela se o servidor voltar. multiplayer-client.js lê
-     __MP_soloOnly antes de bootar o BR e antes de reabrir o lobby. */
-  if (__mpSocket && !state.started) {
-    MenuGate.soloChosen = true;
-    window.__MP_soloOnly = true;
-  }
+  if (state.started) return; // partida em andamento: SOLO não é saída (ver entrarEmSolo)
+  entrarEmSolo();
   MENU.close();
   startGame(e.isTrusted);
 });
 $('btnMulti').addEventListener('click', e => {
   e.stopPropagation();
+  if (emSolo()) { voltarParaSala(); return; }
   if (!salaNoAr()) return;
   /* redesenha o lobby ANTES de abrir: o painel pode estar com a tela de
      resultado da partida anterior. Sem BR carregado o painel abre vazio, e
