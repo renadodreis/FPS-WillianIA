@@ -202,11 +202,25 @@ describe('Qualidade de render (Chrome headless)', { skip: !CHROME && 'Chrome nã
      abra esse vetor sem ninguém perceber. */
   it('nenhuma configuração do jogador controla grama, alcance de visão ou névoa', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-    const bloco = /<div id="settings">([\s\S]*?)<\/div>\s*<div id="loadingMsg"/.exec(html);
-    assert.ok(bloco, 'bloco de configurações não encontrado no index.html');
     const proibido = /grama|grass|distância de visão|distancia de visao|view\s*dist|névoa|nevoa|\bfog\b|densidade/i;
-    assert.ok(!proibido.test(bloco[1]),
-      `configuração que expõe vetor de wallhack no menu:\n${bloco[1]}`);
+
+    /* A versão antiga achava o bloco por VIZINHANÇA (`#settings` seguido de
+       `#loadingMsg`). A unificação do menu meteu o painel do multijogador
+       entre os dois e o guarda ficou CEGO — passou a falhar por não achar
+       nada, que é o pior modo de falha possível pra uma trava anti-trapaça.
+       Agora ele varre todo controle exposto ao jogador, onde quer que esteja:
+       cada linha de configuração e cada elemento de formulário. Não depende
+       de ordem nem de aninhamento. */
+    const linhas = [...html.matchAll(/<div class="srow"[\s\S]*?<\/div>/g)].map(m => m[0]);
+    const controles = [...html.matchAll(/<(?:select|input|option)\b[\s\S]*?(?:<\/select>|>)/g)].map(m => m[0]);
+    assert.ok(linhas.length >= 3,
+      `varredura não achou as linhas de configuração (achou ${linhas.length}) — ` +
+      'a trava anti-trapaça estaria passando sem olhar nada');
+
+    for (const trecho of [...linhas, ...controles]) {
+      assert.ok(!proibido.test(trecho),
+        `controle exposto ao jogador abre vetor de wallhack:\n${trecho}`);
+    }
 
     const cfg = fs.readFileSync(path.join(__dirname, '..', 'js', 'config.js'), 'utf8');
     const settings = /export const SETTINGS = Object\.assign\(\{([^}]*)\}/.exec(cfg);

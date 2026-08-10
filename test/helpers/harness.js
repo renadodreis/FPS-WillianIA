@@ -16,6 +16,50 @@ const CHROME = [
   process.env.CHROME_PATH || '',
 ].find(p => p && fs.existsSync(p));
 
+/* Backend de GPU do Chrome de teste.
+
+   `swiftshader` é rasterizador de SOFTWARE: foi o padrão histórico porque roda
+   em qualquer CI, mas é lento (boot de página passando de 60 s sob carga é a
+   origem de quase todo o flake conhecido deste repo) e não representa GPU
+   nenhuma. Numa máquina com GPU de verdade, `gpu` usa ANGLE sobre o driver
+   nativo.
+
+   QA_GPU=gpu | swiftshader | auto   (padrão: auto)
+   `auto` usa a GPU quando existe um render node (/dev/dri/renderD*) e cai pro
+   software quando não existe — o Windows do Willian e um CI sem GPU continuam
+   funcionando sem ninguém configurar nada.
+
+   ATENÇÃO ao trocar: a string da GPU decide o tier de qualidade
+   (js/gputier.js). Com swiftshader a regra /swiftshader/ dava `baixo`; com
+   NVIDIA daria `alto`, mudando sombra, bloom, SMAA e resolução — e com isso
+   draw calls e as asserções de render. Por isso o harness FIXA o tier na URL
+   (ver `query` no bootGame): o backend passa a ser detalhe de velocidade, não
+   de comportamento. */
+function backendGpuAtivo() {
+  const escolha = (process.env.QA_GPU || 'auto').toLowerCase();
+  if (escolha === 'gpu') return true;
+  if (escolha === 'swiftshader' || escolha === 'sw') return false;
+  try {
+    return fs.readdirSync('/dev/dri').some(n => n.startsWith('renderD'));
+  } catch { return false; }
+}
+
+function backendArgs() {
+  return backendGpuAtivo()
+    ? ['--use-gl=angle', '--use-angle=gl', '--ignore-gpu-blocklist', '--enable-gpu']
+    : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+}
+
+/* Acrescenta `tier=baixo` quando o teste não pediu tier nenhum. Mantém o
+   preset que o swiftshader produzia, para a troca de backend não mexer no que
+   os testes medem. Teste que quer outro tier passa `query` com o seu. */
+function comTierFixo(query) {
+  const q = String(query || '');
+  if (/[?&]tier=/.test(q)) return q;
+  if (!q) return '?tier=baixo';
+  return q + (q.startsWith('?') ? '&' : '?') + 'tier=baixo';
+}
+
 async function waitForServer(srv, port, bootToken, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -135,8 +179,8 @@ async function bootGame({
       executablePath: CHROME,
       headless: 'new',
       protocolTimeout,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--enable-unsafe-swiftshader',
-        '--use-gl=angle', '--use-angle=swiftshader', '--mute-audio', '--window-size=800,600'],
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--mute-audio',
+        '--window-size=800,600', ...backendArgs()],
     });
     const page = await browser.newPage();
     // As flags existem antes do primeiro tick: sob máquina carregada, uma morte
@@ -180,7 +224,7 @@ async function bootGame({
       await request.continue();
     });
   }
-  await page.goto(`http://localhost:${port}/${query}`, {
+  await page.goto(`http://localhost:${port}/${comTierFixo(query)}`, {
     waitUntil: 'domcontentloaded',
     timeout: 90000,
   });
