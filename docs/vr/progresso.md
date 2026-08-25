@@ -191,11 +191,42 @@ correção do flake — o flake era do lobo.
   não existe. Sumir calado faria o jogador de headset concluir que o jogo não tem
   VR; o botão aparece dizendo o que fazer.
 
+### Correção depois de ver o resultado dentro do headset
+
+O dono do projeto entrou em VR durante as medições e relatou: **"os ângulos
+estavam todos errados"**. Estavam mesmo, e a falha era de escopo meu.
+
+`XR.place()` existia, tinha teste, e **nunca era chamado por ninguém**. Sem
+plantar o rig ele fica na origem do mundo — então em VR o jogador nascia de pé
+no meio do mapa, olhando pro lugar errado, enquanto o jogo achava que ele estava
+em `player.pos`. Junto disso, `applyFpsCamera` continuava escrevendo
+`camera.position`/`quaternion` todo frame, e o three sobrescrevia tudo no render
+com a pose da cabeça: o cálculo ia pro lixo e a vista não batia com o jogo.
+
+Eu tinha registrado isso como "adiado pra Fase 3". Foi corte errado: sem o rig
+plantado, entrar em VR não é uma fase incompleta, é ruído.
+
+Corrigido:
+
+- **em jogo**, `applyFpsCamera` deixa de escrever na câmera quando apresenta e
+  passa a plantar o rig nos PÉS (`player.pos`). Recoil, screen shake, tombo da
+  morte e roll de strafe continuam sendo CALCULADOS — alimentam a arma e o HUD —
+  mas não chegam mais na câmera: arrastar a vista de quem está com o aparelho na
+  cara é enjoo, não game feel;
+- **no menu**, que não passa por `applyFpsCamera`, o rig é plantado no spawn;
+- **giro do rig fica em 0**: girar o mundo sob o jogador é a mesma armadilha, e
+  giro artificial (snap turn) é da Fase 3;
+- altura do olho, bob e dip de pouso saem do caminho em VR — a altura vem do
+  aparelho pela referência `local-floor`, e é isso que faz agachar ser agachar.
+
+Dois testes novos travam: o rig segue os pés e o jogo não escreve na câmera; e o
+menu planta o rig no spawn, não na origem do mundo.
+
 ### Decidido NÃO fazer agora
 
-- **Migrar a câmera em jogo para o rig.** `applyFpsCamera` continua escrevendo na
-  câmera fora de XR. Locomoção é Fase 3, e é lá que a escrita passa a ir pro rig
-  (com vinheta, snap turn e agachar). Fase 1 entrega o menu, que é o portão.
+- **Locomoção, giro artificial e agachar por botão.** São da Fase 3. O que a
+  Fase 1 entrega é o rig PLANTADO no lugar certo (ver correção abaixo); mover-se
+  por analógico, snap turn com vinheta e agachar sem dobrar o joelho vêm depois.
 - **Cortes de CFG para VR** (alcance, sombra, LOD): é a Fase 2 inteira, e sem
   medição no aparelho seria chute.
 - **Arma nas mãos.** Hoje `weaponRoot` é filho da câmera — em VR ficaria colada na

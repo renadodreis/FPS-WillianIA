@@ -1785,18 +1785,30 @@ function applyFpsCamera(dt, t) {
   leanRoll = damp(leanRoll, state.driving ? 0 : (-strafe * 0.014 - slideK * 0.06), 7, dt);
   _euler.z = shakeRoll + leanRoll + deathK * 0.85; // tomba ao morrer
   _euler.x = clamp(_euler.x, -1.55, 1.55);
-  camera.quaternion.setFromEuler(_euler);
+  /* EM VR A CABEÇA É DO JOGADOR. O jogo move os PÉS — o rig — e o three
+     escreve a câmera com a pose do headset relativa a esse pai. Tudo que
+     mexeria a cabeça de fora (recoil, screen shake, tombo da morte, roll de
+     strafe) continua sendo CALCULADO porque alimenta a arma e o HUD, mas não
+     chega na câmera: arrastar a vista de quem está com o aparelho na cara é
+     enjoo, não game feel. O giro do rig fica em 0 — girar o mundo sob o
+     jogador é a mesma armadilha, e giro artificial é da Fase 3 (snap turn). */
+  if (XR.presenting) XR.place(player.pos.x, player.pos.y, player.pos.z, 0);
+  else camera.quaternion.setFromEuler(_euler);
 
   // ---- posição do olho: altura (agachar), bob, dip de pouso, shake ----
   const eyeH = lerp(1.62, 1.04, player.crouchT) * (1 - deathK * 0.78); // cai no chão ao morrer
   const bobScale = 1 - adsT * 0.82;
   const bobY = Math.sin(player.bobTime * 2) * 0.046 * player.bobAmp * bobScale;
   const bobX = Math.cos(player.bobTime) * 0.034 * player.bobAmp * bobScale;
-  _v2.set(1, 0, 0).applyQuaternion(camera.quaternion);
-  camera.position.copy(player.pos);
-  camera.position.y += eyeH + bobY * 0.55 + player.landDip;
-  camera.position.addScaledVector(_v2, bobX * 0.4 + shakeX);
-  camera.position.y += shakeY;
+  if (!XR.presenting) {
+    // altura do olho, bob e dip só existem fora do VR: no headset a altura vem
+    // do aparelho (`local-floor`) e agachar é agachar de verdade
+    _v2.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    camera.position.copy(player.pos);
+    camera.position.y += eyeH + bobY * 0.55 + player.landDip;
+    camera.position.addScaledVector(_v2, bobX * 0.4 + shakeX);
+    camera.position.y += shakeY;
+  }
 
   // ---- sway da arma (acompanha o mouse com atraso) ----
   const swTX = clamp(-mouse.swayX * 0.0021, -0.09, 0.09);
@@ -2911,6 +2923,9 @@ function tick(forceDt) {
          mexe. O mundo continua vivo ao fundo; o que sai é o trilho de
          câmera. O ponto de vista do menu em VR é assunto da Fase 5. */
       if (!xrOn) MenuCam.update(dt);
+      // sem isto o rig fica na origem do mundo e o menu em VR vira "de pé no
+      // meio do mapa"; plantado no spawn, o jogador olha o mundo do lugar certo
+      else XR.place(player.pos.x, player.pos.y, player.pos.z, 0);
       /* HORA E CLIMA FIXOS NO MENU. O passeio é a vitrine do jogo e antes
          pegava o clima que estivesse rolando — a rodada anterior caiu num céu
          fechado e os quatro planos saíram cinzas. Golden hour (halo de Mie

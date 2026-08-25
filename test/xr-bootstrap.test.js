@@ -173,6 +173,39 @@ describe('bootstrap XR — em jogo', () => {
     assert.equal(out.aposResize, 0, 'redimensionar a janela não pode tocar no framebuffer da sessão');
   });
 
+  it('em XR o rig segue os PÉS do jogador e o jogo não escreve na câmera', async () => {
+    /* Sem isto o rig fica na origem do mundo e o jogador aparece no meio do
+       mapa, olhando pro lugar errado, enquanto o jogo acha que ele está em
+       `player.pos`. Quem escreve a câmera em XR é o three, com a pose da
+       cabeça relativa ao PAI — o jogo move o pai, nunca a câmera. */
+    const out = await h.play(() => {
+      const G = window.__game, MP = window.__MP, R = MP.renderer;
+      R.setAnimationLoop(null);
+      R.xr.isPresenting = false;
+      G.tick(1 / 60);
+      R.xr.isPresenting = true;
+      G.tick(1 / 60);                       // adota o rig
+      // sentinela no lugar onde o three escreveria a pose da cabeça
+      MP.camera.position.set(4.25, 5.5, 6.75);
+      const P = MP.player.pos;
+      P.set(120, MP.groundAt(120, -60, 999), -60);
+      G.tick(1 / 60);
+      const r = {
+        rig: G.XR.rig.position.toArray().map(v => +v.toFixed(2)),
+        pes: [P.x, P.y, P.z].map(v => +v.toFixed(2)),
+        cam: MP.camera.position.toArray().map(v => +v.toFixed(2)),
+        yaw: +G.XR.rig.rotation.y.toFixed(6),
+      };
+      R.xr.isPresenting = false;
+      G.tick(1 / 60);
+      R.setAnimationLoop(() => G.tick());
+      return r;
+    });
+    assert.deepEqual(out.rig, out.pes, 'o rig tem que ficar nos pés do jogador');
+    assert.deepEqual(out.cam, [4.25, 5.5, 6.75], 'em VR a câmera é do headset, não do jogo');
+    assert.equal(out.yaw, 0, 'girar o mundo sob o jogador é enjoo — giro é da Fase 3');
+  });
+
   it('sem headset o botão de VR não aparece', async () => {
     const out = await h.play(() => !!document.getElementById('btnVR'));
     assert.equal(out, false);
@@ -195,6 +228,27 @@ describe('bootstrap XR — no menu', () => {
       return d;
     });
     assert.ok(out > 0.001, `o passeio do menu tem que mover a câmera no desktop (${out})`);
+  });
+
+  it('em XR o menu planta o rig no chão do spawn, não na origem do mundo', async () => {
+    const out = await h.play(() => {
+      const G = window.__game, MP = window.__MP, R = MP.renderer;
+      R.setAnimationLoop(null);
+      R.xr.isPresenting = true;
+      G.tick(1 / 60);
+      G.tick(1 / 60);
+      const P = MP.player.pos;
+      const r = {
+        rig: G.XR.rig.position.toArray().map(v => +v.toFixed(2)),
+        spawn: [P.x, P.y, P.z].map(v => +v.toFixed(2)),
+      };
+      R.xr.isPresenting = false;
+      G.tick(1 / 60);
+      R.setAnimationLoop(() => G.tick());
+      return r;
+    });
+    assert.deepEqual(out.rig, out.spawn);
+    assert.notDeepEqual(out.rig, [0, 0, 0], 'na origem do mundo o menu vira o meio do mapa');
   });
 
   it('em XR o jogo NÃO move a cabeça do jogador no menu', async () => {
