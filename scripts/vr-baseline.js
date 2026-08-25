@@ -44,7 +44,8 @@ const ROOT = path.join(__dirname, '..');
 
 /* ---------- linha de comando ---------- */
 function parseArgs(argv) {
-  const out = { target: 'local', port: 3271, seconds: 45, seed: '424242', tier: '', out: '' };
+  const out = { target: 'local', port: 3271, seconds: 45, seed: '424242', tier: '', out: '',
+    immersive: '' };
   for (const arg of argv) {
     const m = /^--([a-z]+)=(.*)$/.exec(arg);
     if (!m) continue;
@@ -85,18 +86,106 @@ function adb(args, { quiet = false } = {}) {
 }
 
 /* O socket de depuração do navegador do Quest não tem nome fixo entre
-   versões; ele aparece no /proc/net/unix como `@..._devtools_remote`. */
-function findDevtoolsSocket() {
-  const unix = adb(['shell', 'cat', '/proc/net/unix']);
-  const names = [...new Set(unix.split('\n')
-    .map(l => (/@([\w.]*devtools_remote[\w.]*)/.exec(l) || [])[1])
-    .filter(Boolean))];
-  if (!names.length) {
-    throw new Error('nenhum socket devtools no aparelho — abra o navegador do Quest ' +
-      'e confira "Depuração USB" em Configurações > Sistema > Modo de desenvolvedor');
+   versões; ele aparece no /proc/net/unix como `@..._devtools_remote`. Só
+   existe com o navegador NO AR, e ele leva alguns segundos pra subir depois
+   do intent — por isso a espera por condição. */
+async function findDevtoolsSocket(limiteMs = 30000) {
+  const fim = Date.now() + limiteMs;
+  while (Date.now() < fim) {
+    const unix = adb(['shell', 'cat', '/proc/net/unix']);
+    const nomes = [...new Set(unix.split('\n')
+      .map(l => (/@([\w.]*devtools_remote[\w.]*)/.exec(l) || [])[1])
+      .filter(Boolean))];
+    // preferência: o do navegador da Meta, se houver mais de um
+    const escolhido = nomes.find(n => /oculus|browser/i.test(n)) || nomes[0];
+    if (escolhido) return escolhido;
+    await new Promise(r => setTimeout(r, 1000));
   }
-  // preferência: o do navegador da Meta, se houver mais de um
-  return names.find(n => /oculus|browser/i.test(n)) || names[0];
+  throw new Error('nenhum socket devtools no aparelho — confira se o navegador do Quest ' +
+    'abriu e se "Depuração USB" está ligada em Configurações > Sistema > Modo de desenvolvedor');
+}
+
+/* ---------- entrar em sessão imersiva ----------
+   `requestSession` exige ativação do usuário. O clique do puppeteer é evento
+   CONFIÁVEL (vai pelo Input do CDP), então vale como gesto — é o único jeito
+   de medir XR de verdade sem alguém apertando o botão dentro do headset. */
+async function entrarEmVR(page) {
+  await page.waitForFunction("!!document.getElementById('btnVR')", { timeout: 60000, polling: 250 });
+  await page.click('#btnVR');
+  await page.waitForFunction('window.__game.XR.presenting === true', { timeout: 60000, polling: 250 });
+}
+
+/* Amostrador de SESSÃO IMERSIVA. O `requestAnimationFrame` da janela NÃO
+   descreve o frame de XR: lá quem agenda é `session.requestAnimationFrame`, na
+   cadência do aparelho. Quem enxerga isso é o overlay de perf do próprio jogo
+   (js/perfhud.js), que mede `perf.frameMs` dentro do `tick` — e o `tick` em XR
+   é chamado pela sessão. Por isso aqui a estatística vem dele, não de um laço
+   nosso. */
+async function collectImmersive(page, seconds) {
+  return page.evaluate(async secs => {
+    const G = window.__game, MP = window.__MP;
+    G.perfHud.enabled = true;
+    if (!G.state.started) G.forceStart();
+    const poses = [
+      ['spawn', G.player.pos.x, G.player.pos.z],
+      ['cidade', G.Structures.heliSpot.x, G.Structures.heliSpot.z],
+      ['castelo', G.Structures.FORT_POS.x, G.Structures.FORT_POS.z],
+      ['canhao', G.Cannon.spot.x, G.Cannon.spot.z],
+    ];
+    const porPose = [];
+    const perPose = (secs * 1000) / poses.length;
+    for (let i = 0; i < poses.length; i++) {
+      const [nome, x, z] = poses[i];
+      if (i > 0) {
+        G.player.pos.set(x, G.groundAt(x, z, 999) + 1, z);
+        G.player.vel.set(0, 0, 0);
+      }
+      await new Promise(r => setTimeout(r, 1500));   // assenta streaming e sombra
+      const calls = [], tris = [];
+      const t0 = performance.now();
+      const janela = Math.max(2000, perPose - 1500);
+      while (performance.now() - t0 < janela) {
+        calls.push(MP.renderer.info.render.calls);
+        tris.push(MP.renderer.info.render.triangles);
+        await new Promise(r => setTimeout(r, 120));
+      }
+      const med = a => a.sort((x2, y2) => x2 - y2)[a.length >> 1] || 0;
+      const st = G.perfHud.stats;
+      porPose.push({ pose: nome, fps: +st.fps.toFixed(1), p50ms: +st.p50.toFixed(2),
+        p99ms: +st.p99.toFixed(2), piorMs: +st.worst.toFixed(2), engasgos: st.hitches,
+        amostras: st.samples, calls: med(calls), tris: med(tris) });
+    }
+    const gl = MP.renderer.getContext();
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const camXR = MP.renderer.xr.getCamera();
+    return {
+      imersivo: true, porPose,
+      xr: {
+        presenting: MP.renderer.xr.isPresenting,
+        olhos: camXR && camXR.cameras ? camXR.cameras.length : 0,
+        foveation: MP.renderer.xr.getFoveation === undefined ? null : MP.renderer.xr.getFoveation(),
+        buffer: [gl.drawingBufferWidth, gl.drawingBufferHeight],
+        refPose: MP.renderer.xr.getReferenceSpace ? 'ok' : 'ausente',
+      },
+      renderer: {
+        gpu: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '',
+        programas: MP.renderer.info.programs ? MP.renderer.info.programs.length : -1,
+        geometriasNaGpu: MP.renderer.info.memory.geometries,
+        texturasNaGpu: MP.renderer.info.memory.textures,
+        pixelRatio: MP.renderer.getPixelRatio(),
+        drawingBuffer: [gl.drawingBufferWidth, gl.drawingBufferHeight],
+        sombra: MP.renderer.shadowMap.enabled,
+        xrDisponivel: !!navigator.xr,
+      },
+      ambiente: {
+        userAgent: navigator.userAgent, devicePixelRatio: window.devicePixelRatio,
+        tela: [window.screen.width, window.screen.height],
+        viewport: [window.innerWidth, window.innerHeight],
+        memoriaGB: navigator.deviceMemory || null, nucleos: navigator.hardwareConcurrency || null,
+      },
+      erros: G.errors.slice(0, 10),
+    };
+  }, seconds);
 }
 
 /* ---------- amostrador (roda DENTRO da página) ---------- */
@@ -119,6 +208,16 @@ async function collect(page, seconds) {
       ['castelo', G.Structures.FORT_POS.x, G.Structures.FORT_POS.z],
       ['canhao', G.Cannon.spot.x, G.Cannon.spot.z],
     ];
+
+    /* ABA ESCONDIDA NÃO DESENHA. No navegador do Quest, com o headset fora da
+       cabeça ou o painel fora de vista, o `requestAnimationFrame` simplesmente
+       não dispara — e a medição sairia com zero frame, sem dizer por quê.
+       Espera até a página estar visível e registra o que aconteceu. */
+    const esperandoDesde = performance.now();
+    while (document.visibilityState !== 'visible' && performance.now() - esperandoDesde < 120000)
+      await new Promise(r => setTimeout(r, 500));
+    const visibilidade = document.visibilityState;
+    const esperaVisivelMs = Math.round(performance.now() - esperandoDesde);
 
     const frames = [];
     let stop = false, last = performance.now(), pose = 0;
@@ -167,6 +266,7 @@ async function collect(page, seconds) {
     return {
       frames,
       poses: poses.map(p => p[0]),
+      visibilidade, esperaVisivelMs,
       cena: {
         materiaisUnicos: materials.size, geometriasUnicas: geometries.size,
         texturasEmMaterial: textures.size, meshes, instancedMeshes: instanced,
@@ -204,6 +304,10 @@ const pct = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.
 
 function resumir(frames, poses) {
   const util = frames.slice(5); // os primeiros frames pagam o teleporte inicial
+  /* Zero frame é RESULTADO, não erro: significa que a aba não desenhou
+     (headset fora da cabeça, painel fora de vista). Estourar aqui esconderia
+     justamente o que precisa aparecer no relatório. */
+  if (util.length < 8) return { frames: util.length, semFrames: true, porPose: [] };
   const ms = util.map(f => f.ms).sort((a, b) => a - b);
   const calls = util.map(f => f.calls).sort((a, b) => a - b);
   const tris = util.map(f => f.tris).sort((a, b) => a - b);
@@ -258,33 +362,68 @@ async function runQuest(cfg) {
       '"Permitir depuração USB?" DENTRO do headset');
   }
   // localhost no aparelho = servidor desta máquina: contexto seguro sem HTTPS,
-  // que é o que o WebXR vai exigir a partir da Fase 1.
+  // que é o que o WebXR exige da Fase 1 em diante. Vem ANTES do intent, senão
+  // o navegador abre a URL antes de existir rota pra ela.
   adb(['reverse', `tcp:${cfg.port}`, `tcp:${cfg.port}`]);
-  const socket = findDevtoolsSocket();
+  /* O intent serve só pra ACORDAR o navegador. A URL vai sem query de
+     propósito: `adb shell` entrega a linha ao shell do aparelho, que come `?`
+     e `&` — quem navega de verdade é o CDP, logo abaixo, sem shell no meio. */
+  adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW',
+    '-d', `http://localhost:${cfg.port}/`], { quiet: true });
+  // o socket só nasce com o navegador no ar: procurar antes do intent achava nada
+  const socket = await findDevtoolsSocket();
   adb(['forward', 'tcp:9222', `localabstract:${socket}`]);
-  adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', urlDoJogo(cfg)], { quiet: true });
 
   const browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9222', protocolTimeout: 600000 });
   const page = await esperarAba(browser, cfg.port);
   const boot = await abrirEMedirBoot(page, urlDoJogo(cfg)); // recarrega: mede o boot limpo
-  const dados = await collect(page, cfg.seconds);
-  const shot = path.join(ROOT, 'output', 'vr', 'baseline-quest.png');
-  fs.mkdirSync(path.dirname(shot), { recursive: true });
-  await page.screenshot({ path: shot });
+  /* `--immersive=1` entra em sessão XR de verdade. É a ÚNICA medição de frame
+     time que vale: em painel 2D o navegador do Quest trava a página em 30 Hz e
+     a mediana fica idêntica em qualquer carga. */
+  let dados;
+  if (cfg.immersive) {
+    await entrarEmVR(page);
+    dados = await collectImmersive(page, cfg.seconds);
+  } else {
+    dados = await collect(page, cfg.seconds);
+  }
+  /* Captura é ENFEITE: no navegador do Quest o `Page.captureScreenshot`
+     às vezes simplesmente não volta, e perder 60 s de medição por causa de
+     um PNG seria burrice. Falhou, segue sem ele. */
+  let shot = null;
+  try {
+    const alvoPng = path.join(ROOT, 'output', 'vr', 'baseline-quest.png');
+    fs.mkdirSync(path.dirname(alvoPng), { recursive: true });
+    await page.screenshot({ path: alvoPng, timeout: 20000 });
+    shot = alvoPng;
+  } catch { console.warn('(sem captura de tela: o navegador do Quest não respondeu)'); }
   await browser.disconnect();
-  adb(['forward', '--remove', 'tcp:9222'], { quiet: true });
-  return { boot, dados, screenshot: path.relative(ROOT, shot), adbSocket: socket, dispositivos };
+  /* FAXINA NUNCA DERRUBA MEDIÇÃO. Já custou três corridas de 60 s no
+     aparelho: o `--remove` falha se o encaminhamento não existe mais, e o
+     relatório morria depois do dado já estar colhido. */
+  try { adb(['forward', '--remove', 'tcp:9222'], { quiet: true }); } catch { /* já removido */ }
+  return { boot, dados, screenshot: shot ? path.relative(ROOT, shot) : null,
+    adbSocket: socket, dispositivos };
 }
 
+/* Devolve a aba onde medir. Preferência pra uma que JÁ esteja no jogo; se não
+   houver, qualquer aba serve — `abrirEMedirBoot` navega ela de qualquer jeito,
+   e é isso que dá um boot limpo e cronometrado. A aba nova do navegador do
+   Quest nasce em `chrome://panel-app-nav/ntp`, que é alvo do tipo `page` e
+   aceita navegação normalmente. */
 async function esperarAba(browser, port) {
   const deadline = Date.now() + 30000;
+  let qualquer = null;
   while (Date.now() < deadline) {
-    for (const p of await browser.pages()) {
+    const abas = await browser.pages();
+    for (const p of abas) {
       if (p.url().includes(`:${port}/`)) return p;
+      if (!qualquer && !/^devtools:/.test(p.url())) qualquer = p;
     }
+    if (qualquer) return qualquer;
     await new Promise(r => setTimeout(r, 500));
   }
-  throw new Error('o navegador do Quest não abriu a aba do jogo');
+  throw new Error('o navegador do Quest não expôs nenhuma aba pra medir');
 }
 
 const urlDoJogo = cfg =>
@@ -345,7 +484,9 @@ async function abrirEMedirBoot(page, url) {
   const { frames, poses, ...resto } = saida.dados;
   const relatorio = {
     alvo: cfg.target, seed: cfg.seed, segundos: cfg.seconds,
-    boot: saida.boot, resumo: resumir(frames, poses), ...resto,
+    boot: saida.boot,
+    resumo: saida.dados.imersivo ? { imersivo: true, porPose: saida.dados.porPose } : resumir(frames, poses),
+    ...resto,
     screenshot: saida.screenshot || null,
   };
   const destino = cfg.out || path.join(ROOT, 'output', 'vr', `baseline-${cfg.target}.json`);
@@ -353,6 +494,28 @@ async function abrirEMedirBoot(page, url) {
   fs.writeFileSync(destino, JSON.stringify(relatorio, null, 2));
 
   const r = relatorio.resumo;
+  if (r.imersivo) {
+    console.log(`\n=== BASELINE VR (${cfg.target}, SESSÃO IMERSIVA) ===`);
+    console.log(`GPU: ${relatorio.renderer.gpu}`);
+    console.log(`olhos ${relatorio.xr.olhos} · buffer ${relatorio.xr.buffer.join('x')} · ` +
+      `foveation ${relatorio.xr.foveation} · pixelRatio ${relatorio.renderer.pixelRatio}`);
+    console.log(`boot: html ${saida.boot.htmlMs} ms · __game ${saida.boot.gameMs} ms · ` +
+      `1º frame ${saida.boot.primeiroFrameMs} ms`);
+    for (const p of r.porPose)
+      console.log(`  ${p.pose.padEnd(8)} ${String(p.fps).padStart(5)} fps · p50 ${p.p50ms} ms · ` +
+        `p1% ${p.p99ms} ms · pior ${p.piorMs} ms · engasgos ${p.engasgos} · ` +
+        `${p.calls} calls · ${p.tris} tris`);
+    console.log(`\n→ ${path.relative(ROOT, destino)}`);
+    return;
+  }
+  if (r.semFrames) {
+    console.log(`\n=== BASELINE VR (${cfg.target}) — SEM FRAMES ===`);
+    console.log(`a aba não desenhou (visibilidade "${relatorio.visibilidade}", ` +
+      `${r.frames} frames). No Quest: ponha o headset e deixe o painel do ` +
+      'navegador à vista durante a medição.');
+    console.log(`\n→ ${path.relative(ROOT, destino)}`);
+    return;
+  }
   console.log(`\n=== BASELINE VR (${cfg.target}) ===`);
   console.log(`GPU: ${relatorio.renderer.gpu}`);
   console.log(`UA: ${relatorio.ambiente.userAgent}`);

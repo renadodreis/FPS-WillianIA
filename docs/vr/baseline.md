@@ -2,12 +2,10 @@
 
 Data: 2026-08-25 · branch `refatoracao` · three r0.185.1 · Node 20.20
 
-> **O portão da Fase 0 está ABERTO.** O plano exige número medido **no Quest 3**,
-> e o headset foi desplugado antes da medição no aparelho. O que está aqui é a
-> metade que não depende do aparelho — complexidade de cena, boot, payload,
-> viabilidade técnica — medida de verdade, com script repetível. Assim que o
-> cabo voltar: `npm run vr:baseline -- --target=quest` preenche a tabela que
-> falta, sem escrever uma linha de código nova.
+> **Medido no aparelho em 2026-08-25.** Quest 3 (`eureka`, Android 14), Adreno
+> 740, OculusBrowser 150 / Chrome 150, por `adb reverse` + CDP. Falta uma única
+> medição: frame time dentro de **sessão imersiva** — ver "O teto de 30 Hz"
+> abaixo, que é o motivo de o número de FPS do painel 2D não servir.
 
 ## Como regerar estes números
 
@@ -31,7 +29,70 @@ navegador do Quest em `/proc/net/unix`, faz `adb forward tcp:9222`, abre a URL
 por intent e anexa o puppeteer. `adb` 34.0.4 e a regra udev do fornecedor 2833 já
 estão instalados nesta máquina.
 
-## Medido — complexidade da cena (independe do aparelho)
+## Medido NO QUEST 3 (navegador, painel 2D)
+
+`npm run vr:baseline -- --target=quest --seconds=60`, seed 424242, servidor
+desta máquina alcançado por `adb reverse` (o aparelho vê `http://localhost`,
+que é **contexto seguro sem HTTPS** — é assim que o WebXR fica disponível sem
+publicar nada).
+
+| Item | Medido no Quest 3 | Alvo VR | Teto VR |
+|---|--:|--:|--:|
+| GPU | Adreno 740 | — | — |
+| Buffer de render | **750×562** (dpr 0,8 · escala adaptativa em 0,75) | — | — |
+| Draw calls (mediana / pior) | **413 / 805** | 120 | 180 |
+| Triângulos (mediana / pior) | **813 k / 1,51 M** | 350 k | 500 k |
+| Materiais únicos | **499** | 40 | 60 |
+| Luzes com sombra | **4** | 1 | 1 |
+| Programas de shader | 97 | — | — |
+| Texturas na GPU | 151 | — | — |
+| **Boot até o 1º frame** | **7,79 s** (cache QUENTE: 0,02 MB baixados) | 3 s | **4 s** |
+| Núcleos expostos ao navegador | **3** | — | — |
+| `navigator.xr` | **true** | — | — |
+
+Por pose (1727 frames, ~60 s):
+
+| Pose | fps | p50 | p1% | draw calls | triângulos |
+|---|--:|--:|--:|--:|--:|
+| spawn | 29,9 | 33,4 ms | 56,3 ms | 235 | 800 k |
+| cidade | 29,9 | 33,4 ms | 67,5 ms | 270 | 788 k |
+| castelo | 30,0 | **33,3 ms** | 59,9 ms | **632** | **1,19 M** |
+| canhão | 29,9 | 33,4 ms | 38,9 ms | 419 | 917 k |
+
+### O teto de 30 Hz — por que o FPS acima não mede nada
+
+Olhe a coluna `p50`: **33,3–33,4 ms nas quatro poses**. O castelo tem **2,7× mais
+draw calls** que o spawn (632 contra 235) e 1,5× mais triângulo, e a mediana não
+se move um décimo. Carga 2,7× maior com mediana idêntica não é saturação — é
+**teto**: o navegador do Quest limita a página em painel 2D a 30 Hz.
+
+Consequência prática: o `29,9 fps` descreve a política de composição do painel,
+não a capacidade do aparelho — exatamente o mesmo erro que o `60 fps` do desktop
+(vsync). **Frame time só vale medido dentro de sessão imersiva**, onde quem
+agenda o frame é `session.requestAnimationFrame` na cadência do headset. Para
+isso existe `npm run vr:baseline -- --target=quest --immersive=1`, que entra em
+VR pelo botão do menu (o clique do puppeteer é evento confiável, então vale como
+gesto do usuário) e lê a estatística do `js/perfhud.js` — que mede dentro do
+`tick`, e em XR o `tick` é chamado pela sessão.
+
+O que o painel 2D ainda entrega de útil, e é bastante:
+
+1. **Boot de 7,79 s até o primeiro frame, com cache quente.** O requisito de loja
+   é **4 s até gráfico head-tracked**. É quase o dobro, no melhor caso possível —
+   0,02 MB baixados, tudo servido do cache, sem rede no caminho. Cold boot é
+   pior. Este é o item que reprova o app no review sem ter nada a ver com FPS, e
+   a causa é conhecida: `game.js` monta o mundo inteiro de forma síncrona no
+   escopo do módulo.
+2. **A conta bruta bate com o desktop** (413 vs 463 draw calls, 499 materiais
+   iguais). Confirma o que o plano assume: draw calls, triângulos e materiais
+   **não dependem do aparelho**, então cortar esse orçamento pode ser feito e
+   verificado aqui, sem headset na mão.
+3. **~21× mais pixel esperando.** O painel desenha 750×562 = 421 mil pixels, já
+   com a escala adaptativa recuando de 0,80 para 0,75 sozinha. Em estéreo o
+   Quest 3 pede ~2064×2208 por olho, os dois olhos: ~9,1 milhões de pixels.
+4. **Três núcleos** expostos ao navegador, e o JS do jogo roda num só.
+
+## Medido — complexidade da cena (desktop, para comparação)
 
 Servidor local, seed 424242, Chrome 151 com GPU real (RTX 3050), viewport
 1280×720, tier `alto` (o que a máquina escolhe sozinha: res 1.5, sombra, bloom,
@@ -170,17 +231,41 @@ some em XR; na Fase 4 ela passa a ser filha do grip do controle.
 tamanho da Fase 5, e é bom saber agora que não existe nenhum HUD in-world para
 reaproveitar.
 
-## O que falta medir no aparelho (Fase 0 fecha aqui)
+## O que ainda falta medir no aparelho
 
-Assim que o Quest estiver plugado, com "Permitir depuração USB" aceito:
+Uma coisa só: **frame time dentro de sessão imersiva**, que é o que fecha o
+portão da Fase 1 (72 fps travados).
 
 ```
-npm run vr:baseline -- --target=quest --seconds=90
+npm run vr:baseline -- --target=quest --immersive=1 --seconds=60
 ```
 
-Preenche: FPS/frame time reais no XR2 Gen 2, draw calls e triângulos no
-navegador do aparelho, tempo de boot no aparelho, e uma captura de tela. Só
-então o portão da Fase 0 fecha.
+A corrida chegou a entrar em VR e amostrar, mas o relatório morreu na faxina
+(`adb forward --remove` de um encaminhamento já removido derrubava o processo
+DEPOIS do dado colhido). Corrigido — faxina nunca derruba medição. Falta só
+rodar de novo com o aparelho conectado.
+
+### Armadilhas do aparelho, aprendidas com ele na mão
+
+Custaram três corridas de 60 s e estão todas cobertas no script agora:
+
+1. **O socket de DevTools só existe com o navegador NO AR.** Procurar antes de
+   abrir o navegador não acha nada.
+2. **`adb shell` come `?` e `&` da URL.** O intent com query chegava mutilado; o
+   intent agora só ACORDA o navegador, e quem navega é o CDP.
+3. **`Page.captureScreenshot` trava no navegador do Quest.** Captura virou
+   opcional: perder 60 s de medição por causa de um PNG é burrice.
+4. **Aba escondida não desenha.** Com o headset fora da cabeça ou o painel fora
+   de vista, o `requestAnimationFrame` não dispara e a medição sai com zero
+   frame. O script espera a visibilidade e, se não vier, diz isso em vez de
+   estourar. **Isto não é detalhe de teste**: é exatamente o comportamento que a
+   Fase 6 tem que tratar como *focus-aware* (requisito de loja) quando o jogador
+   tirar o headset no meio da partida.
+5. **O headset dorme e acorda no diálogo do Guardian**, que fica por cima de
+   tudo; app suspenso não expõe socket nem desenha. Para automação existe
+   `adb shell am broadcast -a com.oculus.vrpowermanager.prox_close` (desliga o
+   sensor de presença; `automation_disable` restaura) — mas confirmar limite de
+   segurança continua sendo tarefa humana, dentro do headset.
 
 ## Estimativa de esforço por fase
 

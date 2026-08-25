@@ -48,12 +48,33 @@ não tempo de GPU. Detalhe e evidência em `docs/vr/baseline.md`.
   o jogo. Capacidade de GPU fica com `scripts/perf-probe.js` (4,5 ms/frame em
   800×600 mono).
 
+### Medido NO APARELHO (2026-08-25, com o Quest conectado)
+
+Quest 3, Adreno 740, OculusBrowser 150 / Chrome 150, por `adb reverse` + CDP.
+Tabela completa em `docs/vr/baseline.md`. Os três números que mandam:
+
+| | Quest 3 | teto |
+|---|--:|--:|
+| draw calls (mediana / pior) | 413 / 805 | 180 |
+| boot até o 1º frame | **7,79 s** (cache quente) | **4 s** (loja) |
+| buffer de render | 750×562 = 421 mil px | ~9,1 M px em estéreo |
+
+**O FPS do painel 2D não mede nada.** O p50 deu 33,3–33,4 ms nas quatro poses,
+inclusive na do castelo, que tem 2,7× mais draw calls. Carga 2,7× maior com
+mediana idêntica é teto, não saturação: o navegador do Quest limita a página em
+painel a 30 Hz. Mesmo erro do `60 fps` do desktop (vsync). Frame time só vale
+dentro de sessão imersiva — daí o modo `--immersive=1`.
+
+**`adb reverse` resolveu o maior risco de infraestrutura do plano:** o aparelho
+enxerga o servidor desta máquina como `http://localhost`, que é contexto seguro,
+então o WebXR fica disponível sem publicar nada em HTTPS.
+
 ### Em aberto
 
-O portão da Fase 0 **não fechou**: falta rodar
-`npm run vr:baseline -- --target=quest` com o headset plugado. O aparelho foi
-desplugado antes da medição; o desenvolvimento segue sem ele por decisão do dono
-do projeto, e a tabela do aparelho é preenchida quando o cabo voltar.
+Falta **uma** medição: `--immersive=1`, que fecha o portão da Fase 1. A corrida
+entrou em VR e amostrou, mas o relatório morreu na faxina (`adb forward
+--remove` de um encaminhamento já removido derrubava o processo depois do dado
+colhido). Corrigido; falta o aparelho reconectar.
 
 ---
 
