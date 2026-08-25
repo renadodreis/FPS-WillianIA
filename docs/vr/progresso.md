@@ -231,3 +231,67 @@ menu planta o rig no spawn, não na origem do mundo.
   medição no aparelho seria chute.
 - **Arma nas mãos.** Hoje `weaponRoot` é filho da câmera — em VR ficaria colada na
   cara. No menu ela já nasce invisível; em jogo isso é Fase 4.
+
+---
+
+## Fase 2 — Triagem de performance · 2026-08-25 · EM ANDAMENTO
+
+### Por que a Fase 1 não fecha sozinha
+
+O portão da Fase 1 é "menu a 72 fps travados no Quest". Com o medido, é
+impossível antes dos cortes desta fase: a pose de spawn — que é o menu — paga
+235 draw calls e 800 k triângulos **mono, em 750×562**, contra teto de 180/500 k;
+em estéreo o Adreno 740 precisa entregar ~9,1 M de pixels em 13,8 ms. Nenhum
+ajuste de sessão compra 3,4× de draw call. Os dois portões fecham na mesma
+medição — desvio consciente do plano, não portão pulado.
+
+### Feito: instrumento de mira (`scripts/vr-censo.js`)
+
+O baseline diz QUANTO; este diz DE QUEM, e sem isso a fase vira caça a esmo —
+que em worldgen é o jeito documentado de quebrar este jogo. Duas medições:
+
+1. **Censo por dono**, atribuindo cada mesh/material ao módulo que o criou.
+2. **Atribuição de draw call por subtração**: esconde um filho da cena por vez e
+   mede a diferença em `renderer.info.render.calls`.
+
+Armadilha que o primeiro corte do script pegou: **com sombra ligada a subtração
+mente**. O CSM escalona uma cascata diferente por frame, então dois frames
+seguidos não são comparáveis — davam 8 linhas de ~50 calls somando mais que o
+frame inteiro. Com a sombra desligada durante a atribuição o frame fica estável,
+as linhas somam exatamente o total, e o custo da sombra vira um número à parte
+(que é como o orçamento de VR trata: 1 cascata, não 4).
+
+### Medido
+
+```
+434 objetos Material · 176 APARÊNCIAS distintas · 258 redundantes (59%)
+1278 meshes · 181 InstancedMesh (174 049 instâncias) · 260 SkinnedMesh
+
+frame SEM sombra: 235 draw calls · 0,65 M tris
+sombra (4 cascatas CSM): +45 draw calls · +0,16 M tris
+
+quem paga o frame              calls    tris   nós
+worldgen instanciado              96    591 k   93
+Enemies                           63     54 k    9
+arma FP (filha da câmera)         54      5 k    1
+estruturas                        19      1 k    5
+```
+
+### Leitura e ordem de ataque
+
+| # | Alvo | Ganho estimado | Risco |
+|---|---|--:|---|
+| 1 | **Arma FP**: 54 draw calls para 5 k triângulos — o pior câmbio do jogo. GLB partido em dezenas de meshes, 192 materiais de aparência idêntica | ~50 calls | baixo: merge por material, zero mudança visual |
+| 2 | **Enemies**: 218 SkinnedMesh para ~12 inimigos (~18 por boneco) | ~45 calls | médio: mexe em personagem que o PC também vê |
+| 3 | **Sombra**: 4 cascatas → 1 direcional em XR | ~30 calls | baixo: já é gate por plataforma |
+| 4 | **Worldgen instanciado**: 96 calls / 591 k tris | LOD e alcance | **alto**: contagem é contrato do `rand`; só LOD e view distance |
+
+Somando 1–3: 280 → ~155 draw calls. O resto sai de alcance de visão e LOD, que
+é onde o contrato do `rand` obriga cuidado — nada de mexer em `TREE_COUNT`,
+`GRASS_TOTAL`, `TERRAIN_SEGS` ou `ENEMY_COUNT` (ver o bloco de regras em
+`js/config.js`).
+
+**Deduplicação de material é o único ganho que não muda um pixel**: 59% dos
+materiais desenham igual. A trava a respeitar é material mutado em runtime
+(cor por instância) — esse não pode ser compartilhado, e é o que o teste da
+fase vai precisar provar.
