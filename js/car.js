@@ -472,6 +472,36 @@ export function createCar(deps) {
       v.group.position.copy(v.chassisBody.position);
       v.group.quaternion.copy(v.chassisBody.quaternion);
       _wq.copy(v.group.quaternion).invert();
+      /* NO MENU A FÍSICA NÃO RODA — e sem ela a pose do RaycastVehicle é
+         mentira. `stepPhysics` só existe no caminho de jogo (game.js); no
+         menu cada módulo se atualiza sozinho, sem simulação. Com zero passo,
+         `suspensionLength` fica em 0 (contra 0,55 de repouso) e nenhuma roda
+         tem contato de raycast, então `updateWheelTransform` cola o pneu no
+         ponto de conexão: ele sobe ~1,1 m, vai parar na altura da janela e
+         flutua meio metro do chão. Era o primeiro plano do passeio de câmera
+         do menu — a apresentação do jogo — com as rodas dentro da lataria.
+         Enquanto a física não rodou, os pivôs ficam na pose calibrada com que
+         o js/carwheels.js os montou (cfg.wheelsVis), que é exatamente a pose
+         de carro parado. */
+      const fisicaAtiva = world.stepnumber > 0;
+      /* Pose de REPOUSO, no referencial do grupo. `cfg.wheelsVis` está no
+         referencial VISUAL do chassi, e o grupo fica na origem FÍSICA — que é
+         o centro de massa, `comDrop` ABAIXO da visual (ver createPhysics). A
+         lataria já compensa isso (bodyRoot.position.y = comDrop); os pivôs de
+         roda não compensavam, e em jogo ninguém percebia porque a pose física
+         os sobrescreve todo frame. Sem física, a falta de compensação enterra
+         o pneu exatamente `comDrop` no chão. */
+      if (!fisicaAtiva) {
+        if (v.visualWheels) {
+          const dropVis = v.cfg.comDrop || 0;
+          for (let i = 0; i < 4; i++) {
+            const [wx, wyC, wz] = v.cfg.wheelsVis[i];
+            v.visualWheels[i].position.set(wx, wyC + dropVis, wz);
+            v.visualWheels[i].quaternion.identity();
+          }
+        }
+        continue;
+      }
       for (let i = 0; i < 4; i++) {
         v.vehicle.updateWheelTransform(i);
         if (!v.visualWheels) continue;
