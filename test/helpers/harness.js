@@ -250,6 +250,15 @@ async function bootGame({
     // PERF do QA: mecânica não precisa de pixels — render vira no-op
     MP.composer.render = () => {};
     if (autoStartNaPagina) G.forceStart();
+    /* MATAR NÃO BASTA: animal morto RENASCE em 5 s de tempo de jogo
+       (js/animals.js:158-163), num ponto sorteado do mapa. Quem esperava
+       modelo pesado no `before` voltava a ter um lobo em cena — e lobo caça
+       a 24 m e morde a 1,7 m. Sintoma real: test/weapon-ads.test.js falhando
+       ~65% das vezes com a mira 200–350 px fora do centro, porque o jogador
+       morria no meio da medição e morto o ADS não engata.
+       `setEnabled(false)` é o desligamento que gruda: `update` sai no
+       primeiro `if (!a.enabled) continue`, antes do renascimento. */
+    if (G.Animals && typeof G.Animals.setEnabled === 'function') G.Animals.setEnabled(false);
     for (const a of (G.Animals && G.Animals.list) || []) a.alive = false;
     window.QA = {
       G, MP,
