@@ -158,6 +158,11 @@ async function bootGame({
      "lacunas de teste"). Com false os inimigos, a noite e o boss VOLTAM a
      rodar: é o jogo solo, não um cenário controlado. */
   online = true,
+  /* Scripts injetados ANTES de qualquer script da página (`evaluateOnNewDocument`).
+     Existe por causa do porte VR: o runtime WebXR emulado (IWER) precisa
+     instalar `navigator.xr` antes do game.js ler o ambiente no escopo do
+     módulo. Vazio = comportamento histórico, byte por byte. */
+  initScripts = [],
 }) {
   const puppeteer = require('puppeteer-core');
   const rankFile = extraEnv.RANK_FILE || path.join(os.tmpdir(),
@@ -183,6 +188,8 @@ async function bootGame({
         '--window-size=800,600', ...backendArgs()],
     });
     const page = await browser.newPage();
+    // antes de tudo: runtime emulado, polyfill, o que o chamador precisar
+    for (const src of initScripts) await page.evaluateOnNewDocument(src);
     // As flags existem antes do primeiro tick: sob máquina carregada, uma morte
     // no boot não pode cair no fluxo errado e destruir o contexto do QA.
     await page.evaluateOnNewDocument(onlineNaPagina => {

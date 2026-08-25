@@ -295,3 +295,53 @@ Somando 1–3: 280 → ~155 draw calls. O resto sai de alcance de visão e LOD, 
 materiais desenham igual. A trava a respeitar é material mutado em runtime
 (cor por instância) — esse não pode ser compartilhado, e é o que o teste da
 fase vai precisar provar.
+
+---
+
+## Kit de desenvolvimento VR · 2026-08-25
+
+Correção de método, cobrada pelo dono do projeto e com razão: **nenhum
+desenvolvedor fica de headset na cabeça pra desenvolver**. As primeiras
+medições imersivas dependiam disso, e não dependem mais.
+
+### O problema real
+
+Sessão imersiva sem ninguém no aparelho vira `visible-blurred`/`hidden` e o
+compositor PARA de chamar `session.requestAnimationFrame` — a medição saía com
+zero frame. Pior: com o painel do navegador fora de foco, o contexto JS da
+página congela, e até o clique por CDP ficava pendurado até estourar o timeout.
+Automação não resolve isso; é regra de foreground do navegador.
+
+### O kit, em três camadas
+
+| Camada | Ferramenta | Mede |
+|---|---|---|
+| **Dia a dia, sem aparelho** | `npm run vr:emulado` — IWER (runtime WebXR emulado da Meta) com preset Quest 3, injetado antes do game.js | sessão imersiva real, 2 olhos, grafo do rig, caminho de render, **draw calls e triângulos em estéreo** |
+| **Validação no aparelho** | `npm run vr:baseline -- --target=quest --immersive=1` — telemetria VrApi do logcat | FPS real contra o modo de tela, tempo de aplicação, GPU%, CPU%, térmica, memória — **sem ninguém no headset** |
+| **Contagem de cena** | `npm run vr:censo` | de quem são os draw calls, por subtração |
+
+Duas armadilhas resolvidas no caminho:
+
+- `installRuntime()` do IWER **se recusa a substituir um runtime nativo**. O
+  Chrome desta máquina tem `navigator.xr` nativo (que responde "não suporto" por
+  não haver headset), então sem `{ forceInstall: true }` a emulação não sobe e o
+  sintoma é só um botão de VR que não aparece.
+- O runtime precisa entrar por `evaluateOnNewDocument`, ANTES de qualquer script
+  da página: `xrEnv()` lê `navigator.xr` no escopo do módulo. Daí o `initScripts`
+  novo no harness — aditivo, vazio por padrão.
+
+### Medido em ESTÉREO (o que VR paga de verdade)
+
+| Pose | draw calls | triângulos | teto |
+|---|--:|--:|--:|
+| menu | **512** | 1,74 M | 180 / 500 k |
+| spawn | 516 | 1,74 M | |
+| cidade | 556 | 1,45 M | |
+| castelo | **823** | **2,05 M** | |
+
+Estéreo é ~2× a leitura mono, como esperado — e move o alvo da Fase 2 de "413 →
+120" para **"512 → 180 no menu e 823 → 180 no pior caso"**. O FPS de 60 aqui é
+vsync do PC e não mede nada; tempo continua sendo assunto do aparelho.
+
+E o grafo do rig foi verificado em sessão XR de verdade, não com `isPresenting`
+falsificado: `rig - pés = [0,0,0]`, câmera filha do rig, yaw 0.

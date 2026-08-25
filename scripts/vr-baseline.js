@@ -105,6 +105,74 @@ async function findDevtoolsSocket(limiteMs = 30000) {
     'abriu e se "Depuração USB" está ligada em Configurações > Sistema > Modo de desenvolvedor');
 }
 
+/* ---------- telemetria do runtime do Quest (VrApi) ----------
+   O jeito de medir VR sem ninguém dentro do aparelho. O runtime cospe uma
+   linha por segundo no logcat com FPS real contra o modo de tela, tempo de
+   aplicação, ocupação de GPU e CPU, térmica e memória — é a mesma fonte que
+   o OVR Metrics Tool mostra. Nada disso depende de alguém com o headset na
+   cabeça, e é por isso que a medição passa a viver aqui em vez de pedir
+   favor pro dono do projeto.
+
+   O sensor de presença é desligado pelo comando de automação do modo
+   desenvolvedor (`prox_close`) e RESTAURADO no fim: deixar ligado seria
+   deixar o aparelho sem dormir, gastando bateria. */
+function coletorVrApi() {
+  const proc = spawn('adb', ['logcat', '-s', 'VrApi:V', '-v', 'brief'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const amostras = [];
+  let resto = '';
+  const num = (linha, chave, re) => {
+    const m = new RegExp(chave + re).exec(linha);
+    return m ? +m[1] : null;
+  };
+  proc.stdout.on('data', b => {
+    resto += b.toString();
+    const linhas = resto.split('\n');
+    resto = linhas.pop();
+    for (const l of linhas) {
+      if (!/FPS=/.test(l)) continue;
+      amostras.push({
+        t: Date.now(),
+        fps: num(l, 'FPS=', '([0-9]+)/'),
+        modo: num(l, 'FPS=[0-9]+/', '([0-9]+)'),
+        appMs: num(l, 'App=', '([0-9.]+)ms'),
+        cpuGpuMs: num(l, 'CPU&GPU=', '([0-9.]+)ms'),
+        gpu: num(l, 'GPU%=', '([0-9.]+)'),
+        cpu: num(l, 'CPU%=', '([0-9.]+)'),
+        stale: num(l, 'Stale=', '([0-9]+)'),
+        tear: num(l, 'Tear=', '([0-9]+)'),
+        tempC: num(l, 'Temp=', '([0-9.]+)C'),
+        livreMB: num(l, 'Free=', '([0-9]+)MB'),
+      });
+    }
+  });
+  return {
+    amostras,
+    parar() { try { proc.kill(); } catch { /* já morreu */ } },
+  };
+}
+
+const mediana = a => (a.length ? a.slice().sort((x, y) => x - y)[a.length >> 1] : null);
+
+function resumirVrApi(amostras, de, ate) {
+  const janela = amostras.filter(a => a.t >= de && a.t <= ate && a.fps !== null);
+  if (!janela.length) return { amostras: 0 };
+  return {
+    amostras: janela.length,
+    fps: mediana(janela.map(a => a.fps)),
+    modoTela: mediana(janela.map(a => a.modo)),
+    appMs: mediana(janela.map(a => a.appMs)),
+    cpuGpuMs: mediana(janela.map(a => a.cpuGpuMs)),
+    gpuPct: mediana(janela.map(a => a.gpu)),
+    cpuPct: mediana(janela.map(a => a.cpu)),
+    stale: mediana(janela.map(a => a.stale)),
+    tear: janela.reduce((n, a) => n + (a.tear || 0), 0),
+    tempC: mediana(janela.map(a => a.tempC)),
+    livreMB: mediana(janela.map(a => a.livreMB)),
+  };
+}
+
 /* ---------- entrar em sessão imersiva ----------
    `requestSession` exige ativação do usuário. O clique do puppeteer é evento
    CONFIÁVEL (vai pelo Input do CDP), então vale como gesto — é o único jeito
@@ -126,6 +194,21 @@ async function collectImmersive(page, seconds) {
     const G = window.__game, MP = window.__MP;
     G.perfHud.enabled = true;
     if (!G.state.started) G.forceStart();
+
+    /* SESSÃO SEM NINGUÉM NO HEADSET NÃO DESENHA. Fora da cabeça, a sessão
+       vira `visible-blurred`/`hidden` e o compositor PARA de chamar
+       `session.requestAnimationFrame` — o `tick` não roda e a medição sai
+       com zero amostra, sem dizer por quê. Espera a sessão ficar visível e
+       registra o que aconteceu. (É o mesmo sinal que a Fase 6 tem que
+       tratar como focus-aware: requisito de loja.) */
+    const sessao = MP.renderer.xr.getSession ? MP.renderer.xr.getSession() : null;
+    const visivel = () => !sessao || sessao.visibilityState === 'visible';
+    const t0espera = performance.now();
+    while (!visivel() && performance.now() - t0espera < 120000)
+      await new Promise(r => setTimeout(r, 500));
+    const visibilidadeXR = sessao ? sessao.visibilityState : 'sem sessão';
+    const esperaVisivelMs = Math.round(performance.now() - t0espera);
+
     const poses = [
       ['spawn', G.player.pos.x, G.player.pos.z],
       ['cidade', G.Structures.heliSpot.x, G.Structures.heliSpot.z],
@@ -142,24 +225,33 @@ async function collectImmersive(page, seconds) {
       }
       await new Promise(r => setTimeout(r, 1500));   // assenta streaming e sombra
       const calls = [], tris = [];
+      const frame0 = MP.renderer.info.render.frame;
       const t0 = performance.now();
+      const t0wall = Date.now();
       const janela = Math.max(2000, perPose - 1500);
       while (performance.now() - t0 < janela) {
         calls.push(MP.renderer.info.render.calls);
         tris.push(MP.renderer.info.render.triangles);
         await new Promise(r => setTimeout(r, 120));
       }
+      /* fps por CONTAGEM DE FRAME do renderer: não depende do perfHud e é o
+         que denuncia loop parado (frames = 0) em vez de devolver zero mudo */
+      const frames = MP.renderer.info.render.frame - frame0;
+      const decorridoMs = performance.now() - t0;
+      const janelaWall = [t0wall, Date.now()];
       const med = a => a.sort((x2, y2) => x2 - y2)[a.length >> 1] || 0;
       const st = G.perfHud.stats;
       porPose.push({ pose: nome, fps: +st.fps.toFixed(1), p50ms: +st.p50.toFixed(2),
         p99ms: +st.p99.toFixed(2), piorMs: +st.worst.toFixed(2), engasgos: st.hitches,
-        amostras: st.samples, calls: med(calls), tris: med(tris) });
+        amostras: st.samples, calls: med(calls), tris: med(tris),
+        framesReais: frames, fpsReal: +(frames / (decorridoMs / 1000)).toFixed(1),
+        janelaWall });
     }
     const gl = MP.renderer.getContext();
     const dbg = gl.getExtension('WEBGL_debug_renderer_info');
     const camXR = MP.renderer.xr.getCamera();
     return {
-      imersivo: true, porPose,
+      imersivo: true, porPose, visibilidadeXR, esperaVisivelMs,
       xr: {
         presenting: MP.renderer.xr.isPresenting,
         olhos: camXR && camXR.cameras ? camXR.cameras.length : 0,
@@ -382,8 +474,22 @@ async function runQuest(cfg) {
      a mediana fica idêntica em qualquer carga. */
   let dados;
   if (cfg.immersive) {
-    await entrarEmVR(page);
-    dados = await collectImmersive(page, cfg.seconds);
+    /* Sensor de presença fora: é o comando de automação do modo desenvolvedor
+       que faz o aparelho renderizar na mesa. Restaurado no fim — deixar
+       ligado é deixar o headset sem dormir, gastando bateria. */
+    try { adb(['shell', 'am', 'broadcast', '-a', 'com.oculus.vrpowermanager.prox_close'], { quiet: true }); } catch { /* sem automação: segue */ }
+    try { adb(['logcat', '-c'], { quiet: true }); } catch { /* buffer cheio: segue */ }
+    const vrapi = coletorVrApi();
+    try {
+      await entrarEmVR(page);
+      dados = await collectImmersive(page, cfg.seconds);
+    } finally {
+      vrapi.parar();
+      try { adb(['shell', 'am', 'broadcast', '-a', 'com.oculus.vrpowermanager.automation_disable'], { quiet: true }); } catch { /* idem */ }
+    }
+    for (const p of dados.porPose)
+      p.runtime = resumirVrApi(vrapi.amostras, p.janelaWall[0], p.janelaWall[1]);
+    dados.vrapiAmostras = vrapi.amostras.length;
   } else {
     dados = await collect(page, cfg.seconds);
   }
@@ -501,10 +607,22 @@ async function abrirEMedirBoot(page, url) {
       `foveation ${relatorio.xr.foveation} · pixelRatio ${relatorio.renderer.pixelRatio}`);
     console.log(`boot: html ${saida.boot.htmlMs} ms · __game ${saida.boot.gameMs} ms · ` +
       `1º frame ${saida.boot.primeiroFrameMs} ms`);
-    for (const p of r.porPose)
-      console.log(`  ${p.pose.padEnd(8)} ${String(p.fps).padStart(5)} fps · p50 ${p.p50ms} ms · ` +
-        `p1% ${p.p99ms} ms · pior ${p.piorMs} ms · engasgos ${p.engasgos} · ` +
-        `${p.calls} calls · ${p.tris} tris`);
+    console.log(`visibilidade da sessão: ${relatorio.visibilidadeXR} ` +
+      `(esperou ${relatorio.esperaVisivelMs} ms)`);
+    console.log(`telemetria do runtime (VrApi): ${relatorio.vrapiAmostras} amostras\n`);
+    console.log('pose      fps/modo   app ms  cpu+gpu  gpu%  cpu%  stale  °C   calls      tris');
+    for (const p of r.porPose) {
+      const rt = p.runtime || {};
+      console.log(`${p.pose.padEnd(9)} ${String(rt.fps ?? '—').padStart(3)}/${String(rt.modoTela ?? '—').padEnd(4)} ` +
+        `${String(rt.appMs ?? '—').padStart(7)} ${String(rt.cpuGpuMs ?? '—').padStart(8)} ` +
+        `${String(rt.gpuPct ?? '—').padStart(5)} ${String(rt.cpuPct ?? '—').padStart(5)} ` +
+        `${String(rt.stale ?? '—').padStart(6)} ${String(rt.tempC ?? '—').padStart(4)} ` +
+        `${String(p.calls).padStart(6)} ${String(p.tris).padStart(9)}`);
+    }
+    if (r.porPose.every(p => p.framesReais === 0)) {
+      console.log('\nZERO frame desenhado: a sessão existe mas não está visível. ' +
+        'Ponha o headset NA CABEÇA durante a medição.');
+    }
     console.log(`\n→ ${path.relative(ROOT, destino)}`);
     return;
   }

@@ -20,7 +20,9 @@
     "quality": "npm run lint && npm test",
     "refactor:check": "npm run analyze:dead && npm run analyze:cycles && npm run quality",
     "soak": "node scripts/soak.js",
-    "vr:baseline": "node scripts/vr-baseline.js"
+    "vr:baseline": "node scripts/vr-baseline.js",
+    "vr:emulado": "node scripts/vr-emulado.js",
+    "vr:censo": "node scripts/vr-censo.js"
   },
   "engines": {
     "node": ">=18"
@@ -40,6 +42,7 @@
     "cloc": "^2.6.0-cloc",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
+    "iwer": "^2.3.0",
     "jscpd": "^5.0.12",
     "knip": "^6.26.0",
     "madge": "^8.0.0",
