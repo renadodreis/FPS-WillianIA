@@ -54,6 +54,8 @@ import { createResolutionScaler } from './js/adaptivequality.js';
 import { installFastSAP } from './js/sapbroadphase.js';
 import { autoTierSettings } from './js/gputier.js';
 import { createPerfHud } from './js/perfhud.js';
+import { createXrBoot } from './js/xr/xrboot.js';
+import { createXrButton, xrButtonState } from './js/xr/xrbutton.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
@@ -319,6 +321,16 @@ scene.fog = new THREE.Fog(FOG_COLOR, CFG.VIEW_DIST * 0.5, CFG.VIEW_DIST);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.08, CFG.VIEW_DIST + 600);
 camera.position.set(0, 3, 8);
 
+/* ---- XR (Quest) ----
+   Fachada única do porte pra headset: ambiente, sessão e rig de câmera.
+   Criar aqui é seguro porque NADA disto aloca — o rig é preguiçoso de
+   propósito, já que todo Object3D novo gasta 4 números do `Math.random`
+   seedado (linha ~201) e deslocaria o worldgen inteiro. Quem cria o rig
+   é a primeira sessão de verdade, muito depois do mundo montado. */
+let aoMudarSessaoXr = () => {}; // preenchido lá embaixo, quando o botão existe
+const XR = createXrBoot({ THREE, renderer, scene, camera,
+  onEnter: () => aoMudarSessaoXr(), onExit: () => aoMudarSessaoXr() });
+
 // ambiente PMREM para os MeshStandardMaterial não ficarem chapados
 {
   const pmrem = new THREE.PMREMGenerator(renderer);
@@ -486,6 +498,14 @@ function pixelRatioCeiling() {
   return Math.min(dpr, Number.isFinite(wanted) && wanted > 0 ? wanted : 1);
 }
 function applyPixelRatio(value) {
+  /* EM XR A RESOLUÇÃO NÃO É NOSSA. O framebuffer pertence à sessão:
+     `setPixelRatio`/`setSize` viram no-op com aviso no console. E é
+     exatamente em XR que o escalador adaptativo mais tentaria mexer —
+     ele reage a frame estourado, que no começo de uma sessão é a regra.
+     Seria enxurrada de aviso sem mudar um pixel. O botão equivalente em
+     XR é `renderer.xr.setFramebufferScaleFactor`, e ele é assunto da
+     triagem de perf (Fase 2), não deste caminho. */
+  if (XR.presenting) return;
   renderer.setPixelRatio(value);
   composer.setPixelRatio(value); // sem isto o pós continua na razão antiga
 }
@@ -2813,8 +2833,20 @@ const MenuCam = createMenuCamera({ THREE, camera, heightAt, shots: MENU_SHOTS,
      cancelamento em cadeia de test/br-drops; ver test/menuscene-gate.test.js). */
   mayTour: () => { const s = prewarm.stats; return s.runs > 0 && s.queued === 0; } });
 
-function animate() {
-  requestAnimationFrame(animate);
+/* O DONO DO LOOP É O RENDERER, e não o `requestAnimationFrame` da janela.
+   Dentro de uma sessão WebXR quem agenda frame é `session.requestAnimationFrame`
+   (cadência do headset, 72 Hz no Quest 3, com a pose da cabeça junto), e o
+   three só sabe trocar uma fila pela outra se o loop for dele. No desktop
+   `setAnimationLoop` cai no mesmo `requestAnimationFrame` de sempre — a
+   cadência não muda. */
+function startLoop() {
+  renderer.setAnimationLoop(() => tick());
+  /* O PRIMEIRO FRAME É SÍNCRONO, e isso não é detalhe: o `animate()` antigo
+     era `requestAnimationFrame(animate); tick();` — ele agendava o próximo
+     frame E desenhava um AGORA, ainda dentro da avaliação do módulo. Um
+     refactor que devia ser neutro no desktop não pode apagar isso calado:
+     é ele que põe a primeira imagem na tela e que roda a primeira rodada de
+     prewarm de shader antes de qualquer coisa depender delas. */
   tick();
 }
 function stepPhysics(dt, intendedDt = dt) {
@@ -2839,7 +2871,13 @@ function renderFrame() {
   }
   csm.update();
   scheduleCsmShadows();
-  composer.render();
+  /* EM XR O PÓS SAI DO CAMINHO — e isso não é otimização, é requisito: o
+     EffectComposer desenha nos render targets DELE, e o framebuffer da
+     sessão WebXR não é um deles. Com o composer no caminho o headset
+     simplesmente não recebe imagem. (De quebra, passe de tela cheia em
+     estéreo custa o dobro; ver docs/vr/baseline.md.) */
+  if (XR.presenting) renderer.render(scene, camera);
+  else composer.render();
 }
 function tick(forceDt) {
   const now = performance.now();
@@ -2853,6 +2891,12 @@ function tick(forceDt) {
   perf.simulationCoverage = 1;
   perf.frameMs = frameDt * 1000;
 
+  /* ANTES de qualquer coisa tocar em câmera: reconcilia o grafo com a
+     sessão XR. A sessão pode acabar por fora (headset tirado, botão do
+     sistema, bateria), então quem manda é o `isPresenting` do renderer,
+     não um espelho local. */
+  const xrOn = XR.sync();
+
   if (!state.started || state.paused) {
     // menu / pausa: mundo vivo ao fundo, câmera passeando pelo mapa
     menuT += dt;
@@ -2862,7 +2906,11 @@ function tick(forceDt) {
       // reescreve weaponRoot.visible toda vez (ver shootUpdate), então isto
       // vale só enquanto a partida não começou.
       weaponRoot.visible = false;
-      MenuCam.update(dt);
+      /* EM VR O PASSEIO NÃO RODA. Arrastar a cabeça do jogador é a receita
+         de enjoo — em VR a câmera só se move quando o pescoço dele se
+         mexe. O mundo continua vivo ao fundo; o que sai é o trilho de
+         câmera. O ponto de vista do menu em VR é assunto da Fase 5. */
+      if (!xrOn) MenuCam.update(dt);
       /* HORA E CLIMA FIXOS NO MENU. O passeio é a vitrine do jogo e antes
          pegava o clima que estivesse rolando — a rodada anterior caiu num céu
          fechado e os quatro planos saíram cinzas. Golden hour (halo de Mie
@@ -3476,6 +3524,29 @@ $('mpPanel').addEventListener('click', e => e.stopPropagation());
    (index.html nasce com .disabled) em vez de aceitar clique que não faz nada. */
 MenuGate.wired = true;
 paintMenu();
+
+/* ---- botão de VR ----
+   Só nasce se `isSessionSupported('immersive-vr')` disser sim (ou se for um
+   headset que não consegue, e aí aparece desabilitado com o motivo). Num
+   desktop comum some inteiro: ver a política em js/xr/xrbutton.js. */
+{
+  let xrSuportado = false;
+  const pintarXr = () => xrBtn.apply(xrButtonState({
+    env: XR.env, supported: xrSuportado, presenting: XR.presenting,
+  }));
+  const xrBtn = createXrButton({
+    parent: document.getElementById('menuBtns'),
+    onClick: async () => {
+      if (XR.presenting) await XR.exit();
+      else await XR.enter();
+      pintarXr();
+    },
+  });
+  // a sessão também termina por fora (headset tirado, botão do sistema):
+  // o texto do botão acompanha por este gancho, não por polling
+  aoMudarSessaoXr = pintarXr;
+  XR.isSupported().then(ok => { xrSuportado = ok; pintarXr(); });
+}
 ui.overlay.addEventListener('click', (e) => {
   // clique em QUALQUER controle do menu (inclusive o gatilho dos controles
   // recolhidos) é do menu, não "clicar na tela pra voltar ao jogo"
@@ -3491,6 +3562,9 @@ ui.overlay.addEventListener('click', (e) => {
 });
 
 window.addEventListener('resize', () => {
+  // em sessão XR o tamanho do alvo é da sessão; a janela do navegador atrás
+  // pode mudar à vontade que não é com a gente (ver applyPixelRatio)
+  if (XR.presenting) return;
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -3585,6 +3659,7 @@ window.__game = {
     ceilingOf: pixelRatioCeiling,
   },
   perfHud,     // overlay de diagnóstico (F3 / ?perf=1) — hook de QA
+  XR,          // porte pro headset: ambiente, sessão e rig (js/xr/)
   gpuTier: __tier, // o que o auto-tier decidiu no primeiro boot
   get errors() { return __errors; },
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
@@ -3728,4 +3803,4 @@ rebucketTrees(0, 0);
    pra linkar os programas. O menu segue chamando prewarmIfIdle pros GLBs que
    ainda estão baixando. */
 prewarmIfIdle(performance.now());
-animate();
+startLoop();

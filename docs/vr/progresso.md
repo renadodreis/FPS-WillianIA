@@ -54,3 +54,128 @@ O portão da Fase 0 **não fechou**: falta rodar
 `npm run vr:baseline -- --target=quest` com o headset plugado. O aparelho foi
 desplugado antes da medição; o desenvolvimento segue sem ele por decisão do dono
 do projeto, e a tabela do aparelho é preenchida quando o cabo voltar.
+
+---
+
+## Fase 1 — Bootstrap XR · 2026-08-25 · PORTÃO PARCIAL
+
+### Feito
+
+Camada nova `js/xr/`, no mesmo molde de `js/mobile.js` e `js/gputier.js` — núcleo
+puro que recebe o ambiente por parâmetro, camada fina de DOM por fora. São quatro
+módulos, todos testáveis sem headset:
+
+| Módulo | O que resolve |
+|---|---|
+| `xrenv.js` | detecção pura. Separa `device` ("é um headset?", síncrono, decide preset) de `api` ("dá pra abrir sessão?", exige `navigator.xr` **e** contexto seguro). `?xr=1`/`?xr=0` vencem tudo |
+| `xrrig.js` | o rig `scene > xrRig > camera`. Nasce **preguiçoso** |
+| `xrsession.js` | ciclo da sessão: `local-floor` requerido, ordem `setReferenceSpaceType` → `setSession`, uma sessão por vez, recusa sem sujar estado, sinal de foco |
+| `xrboot.js` | fachada única que o `game.js` conhece; `sync()` reconcilia o grafo com `renderer.xr.isPresenting` uma vez por frame |
+| `xrbutton.js` | política do botão (pura) + camada de DOM |
+
+No `game.js`, cinco mudanças:
+
+1. **O dono do loop passou a ser o renderer.** `requestAnimationFrame(animate)`
+   virou `renderer.setAnimationLoop`. Dentro de uma sessão quem agenda frame é
+   `session.requestAnimationFrame` (72 Hz do Quest, com a pose da cabeça junto), e
+   o three só troca uma fila pela outra se o loop for dele. No desktop cai no
+   mesmo `requestAnimationFrame` de antes — a cadência não muda.
+2. **O EffectComposer sai do caminho em XR.** Não é otimização: ele desenha nos
+   render targets dele, e o framebuffer da sessão não é um deles. Com o composer
+   no caminho o headset não recebe imagem.
+3. **O passeio de câmera do menu não roda em VR.** Arrastar a cabeça do jogador é
+   enjoo garantido. O mundo continua vivo ao fundo; o que sai é o trilho.
+4. **A resolução em XR é da sessão.** `applyPixelRatio` e o `resize` viram no-op
+   enquanto apresenta — senão o escalador adaptativo (que reage a frame estourado,
+   justamente o que sobra no começo de uma sessão) despejaria avisos no console
+   sem mudar um pixel.
+5. **Botão de VR no menu**, só para quem pode usar.
+
+### Medido
+
+`npm run lint` limpo. **64 testes novos, todos verdes** (`xr-env`, `xr-rig`,
+`xr-session`, `xr-button` puros em Node; `xr-bootstrap` no navegador, portas 3310
+e 3312). Suíte completa rodada para provar que o desktop não regrediu.
+
+Não há número de FPS aqui: sem o aparelho plugado, `72 fps travados` não é uma
+afirmação que eu possa fazer. O portão fecha quando o cabo voltar.
+
+### O flake do `weapon-ads` — que era anterior a tudo isto
+
+A suíte pegou `weapon-ads.test.js` falhando, e o runner classificou como
+**regressão real** (três rodadas isoladas sem dois passes seguidos). Minha
+primeira conclusão foi que a culpa era do bootstrap XR. **Estava errada**, e
+registro o erro junto com a correção porque o método é a lição.
+
+O que derrubou a hipótese: A/B de 8 execuções isoladas alternadas entre as duas
+árvores.
+
+| árvore | falhas de 8 |
+|---|--:|
+| `09b5617` (**antes** da Fase 1) | 5 |
+| Fase 1 | 6 |
+
+Mesmos sintomas e mesmas magnitudes nas duas (arma 2 `scope` ~330 px, arma 7
+`bead` ~206 px). O teste já falhava ~65% das vezes nesta máquina. As amostras
+anteriores (9/9 numa árvore, 7/9 na outra) eram ruído — três execuções não
+medem um flake de 65%.
+
+**Causa raiz, com prova.** Instrumentando a medição, TODA falha trazia
+`morto: true`, `vida: 0`, escala de tempo `0.35` e
+`causa: {"type":"animal"}` — e a vida caindo em rampa entre as armas
+(100 → 55 → 3 → 0). Um **lobo estava comendo o jogador parado no spawn** no meio
+da medição; morto, o ADS não engata (`playerUpdate` deixa `adsT` em 0) e a arma
+fica na pose de quadril — exatamente os 200–350 px de erro.
+
+Por que o lobo existia: o harness mata os animais no boot
+(`a.alive = false`), mas **animal morto renasce em 5 s de tempo de jogo**
+(`js/animals.js:158-163`), num ponto sorteado. O `before` deste teste espera até
+20 s pelo modelo do corpo FP, e cada medição roda ~42 s de tempo de jogo num
+bloco só. Sobrava lobo de novo, e ele caça a 24 m.
+
+Correção (`test/helpers/harness.js`): usar o desligamento que gruda —
+`G.Animals.setEnabled(false)`, que faz o `update` sair no primeiro
+`if (!a.enabled) continue`, antes do renascimento. Matar continua ali para quem
+lê `alive`.
+
+Medido depois: **0 falhas em 6 execuções** (era 5–6 em 8).
+
+De quebra, o teste novo do loop deixou de esperar por relógio
+(`setTimeout(250)`) e passou a esperar por **condição** — sob carga o rAF entrega
+menos frames por segundo, e isso viraria flake meu dentro da suíte dos outros.
+
+O `tick()` síncrono no `startLoop()` ficou, mas pelo motivo certo e só por ele: o
+`animate()` antigo desenhava um frame ainda dentro da avaliação do módulo, e um
+refactor que devia ser neutro no desktop não pode apagar isso calado. Não é
+correção do flake — o flake era do lobo.
+
+### Decisões de projeto (com o porquê, pra não reabrir de graça)
+
+- **O rig nasce preguiçoso.** Todo `Object3D` gasta 4 números do `Math.random`
+  seedado (game.js:201) no próprio UUID, e a ordem de consumo é contrato do
+  worldgen. Um `Group` criado no boot moveria o mundo de todo mundo. Montar a
+  camada não aloca nada; quem cria o rig é a primeira sessão de verdade. Há teste
+  contando consumo de `Math.random` justamente pra travar isso.
+- **`presenting` vem do `renderer.xr.isPresenting`, não de um espelho local.** A
+  sessão termina por fora — headset tirado, botão do sistema, bateria. `sync()`
+  reconcilia o grafo com o fato, uma vez por frame, em vez de confiar em callback.
+- **`local-floor` é requisito, não opcional, e a ordem importa.** O three lê o
+  tipo de referência ao adotar a sessão; invertendo a ordem o jogo nasce em
+  `local` (origem na cabeça) e o jogador aparece enterrado até a cintura no
+  terreno, sem uma linha de erro. Há teste travando a ordem.
+- **O rig fica nos PÉS.** A altura do olho vem do headset — é o que faz agachar
+  virar agachar de verdade.
+- **Botão desabilitado num headset sem contexto seguro.** Servir o jogo pelo IP
+  da rede local é o jeito mais comum de testar no aparelho, e aí `navigator.xr`
+  não existe. Sumir calado faria o jogador de headset concluir que o jogo não tem
+  VR; o botão aparece dizendo o que fazer.
+
+### Decidido NÃO fazer agora
+
+- **Migrar a câmera em jogo para o rig.** `applyFpsCamera` continua escrevendo na
+  câmera fora de XR. Locomoção é Fase 3, e é lá que a escrita passa a ir pro rig
+  (com vinheta, snap turn e agachar). Fase 1 entrega o menu, que é o portão.
+- **Cortes de CFG para VR** (alcance, sombra, LOD): é a Fase 2 inteira, e sem
+  medição no aparelho seria chute.
+- **Arma nas mãos.** Hoje `weaponRoot` é filho da câmera — em VR ficaria colada na
+  cara. No menu ela já nasce invisível; em jogo isso é Fase 4.
