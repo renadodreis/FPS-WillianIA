@@ -19,7 +19,8 @@
     "analyze:lines": "cloc . --exclude-dir=node_modules,.git,dist,coverage",
     "quality": "npm run lint && npm test",
     "refactor:check": "npm run analyze:dead && npm run analyze:cycles && npm run quality",
-    "soak": "node scripts/soak.js"
+    "soak": "node scripts/soak.js",
+    "vr:baseline": "node scripts/vr-baseline.js"
   },
   "engines": {
     "node": ">=18"
