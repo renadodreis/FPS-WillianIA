@@ -109,7 +109,17 @@ SMAA). Duas execuções, variação < 0,3 %.
 | Programas de shader linkados | 108 | — | — | — |
 | Texturas na GPU | 171 | — | — | — |
 | Payload de boot | **10,57 MB** em 146 requisições | — | — | cabe folgado no APK |
-| Boot até 1º frame | **2,38 s** (desktop, servidor local) | 3 s | 4 s | sem folga pro Quest |
+| Boot até 1º frame | **2,38 s** (desktop, servidor local) — **ver correção abaixo** | 3 s | 4 s | sem folga pro Quest |
+
+> **CORREÇÃO (2026-08-26).** Este 2,38 s **não reproduz**. Auditoria posterior
+> mediu, com a MESMA ferramenta (`scripts/vr-baseline.js`) e na mesma máquina,
+> 2,94–3,03 s — e mediu 2,97 s também no commit ANTERIOR a qualquer mudança de
+> boot, ou seja, a diferença não veio de regressão: o 2,38 s original foi
+> colhido em condição mais favorável (cache/disco quente, máquina menos
+> carregada) e virou uma barra que o próprio repo não alcança em condição
+> normal. Fica aqui como advertência de método: **uma medição só não é
+> baseline** — o número que vale é a mediana de várias, com a condição
+> declarada.
 
 Por pose (mediana de ~8 s cada):
 

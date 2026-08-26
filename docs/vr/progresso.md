@@ -345,3 +345,33 @@ vsync do PC e não mede nada; tempo continua sendo assunto do aparelho.
 
 E o grafo do rig foi verificado em sessão XR de verdade, não com `isPresenting`
 falsificado: `rig - pés = [0,0,0]`, câmera filha do rig, yaw 0.
+
+---
+
+## Correção de números do boot · 2026-08-26
+
+O porteiro (`docs/qa/porteiro-aaa.md`) reprovou a entrega e, no caminho, derrubou
+dois números que estavam circulando como fato. Registro os dois porque número
+errado que ninguém corrige vira decisão errada depois.
+
+**1. O baseline de 2,38 s até o primeiro frame não reproduz.** Medido com a
+mesma ferramenta, na mesma máquina: 2,94–3,03 s no HEAD e **2,97 s no commit
+anterior à mudança de boot**. Ou seja, não é regressão — o 2,38 s foi colhido em
+condição favorável e não representa o caso normal. Uma medição só não é
+baseline.
+
+**2. A melhora alegada no primeiro frame (2661 → 2465 ms) também não
+reproduz.** Pela ferramenta oficial, HEAD e commit-pai medem igual dentro do
+ruído. O trabalho de boot **não antecipou o primeiro pixel**.
+
+O que ele DE FATO entregou, medido pelo porteiro em 5 rodadas (mediana):
+
+| | antes | depois | ganho |
+|---|--:|--:|--:|
+| botão do menu utilizável | 1329 ms | **856 ms** | −473 ms (−36 %) |
+| primeiro conteúdo pintado (FCP) | 1376 ms | **552 ms** | −824 ms (−60 %) |
+| primeiro desenho no canvas | 1329 ms | 1319 ms | ~0 |
+
+É ganho real e é o que o jogador sente primeiro — a tela deixa de ficar morta —
+mas **não** é o que foi anunciado. O anúncio dizia "primeiro frame antecipado"; o
+que antecipou foi o menu ficar utilizável.
