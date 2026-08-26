@@ -441,9 +441,26 @@ import {
     }
 
     const r = resolveIncomingCode(bindings, e.code);
-    if (r.suppress) { e.stopImmediatePropagation(); return; }
-    if (r.rewritten) {
-      try { Object.defineProperty(e, 'code', { value: r.code, configurable: true }); }
+    /* TECLA ÓRFÃ FICA SURDA PRO JOGO, NÃO MORTA PRA PÁGINA.
+
+       A ação foi remapeada, então a tecla PADRÃO dela não pode mais acionar
+       nada no jogo. Matar o evento com `stopImmediatePropagation()` resolvia
+       isso e quebrava muito mais: como este listener roda em CAPTURA no
+       `window`, o evento morria antes de `document` e antes do elemento
+       focado — ou seja, antes de quem não tem nada a ver com a ação
+       remapeada. Duas vítimas medidas, as duas lendo `e.key` (nunca
+       `e.code`, então o mapa de teclas nem as protegia): o ESPAÇO que ativa
+       o `.mbtn` focado do menu (js/menuscene.js) e os botões da tela de
+       morte (game.js). Remapear "pular" deixava a navegação por teclado do
+       menu muda.
+
+       Em vez de matar, RENOMEIA: o código vira um nome que nenhum sistema do
+       jogo conhece. `keys['Orfa_Space']` é ligado e desligado como qualquer
+       outro e ninguém lê — a tecla fica inerte pro jogo — enquanto o evento
+       segue vivo, com `e.key` intacto, pra página inteira. */
+    const codigoFinal = r.suppress ? `Orfa_${e.code}` : (r.rewritten ? r.code : null);
+    if (codigoFinal !== null) {
+      try { Object.defineProperty(e, 'code', { value: codigoFinal, configurable: true }); }
       catch { /* navegador que recusa a sombra: pior caso é a tecla nova não acionar nada */ }
     }
   }

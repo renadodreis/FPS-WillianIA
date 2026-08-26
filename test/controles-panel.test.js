@@ -129,11 +129,24 @@ describe('painel de controles no navegador (Chrome headless)', { skip: !CHROME &
       assert.deepEqual(seen, ['KeyR'], 'game.js precisa ver KeyR (o canônico de reload) quando o jogador aperta a tecla remapeada');
     });
 
-    it('dado a tecla física ANTIGA (R) depois do remap, então NÃO chega no listener em bolha — vira letra morta', async () => {
+    /* EXPECTATIVA CORRIGIDA. A versão original exigia que o evento da tecla
+       órfã NÃO CHEGASSE — o que era implementado matando o evento com
+       `stopImmediatePropagation()` na captura do `window`. Isso silenciava o
+       jogo e também a PÁGINA: o ESPAÇO parava de ativar o `.mbtn` focado do
+       menu (js/menuscene.js) e os botões da tela de morte (game.js), os dois
+       lendo `e.key`. Contrato certo: a tecla órfã fica INERTE PRO JOGO
+       (código renomeado pra algo que nenhum sistema conhece) e VIVA PRA
+       PÁGINA. Ver test/controles-orfa-viva.test.js. */
+    it('dado a tecla física ANTIGA (R) depois do remap, então ela chega INERTE — nunca como KeyR nem como a ação', async () => {
       await h.page.evaluate(() => { window.__seenCodes = []; });
       await h.page.keyboard.press('KeyR');
       const seen = await h.page.evaluate(() => window.__seenCodes);
-      assert.deepEqual(seen, [], 'a tecla R antiga não pode continuar recarregando depois do remap pra J');
+      assert.ok(!seen.includes('KeyR'),
+        'a tecla R antiga não pode continuar recarregando depois do remap pra J');
+      for (const c of seen) {
+        assert.match(c, /^Orfa_/,
+          `código "${c}" vazou pro jogo: a tecla órfã tem que chegar renomeada`);
+      }
     });
 
     it('dado um evento de teclado SINTÉTICO (isTrusted:false, o que js/touchcontrols.js dispara), então NÃO é interceptado — o toque nunca quebra por causa de um remap no desktop', async () => {
