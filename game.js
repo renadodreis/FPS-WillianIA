@@ -55,6 +55,7 @@ import { installFastSAP } from './js/sapbroadphase.js';
 import { autoTierSettings } from './js/gputier.js';
 import { createPerfHud } from './js/perfhud.js';
 import { createXrBoot } from './js/xr/xrboot.js';
+import { criarEntradaXR, SNAP_RAD } from './js/xr/xrinput.js';
 import { createXrButton, xrButtonState } from './js/xr/xrbutton.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
@@ -351,6 +352,8 @@ camera.position.set(0, 3, 8);
    propósito, já que todo Object3D novo gasta 4 números do `Math.random`
    seedado (linha ~201) e deslocaria o worldgen inteiro. Quem cria o rig
    é a primeira sessão de verdade, muito depois do mundo montado. */
+const entradaXR = criarEntradaXR();
+let xrYaw = 0;              // giro artificial acumulado (snap turn), em radianos
 let aoMudarSessaoXr = () => {}; // preenchido lá embaixo, quando o botão existe
 const XR = createXrBoot({ THREE, renderer, scene, camera,
   onEnter: () => aoMudarSessaoXr(), onExit: () => aoMudarSessaoXr() });
@@ -1818,7 +1821,7 @@ function applyFpsCamera(dt, t) {
      chega na câmera: arrastar a vista de quem está com o aparelho na cara é
      enjoo, não game feel. O giro do rig fica em 0 — girar o mundo sob o
      jogador é a mesma armadilha, e giro artificial é da Fase 3 (snap turn). */
-  if (XR.presenting) XR.place(player.pos.x, player.pos.y, player.pos.z, 0);
+  if (XR.presenting) XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
   else camera.quaternion.setFromEuler(_euler);
 
   // ---- posição do olho: altura (agachar), bob, dip de pouso, shake ----
@@ -2945,6 +2948,29 @@ function tick(forceDt) {
      não um espelho local. */
   const xrOn = XR.sync();
 
+  /* CONTROLES DO HEADSET. A intenção vira as MESMAS teclas que o teclado
+     escreveria: assim colisão, rampa, escada, veículo e arma continuam sendo
+     o código já testado, e não uma segunda física só pra VR. O giro é em
+     PASSOS de 45° (js/xr/xrinput.js explica por quê) e mora no rig — girar a
+     câmera do jogador é justamente o que não se pode fazer. */
+  if (xrOn) {
+    const sessao = renderer.xr.getSession && renderer.xr.getSession();
+    const cmd = entradaXR.ler(sessao ? sessao.inputSources : null);
+    xrYaw += cmd.girar * SNAP_RAD;
+    keys['KeyW'] = cmd.andar.y > 0.15;
+    keys['KeyS'] = cmd.andar.y < -0.15;
+    keys['KeyD'] = cmd.andar.x > 0.15;
+    keys['KeyA'] = cmd.andar.x < -0.15;
+    keys['Space'] = cmd.pular;
+    keys['ControlLeft'] = cmd.agachar;
+    if (cmd.recarregar && !keys['KeyR']) justPressed.add('KeyR');
+    keys['KeyR'] = cmd.recarregar;
+    if (cmd.usar && !keys['KeyE']) justPressed.add('KeyE');
+    keys['KeyE'] = cmd.usar;
+    mouse.shooting = cmd.atirar;
+    mouse.aiming = cmd.mirar;
+  }
+
   if (!state.started || state.paused) {
     // menu / pausa: mundo vivo ao fundo, câmera passeando pelo mapa
     menuT += dt;
@@ -2961,7 +2987,7 @@ function tick(forceDt) {
       if (!xrOn) MenuCam.update(dt);
       // sem isto o rig fica na origem do mundo e o menu em VR vira "de pé no
       // meio do mapa"; plantado no spawn, o jogador olha o mundo do lugar certo
-      else XR.place(player.pos.x, player.pos.y, player.pos.z, 0);
+      else XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
       /* HORA E CLIMA FIXOS NO MENU. O passeio é a vitrine do jogo e antes
          pegava o clima que estivesse rolando — a rodada anterior caiu num céu
          fechado e os quatro planos saíram cinzas. Golden hour (halo de Mie
