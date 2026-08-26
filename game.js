@@ -2948,6 +2948,14 @@ function tick(forceDt) {
      não um espelho local. */
   const xrOn = XR.sync();
 
+  /* ENTROU EM VR = ESTÁ JOGANDO. O menu é DOM, e DOM não é renderizado dentro
+     de uma sessão imersiva: quem entrasse pelo botão ficava de pé no mundo com
+     `started` falso e `paused` verdadeiro — o analógico não movia ninguém e não
+     havia como apertar "JOGAR", porque o botão não existe no headset. Beco sem
+     saída que, de fora, parecia "controle de VR não funciona".
+     Sai quando existir menu dentro do mundo (Fase 5). */
+  if (xrOn && !state.started) startGame(false);
+
   /* CONTROLES DO HEADSET. A intenção vira as MESMAS teclas que o teclado
      escreveria: assim colisão, rampa, escada, veículo e arma continuam sendo
      o código já testado, e não uma segunda física só pra VR. O giro é em
