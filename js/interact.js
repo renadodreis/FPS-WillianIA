@@ -21,6 +21,10 @@ export function createInteract(deps) {
     const { group } = buildChest(csmMat);
     group.position.set(s.x, heightAt(s.x, s.z), s.z);
     scene.add(group);
+    /* O mesh fica guardado no próprio spot: em VR o alvo de interação é
+       destacado no MUNDO (não há centro de tela onde pendurar dica), e sem a
+       referência só dava pra marcar o ponto no chão, não o baú. */
+    s.mesh = group;
   }
   const chest = { medkits: 0, nades: 0, meat: 0 };
 

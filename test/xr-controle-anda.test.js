@@ -591,3 +591,45 @@ describe('a entrada de VR chega em quem escuta TECLADO', { skip: !CHROME && 'Chr
       `alcançou ${r.alcancadas}: com três, cinco armas do BR ficam inacessíveis em VR`);
   });
 });
+
+describe('remapear tecla no PC não desliga o controle de VR', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* O jogo deixa o jogador remapear teclas (js/keybinds.js). O remapeamento
+     reescreve `e.code` na captura e SUPRIME o código original para não haver
+     ação dupla — se isso alcançasse a ponte de VR, remapear "usar" no PC
+     desligaria o botão de abrir baú no headset, e ninguém ligaria uma coisa à
+     outra. O que protege é o `if (!e.isTrusted) return` do index.html: evento
+     sintético não passa pelo remapeamento. Este teste trava esse acordo, que
+     hoje é implícito e some no primeiro refactor. */
+  let h;
+  before(async () => {
+    h = await bootEmVR(bootGame, {
+      port: PORT + 6,
+      // o jogador remapeou USAR de KeyE para KeyH antes de entrar em VR
+      initScripts: [`try { localStorage.setItem('callofai_keys',
+        JSON.stringify({ use: 'KeyH' })); } catch (e) { void e; }`],
+    });
+  });
+  after(async () => { if (h) await h.close(); });
+
+  it('com "usar" remapeado, o botão do headset ainda emite KeyE puro', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A;
+      A.solta(); await A.espera(250);
+      const vistos = [];
+      const ouvir = e => vistos.push(e.code);
+      window.addEventListener('keydown', ouvir);
+      A.botao('left', 'x-button', 1);
+      await A.espera(300);
+      A.botao('left', 'x-button', 0);
+      await A.espera(200);
+      window.removeEventListener('keydown', ouvir);
+      A.solta();
+      return vistos;
+    });
+    assert.ok(r.includes('KeyE'),
+      `com "usar" remapeado, o botão do headset emitiu ${JSON.stringify(r)} — ` +
+      'sem KeyE o baú do BR volta a ser inalcançável em VR');
+    assert.ok(!r.some(c => c.startsWith('Orfa_')),
+      `o remapeamento suprimiu a tecla do headset: ${JSON.stringify(r)}`);
+  });
+});

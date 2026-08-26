@@ -337,7 +337,10 @@ export function createMapToys(deps) {
     update, prompt, tryBounce,
     // hooks de QA
     get spots() { return { tramp: tramp.spot, gallery: gal.spot, fireworks: fw.spot, rings: ring.spot, xylo: xyl.spot }; },
-    get gallery() { return { active: gal.active, score: gal.score, best: gal.best, targets: gal.targets.length }; },
+    /* `leverPos` sai daqui porque em VR o marcador de interação precisa saber
+       ONDE fica a alavanca, não o centro da atração — os dois estão a 4,6 m um
+       do outro, e a galeria era o único alvo do mapa sem marcador no headset. */
+    get gallery() { return { active: gal.active, score: gal.score, best: gal.best, targets: gal.targets.length, leverPos: gal.leverPos ? { ...gal.leverPos } : null }; },
     get rings() { return { next: ring.next, running: ring.running, total: ring.rings.length, best: ring.best, list: ring.rings.map(r => ({ x: r.c.x, y: r.c.y, z: r.c.z, nx: r.n.x, nz: r.n.z })) }; },
     get fireworks() { return { cd: fw.cd, shells: fw.shells.length, pos: fw.spot }; },
     startGallery: galleryStart, fireFireworks: fireworksFire,
