@@ -26,31 +26,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { bootGame } = require('../test/helpers/harness.js');
+const { runtimeEmulado } = require('../test/helpers/iwer.js');
 
 const ROOT = path.join(__dirname, '..');
-
-/* Bundle UMD do IWER + a instalação do runtime, tudo num script só, para
-   entrar por `evaluateOnNewDocument` antes de qualquer script da página.
-   Precisa ser ANTES: o `xrEnv()` do js/xr/xrenv.js lê `navigator.xr` no
-   escopo do módulo, e runtime instalado depois disso chegaria tarde. */
-function scriptDoRuntimeEmulado() {
-  const umd = fs.readFileSync(
-    path.join(ROOT, 'node_modules', 'iwer', 'build', 'iwer.js'), 'utf8');
-  return `${umd}
-;(function () {
-  try {
-    var IWER = globalThis.IWER;
-    var dev = new IWER.XRDevice(IWER.metaQuest3);
-    /* forceInstall: o Chrome desta maquina JA tem navigator.xr nativo, que
-       responde "nao suporto" a tudo por nao haver headset. Sem forcar, o
-       IWER se recusa a substituir um runtime nativo e a emulacao nao sobe. */
-    dev.installRuntime({ forceInstall: true });
-    globalThis.__xrEmulado = dev;   // QA: recenter, visibilidade, controles
-  } catch (e) {
-    globalThis.__xrEmuladoErro = String(e && e.message || e);
-  }
-})();`;
-}
 
 function parseArgs(argv) {
   const out = { port: 3275, out: '', seconds: 12 };
@@ -68,7 +46,7 @@ function parseArgs(argv) {
   const h = await bootGame({
     port: cfg.port,
     autoStart: false,               // começa no MENU: é o portão da Fase 1
-    initScripts: [scriptDoRuntimeEmulado()],
+    initScripts: [runtimeEmulado()],
     protocolTimeout: 300000,
   });
   let dados;

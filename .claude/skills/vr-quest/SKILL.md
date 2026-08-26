@@ -55,6 +55,29 @@ sempre. Quem estiver de headset clica numa tela morta.
 curl -s http://127.0.0.1:9222/json/list | grep '"url"'
 ```
 
+## Quando alguém disser "os controles não funcionam"
+
+`npm run vr:controles` (opcional `--entrar`, `--segundos=N`). Ele verifica NOVE
+camadas em ordem e **para na primeira que falhar**, dizendo o que fazer:
+
+    1 adb · 2 controles · 3 túnel · 4 navegador · 5 abas · 6 página
+    7 SESSÃO IMERSIVA  ← o portão · 8 fontes de entrada · 9 sinal de verdade
+
+**Regra do script, e a lição que o pariu:** nada da camada 7 pra baixo é
+reportado sem `XR.presenting === true` confirmado NA PÁGINA. A sonda antiga não
+tinha esse portão, lia uma aba que estava no menu da biblioteca do sistema e
+afirmava "0 fontes de entrada" — com confiança, cinco vezes seguidas, enquanto o
+dono do projeto repetia que os controles não funcionavam. **Sonda que mede a
+coisa errada é pior que sonda nenhuma: produz afirmação confiante e falsa.**
+
+Duas leituras da camada 2 que enganam:
+
+- **`CONNECTED_INACTIVE` não é controle quebrado.** É controle parado na mesa:
+  pareado, bateria cheia, sem mandar nada. Some com um botão apertado. Quem só
+  olha "chegou entrada?" confunde isso com defeito de software.
+- **`Hand tracking enabled: 0` + nenhum controle ativo = sessão sem entrada
+  nenhuma**, e isso é o aparelho, não o jogo.
+
 ## Medir sem ninguém dentro do headset
 
 `npm run vr:baseline -- --target=quest --immersive=1` faz o ciclo inteiro.
@@ -65,6 +88,7 @@ As três fontes, e o que cada uma vale:
 | `npm run vr:emulado` | sessão imersiva REAL no PC (IWER), 2 olhos | draw calls e triângulos em estéreo, grafo do rig, caminho de render, lógica de entrada |
 | `adb logcat -s VrApi` | FPS real, tempo de app, GPU%, CPU%, térmica | **tempo** — só o aparelho mede tempo |
 | `npm run vr:censo` | de quem são os draw calls, por subtração | escolher o que cortar |
+| `npm run vr:controles` | estado real dos controles, camada a camada | "os controles não funcionam" |
 
 ### Painel 2D do navegador trava em 30 Hz
 
@@ -93,6 +117,61 @@ I/VrApi: FPS=58/90,...,App=11.36ms,CPU&GPU=16.88ms,GPU%=0.81,Temp=45.0C,Free=298
 Uma linha por segundo do runtime: FPS real contra o modo de tela, tempo de
 aplicação, ocupação de GPU/CPU, térmica e memória. É a mesma fonte do OVR
 Metrics Tool.
+
+## O KIT É A BASE. Dublê escrito à mão é erro primário
+
+**Teste de controle de VR se escreve acionando o runtime emulado, não inventando
+objetos `{handedness, gamepad:{axes, buttons}}`.** Dublê à mão tem a forma que
+quem escreveu IMAGINOU; o kit tem a forma que a plataforma entrega. Foi por
+dublê à mão que a suíte ficou verde enquanto o jogo ignorava os dois controles
+no aparelho — cinco relatos seguidos de "os controles não funcionam".
+
+`test/helpers/iwer.js` instala o runtime e expõe `window.__A`:
+
+```js
+const { bootEmVR } = require('./helpers/iwer');
+h = await bootEmVR(bootGame, { port: 3414 });   // sobe, clica no botão, entra em sessão
+
+// dentro da página:
+window.__A.stick('left', 0, -1);                // updateAxes('thumbstick', x, y)
+window.__A.botao('right', 'trigger', 1);        // updateButtonValue(id, valor)
+window.__A.solta();                             // zera tudo
+```
+
+Os **ids** vêm do config oficial da Meta (`iwer/lib/device/configs/controller/meta.js`,
+extraído de `webxr-device-config` para Quest 1/2/Pro/3), não de chute:
+`trigger`, `squeeze`, `thumbstick`, `x-button`/`y-button` (esquerda),
+`a-button`/`b-button` (direita); eixos 0 e 1 **nulos**, 2 e 3 o analógico.
+
+Três detalhes que só aparecem usando o kit de verdade:
+
+- **O perfil do Quest 3 é `meta-quest-touch-plus`.** `oculus-touch-v3` é do
+  Quest 2 e entra só como fallback. Quem casa o modelo de mão só com
+  `oculus-touch-v3` deixa o Quest 3 sem controle na tela.
+- **Não chame `tick` na mão dentro de uma sessão.** Quem chama o frame é a
+  sessão; forçar `tick` volta a medir o harness. Espere TEMPO e leia o efeito.
+- **`page.evaluate` com string ignora os argumentos.** Por isso o acionador é
+  instalado na página (`window.__A`) e os testes são funções normais — costurar
+  código por interpolação traz de volta a fragilidade que o kit veio eliminar.
+
+### O que o emulado NÃO pega — medido, não suposto
+
+O IWER declara `class XRInputSourceArray extends Array`, e **subclasse de Array
+PASSA em `Array.isArray`**. O navegador nativo implementa a interface do WebIDL,
+que não herda de Array e portanto **reprova**.
+
+Experimento, com o defeito reintroduzido de propósito:
+
+| suíte | com o bug `Array.isArray(inputSources) ? … : []` |
+|---|---|
+| `xr-controle-anda` (IWER, sessão real) | **12/12 passa** — não pega |
+| `xr-input` (caso de forma nativa) | **3 falham** — pega |
+
+Ou seja: o kit emulado é a base para tudo (sessão real, controles reais, mapa
+oficial, locomoção, conforto, tiro), **e ainda assim é obrigatório ter um caso
+com a forma NATIVA** para o que o emulador imita por conveniência. Há um teste
+em `xr-controle-anda` que trava essa divergência: se o IWER um dia parar de
+herdar de Array, ele falha e avisa que o caso separado virou redundante.
 
 ## Desenvolver sem aparelho: IWER
 
@@ -197,7 +276,28 @@ API, não a forma conveniente.**
   Touch não tem — ler 0/1 dá analógico morto no aparelho, e isso não se descobre
   sem um Quest na mão. Eixo 3 negativo é "pra frente".
 - **Botões** (perfil xr-standard): 0 gatilho, 1 empunhadura, 3 clique do
-  analógico, 4 e 5 os botões da mão.
+  analógico, 4 e 5 os botões da mão. O mapa completo, e não sobra botão:
+
+  | | esquerda | direita |
+  |---|---|---|
+  | analógico | andar | girar em passos |
+  | clique do analógico (3) | correr | — |
+  | gatilho (0) | — | atirar |
+  | empunhadura (1) | agachar / deslizar | mirar |
+  | botão de baixo (4) | usar | pular |
+  | botão de cima (5) | recarregar | trocar de arma |
+
+- **APERTAR não é SEGURAR, e a diferença mata arma.** No game.js,
+  `const want = gun.auto ? mouse.shooting : mouse.clicked`: automática lê o
+  estado contínuo, semi-automática lê o CLIQUE — e `mouse.clicked` é zerado a
+  cada frame, então só a borda de subida pode escrevê-lo. Escrevendo só
+  `mouse.shooting`, pistola, sniper e escopeta ficam **mudas em VR**, sem erro e
+  sem console, enquanto o fuzil funciona — o que faz parecer bug de arma, não de
+  entrada. Vale o mesmo para trocar de arma: ciclar em rajada nunca para na arma
+  que o jogador quer.
+- **Sem correr e sem trocar de arma não é FPS.** O Touch não tem fileira de
+  números nem roda de mouse: sem mapear, o jogador atravessa o mapa de battle
+  royale andando e com a arma inicial a partida inteira.
 - **A intenção vira as MESMAS teclas do teclado.** Colisão, rampa, escada,
   veículo e arma continuam sendo o código já testado. Controle novo não pode
   virar física nova.

@@ -22,7 +22,8 @@
     "soak": "node scripts/soak.js",
     "vr:baseline": "node scripts/vr-baseline.js",
     "vr:emulado": "node scripts/vr-emulado.js",
-    "vr:censo": "node scripts/vr-censo.js"
+    "vr:censo": "node scripts/vr-censo.js",
+    "vr:controles": "node scripts/vr-controles.js"
   },
   "engines": {
     "node": ">=18"

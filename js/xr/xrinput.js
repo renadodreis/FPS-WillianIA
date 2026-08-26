@@ -72,12 +72,16 @@ function botao(fonte, i) {
 
 export function criarEntradaXR() {
   let girarArmado = true;   // rearma quando o analógico volta pro centro
+  let gatilhoAntes = false; // pra separar APERTAR de ESTAR SEGURANDO
+  let trocaAntes = false;   // idem pra troca de arma: ciclar em rajada é inútil
 
   function ler(fontes) {
     const out = {
       andar: { x: 0, y: 0 },
       girar: 0,
-      atirar: false, mirar: false, pular: false, agachar: false, recarregar: false, usar: false,
+      atirar: false, atirarAgora: false,
+      mirar: false, pular: false, agachar: false, recarregar: false, usar: false,
+      correr: false, trocarArma: false,
     };
     const lista = comoLista(fontes);
     let esquerda = null, direita = null;
@@ -102,6 +106,8 @@ export function criarEntradaXR() {
       out.andar.x = x * k + 0;
       out.andar.y = y * k + 0;
       out.agachar = botao(esquerda, 1);
+      // clique do analógico = correr, do mesmo jeito que quase todo FPS de VR
+      out.correr = botao(esquerda, 3);
       out.usar = botao(esquerda, 4);
       out.recarregar = botao(esquerda, 5);
     }
@@ -121,6 +127,23 @@ export function criarEntradaXR() {
     } else {
       girarArmado = true;   // controle sumiu: não deixa o giro travado armado errado
     }
+
+    /* APERTAR não é SEGURAR. Arma automática lê o estado contínuo; a
+       semi-automática lê o CLIQUE (`gun.auto ? mouse.shooting : mouse.clicked`
+       no game.js), e clique é borda. Sem esta linha, pistola, sniper e escopeta
+       ficam mudas em VR — sem erro, sem console. A borda é calculada FORA do
+       `if (direita)` de propósito: com o controle sumindo no meio do aperto, o
+       estado volta a falso e o próximo aperto conta como aperto novo. */
+    out.atirarAgora = out.atirar && !gatilhoAntes;
+    gatilhoAntes = out.atirar;
+
+    /* B da direita CICLA a arma, um passo por aperto. Segurar não pode virar
+       rajada de troca: o jogador nunca pararia na arma que quer. Mesmo motivo
+       do giro em passos, e a borda mora fora do `if (direita)` pela mesma razão
+       do gatilho — controle sumindo não deixa a troca travada. */
+    const trocaAgora = botao(direita, 5);
+    out.trocarArma = trocaAgora && !trocaAntes;
+    trocaAntes = trocaAgora;
 
     return out;
   }

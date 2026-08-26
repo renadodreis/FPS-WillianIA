@@ -37,8 +37,9 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const { CHROME } = require('../test/helpers/harness.js');
+const { adb, findDevtoolsSocket } = require('./lib/vrdevice.js');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -76,35 +77,6 @@ async function startServer(port, seed) {
 }
 
 /* ---------- adb ---------- */
-function adb(args, { quiet = false } = {}) {
-  try {
-    return execFileSync('adb', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', quiet ? 'ignore' : 'pipe'] }).trim();
-  } catch (e) {
-    throw new Error(`adb ${args.join(' ')} falhou: ${(e.stderr || e.message || '').toString().trim()}`,
-      { cause: e });
-  }
-}
-
-/* O socket de depuração do navegador do Quest não tem nome fixo entre
-   versões; ele aparece no /proc/net/unix como `@..._devtools_remote`. Só
-   existe com o navegador NO AR, e ele leva alguns segundos pra subir depois
-   do intent — por isso a espera por condição. */
-async function findDevtoolsSocket(limiteMs = 30000) {
-  const fim = Date.now() + limiteMs;
-  while (Date.now() < fim) {
-    const unix = adb(['shell', 'cat', '/proc/net/unix']);
-    const nomes = [...new Set(unix.split('\n')
-      .map(l => (/@([\w.]*devtools_remote[\w.]*)/.exec(l) || [])[1])
-      .filter(Boolean))];
-    // preferência: o do navegador da Meta, se houver mais de um
-    const escolhido = nomes.find(n => /oculus|browser/i.test(n)) || nomes[0];
-    if (escolhido) return escolhido;
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  throw new Error('nenhum socket devtools no aparelho — confira se o navegador do Quest ' +
-    'abriu e se "Depuração USB" está ligada em Configurações > Sistema > Modo de desenvolvedor');
-}
-
 /* ---------- telemetria do runtime do Quest (VrApi) ----------
    O jeito de medir VR sem ninguém dentro do aparelho. O runtime cospe uma
    linha por segundo no logcat com FPS real contra o modo de tela, tempo de

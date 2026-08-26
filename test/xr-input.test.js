@@ -132,6 +132,63 @@ describe('botões', () => {
   });
 });
 
+describe('correr e trocar de arma — sem isso não é FPS', () => {
+  /* Sobravam dois botões no Touch depois de andar/girar/atirar/mirar/pular/
+     agachar/usar/recarregar: o CLIQUE DO ANALÓGICO esquerdo (índice 3) e o B da
+     direita (índice 5). Sem correr, o mapa de battle royale é impraticável a pé;
+     sem trocar de arma, o jogador fica preso na inicial a partida inteira. */
+  it('clique do analógico esquerdo é correr', () => {
+    const btns = [false, false, false, true];
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1], btns)]).correr, true);
+  });
+
+  it('correr é estado contínuo, não borda — soltar para de correr', () => {
+    const seg = [false, false, false, true];
+    entrada.ler([mao('left', [0, 0, 0, -1], seg)]);
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1], seg)]).correr, true, 'segurar mantém');
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1])]).correr, false);
+  });
+
+  it('B da direita troca de arma, um passo por aperto', () => {
+    const b = p => [mao('right', [0, 0, 0, 0], [false, false, false, false, false, p])];
+    assert.equal(entrada.ler(b(true)).trocarArma, true);
+    assert.equal(entrada.ler(b(true)).trocarArma, false, 'segurar não pode ciclar em rajada');
+    entrada.ler(b(false));
+    assert.equal(entrada.ler(b(true)).trocarArma, true);
+  });
+});
+
+describe('borda do gatilho — semi-automática precisa do APERTO, não do segurar', () => {
+  /* `const want = gun.auto ? mouse.shooting : mouse.clicked` — automática lê o
+     estado, semi lê o CLIQUE. Em VR só o estado era escrito, então pistola,
+     sniper e escopeta ficavam mudas sem erro nenhum. A borda mora aqui porque
+     é lógica de entrada, e lógica de entrada se testa sem headset. */
+  const gatilho = p => [mao('right', [0, 0, 0, 0], [p])];
+
+  it('o aperto acusa borda uma vez só', () => {
+    assert.equal(entrada.ler(gatilho(true)).atirarAgora, true, 'primeiro frame do aperto é o clique');
+    assert.equal(entrada.ler(gatilho(true)).atirarAgora, false, 'segurar não é clicar de novo');
+    assert.equal(entrada.ler(gatilho(true)).atirarAgora, false);
+  });
+
+  it('soltar e apertar de novo acusa outra borda', () => {
+    entrada.ler(gatilho(true));
+    entrada.ler(gatilho(false));
+    assert.equal(entrada.ler(gatilho(true)).atirarAgora, true);
+  });
+
+  it('o estado contínuo continua existindo pra automática', () => {
+    assert.equal(entrada.ler(gatilho(true)).atirar, true);
+    assert.equal(entrada.ler(gatilho(true)).atirar, true, 'automática precisa do segurar');
+  });
+
+  it('controle sumindo no meio do aperto não deixa a borda armada errada', () => {
+    entrada.ler(gatilho(true));
+    entrada.ler([]);                       // controle sumiu com o gatilho apertado
+    assert.equal(entrada.ler(gatilho(true)).atirarAgora, true);
+  });
+});
+
 describe('o que o WebXR ENTREGA de verdade (não é Array)', () => {
   /* ESTE É O BUG QUE PASSOU. `session.inputSources` é um `XRInputSourceArray`,
      NÃO um `Array`: `Array.isArray()` devolve FALSE nele. O guarda defensivo

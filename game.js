@@ -2970,12 +2970,31 @@ function tick(forceDt) {
     keys['KeyD'] = cmd.andar.x > 0.15;
     keys['KeyA'] = cmd.andar.x < -0.15;
     keys['Space'] = cmd.pular;
+    if (cmd.agachar && !keys['ControlLeft']) justPressed.add('ControlLeft'); // deslize
     keys['ControlLeft'] = cmd.agachar;
+    keys['ShiftLeft'] = cmd.correr;
+    /* CICLA a arma pelas destravadas. Sem isto o jogador fica com a arma
+       inicial a partida inteira: o Touch não tem fileira de números, e a roda
+       do mouse não existe no headset. Escreve o MESMO `justPressed` do teclado,
+       então a troca continua sendo o código já testado. */
+    if (cmd.trocarArma) {
+      const atual = arsenal.indexOf(gun);
+      for (let i = 1; i <= arsenal.length; i++) {
+        const alvo = (atual + i) % arsenal.length;
+        if (alvo < 3 && !arsenal[alvo].locked) { justPressed.add(`Digit${alvo + 1}`); break; }
+      }
+    }
     if (cmd.recarregar && !keys['KeyR']) justPressed.add('KeyR');
     keys['KeyR'] = cmd.recarregar;
     if (cmd.usar && !keys['KeyE']) justPressed.add('KeyE');
     keys['KeyE'] = cmd.usar;
     mouse.shooting = cmd.atirar;
+    /* SEMI-AUTOMÁTICA LÊ O CLIQUE, não o segurar (`gun.auto ? mouse.shooting :
+       mouse.clicked`, logo abaixo em shootUpdate). Sem esta linha a pistola, a
+       sniper e a escopeta ficavam MUDAS em VR — o gatilho acendia `shooting` e
+       nada mais, sem erro e sem console. `clicked` é consumido e zerado a cada
+       frame, então só a borda de subida pode escrevê-lo. */
+    if (cmd.atirarAgora) mouse.clicked = true;
     mouse.aiming = cmd.mirar;
   }
 
@@ -3752,6 +3771,9 @@ window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
+  // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como
+  // verificar de fora que a troca de arma do headset chegou a trocar alguma coisa.
+  get gunIndex() { return arsenal.indexOf(gun); },
   get Cannon() { return Cannon; },
   get MapToys() { return MapToys; },
   get Secrets() { return Secrets; },
