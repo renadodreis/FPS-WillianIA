@@ -21,29 +21,154 @@
       entre as duas contagens é o ganho que a deduplicação paga sem
       mexer num pixel do que se vê.
 
+   3. `--imersivo=1`: a MESMA subtração, mas DENTRO de uma sessão
+      `immersive-vr` de verdade (IWER, preset Quest 3) e em VÁRIAS POSES.
+      Existe porque o número que reprova a entrega é o do ESTÉREO — e
+      mono não é metade de estéreo em nada que dependa de frustum: o
+      culling roda uma vez por olho, com dois frusta diferentes. Fora da
+      sessão o censo mede o desktop e a conta não fecha com o que a
+      Categoria E cobra (docs/vr/criterio-aaa.md §6).
+
+      Aqui a subtração não usa `G.tick(0)` + `render()` à mão: o dono do
+      frame é a sessão, e forçar frame por fora volta a medir o harness.
+      Este modo ESPERA frames de verdade (`renderer.info.render.frame`) e
+      lê a mediana de uma janela. Esconder é feito no `onBeforeRender` da
+      cena, imediatamente antes do `projectObject`: escrever `visible`
+      uma vez só não segura módulo que reescreve `visible` todo frame, e
+      esse falso zero atribuiria custo a quem não tem.
+
    Uso: node scripts/vr-censo.js [--port=3273] [--out=arquivo.json]
+        node scripts/vr-censo.js --imersivo=1 [--port=3462]
    ================================================================ */
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
 const { bootGame } = require('../test/helpers/harness.js');
+const { bootEmVR } = require('../test/helpers/iwer.js');
 
 const ROOT = path.join(__dirname, '..');
 
 function parseArgs(argv) {
-  const out = { port: 3273, out: '' };
+  const out = { port: 3273, out: '', imersivo: 0 };
   for (const a of argv) {
     const m = /^--([a-z]+)=(.*)$/.exec(a);
     if (!m) continue;
-    if (m[1] === 'port') out.port = +m[2];
+    if (m[1] === 'port' || m[1] === 'imersivo') out[m[1]] = +m[2];
     else if (m[1] in out) out[m[1]] = m[2];
   }
   return out;
 }
 
+/* ---- ATRIBUIÇÃO DENTRO DA SESSÃO (roda NA PÁGINA) ----
+   Devolve, por pose, quanto cada filho da cena custa em draw calls e
+   triângulos ESTÉREO. Sombra fica DESLIGADA durante a subtração (o CSM
+   escalona uma cascata por frame e dois frames seguidos não são
+   comparáveis); o custo dela sai como número à parte. */
+async function atribuirNaSessao() {
+  const G = window.__game, MP = window.__MP, R = MP.renderer;
+  const rotulosPorNome = window.__censoRaizes || new Map();
+  /* perfHud assume o `info`: autoReset = false + reset no começo do frame.
+     Sem isso o contador descreve o último passe, não o frame. */
+  G.perfHud.enabled = true;
+
+  const esperaFrames = n => new Promise(res => {
+    const alvo = R.info.render.frame + n;
+    const olha = () => (R.info.render.frame >= alvo ? res() : setTimeout(olha, 6));
+    olha();
+  });
+  const med = a => a.slice().sort((x, y) => x - y)[a.length >> 1] || 0;
+  async function amostra(n = 9) {
+    const calls = [], tris = [];
+    for (let i = 0; i < n; i++) {
+      await esperaFrames(1);
+      calls.push(R.info.render.calls);
+      tris.push(R.info.render.triangles);
+    }
+    return { calls: med(calls), tris: med(tris) };
+  }
+
+  /* Esconder AGORA, no último instante antes do culling. Módulo que
+     reescreve `visible` no update perde a queda de braço. */
+  let escondido = null;
+  const antes = MP.scene.onBeforeRender;
+  MP.scene.onBeforeRender = function (...a) {
+    if (escondido) escondido.visible = false;
+    if (antes) antes.apply(this, a);
+  };
+
+  const nome = filho => {
+    if (rotulosPorNome.has(filho)) return rotulosPorNome.get(filho);
+    return filho.name || `(${filho.type})`;
+  };
+
+  const irPara = (x, z) => {
+    G.player.pos.set(x, G.groundAt(x, z, 999) + 1, z);
+    G.player.vel.set(0, 0, 0);
+  };
+
+  const sombraSalva = R.shadowMap.enabled;
+  const poses = [];
+  const alvos = [
+    ['spawn', null],
+    ['cidade', [G.Structures.heliSpot.x, G.Structures.heliSpot.z]],
+    ['castelo', [G.Structures.FORT_POS.x, G.Structures.FORT_POS.z]],
+  ];
+
+  for (const [rotulo, xz] of alvos) {
+    if (xz) irPara(xz[0], xz[1]);
+    await esperaFrames(30);            // assenta stream de grama e frustum
+
+    R.shadowMap.enabled = true;
+    await esperaFrames(20);
+    const comSombra = await amostra(11);
+    R.shadowMap.enabled = false;
+    await esperaFrames(20);
+    const base = await amostra(11);
+
+    const linhas = [];
+    for (const filho of MP.scene.children.slice()) {
+      if (!filho.visible) continue;
+      escondido = filho;
+      await esperaFrames(4);
+      const sem = await amostra(7);
+      escondido = null;
+      filho.visible = true;
+      await esperaFrames(4);
+      const dCalls = base.calls - sem.calls;
+      const dTris = base.tris - sem.tris;
+      if (dCalls <= 0 && dTris <= 0) continue;
+      linhas.push({ dono: nome(filho), calls: dCalls, tris: dTris });
+    }
+    linhas.sort((a, b) => b.calls - a.calls);
+    const somaCalls = linhas.reduce((s, l) => s + l.calls, 0);
+    poses.push({
+      pose: rotulo,
+      base,
+      custoDaSombra: { calls: comSombra.calls - base.calls, tris: comSombra.tris - base.tris },
+      naoAtribuido: base.calls - somaCalls,
+      linhas,
+    });
+  }
+
+  R.shadowMap.enabled = sombraSalva;
+  MP.scene.onBeforeRender = antes;
+  return {
+    poses,
+    sessao: {
+      presenting: R.xr.isPresenting,
+      olhos: (R.xr.getCamera() && R.xr.getCamera().cameras || []).length,
+      foveacao: R.xr.getFoveation ? R.xr.getFoveation() : null,
+    },
+  };
+}
+
 (async () => {
   const cfg = parseArgs(process.argv.slice(2));
-  const h = await bootGame({ port: cfg.port });
+  /* Em modo imersivo o jogo tem que nascer no MENU: quem entra na sessão é o
+     clique no botão de VR, e `startGame` sai do primeiro tick com sessão. */
+  const h = cfg.imersivo
+    ? await bootEmVR(bootGame, { port: cfg.port })
+    : await bootGame({ port: cfg.port });
   let dados;
   try {
     dados = await h.play(() => {
@@ -55,6 +180,7 @@ function parseArgs(argv) {
          código. Subindo até quem tem nome, o número cai no módulo que criou
          a coisa. Sem nome em toda a linhagem, o rótulo diz onde ela pendura. */
       const raizes = new Map();  // objeto filho-da-cena -> rótulo
+      window.__censoRaizes = raizes;   // reaproveitado pela atribuição em sessão
       {
         const G = window.__game;
         const marcar = (obj, rotulo) => {
@@ -213,7 +339,10 @@ function parseArgs(argv) {
         };
       }
 
-      const drawCalls = medirDrawCalls();
+      /* Dentro de uma sessão, quem chama frame é a sessão. `R.render()` à mão
+         aqui mediria o harness (e ainda desenharia fora do frame do
+         compositor): a atribuição em estéreo é o passo separado logo abaixo. */
+      const drawCalls = window.__game.XR.presenting ? null : medirDrawCalls();
 
       return {
         drawCalls,
@@ -228,6 +357,10 @@ function parseArgs(argv) {
         materiaisRedundantes: materiais.size - assinaturas.size,
       };
     });
+    if (cfg.imersivo) {
+      dados.estereo = await h.play(atribuirNaSessao);
+      dados.estereo.poses.forEach(p => { p.linhas.forEach(l => { l.tris = Math.round(l.tris); }); });
+    }
   } finally {
     await h.close();
   }
@@ -258,6 +391,20 @@ function parseArgs(argv) {
     for (const l of dc.linhas.slice(0, 14))
       console.log(`${String(l.dono).slice(0, 32).padEnd(32)} ${String(l.calls).padStart(6)} ` +
         `${String(Math.round(l.tris / 1000) + 'k').padStart(9)} ${String(l.nos).padStart(5)}`);
+  }
+  if (dados.estereo) {
+    const s = dados.estereo.sessao;
+    console.log(`\n=== ESTÉREO (sessão immersive-vr, ${s.olhos} olhos, foveação ${s.foveacao}) ===`);
+    for (const p of dados.estereo.poses) {
+      console.log(`\n[${p.pose}] SEM sombra: ${p.base.calls} draw calls · ${(p.base.tris / 1e6).toFixed(2)}M tris` +
+        ` · sombra +${p.custoDaSombra.calls} calls / +${(p.custoDaSombra.tris / 1e6).toFixed(2)}M tris` +
+        ` · não atribuído ${p.naoAtribuido}`);
+      console.log('  dono                              calls       tris    %');
+      for (const l of p.linhas.slice(0, 14))
+        console.log(`  ${String(l.dono).slice(0, 32).padEnd(32)} ${String(l.calls).padStart(5)} ` +
+          `${String(Math.round(l.tris / 1000) + 'k').padStart(10)} ` +
+          `${(l.calls / p.base.calls * 100).toFixed(0).padStart(4)}%`);
+    }
   }
   console.log('\naparências mais repetidas (candidatas a material compartilhado):');
   for (const a of dados.assinaturasTop.slice(0, 8))

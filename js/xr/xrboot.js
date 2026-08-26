@@ -18,10 +18,11 @@ import { createXrRig } from './xrrig.js';
 import { createXrSession } from './xrsession.js';
 import { createXrHands } from './xrhands.js';
 import { createXrComfort } from './xrcomfort.js';
+import { createXrQuality } from './xrquality.js';
 import { criarGiroXR } from './xrturn.js';
 import { criarCorpoXR } from './xrbody.js';
 
-export function createXrBoot({ THREE, renderer, scene, camera,
+export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => null, CFG = null,
   nav = typeof navigator === 'undefined' ? null : navigator,
   win = typeof window === 'undefined' ? undefined : window,
   onEnter = () => {}, onExit = () => {}, onVisibility = () => {} } = {}) {
@@ -30,6 +31,7 @@ export function createXrBoot({ THREE, renderer, scene, camera,
   const session = createXrSession({ renderer, navigator: nav, onEnter, onExit, onVisibility });
   const hands = createXrHands({ renderer });
   const comfort = createXrComfort({ THREE, camera });
+  const quality = createXrQuality({ renderer, getCsm, CFG });
   /* `localStorage` não é só "pode estar cheio": em iframe com sandbox o próprio
      ACESSO à propriedade lança. Sem preferência salva o giro cai no padrão. */
   let armazem;
@@ -45,7 +47,7 @@ export function createXrBoot({ THREE, renderer, scene, camera,
      Devolve se está em XR e deixa o grafo coerente com isso. */
   function sync() {
     const p = apresentando();
-    if (p && !rig.entered) { rig.enter(); hands.anexar(rig.rig); comfort.anexar(); }
+    if (p && !rig.entered) { rig.enter(); hands.anexar(rig.rig); comfort.anexar(); quality.aplicar(); }
     else if (!p && rig.entered) { comfort.soltar(); hands.exit(); corpo.soltar(); rig.exit(); }
     return p;
   }
@@ -68,6 +70,7 @@ export function createXrBoot({ THREE, renderer, scene, camera,
     mao: qual => hands.mao(qual),
     punho: qual => hands.punho(qual),
     conforto: comfort,
+    qualidade: quality,
     giro,        // política de giro (js/xr/xrturn.js): suave, passos, preferência
     corpo,       // altura, postura e o boneco (js/xr/xrbody.js)
     get visibility() { return session.visibility; },

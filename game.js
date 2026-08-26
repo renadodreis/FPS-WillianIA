@@ -369,6 +369,14 @@ const _passoXR = { x: 0, z: 0 };   // passo físico do cômodo, drenado do rig p
 let aoMudarSessaoXr = () => {}; // preenchido lá embaixo, quando o botão existe
 const _xrCabeca = new THREE.Vector3();
 const XR = createXrBoot({ THREE, renderer, scene, camera,
+  /* O preset de qualidade da sessão (js/xr/xrquality.js) precisa do CSM, e o
+     CSM nasce DEPOIS desta chamada — por isso um resolvedor preguiçoso, e não
+     o objeto: destructuring avalia na hora e cairia na zona morta do `const`.
+     O headset desenha duas vezes por frame a 72 Hz, e as cascatas de sombra
+     distantes são a maior fatia configurável do quadro (+42 draw calls de 240,
+     medido por subtração). Aplicado ao entrar e DESFEITO ao sair — preset que
+     vaza pro desktop é regressão de PC. */
+  getCsm: () => csm, CFG,
   onEnter: () => aoMudarSessaoXr(),
   onExit: () => { XRArma.exit(); XRInterage.exit(); aoMudarSessaoXr(); } });
 /* FOVEAÇÃO: o three nasce em 1.0 — o MÁXIMO ("Set default foveation to
