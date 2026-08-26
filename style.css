@@ -242,14 +242,60 @@
   #ctlBox > summary::-webkit-details-marker { display: none; }
   #ctlBox > summary::marker { content: ''; }
   #ctlBox[open] > summary { border-color: rgba(255,200,120,0.55); color: #fff6de; opacity: 1; }
-  #controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12.5rem), 1fr));
+  /* #controls CABE NA TELA — três armadilhas que já vazaram o rodapé
+     (#loadingMsg, "ESC pausa o jogo...") pra fora da viewport em 1366x768
+     e 1920x1080:
+       1. COLUNA DE MAIS. Com minmax em 12.5rem, os 3 grupos (Movimento/
+          Combate/Interação) só cabem DOIS por linha dentro da largura do
+          #panel (660px — #ctlBox tem max-width:760px, mas quem manda é o
+          PAI: #panel nunca passa de min(660px,92vw)). Interação sobrava
+          pra uma SEGUNDA linha inteira, dobrando a altura do card. Em
+          10.5rem os três cabem numa linha só (3×10.5rem + 2 gaps ≈ 545px
+          < ~610px úteis) — a altura do card vira a do MAIOR grupo, não a
+          soma dos três.
+       2. Nenhum teto. Sem max-height, um card mais alto que a tela nunca
+          para de crescer — ele empurra o rodapé pra fora e o #overlay só
+          rola se o jogador DESCOBRIR que dá pra rolar. Com
+          overflow-y:auto aqui, é o CARD que rola por dentro (mesma altura
+          em qualquer resolução), e #panel/#loadingMsg nunca dependem de
+          quantas linhas os grupos têm.
+       3. max-height:320px é rede de segurança, não o caminho comum: hoje
+          o conteúdo real fica bem abaixo disso (~230px, medido em
+          test/controles-panel.test.js) — o scroll interno só entra se um
+          grupo crescer no futuro. */
+  #controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));
     gap: clamp(8px, 1.2vw, 20px); text-align: left; margin-top: 10px;
+    max-height: min(46vh, 320px); overflow-y: auto; overflow-x: hidden;
     background: linear-gradient(180deg, rgba(13,21,33,0.66), rgba(7,12,20,0.58));
     backdrop-filter: blur(7px);   /* blur SÓ aqui: card pequeno, legibilidade */
     border: 1px solid rgba(255,205,120,0.16); border-radius: 16px;
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 10px 30px rgba(0,0,0,0.28);
     padding: clamp(12px, 1.9vh, 22px) clamp(14px, 1.8vw, 26px);
     animation: riseIn .3s ease-out both; }
+  #controls { scrollbar-width: thin; scrollbar-color: rgba(255,205,120,0.35) transparent; }
+  #controls::-webkit-scrollbar { width: 8px; }
+  #controls::-webkit-scrollbar-thumb { background: rgba(255,205,120,0.35); border-radius: 8px; }
+
+  /* ---- toolbar do remapeamento: dica + restaurar padrão, span nas 3 colunas ---- */
+  #keyToolbar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
+    gap: 10px 16px; flex-wrap: wrap; margin: -2px 0 2px;
+    padding-bottom: clamp(8px, 1.2vh, 12px); border-bottom: 1px solid rgba(255,205,120,0.14); }
+  #keyHint { font-size: clamp(9px, .68vw, 11px); color: rgba(206,226,255,0.62); letter-spacing: .03em; }
+  #keyHint kbd { font: inherit; padding: 1px 5px; border-radius: 4px; color: #ffd76a;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(178,205,242,0.22); }
+  #btnKeyReset { appearance: none; -webkit-appearance: none; cursor: pointer; flex: 0 0 auto;
+    font: inherit; font-size: clamp(9px, .68vw, 11px); font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: #ffdcae; background: rgba(255,178,87,0.10);
+    border: 1px solid rgba(255,178,87,0.35); border-radius: 8px; padding: 5px 10px; }
+  #btnKeyReset:hover { background: rgba(255,178,87,0.22); }
+  #btnKeyReset:focus-visible { outline: 2px solid #ffb257; outline-offset: 2px; }
+
+  /* aviso de troca/conflito ("X e Y trocaram de tecla"). Some do layout
+     quando `[hidden]` — igual ao #menuNotice, mesmo idioma visual. */
+  #keyStatus { grid-column: 1 / -1; font-size: clamp(9px, .68vw, 11px); letter-spacing: .03em;
+    color: #ffdcae; background: linear-gradient(90deg, rgba(96,50,8,0.5), rgba(96,50,8,0.08));
+    border-left: 2px solid #ffb257; border-radius: 0 6px 6px 0; padding: 5px 9px; margin: -2px 0 2px; }
+  #keyStatus[hidden] { display: none; }
   .ctlGroup h4 { font-size: clamp(8px, .62vw, 10px); font-weight: 700; letter-spacing: .34em; text-transform: uppercase;
     color: #ffb257; margin-bottom: clamp(6px, 1vh, 11px); padding-bottom: 6px;
     border-bottom: 1px solid rgba(255,180,90,0.20); }
@@ -271,6 +317,19 @@
   .key.mouse { min-width: clamp(30px, 2.8vw, 42px); }
   .key.dash { min-width: 7px; padding: 0; background: none; border: none; box-shadow: none;
     color: rgba(255,215,106,0.55); text-shadow: none; }
+
+  /* ---- .keyBtn: o MESMO tampo .key, mas <button> de verdade (foco e
+     Enter/Espaço de graça). appearance:none tira o chrome nativo do
+     Safari/iOS; o resto do visual é 100% herdado de .key. ---- */
+  .keyBtn { appearance: none; -webkit-appearance: none; margin: 0; font-family: inherit; cursor: pointer;
+    transition: background-color .15s, border-color .15s, transform .1s, color .15s; }
+  .keyBtn:hover { border-color: rgba(255,215,106,0.6); background: linear-gradient(180deg, #3d5170 0%, #2c3b53 46%, #202a3d 100%); }
+  .keyBtn:focus-visible { outline: 2px solid #ffb257; outline-offset: 2px; }
+  .keyBtn:active { transform: translateY(1px); }
+  /* "esperando tecla": pulso âmbar, texto vira "…" (script no fim do body) */
+  .keyBtn.listening { background: linear-gradient(180deg, #ffc270 0%, #ff9a3d 100%); color: #241505;
+    border-color: rgba(255,222,160,0.9); text-shadow: none; animation: keyListenPulse 1s ease-in-out infinite; }
+  @keyframes keyListenPulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 
   #loadingMsg { margin-top: clamp(10px, 2vh, 22px); color: rgba(178,203,238,.72); text-shadow: 0 1px 4px rgba(0,0,0,.8);
     font-size: clamp(9px, .72vw, 12px); letter-spacing: .18em; animation: riseIn .5s ease-out both .66s; }

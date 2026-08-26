@@ -94,28 +94,54 @@
          JOGO. <details> nativo = zero JS, teclado e ARIA de graça. -->
     <details id="ctlBox">
       <summary class="mbtn sec" id="btnCtl">⌨ &nbsp;CONTROLES</summary>
+      <!-- ================================================================
+           REMAPEAMENTO DE VERDADE. Cada `.keyBtn` é um <button> de verdade
+           (foco/Enter/Espaço de graça) com `data-act` batendo num id de
+           js/keybinds.js#ACTIONS. Clicar entra em modo "esperando tecla"
+           (.listening); a PRÓXIMA tecla física vira o novo binding. ESC
+           cancela. Conflito nunca fica silencioso: troca (swap) com quem
+           já tinha a tecla — #keyStatus anuncia o quê.
+
+           O que NÃO virou botão, de propósito: "Atirar/mirar" é MOUSE (o
+           pedido foi remapear TECLA) e "Trocar de arma" são 5+ códigos com
+           semântica de ORDEM que o BR ainda estende (br-game.js, armas
+           4-8) — fica como legenda, igual sempre foi.
+
+           A fiação de verdade (a captura de teclado que faz o remap VALER
+           sem tocar em game.js) mora no <script type="module"> no fim do
+           body — ver o comentário lá. Este bloco só desenha; os rótulos
+           dos botões nascem com o PADRÃO e são repintados no boot pelo
+           bindings salvo (callofai_keys), pra não haver flash de tecla
+           errada em quem já remapeou. -->
       <div id="controls">
+        <div id="keyToolbar">
+          <span id="keyHint">Clique numa tecla e aperte a nova. <kbd>ESC</kbd> cancela.</span>
+          <button type="button" id="btnKeyReset">Restaurar padrão</button>
+        </div>
+        <div id="keyStatus" role="status" aria-live="polite" hidden></div>
         <div class="ctlGroup">
           <h4>Movimento</h4>
-          <div class="ctl"><span class="keys"><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span></span><b>Mover</b></div>
-          <div class="ctl"><span class="keys"><span class="key wide">SHIFT</span></span><b>Correr</b></div>
-          <div class="ctl"><span class="keys"><span class="key wide">ESPAÇO</span></span><b>Pular</b></div>
-          <div class="ctl"><span class="keys"><span class="key wide">CTRL</span></span><b>Agachar / deslizar</b></div>
+          <div class="ctl"><span class="keys">
+            <button type="button" class="key keyBtn" data-act="moveForward">W</button><button type="button" class="key keyBtn" data-act="moveLeft">A</button><button type="button" class="key keyBtn" data-act="moveBack">S</button><button type="button" class="key keyBtn" data-act="moveRight">D</button>
+          </span><b>Mover</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn wide" data-act="sprint">SHIFT</button></span><b>Correr</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn wide" data-act="jump">ESPAÇO</button></span><b>Pular</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn wide" data-act="crouch">CTRL</button></span><b>Agachar / deslizar</b></div>
         </div>
         <div class="ctlGroup">
           <h4>Combate</h4>
           <div class="ctl"><span class="keys"><span class="key mouse">🖱 ESQ</span><span class="key mouse">DIR</span></span><b>Atirar / mirar</b></div>
-          <div class="ctl"><span class="keys"><span class="key">R</span></span><b>Recarregar</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn" data-act="reload">R</button></span><b>Recarregar</b></div>
           <div class="ctl"><span class="keys"><span class="key">1</span><span class="key dash">–</span><span class="key">5</span></span><b>Trocar de arma <i>(ou scroll)</i></b></div>
-          <div class="ctl"><span class="keys"><span class="key">G</span></span><b>Granada</b></div>
-          <div class="ctl"><span class="keys"><span class="key">T</span></span><b>Acessório da mira</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn" data-act="grenade">G</button></span><b>Granada</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn" data-act="sight">T</button></span><b>Acessório da mira</b></div>
         </div>
         <div class="ctlGroup">
           <h4>Interação</h4>
-          <div class="ctl"><span class="keys"><span class="key">E</span></span><b>Veículo / baú</b></div>
-          <div class="ctl"><span class="keys"><span class="key">Q</span></span><b>Kit médico</b></div>
-          <div class="ctl"><span class="keys"><span class="key">F</span></span><b>Comer carne</b></div>
-          <div class="ctl"><span class="keys"><span class="key wide">TAB</span></span><b>Inventário</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn" data-act="use">E</button></span><b>Veículo / baú</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn" data-act="medkit">Q</button></span><b>Kit médico</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn" data-act="eat">F</button></span><b>Comer carne</b></div>
+          <div class="ctl"><span class="keys"><button type="button" class="key keyBtn wide" data-act="inventory">TAB</button></span><b>Inventário</b></div>
         </div>
       </div>
     </details>
@@ -274,5 +300,156 @@
 <script src="multiplayer-client.js"></script>
 <script src="city-destruction-protocol.js"></script>
 <script src="city-destruction-client.js"></script>
+<!-- ================================================================
+     REMAPEAMENTO DE TECLAS — a camada fina que faz js/keybinds.js valer.
+     NÃO edita game.js (fora da posse deste agente) e não precisa: um
+     listener em fase de CAPTURA no `window` roda ANTES de qualquer
+     listener em fase de bolha no MESMO `window` — é ordem de DESPACHO
+     do DOM (capturing sempre visita o alvo antes do bubbling), não
+     ordem de registro de <script>. Então isto intercepta o teclado
+     antes do `window.addEventListener('keydown', ...)` de game.js
+     (game.js:1326) e do listener exclusivo do BR (br-game.js:1814,
+     registrado só quando a partida começa) não importa a ordem dos
+     <script> na página.
+
+     O que a interceptação faz, via `resolveIncomingCode` (puro, testado
+     em test/controles-keybinds.test.js):
+       · tecla remapeada  → reescreve `e.code` pro código CANÔNICO da
+         ação (Object.defineProperty na instância, sombreando o getter
+         do protótipo) ANTES do evento chegar em game.js. `keys.KeyR`
+         continua sendo o único lido pelo jogo inteiro — só o CAMINHO
+         até lá mudou.
+       · tecla padrão órfã (a ação foi remapeada pra outro lugar)
+         → `stopImmediatePropagation()`: a tecla antiga vira letra morta,
+         nunca sobra funcionando escondida.
+       · nada remapeado → passa direto, byte a byte igual a antes.
+
+     `isTrusted` é o portão: só teclado FÍSICO passa por aqui. Eventos
+     SINTÉTICOS (js/touchcontrols.js, `sendKey`) têm isTrusted:false e
+     seguem intocados — o toque já manda sempre o código padrão, então
+     remapear no desktop nunca quebra o celular. -->
+<script type="module">
+import {
+  ACTIONS, loadBindings, saveBindings, resetBindings, rebind,
+  resolveIncomingCode, describeCode, PREVENT_DEFAULT_CODES,
+} from './js/keybinds.js';
+
+(function keybindsUI() {
+  const controls = document.getElementById('controls');
+  if (!controls) return; // painel de controles não existe nesta página
+
+  let storage = null;
+  try { storage = window.localStorage; } catch { storage = null; }
+  let bindings = loadBindings(storage);
+  let listening = null; // actionId esperando a próxima tecla, ou null
+
+  const statusEl = document.getElementById('keyStatus');
+  const actionLabel = id => { const a = ACTIONS.find(x => x.id === id); return a ? a.label : id; };
+  const btnFor = id => controls.querySelector(`.keyBtn[data-act="${id}"]`);
+
+  function say(msg) {
+    if (!statusEl) return;
+    statusEl.textContent = msg || '';
+    statusEl.hidden = !msg;
+  }
+  function paint(actionId) {
+    const btn = btnFor(actionId);
+    if (btn) btn.textContent = describeCode(bindings[actionId]);
+  }
+  function paintAll() { for (const a of ACTIONS) paint(a.id); }
+
+  function stopListening(btn) {
+    if (btn) btn.classList.remove('listening');
+    listening = null;
+  }
+  function startListening(actionId, btn) {
+    if (listening) stopListening(btnFor(listening));
+    listening = actionId;
+    btn.classList.add('listening');
+    btn.textContent = '…';
+    say(`Aperte uma tecla para "${actionLabel(actionId)}". ESC cancela.`);
+  }
+
+  function finishListening(code) {
+    const actionId = listening;
+    stopListening(btnFor(actionId));
+    if (code === 'Escape') { paint(actionId); say(''); return; }
+    const r = rebind(bindings, actionId, code);
+    if (!r.ok) {
+      paint(actionId);
+      say(r.reason === 'reserved' ? 'Essa tecla é reservada — escolha outra.' : 'Não deu para usar essa tecla.');
+      return;
+    }
+    bindings = r.bindings;
+    saveBindings(storage, bindings);
+    paint(actionId);
+    if (r.swappedWith) {
+      paint(r.swappedWith);
+      say(`"${actionLabel(actionId)}" e "${actionLabel(r.swappedWith)}" trocaram de tecla.`);
+    } else {
+      say(`"${actionLabel(actionId)}" agora é ${describeCode(code)}.`);
+    }
+  }
+
+  controls.addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest('.keyBtn');
+    if (!btn) return;
+    const actionId = btn.dataset.act;
+    if (!actionId) return;
+    if (listening === actionId) { stopListening(btn); paint(actionId); say(''); return; }
+    startListening(actionId, btn);
+  });
+
+  // dedo/foco saiu do botão sem apertar tecla nenhuma: cancela, não trava em "…"
+  controls.addEventListener('focusout', e => {
+    const btn = e.target.closest && e.target.closest('.keyBtn');
+    if (!btn || listening !== btn.dataset.act) return;
+    const actionId = listening;
+    stopListening(btn);
+    paint(actionId);
+    say('');
+  });
+
+  const resetBtn = document.getElementById('btnKeyReset');
+  if (resetBtn) resetBtn.addEventListener('click', () => {
+    if (listening) stopListening(btnFor(listening));
+    bindings = resetBindings(storage);
+    paintAll();
+    say('Controles restaurados ao padrão.');
+  });
+
+  paintAll();
+
+  function handleKey(e) {
+    if (!e.isTrusted) return; // sintético (toque) — nunca intercepta
+    /* DIGITANDO NUM CAMPO, TECLA É TEXTO — NÃO É COMANDO. Mesma guarda do
+       game.js:1328, e ela precisa vir ANTES do preventDefault: este
+       interceptador roda em fase de CAPTURA, ou seja, antes de todo mundo.
+       Sem isto, o espaço nunca chega no campo de nick, no chat nem no código
+       da sala, e o Tab para de navegar entre campos — que é exatamente o bug
+       nº 18 do QA-REPORT.md, já corrigido uma vez neste repo. */
+    const alvo = e.target;
+    if (alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' ||
+        alvo.isContentEditable)) return;
+    if (PREVENT_DEFAULT_CODES.includes(e.code)) e.preventDefault();
+
+    if (listening) {
+      e.preventDefault();
+      e.stopImmediatePropagation(); // enquanto captura, NADA vaza pro jogo
+      if (e.type === 'keydown') finishListening(e.code);
+      return;
+    }
+
+    const r = resolveIncomingCode(bindings, e.code);
+    if (r.suppress) { e.stopImmediatePropagation(); return; }
+    if (r.rewritten) {
+      try { Object.defineProperty(e, 'code', { value: r.code, configurable: true }); }
+      catch { /* navegador que recusa a sombra: pior caso é a tecla nova não acionar nada */ }
+    }
+  }
+  window.addEventListener('keydown', handleKey, true);
+  window.addEventListener('keyup', handleKey, true);
+})();
+</script>
 </body>
 </html>
