@@ -314,7 +314,15 @@ const SFX = createSFX({ SETTINGS, clamp, rand });
 
 /* ================== renderer / cena / pós ================== */
 const canvas = document.getElementById('game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+/* `antialias: true` existe POR CAUSA DO VR, e quase não custa no desktop. O
+   three repassa esse atributo pro framebuffer da sessão XR
+   (`samples: attributes.antialias ? 4 : 0`, WebXRManager.js): com `false`, o
+   headset renderiza com ZERO amostra de MSAA — e em XR o EffectComposer está
+   fora do caminho, então o SMAA do desktop também não existe lá. Resultado:
+   serrilhado em tudo, que é metade do "a qualidade está horrível". No desktop
+   o quadro passa pelos render targets do composer e o buffer do canvas só
+   recebe o blit final, então o MSAA daqui praticamente não é exercido. */
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 /* PRIMEIRO boot: a string da GPU escolhe o preset de partida (js/gputier.js).
    Existindo configuração salva o módulo não encosta em nada — a escolha
    manual do jogador vence e persiste. Roda ANTES do primeiro setPixelRatio
@@ -357,6 +365,14 @@ let xrYaw = 0;              // giro artificial acumulado (snap turn), em radiano
 let aoMudarSessaoXr = () => {}; // preenchido lá embaixo, quando o botão existe
 const XR = createXrBoot({ THREE, renderer, scene, camera,
   onEnter: () => aoMudarSessaoXr(), onExit: () => aoMudarSessaoXr() });
+/* FOVEAÇÃO: o three nasce em 1.0 — o MÁXIMO ("Set default foveation to
+   maximum", WebXRManager.js:46). Foveação máxima manda o compositor renderizar
+   a PERIFERIA em resolução baixa; no Quest isso é um borrão que acompanha a
+   cabeça, e o jogador enxerga como imagem ruim sem saber nomear. Ninguém nunca
+   chamou `setFoveation` aqui, então o jogo rodou o tempo todo no pior ajuste
+   possível de nitidez. 0,2 mantém o centro inteiro e ainda alivia o extremo da
+   borda; 0 seria resolução cheia em todo o campo. */
+renderer.xr.setFoveation(0.2);
 
 // ambiente PMREM para os MeshStandardMaterial não ficarem chapados
 {
@@ -1573,6 +1589,37 @@ const recoil = {
   applied: 0, appliedYaw: 0,
   kickZ: 0, kickRot: 0, shotIdx: 0, lastShotT: -9,
 };
+
+/* PONTE DE TECLADO DO VR — e ela não é firula, é o que torna o BR jogável.
+
+   Metade do jogo não lê `keys[]`: lê EVENTO de teclado. Em `br-game.js` há um
+   `addEventListener('keydown')` que trata sozinho o pulo da nave, a abertura do
+   paraquedas, o BAÚ (`KeyE` → `tryOpenCrate`) e cinco das oito armas. A entrada
+   do headset escrevia só `keys[]`/`justPressed`, então no aparelho nada disso
+   existia — o jogador caía da nave sem poder pular, sem paraquedas, e olhava
+   para um baú que não abria. Foi o "não consigo pegar o carro, abrir os baús".
+
+   Consertar cada chamador seria caçar sintoma. A ponte emite o MESMO evento que
+   o teclado emitiria, então tudo que já escuta teclado passa a funcionar no
+   headset — inclusive o que for escrito amanhã.
+
+   Só na BORDA: `keydown` repetido a 72 Hz dispararia `tryOpenCrate` setenta e
+   duas vezes por segundo. E `keys`/`justPressed` continuam sendo escritos aqui
+   em vez de ficarem por conta do listener, porque um `stopImmediatePropagation`
+   de qualquer outro ouvinte não pode ser o que decide se o jogador anda. */
+const _teclasXR = new Set();
+function teclaXR(code, ativo) {
+  const antes = _teclasXR.has(code);
+  if (!!ativo === antes) return;
+  if (ativo) { _teclasXR.add(code); if (!keys[code]) justPressed.add(code); keys[code] = true; }
+  else { _teclasXR.delete(code); keys[code] = false; }
+  try {
+    window.dispatchEvent(new KeyboardEvent(ativo ? 'keydown' : 'keyup',
+      { code, key: code, bubbles: true, cancelable: true }));
+  } catch { /* sem KeyboardEvent no ambiente: as teclas acima já valem */ }
+}
+/* Sair da sessão com botão apertado deixaria a tecla presa para sempre. */
+function soltarTeclasXR() { for (const c of [..._teclasXR]) teclaXR(c, false); }
 
 /* ROTAÇÃO DA VISTA NO MUNDO — a única que serve para decidir direção em VR.
 
@@ -2991,6 +3038,8 @@ function tick(forceDt) {
      saída que, de fora, parecia "controle de VR não funciona".
      Sai quando existir menu dentro do mundo (Fase 5). */
   if (xrOn && !state.started) startGame(false);
+  // saiu da sessão com botão apertado: sem isto a tecla fica presa pra sempre
+  if (!xrOn && _teclasXR.size) soltarTeclasXR();
 
   /* A ARMA MORA NA MÃO, NÃO NA CABEÇA. Fora de XR ela é filha da câmera e
      mirar é girar a vista. Em XR isso colaria a arma no rosto: o jogador teria
@@ -3023,29 +3072,30 @@ function tick(forceDt) {
        locomoção suave, e é a periferia da retina que alimenta a sensação de
        auto-movimento que o ouvido interno não confirma. */
     XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), RUN_SPEED);
-    keys['KeyW'] = cmd.andar.y > 0.15;
-    keys['KeyS'] = cmd.andar.y < -0.15;
-    keys['KeyD'] = cmd.andar.x > 0.15;
-    keys['KeyA'] = cmd.andar.x < -0.15;
-    keys['Space'] = cmd.pular;
-    if (cmd.agachar && !keys['ControlLeft']) justPressed.add('ControlLeft'); // deslize
-    keys['ControlLeft'] = cmd.agachar;
-    keys['ShiftLeft'] = cmd.correr;
+    teclaXR('KeyW', cmd.andar.y > 0.15);
+    teclaXR('KeyS', cmd.andar.y < -0.15);
+    teclaXR('KeyD', cmd.andar.x > 0.15);
+    teclaXR('KeyA', cmd.andar.x < -0.15);
+    teclaXR('Space', cmd.pular);
+    teclaXR('ControlLeft', cmd.agachar);   // segurar agacha, apertar durante o sprint desliza
+    teclaXR('ShiftLeft', cmd.correr);
     /* CICLA a arma pelas destravadas. Sem isto o jogador fica com a arma
        inicial a partida inteira: o Touch não tem fileira de números, e a roda
        do mouse não existe no headset. Escreve o MESMO `justPressed` do teclado,
        então a troca continua sendo o código já testado. */
     if (cmd.trocarArma) {
+      /* Cicla o arsenal INTEIRO, chamando a troca direto. Antes isto escrevia
+         `Digit1..3` e parava aí: as armas 4 a 8 do BR só existem num listener de
+         teclado do br-game.js, e três das oito armas eram tudo o que o headset
+         alcançava. */
       const atual = arsenal.indexOf(gun);
       for (let i = 1; i <= arsenal.length; i++) {
         const alvo = (atual + i) % arsenal.length;
-        if (alvo < 3 && !arsenal[alvo].locked) { justPressed.add(`Digit${alvo + 1}`); break; }
+        if (!arsenal[alvo].locked) { switchWeapon(alvo); break; }
       }
     }
-    if (cmd.recarregar && !keys['KeyR']) justPressed.add('KeyR');
-    keys['KeyR'] = cmd.recarregar;
-    if (cmd.usar && !keys['KeyE']) justPressed.add('KeyE');
-    keys['KeyE'] = cmd.usar;
+    teclaXR('KeyR', cmd.recarregar);
+    teclaXR('KeyE', cmd.usar);
     mouse.shooting = cmd.atirar;
     /* SEMI-AUTOMÁTICA LÊ O CLIQUE, não o segurar (`gun.auto ? mouse.shooting :
        mouse.clicked`, logo abaixo em shootUpdate). Sem esta linha a pistola, a

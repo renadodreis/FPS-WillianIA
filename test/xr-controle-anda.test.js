@@ -445,3 +445,88 @@ describe('conforto: vinheta de túnel e piscada no giro', { skip: !CHROME && 'Ch
       'a vinheta precisa ser filha da CÂMERA: presa a outro pai, ela escorrega quando o jogador vira a cabeça');
   });
 });
+
+describe('a entrada de VR chega em quem escuta TECLADO', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* Metade do jogo não lê `keys[]`: lê EVENTO de teclado. Em br-game.js um
+     `addEventListener('keydown')` trata sozinho o pulo da nave, o paraquedas, o
+     BAÚ (`KeyE` → tryOpenCrate) e cinco das oito armas. A entrada do headset
+     escrevia só `keys[]`/`justPressed`, então no aparelho nada disso existia —
+     o jogador caía da nave sem poder pular e olhava para um baú que não abria.
+     Era o "não consigo pegar o carro, abrir os baús". */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: PORT + 5 }); });
+  after(async () => { if (h) await h.close(); });
+
+  /* Grava os eventos de teclado que a janela recebe enquanto o botão é apertado. */
+  const espiar = async (mao, botao) => {
+    const A = window.__A;
+    A.solta(); await A.espera(250);
+    const vistos = [];
+    const ouvir = e => vistos.push({ tipo: e.type, code: e.code });
+    window.addEventListener('keydown', ouvir);
+    window.addEventListener('keyup', ouvir);
+    A.botao(mao, botao, 1);
+    await A.espera(300);
+    A.botao(mao, botao, 0);
+    await A.espera(300);
+    window.removeEventListener('keydown', ouvir);
+    window.removeEventListener('keyup', ouvir);
+    A.solta();
+    return vistos;
+  };
+
+  it('USAR emite KeyE de verdade — é o que abre o baú do BR', async () => {
+    const v = await h.play(espiar, 'left', 'x-button');
+    const downs = v.filter(x => x.tipo === 'keydown' && x.code === 'KeyE');
+    assert.equal(downs.length, 1,
+      `esperava exatamente um keydown de KeyE, vieram ${downs.length}: ` +
+      'zero = o baú continua inalcançável no headset; mais de um = tryOpenCrate ' +
+      'dispararia várias vezes por segundo');
+    assert.ok(v.some(x => x.tipo === 'keyup' && x.code === 'KeyE'), 'soltou o botão e a tecla ficou presa');
+  });
+
+  it('PULAR emite Space — é o pulo da nave e o paraquedas', async () => {
+    const v = await h.play(espiar, 'right', 'a-button');
+    assert.equal(v.filter(x => x.tipo === 'keydown' && x.code === 'Space').length, 1);
+  });
+
+  it('RECARREGAR emite KeyR', async () => {
+    const v = await h.play(espiar, 'left', 'y-button');
+    assert.equal(v.filter(x => x.tipo === 'keydown' && x.code === 'KeyR').length, 1);
+  });
+
+  it('segurar o botão NÃO repete o evento a 72 Hz', async () => {
+    const v = await h.play(async () => {
+      const A = window.__A;
+      A.solta(); await A.espera(250);
+      const vistos = [];
+      const ouvir = e => vistos.push(e.code);
+      window.addEventListener('keydown', ouvir);
+      A.botao('left', 'x-button', 1);
+      await A.espera(1500);                   // ~100 frames segurando
+      window.removeEventListener('keydown', ouvir);
+      A.solta();
+      return vistos.filter(c => c === 'KeyE').length;
+    });
+    assert.equal(v, 1, `segurar 1,5 s emitiu ${v} keydown de KeyE — abriria o baú em rajada`);
+  });
+
+  it('o ciclo de arma alcança TODO o arsenal, não só as três primeiras', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game;
+      A.solta(); await A.espera(250);
+      const destravadas = G.arsenal.filter(a => !a.locked).length;
+      const vistos = new Set([G.gunIndex]);
+      for (let i = 0; i < destravadas + 2; i++) {
+        A.botao('right', 'b-button', 1); await A.espera(200);
+        A.botao('right', 'b-button', 0); await A.espera(350);
+        vistos.add(G.gunIndex);
+      }
+      A.solta();
+      return { destravadas, alcancadas: vistos.size, total: G.arsenal.length };
+    });
+    assert.equal(r.alcancadas, r.destravadas,
+      `o arsenal tem ${r.total} armas, ${r.destravadas} destravadas, e o ciclo do headset ` +
+      `alcançou ${r.alcancadas}: com três, cinco armas do BR ficam inacessíveis em VR`);
+  });
+});
