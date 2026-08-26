@@ -48,7 +48,12 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
   function sync() {
     const p = apresentando();
     if (p && !rig.entered) { rig.enter(); hands.anexar(rig.rig); comfort.anexar(); quality.aplicar(); }
-    else if (!p && rig.entered) { comfort.soltar(); hands.exit(); corpo.soltar(); rig.exit(); }
+    /* `quality.restaurar()` PRIMEIRO, e a ordem importa menos que o fato de ele
+       estar aqui: esta linha já foi escrita uma vez e sumiu quando outro wiring
+       reescreveu o mesmo `else if`. O sintoma era mudo — o jogador tirava o
+       headset e seguia no monitor com duas cascatas de sombra apagadas e o
+       alcance da sombra em 90 m, para sempre. Regressão de PC nascida de VR. */
+    else if (!p && rig.entered) { quality.restaurar(); comfort.soltar(); hands.exit(); corpo.soltar(); rig.exit(); }
     return p;
   }
 

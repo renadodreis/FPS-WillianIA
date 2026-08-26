@@ -167,6 +167,34 @@ function instalarFerramentas() {
   return true;
 }
 
+describe('mirar e sumir não podem coexistir', () => {
+  /* DEFEITO MEDIDO E CORRIGIDO: a janela de mira começava em 6 cm e a guarda
+     escondia a arma abaixo de 12 cm. Entre os dois, o jogador fazia exatamente
+     o gesto de mirar que pediu — trazer a arma ao olho — e a arma DESAPARECIA.
+     Medido nas três armas de mira longa: recuo 0,1004 m dava `ads 0,652`,
+     `mirando true` e `naCara true` ao mesmo tempo.
+
+     Nenhum teste de unidade pegava porque cada constante estava certa sozinha;
+     o defeito morava na RELAÇÃO entre elas. Por isso o invariante virou código
+     e este teste guarda a relação, não os valores. */
+  let M;
+  before(async () => { M = await import('../js/xr/xrweapon.js'); });
+
+  it('a janela de mira começa DEPOIS de a arma parar de ser escondida', () => {
+    assert.ok(M.RECUO_MIN > M.CABECA_RAIO,
+      `recuo mínimo ${M.RECUO_MIN} m contra raio de esconder ${M.CABECA_RAIO} m: ` +
+      `sobreposição de ${((M.CABECA_RAIO - M.RECUO_MIN) * 100).toFixed(1)} cm em que mirar faz a arma sumir`);
+    assert.equal(M.JANELAS_SEPARADAS, true);
+  });
+
+  it('a janela de mira continua utilizável depois do ajuste', () => {
+    /* Com o controle na bochecha a ocular fica a ~20 cm do olho: o mínimo tem
+       que caber bem abaixo disso, senão consertar o sumiço mataria o ADS. */
+    assert.ok(M.RECUO_MIN < 0.18, `recuo mínimo ${M.RECUO_MIN} m deixaria o gesto natural fora da janela`);
+    assert.ok(M.RECUO_MAX - M.RECUO_MIN > 0.25, 'a janela de mira ficou estreita demais para a mão humana');
+  });
+});
+
 describe('arma e mira em VR (IWER, sessão imersiva real)', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   let h;
   before(async () => {

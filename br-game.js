@@ -773,8 +773,9 @@
        cima/baixo NÃO zera a direção (normalizar getWorldDirection ali explode). */
     function shipWalk(dt, pose) {
       if (!S.chatOpen && !MP.state.paused && !MP.player.dead) {
-        _eul.setFromQuaternion(MP.camera.quaternion);
-        const yaw = _eul.y;
+        // yaw de MUNDO: em XR o giro artificial mora no rig, e o quaternion da
+        // câmera é relativo a ele — andar na nave ia pro lado errado no headset
+        const yaw = G.yawDaVista();
         const fx = -Math.sin(yaw), fz = -Math.cos(yaw); // frente (horizontal estável)
         const K = G.keys;
         let mx = 0, mz = 0;
@@ -982,8 +983,7 @@
         c2.fillRect(W(boss.group.position.x) - 2.5, W(boss.group.position.z) - 2.5, 5, 5);
       }
       // VOCÊ: triângulo apontando pra onde a câmera olha, com contorno
-      _eul.setFromQuaternion(MP.camera.quaternion);
-      const yaw = -_eul.y; // canvas: +z pra baixo
+      const yaw = -G.yawDaVista(); // canvas: +z pra baixo (yaw de MUNDO: ver game.js)
       c2.save();
       c2.translate(W(P.x), W(P.z));
       c2.rotate(yaw);
@@ -1872,8 +1872,10 @@
         p = G.Heli.group.position;
         rotY = G.Heli.group.rotation.y;
       } else {
-        _eul.setFromQuaternion(MP.camera.quaternion);
-        rotY = _eul.y;
+        /* yaw de MUNDO. Este valor vai PRO SERVIDOR: lido do quaternion local
+           da câmera, em XR o avatar aparecia virado pro lado errado pros
+           outros jogadores. */
+        rotY = G.yawDaVista();
       }
       // transições de posse (só em partida; no solo o servidor recusaria)
       if (S.phase === 'PLAY') {

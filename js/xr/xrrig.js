@@ -125,9 +125,36 @@ export function createXrRig({ THREE, scene, camera }) {
      em diante o colisor está debaixo da cabeça, e não onde o jogador estava
      quando entrou na sessão. Chamar é opcional; não chamar mantém o
      comportamento antigo. */
-  function consumirPasso(alvo) {
+/* Quanto o jogador pode andar FISICAMENTE em um frame. A 72 Hz, caminhar
+   depressa (1,5 m/s) dá ~2 cm por frame — 15 cm é sete vezes essa folga, e
+   ainda assim menor que qualquer parede do jogo.
+
+   POR QUE UM TETO, e por que DESCARTAR o excedente em vez de represá-lo:
+
+   - **Salto grande atravessa parede.** A colisão do jogo empurra para fora do
+     volume, mas não varre o caminho: um salto de 3 m aparece do outro lado e é
+     empurrado pelo lado errado. Medido: 3,000 m atravessando direção que o
+     próprio jogo reportava bloqueada.
+   - **Recentrar não é andar.** `recenter()` muda a ORIGEM, não move ninguém —
+     e o jogador era deslocado no mundo pela distância dele ao centro (medido:
+     0,72 m e 0,59 m). O rig não distingue os dois; o teto distingue.
+   - **Represar vira teleporte.** Enquanto o jogo não drenava (morto, dirigindo),
+     o passo acumulava — 1,200 m morto, 1,005 m dirigindo — e o colisor saltava
+     tudo de uma vez no frame em que voltava. Descartar o excedente é a escolha
+     certa: o jogador não "tem direito" a metros guardados de quando não estava
+     jogando. */
+  const PASSO_MAX = 0.15;
+
+  function consumirPasso(alvo, limite = PASSO_MAX) {
     const out = alvo || { x: 0, z: 0 };
-    out.x = passoX; out.z = passoZ;
+    const m = Math.hypot(passoX, passoZ);
+    if (m > limite) {
+      // corta na direção do passo e JOGA FORA o resto: represar viraria teleporte
+      const k = limite / m;
+      out.x = passoX * k; out.z = passoZ * k;
+    } else {
+      out.x = passoX; out.z = passoZ;
+    }
     passoX = 0; passoZ = 0;
     return out;
   }

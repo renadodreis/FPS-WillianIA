@@ -162,16 +162,60 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     const agora = xr.headWorldPosition(new THREE.Vector3());
     assert.equal(+(agora.x - antes.x).toFixed(3), 0.8, 'o passo físico sumiu');
     assert.equal(+(agora.z - antes.z).toFixed(3), -0.6);
-    const passo = xr.consumirPasso();
+    /* limite alto de propósito: aqui se testa o MECANISMO de acumular e
+       drenar. O teto por frame tem teste próprio logo abaixo. */
+    const passo = xr.consumirPasso(null, 99);
     assert.equal(+passo.x.toFixed(3), 0.8, 'o jogo não recebeu o passo pra absorver');
     assert.equal(+passo.z.toFixed(3), -0.6);
-    assert.equal(+xr.consumirPasso().x.toFixed(3), 0, 'drenar duas vezes conta duas vezes');
+    assert.equal(+xr.consumirPasso(null, 99).x.toFixed(3), 0, 'drenar duas vezes conta duas vezes');
     /* Absorvido pelo jogo, o mesmo passo entra na posição de jogo e sai do
        acumulado: a cabeça não pode pular na troca. */
     xr.place(50.8, 0, -20.6, 0);
     const depois = xr.headWorldPosition(new THREE.Vector3());
     assert.equal(+(depois.x - agora.x).toFixed(3), 0, 'a cabeça pulou ao absorver o passo');
     assert.equal(+(depois.z - agora.z).toFixed(3), 0);
+  });
+
+  /* O TETO POR FRAME, e por que ele existe. A colisão do jogo empurra para
+     fora do volume mas não varre o caminho: um salto grande aparece do outro
+     lado da parede e é empurrado pelo lado errado. Medido antes do teto: 3,000 m
+     atravessando direção que o próprio jogo reportava bloqueada. Os saltos vêm
+     de três lugares — glitch de tracking, `recenter()` (que muda a ORIGEM e não
+     é andar) e o acumulado de quando o jogo não estava drenando. */
+  it('o passo de um frame tem TETO, e o excedente é jogado fora', () => {
+    xr.enter();
+    camera.position.set(0, 1.7, 0);
+    xr.place(0, 0, 0, 0);
+    camera.position.set(3, 1.7, 0);          // salto de 3 m: tracking, não caminhada
+    xr.place(0, 0, 0, 0);
+    const p = xr.consumirPasso();
+    assert.ok(Math.hypot(p.x, p.z) <= 0.1501,
+      `um salto de 3 m entregou ${Math.hypot(p.x, p.z).toFixed(3)} m ao jogo: atravessa parede`);
+    const sobra = xr.consumirPasso();
+    assert.equal(+Math.hypot(sobra.x, sobra.z).toFixed(3), 0,
+      'o excedente ficou represado — ao ser liberado, o colisor teleporta');
+  });
+
+  it('o teto preserva a DIREÇÃO do passo, não só o tamanho', () => {
+    xr.enter();
+    camera.position.set(0, 1.7, 0);
+    xr.place(0, 0, 0, 0);
+    camera.position.set(0, 1.7, -2);         // salto reto pra frente
+    xr.place(0, 0, 0, 0);
+    const p = xr.consumirPasso();
+    assert.equal(+p.x.toFixed(3), 0, 'o corte torceu o passo pro lado');
+    assert.ok(p.z < 0, 'o corte inverteu o sentido do passo');
+  });
+
+  it('passo de gente cabe folgado no teto', () => {
+    xr.enter();
+    camera.position.set(0, 1.7, 0);
+    xr.place(0, 0, 0, 0);
+    camera.position.set(0.02, 1.7, 0.01);    // ~2 cm: um frame andando depressa a 72 Hz
+    xr.place(0, 0, 0, 0);
+    const p = xr.consumirPasso();
+    assert.equal(+p.x.toFixed(3), 0.02, 'o teto cortou um passo humano normal');
+    assert.equal(+p.z.toFixed(3), 0.01);
   });
 
   it('o rig fica nos PÉS: a altura do olho vem só da pose da cabeça', () => {

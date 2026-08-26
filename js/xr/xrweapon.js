@@ -60,7 +60,12 @@
    e perto do eixo. Os números são a "sight picture" possível com o Touch na
    mão — folgados o bastante para não exigir precisão de milímetro, apertados
    o bastante para que a arma no quadril não conte como mirada. */
-export const RECUO_MIN = 0.06;   // colado demais: a ocular estaria na pupila
+/* MAIOR QUE `CABECA_RAIO`, e isso é INVARIANTE, não gosto. Enquanto valeu 0,06
+   as duas janelas se sobrepunham em 6 cm: medido, recuo de 0,1004 m dava
+   `mirando: true` E `naCara: true` — o jogador fazia exatamente o gesto de
+   mirar que pediu e a arma DESAPARECIA. Mirar e sumir não podem coexistir; a
+   asserção logo abaixo trava isso. */
+export const RECUO_MIN = 0.14;   // colado demais: a ocular estaria na pupila
 export const RECUO_MAX = 0.45;   // além disso a arma está no quadril
 export const PERP_MAX = 0.085;   // desvio lateral do olho até o eixo óptico
 
@@ -78,6 +83,13 @@ export const APOIO_SOLTA = 0.32;
    mecânica: com o controle na bochecha a ocular fica a ~20 cm do olho, bem
    fora daqui. */
 export const CABECA_RAIO = 0.12;
+
+/* O invariante que amarra os dois números acima: NENHUM recuo pode estar ao
+   mesmo tempo dentro da janela de mira e dentro do raio que esconde a arma.
+   Deixado implícito, isso já produziu o defeito de a arma sumir no gesto
+   principal do jogo — e nenhum teste de unidade pegava, porque cada constante
+   estava "certa" sozinha. */
+export const JANELAS_SEPARADAS = RECUO_MIN > CABECA_RAIO;
 
 const SUAVIZA_ADS = 14;    // 1/s — sobe rápido, mas não pisca com tremor de mão
 const SUAVIZA_MAOS = 12;   // 1/s — transição de uma para duas mãos

@@ -107,33 +107,57 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
       `o preset não baixou o custo: ${r.comPreset} draw calls contra ${r.semPreset} sem ele`);
   });
 
-  it('SAIR restaura tudo — preset que vaza pro desktop é regressão de PC', async () => {
+  it('SAIR DA SESSÃO restaura tudo — preset que vaza pro desktop é regressão de PC', async () => {
+    /* ESTE TESTE JÁ FOI FALSO, e é a lição mais cara desta rodada. A versão
+       anterior chamava `restaurar()` na mão sem NUNCA sair da sessão, então
+       não provava que a saída restaura — provava que a função existe. Pior:
+       asseverava `getFramebufferScaleFactor() === 1`, e esse getter NÃO EXISTE
+       no three r185, então a expressão caía num literal e a asserção não podia
+       falhar. Enquanto isso, em produção, `restaurar()` tinha ZERO chamadas: o
+       jogador tirava o headset e ficava com as sombras cortadas no monitor.
+
+       Agora o teste sai da sessão de verdade e lê o ESTADO DO JOGO — cascatas
+       e alcance de sombra — que é o que o jogador enxerga no monitor. */
     const r = await h.play(async () => {
-      const G = window.__game, MP = window.__MP;
-      const luzes = () => MP.renderer.xr && null;
-      void luzes;
-      const antes = G.XR.qualidade.dentro;
-      G.XR.qualidade.restaurar();
-      const fbDepois = MP.renderer.xr.getFramebufferScaleFactor
-        ? MP.renderer.xr.getFramebufferScaleFactor() : 1;
-      const fov = MP.renderer.xr.getFoveation ? MP.renderer.xr.getFoveation() : null;
-      G.XR.qualidade.aplicar();
-      return { antes, dentroDepois: G.XR.qualidade.dentro, fbDepois, fov };
+      const G = window.__game;
+      const estado = () => ({
+        cascatas: G.csmDebug.castShadow,
+        maxFar: G.csmDebug.maxFar,
+        cfgFar: G.csmDebug.cfgMaxFar,
+        dentro: G.XR.qualidade.dentro,
+        presenting: G.XR.presenting,
+      });
+      const dentro = estado();
+      await G.XR.exit();                              // SAI DE VERDADE
+      for (let i = 0; i < 30 && G.XR.presenting; i++) await new Promise(r2 => setTimeout(r2, 50));
+      await new Promise(r2 => setTimeout(r2, 300));   // deixa o sync reconciliar
+      const fora = estado();
+      return { dentro, fora };
     });
-    assert.equal(r.antes, true);
-    assert.equal(r.fbDepois, 1, `o framebuffer ficou em ${r.fbDepois} depois de restaurar`);
-    assert.equal(r.fov, 0.2, `a foveação ficou em ${r.fov} — tinha que voltar ao valor de fora da sessão`);
+    assert.equal(r.dentro.dentro, true, 'o preset não estava aplicado dentro da sessão');
+    assert.equal(r.fora.presenting, false, 'a sessão não terminou — o teste não mediu a saída');
+    assert.equal(r.fora.dentro, false,
+      'saiu da sessão e o preset continua marcado como aplicado');
+    assert.deepEqual(r.fora.cascatas, r.dentro.cascatas.map(() => true),
+      `as cascatas de sombra ficaram ${JSON.stringify(r.fora.cascatas)} no monitor depois de sair do VR`);
+    assert.equal(r.fora.cfgFar, 160,
+      `CFG.CSM_MAX_FAR ficou em ${r.fora.cfgFar} fora da sessão — o desktop herdou o corte do headset`);
   });
 
   it('restaurar duas vezes não quebra nem desfaz o que não é seu', async () => {
+    /* Roda DEPOIS do caso que sai da sessão, então o preset já está desfeito:
+       a primeira chamada tem que ser no-op e não pode estragar o estado do
+       monitor. Sem isto, um `restaurar()` extra vindo de qualquer caminho
+       (saída dupla, sessão perdida por fora) desfaria o que não é seu. */
     const r = await h.play(() => {
       const G = window.__game;
+      const antes = G.csmDebug.castShadow.slice();
       const a = G.XR.qualidade.restaurar();
       const b = G.XR.qualidade.restaurar();
-      G.XR.qualidade.aplicar();
-      return { a, b };
+      return { a, b, antes, depois: G.csmDebug.castShadow };
     });
-    assert.equal(r.a, true);
-    assert.equal(r.b, false, 'restaurar sem ter aplicado tem que ser no-op, não estrago');
+    assert.equal(r.a, false, 'fora da sessão o preset já tinha sido desfeito — restaurar de novo é no-op');
+    assert.equal(r.b, false);
+    assert.deepEqual(r.depois, r.antes, 'restaurar sem ter aplicado mexeu na sombra do monitor');
   });
 });

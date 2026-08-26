@@ -505,7 +505,8 @@ describe('Inimigos — caminho do GLB do Guardião', { skip: !CHROME && 'Chrome 
          procedural; o resto de malha no grupo é o rig do GLB (o flash tem
          material próprio e fica de fora da fusão). */
       const perfil = e => {
-        let fundidoOculto = 0, fundidoVisivel = 0, doGlb = 0, glbComSombra = 0, glbCulled = 0;
+        let fundidoOculto = 0, fundidoVisivel = 0, doGlb = 0, glbComSombra = 0,
+          glbCulled = 0, glbSemEsfera = 0;
         e.group.traverse(o => {
           if (!(o.isMesh || o.isSkinnedMesh) || o === e.flash) return;
           if (o.isSkinnedMesh && o.skeleton === e.skeleton) {
@@ -515,8 +516,9 @@ describe('Inimigos — caminho do GLB do Guardião', { skip: !CHROME && 'Chrome 
           doGlb++;
           if (o.castShadow) glbComSombra++;
           if (o.frustumCulled) glbCulled++;
+          if (o.frustumCulled && !o.boundingSphere) glbSemEsfera++;
         });
-        return { fundidoOculto, fundidoVisivel, doGlb, glbComSombra, glbCulled,
+        return { fundidoOculto, fundidoVisivel, doGlb, glbComSombra, glbCulled, glbSemEsfera,
           flashMuted: !!e.flashMuted, temEsqueletoFundido: !!e.skeleton,
           hitSpheres: e.hitSpheres().length, drawCalls: draws(e) };
       };
@@ -538,9 +540,11 @@ describe('Inimigos — caminho do GLB do Guardião', { skip: !CHROME && 'Chrome 
       'inimigo sem GLB que não é executivo: a troca de visual falhou pela metade');
   });
 
-  it('cada inimigo com GLB custa 2 draw calls e o corpo fundido some inteiro', () => {
+  it('cada inimigo com GLB custa 1 draw call e o corpo fundido some inteiro', () => {
     for (const p of r.perfis) {
-      assert.ok(p.drawCalls <= 2,
+      /* eram 2: arma e corpo, mesmo material e mesmo skin, em malhas separadas.
+         js/charmodels.js:fundirSubmalhas junta as duas. */
+      assert.ok(p.drawCalls <= 1,
         `inimigo com GLB gastou ${p.drawCalls} draw calls (${p.doGlb} malhas no rig)`);
       assert.equal(p.fundidoVisivel, 0,
         'malha do corpo fundido continua desenhando por baixo do GLB (draw call dobrada)');
@@ -551,12 +555,23 @@ describe('Inimigos — caminho do GLB do Guardião', { skip: !CHROME && 'Chrome 
     }
   });
 
-  it('o rig do GLB não entra no caminho de sombra nem some por bounding box', () => {
+  it('o rig do GLB não entra no caminho de sombra e É cortado pelo frustum', () => {
     for (const p of r.perfis) {
       assert.equal(p.glbComSombra, 0,
         'malha do GLB com castShadow: o CSM tem 4 cascatas, isso quadruplica a draw call');
-      assert.equal(p.glbCulled, 0,
-        'malha do GLB com frustumCulled: os ossos animados saem do bounding original e ela some');
+      /* ANTES esta linha exigia frustumCulled=false em TODAS as malhas do rig,
+         com a justificativa de que "os ossos animados saem do bounding original
+         e ela some". A justificativa está certa e a solução estava errada:
+         desligar o culling faz os 20 inimigos com GLB desenharem SEMPRE, a 400 m
+         e de costas — medido em 40 das 221 draw calls da pose de spawn, nenhuma
+         delas na tela. A saída é a mesma de js/skeletons.js: uma esfera que
+         COBRE a animação (js/charmodels.js) e o culling ligado. Quem garante
+         que nada some é o describe da varredura de pose abaixo. */
+      assert.equal(p.glbCulled, p.doGlb,
+        'malha do rig do GLB sem frustumCulled: inimigo fora da tela pagando draw call');
+      assert.equal(p.glbSemEsfera, 0,
+        'malha do rig com culling ligado e SEM boundingSphere da animação: ' +
+        'o three cairia na esfera da pose de bind e o inimigo sumiria ao andar');
     }
   });
 
@@ -565,6 +580,244 @@ describe('Inimigos — caminho do GLB do Guardião', { skip: !CHROME && 'Chrome 
       assert.equal(p.hitSpheres, 4, 'a hitbox analítica mudou no caminho do GLB');
       assert.equal(p.flashMuted, true,
         'flashMuted caiu: o traverse do GLB apaga o plano do flash e nada o reacende');
+    }
+  });
+});
+
+/* ================================================================
+   O RIG DO GUARDIÃO PAGA CULLING — e a esfera que torna isso seguro.
+
+   Medido em 98b114f (seed 424242, tier=baixo, GLB carregado, pose de spawn):
+   28 inimigos = 20 com o GLB do Guardião + 8 executivos procedurais. Os
+   executivos somem do frame quando saem da tela (fuseBody lhes dá uma esfera
+   que cobre a pose animada); os 20 do GLB **não somem nunca**, porque
+   `prepRiggedMesh` desliga `frustumCulled`. Resultado da atribuição por
+   subtração: Enemies custava 40 das 221 draw calls do frame — 2 por inimigo
+   com GLB, TODOS os 20, inclusive os que estavam a 403 m e atrás do jogador.
+   Nenhuma dessas 40 aparecia na tela.
+
+   Desligar o culling era a saída barata para um problema real: a esfera que o
+   three calcula sozinho é a da POSE DE BIND, e os ossos animados levam
+   vértices para fora dela — a malha some da tela no meio da caminhada. A saída
+   correta é a que js/skeletons.js já usa: calcular uma esfera que COBRE a
+   animação e deixar o culling ligado.
+
+   Este describe é a rede das duas metades:
+     1. o inimigo fora do frustum custa ZERO;
+     2. o inimigo dentro do frustum NÃO SOME em nenhuma pose que o jogo produz
+        — varredura por clipe E pelas misturas que js/enemies.js:444-457 monta
+        (Walk com peso 0,25..1 sozinho, e com Shoot/Punch por cima).
+   ================================================================ */
+describe('Inimigos — o rig do GLB paga frustum culling', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  let h, r;
+  before(async () => {
+    h = await bootGame({ port: 3470 });
+    await h.page.waitForFunction(
+      'window.QA.G.Enemies.list.some(e => e.hasModel)', { timeout: 90000 });
+    r = await h.play(() => {
+      const G = window.QA.G, MP = window.QA.MP, THREE = MP.THREE;
+      const rd = v => +v.toFixed(4);
+      const lista = G.Enemies.list;
+      const e = lista.find(x => x.hasModel && !x.heavy);
+      const malhas = [];
+      e.group.traverse(o => { if (o.isSkinnedMesh && o.skeleton !== e.skeleton) malhas.push(o); });
+
+      /* ---- caixa de aparência: o que o jogador vê, com o grupo na origem ---- */
+      const salvo = { p: e.group.position.clone(), r: e.group.rotation.clone() };
+      e.group.position.set(0, 0, 0); e.group.rotation.set(0, 0, 0);
+      e.group.updateMatrixWorld(true);
+      /* A fusão de submalhas concatena na ordem do traverse: os 142 primeiros
+         vértices são a arma (Object_7) e os 943 seguintes o corpo (Object_9).
+         Medir CADA FAIXA separadamente prova, casa decimal por casa decimal,
+         que as duas peças caíram exatamente onde estavam — o que uma caixa
+         única da malha fundida não provaria. */
+      const FAIXAS = [['Object_7', 0, 142], ['Object_9', 142, 1085]];
+      const caixaDe = (m, ini, fim) => {
+        const box = new THREE.Box3(), v = new THREE.Vector3();
+        for (let i = ini; i < fim; i++)
+          box.expandByPoint(m.getVertexPosition(i, v).applyMatrix4(m.matrixWorld));
+        return [box.min.toArray().map(rd), box.max.toArray().map(rd)];
+      };
+      const caixas = malhas.length === 1
+        ? FAIXAS.map(([nome, a, b]) => ({ nome, caixa: caixaDe(malhas[0], a, b) }))
+        : malhas.map(m => ({ nome: m.name,
+          caixa: caixaDe(m, 0, m.geometry.attributes.position.count) }));
+
+      /* ---- draw calls: dentro do frustum x fora dele ----
+         Mesma cena, mesmo inimigo, só a câmera vira. Fora do frustum tem que
+         custar ZERO; era exatamente isso que o `frustumCulled = false` impedia. */
+      const soEsteInimigo = fn => {
+        const prev = new Map();
+        MP.scene.children.forEach(c => { prev.set(c, c.visible); c.visible = false; });
+        e.group.visible = true;
+        MP.renderer.info.autoReset = true;
+        const out = fn();
+        MP.scene.children.forEach(c => { c.visible = prev.get(c); });
+        return out;
+      };
+      const desenha = (px, py, pz, olharX, olharY, olharZ) => {
+        const cam = MP.camera;
+        cam.position.set(px, py, pz);
+        cam.lookAt(olharX, olharY, olharZ);
+        cam.updateMatrixWorld(true);
+        MP.renderer.render(MP.scene, cam);
+        return MP.renderer.info.render.calls;
+      };
+      const draws = soEsteInimigo(() => ({
+        deFrente: desenha(0, 1.1, 6, 0, 1.1, 0),
+        deCostas: desenha(0, 1.1, 6, 0, 1.1, 60),
+        deLado: desenha(0, 1.1, 6, 60, 1.1, 6),
+      }));
+      e.group.position.copy(salvo.p); e.group.rotation.copy(salvo.r);
+      e.group.updateMatrixWorld(true);
+
+      /* ---- custo de Enemies no frame inteiro, por subtração ---- */
+      const R = MP.renderer;
+      const salvoAuto = R.info.autoReset, salvoSombra = R.shadowMap.enabled;
+      R.info.autoReset = false; R.shadowMap.enabled = false;
+      const frame = () => {
+        G.tick(0); R.info.reset(); R.render(MP.scene, MP.camera);
+        return R.info.render.calls;
+      };
+      for (let i = 0; i < 6; i++) frame();          // assenta stream de grama
+      const base = frame();
+      const vis = lista.map(x => x.group.visible);
+      lista.forEach(x => { x.group.visible = false; });
+      const sem = frame();
+      lista.forEach((x, i) => { x.group.visible = vis[i]; });
+      R.shadowMap.enabled = salvoSombra; R.info.autoReset = salvoAuto;
+
+      /* ---- VARREDURA DE POSE: nenhum vértice pode sair da esfera ----
+         O jogo nunca chama `setTime`: ele avança o mixer com `update(dt)` e
+         mistura pesos. A varredura faz o mesmo, nas combinações de
+         js/enemies.js:444-457. */
+      const esferas = malhas.map(m => m.boundingSphere && m.boundingSphere.clone());
+      const acoes = e.actions || {};
+      const pior = malhas.map(() => 0);
+      let fora = 0, amostras = 0, nVert = 0;
+      const v = new THREE.Vector3();
+      const conferir = () => {
+        e.group.updateMatrixWorld(true);
+        malhas.forEach((m, j) => {
+          const s = esferas[j];
+          if (!s) return;
+          for (let i = 0; i < m.geometry.attributes.position.count; i++) {
+            const d = m.getVertexPosition(i, v).distanceTo(s.center);
+            if (d > pior[j]) pior[j] = d;
+            if (d > s.radius + 1e-4) fora++;
+            nVert++;
+          }
+        });
+        amostras++;
+      };
+      const parar = () => { for (const a of Object.values(acoes)) { a.stop(); a.reset(); } };
+      const varrer = montar => {
+        parar();
+        montar();
+        for (let i = 0; i < 90; i++) { e.mixer.update(1 / 30); conferir(); }
+      };
+      parar(); conferir();                                    // repouso puro
+      for (const peso of [0.25, 0.6, 1]) {
+        varrer(() => { acoes.Walk.play().setEffectiveWeight(peso); });
+        varrer(() => { acoes.Walk.play().setEffectiveWeight(peso); acoes.Shoot.reset().play(); });
+        varrer(() => { acoes.Walk.play().setEffectiveWeight(peso); acoes.Punch.reset().play(); });
+      }
+      // devolve o mixer ao estado que js/enemies.js deixou
+      parar();
+      acoes.Walk.play().setEffectiveWeight(1);
+      e.mixer.setTime(0);
+      e.group.updateMatrixWorld(true);
+
+      return {
+        total: lista.length,
+        comModelo: lista.filter(x => x.hasModel).length,
+        malhas: malhas.map((m, j) => ({
+          nome: m.name, frustumCulled: !!m.frustumCulled,
+          temEsfera: !!m.boundingSphere,
+          material: m.material && m.material.uuid,
+          verts: m.geometry.attributes.position.count,
+          tris: (m.geometry.index ? m.geometry.index.count : 0) / 3,
+          grupos: m.geometry.groups.length,
+          raio: esferas[j] ? rd(esferas[j].radius) : null,
+        })),
+        caixas, draws, enemiesNoFrame: base - sem,
+        varredura: { fora, amostras, nVert, pior: pior.map(rd),
+          // folga = a MENOR das folgas: é a malha que estoura primeiro
+          folga: rd(Math.min(...malhas.map((m, j) =>
+            esferas[j] ? esferas[j].radius / pior[j] : Infinity))) },
+      };
+    });
+  });
+  after(async () => { if (h) await h.close(); });
+
+  /* Caixa de cada malha do rig, com o grupo na origem, colhida em 98b114f
+     ANTES do culling voltar. É a prova de que a esfera não mexeu num pixel:
+     mesma malha, mesma pose, mesmo lugar. */
+  const OURO_CAIXA = {
+    Object_7: [[-0.7395, 1.173, -0.4488], [-0.1641, 1.367, 0.6477]],
+    Object_9: [[-0.6647, -0.0021, -0.6795], [0.7281, 1.9179, 0.4529]],
+  };
+
+  it('as duas submalhas do rig viram UMA, sem perder vértice nem triângulo', () => {
+    assert.equal(r.malhas.length, 1,
+      `o rig do Guardião desenha em ${r.malhas.length} malhas: a arma e o corpo usam o ` +
+      'mesmo material e o mesmo skin, e cada malha a mais é 1 draw call por inimigo');
+    const m = r.malhas[0];
+    assert.equal(m.verts, 1085, 'vértices somem/sobram na fusão (era 142 da arma + 943 do corpo)');
+    assert.equal(m.tris, 877, 'triângulos somem/sobram na fusão (era 60 + 817)');
+    assert.equal(m.grupos, 0,
+      'a geometria fundida ficou com grupos: cada grupo volta a ser uma draw call');
+  });
+
+  it('toda malha do rig tem esfera da animação e culling ligado', () => {
+    for (const m of r.malhas) {
+      assert.ok(m.temEsfera, `${m.nome}: sem boundingSphere — o three usaria a pose de bind`);
+      assert.ok(m.frustumCulled, `${m.nome}: culling desligado, o inimigo desenha fora da tela`);
+    }
+  });
+
+  it('inimigo FORA do frustum custa zero draw call', () => {
+    assert.equal(r.draws.deFrente, 1,
+      `inimigo de frente deveria custar 1 draw call, custou ${r.draws.deFrente}`);
+    assert.equal(r.draws.deCostas, 0,
+      `inimigo atrás da câmera ainda custa ${r.draws.deCostas} draw calls`);
+    assert.equal(r.draws.deLado, 0,
+      `inimigo fora do frustum lateral ainda custa ${r.draws.deLado} draw calls`);
+  });
+
+  it('Enemies para de pagar pelos 20 inimigos fora da tela', () => {
+    assert.equal(r.total, 28);
+    assert.equal(r.comModelo, 20, 'a divisão 20 GLB / 8 executivos mudou');
+    /* Medido em 98b114f: 40 draw calls (2 x 20 inimigos, TODOS, sempre — o
+       culling estava desligado). Com culling só quem está no frustum paga, e
+       com a fusão paga 1 em vez de 2. Teto com folga honesta sobre o medido. */
+    assert.ok(r.enemiesNoFrame <= 12,
+      `Enemies custa ${r.enemiesNoFrame} draw calls na pose de spawn (era 40, teto 12)`);
+  });
+
+  it('a esfera cobre TODA a animação: nenhum vértice sai (nada some da tela)', () => {
+    assert.ok(r.varredura.amostras > 800,
+      `varredura rasa demais (${r.varredura.amostras} poses)`);
+    assert.ok(r.varredura.nVert > 800000,
+      `varredura vazia (${r.varredura.nVert} vértices)`);
+    assert.equal(r.varredura.fora, 0,
+      `${r.varredura.fora} vértices fora da esfera: o inimigo pisca ao andar/atirar`);
+  });
+
+  it('a esfera não sobra (cada centímetro é culling perdido)', () => {
+    assert.ok(r.varredura.folga >= 1.05,
+      `esfera raspando o pior caso (folga ${r.varredura.folga}×): pose nova estoura e o inimigo some`);
+    assert.ok(r.varredura.folga <= 1.35,
+      `esfera ${r.varredura.folga}× maior que o pior vértice medido — culling grosso de graça`);
+  });
+
+  it('a aparência do rig é a mesma casa decimal por casa decimal', () => {
+    for (const c of r.caixas) {
+      const ouro = OURO_CAIXA[c.nome];
+      assert.ok(ouro, `malha ${c.nome} não existia no ouro de 98b114f`);
+      for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++)
+        assert.ok(Math.abs(c.caixa[i][j] - ouro[i][j]) <= 0.002,
+          `${c.nome} [${i}][${j}]: ouro ${ouro[i][j]} agora ${c.caixa[i][j]}`);
     }
   });
 });

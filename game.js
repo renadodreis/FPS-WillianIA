@@ -60,6 +60,8 @@ import { eixoDeGiro } from './js/xr/xrturn.js';
 import { createXrButton, xrButtonState } from './js/xr/xrbutton.js';
 import { createXrWeapon } from './js/xr/xrweapon.js';
 import { createXrInteract } from './js/xr/xrinteract.js';
+import { createXrUi } from './js/xr/xrui.js';
+import { createXrHud } from './js/xr/xrhud.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
@@ -1648,6 +1650,7 @@ function soltarTeclasXR() { for (const c of [..._teclasXR]) teclaXR(c, false); }
    `getWorldQuaternion` usa a `matrixWorld` do último render — um frame de
    atraso, imperceptível, e é a leitura correta. */
 const _qVista = new THREE.Quaternion();
+const _eulerVista = new THREE.Euler(0, 0, 0, 'YXZ');
 const vistaMundo = () => (XR.presenting ? camera.getWorldQuaternion(_qVista) : camera.quaternion);
 
 function playerUpdate(dt, t) {
@@ -2774,6 +2777,46 @@ const XRInterage = createXrInteract({
   THREE, scene, player, state, heightAt, Structures, Car, Heli, arsenal,
   getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets,
 });
+/* PAINEL E HUD DENTRO DO MUNDO. O menu, as opções e o HUD são DOM, e DOM não
+   existe dentro de uma sessão imersiva: com o aparelho na cara não havia como
+   pausar, mudar o conforto ou sair da partida. */
+const XRUI = createXrUi({
+  THREE, scene, camera, giro: XR.giro,
+  armazem: (() => { try { return window.localStorage; } catch { return null; } })(),
+  acoes: {
+    pausar: () => setPaused(true),
+    retomar: () => setPaused(false),
+    // recentrar zera o giro artificial e replanta o rig SEM mover o jogador no mundo
+    recentrar: () => { XR.giro.zerar(); xrYaw = 0; XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw); },
+    /* SAIR encerra a sessão junto, e é deliberado: `voltarAoMenu()` aterrissa
+       no menu principal, que ainda é DOM. Sair da partida sem sair do VR
+       deixaria o jogador de pé no mundo sem menu — o beco que esta rodada veio
+       fechar. Menu principal dentro do mundo é a próxima rodada. */
+    sair: () => { voltarAoMenu(); XR.exit(); },
+    reaparecer: () => restartMatch(),
+  },
+});
+const XRHud = createXrHud({
+  THREE,
+  ler: () => ({
+    oculto: state.driving || state.flying || !state.started || state.paused,
+    ads: mouse.aiming,
+    vida: player.health / player.maxHealth,
+    armadura: player.armor / player.armorMax,
+    arma: gun ? gun.name : '',
+    melee: !!(gun && gun.melee),
+    pente: gun ? gun.mag : 0,
+    reserva: gun ? gun.reserve : 0,
+    recarregando: !!(gun && gun.reloading),
+    granadas: inventory.nades,
+    medkits: inventory.medkits,
+    abates: kills,
+    br: (window.__BR_active && window.__BR_debug)
+      ? { fase: window.__BR_debug.S.phase, vivos: window.__BR_debug.S.alive, tempo: '', zona: '' } : null,
+    // o DOM continua sendo o MODELO do feed; o painel do pulso é só a vista
+    feed: ui.killfeed ? Array.prototype.slice.call(ui.killfeed.children, -3).map(e => e.textContent) : [],
+  }),
+});
 
 /* ================== minimapa / radar (canvas 2D) ================== */
 const MiniMap = (() => {
@@ -3062,7 +3105,7 @@ function tick(forceDt) {
      havia como apertar "JOGAR", porque o botão não existe no headset. Beco sem
      saída que, de fora, parecia "controle de VR não funciona".
      Sai quando existir menu dentro do mundo (Fase 5). */
-  if (xrOn && !state.started) startGame(false);
+  if (xrOn && !state.started && !XRUI.aberto) startGame(false);
   // saiu da sessão com botão apertado: sem isto a tecla fica presa pra sempre
   if (!xrOn && _teclasXR.size) soltarTeclasXR();
 
@@ -3084,6 +3127,17 @@ function tick(forceDt) {
   if (xrOn) {
     const sessao = renderer.xr.getSession && renderer.xr.getSession();
     const fontes = sessao ? sessao.inputSources : null;
+    /* O painel come a entrada enquanto está aberto — senão o gatilho que
+       escolhe "SAIR DA PARTIDA" dispara um tiro no mesmo frame. `ler(fontes)`
+       continua rodando SEMPRE para que as bordas (apertar ≠ segurar) não
+       mintam na hora de fechar. */
+    const ui3d = XRUI.update({ dt, fontes, maos: { left: XR.mao('left'), right: XR.mao('right') } });
+    /* Headset tirado ou menu do sistema aberto = sessão 'visible-blurred' ou
+       'hidden'. A loja exige que o app pause sozinho nesse caso, e não só no
+       botão. */
+    if (XR.visibility !== 'visible' && !XRUI.aberto && state.started) XRUI.abrir('pausa');
+    // a tela de morte de DOM não é desenhada no headset
+    if (Morte.naTela && !XRUI.aberto) XRUI.abrir('morte');
     const cmd = entradaXR.ler(fontes);
 
     /* O BONECO É DO JOGADOR, NÃO DA CÂMERA. Pendurado na câmera ele afunda o
@@ -3098,8 +3152,12 @@ function tick(forceDt) {
        do terreno era lida onde ele ESTAVA. Drenado ANTES do playerUpdate, a
        física do frame já roda debaixo da cabeça — e a cabeça não pula, porque o
        que entra em player.pos sai do acumulado do rig (js/xr/xrrig.js). */
+    /* DRENA SEMPRE, aplica só quando pode. Drenar só quando o jogo aceita o
+       passo fazia o rig acumular enquanto o jogador estava morto ou dirigindo
+       (medido: 1,200 m e 1,005 m) e despejar tudo num frame ao voltar — o
+       colisor teleportava. O teto de `consumirPasso` cuida do resto. */
+    XR.consumirPasso(_passoXR);
     if (!state.driving && !state.flying && !player.dead) {
-      XR.consumirPasso(_passoXR);
       player.pos.x += _passoXR.x;
       player.pos.z += _passoXR.z;
     }
@@ -3107,47 +3165,62 @@ function tick(forceDt) {
     /* GIRO: contínuo por padrão, em passos por opção do jogador
        (js/xr/xrturn.js explica por que o padrão diverge do "default to snap"
        da Meta). O pivô é a cabeça, e isso é do rig. */
-    const giroXR = XR.giro.atualizar(dt, eixoDeGiro(fontes));
+    // com o painel aberto o yaw não pode acumular invisível e saltar ao retomar
+    const giroXR = XR.giro.atualizar(dt, ui3d.capturando ? 0 : eixoDeGiro(fontes));
     xrYaw = XR.giro.yaw;
-    if (giroXR.passo) XR.conforto.piscar();   // só o modo em passos pisca
+    /* A vinheta tem que ser DESLIGÁVEL, e desligar de verdade: zerar as
+       entradas não bastaria, porque a esfera continuaria no caminho do render. */
+    if (XRUI.prefs.vinheta) {
+      XR.conforto.anexar();                    // idempotente: só reacende
+      if (giroXR.passo) XR.conforto.piscar();  // só o modo em passos pisca
+    } else XR.conforto.soltar();
     /* VINHETA: a periferia fecha ao andar E ao girar. A vinheta da Meta reage a
        três eventos separados (Movement, Rotation, Acceleration), não só a andar;
        o túnel de giro só começa acima de 45°/s pra não piscar na mira fina. */
-    XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), RUN_SPEED,
-      giroXR.velocidade);
-    teclaXR('KeyW', cmd.andar.y > 0.15);
-    teclaXR('KeyS', cmd.andar.y < -0.15);
-    teclaXR('KeyD', cmd.andar.x > 0.15);
-    teclaXR('KeyA', cmd.andar.x < -0.15);
-    teclaXR('Space', cmd.pular);
-    // agachar de verdade: baixar a cabeça vale tanto quanto o botão
-    teclaXR('ControlLeft', cmd.agachar || XR.corpo.agachado);
-    teclaXR('ShiftLeft', cmd.correr);
-    /* CICLA a arma pelas destravadas. Sem isto o jogador fica com a arma
-       inicial a partida inteira: o Touch não tem fileira de números, e a roda
-       do mouse não existe no headset. Escreve o MESMO `justPressed` do teclado,
-       então a troca continua sendo o código já testado. */
-    if (cmd.trocarArma) {
-      /* Cicla o arsenal INTEIRO, chamando a troca direto. Antes isto escrevia
-         `Digit1..3` e parava aí: as armas 4 a 8 do BR só existem num listener de
-         teclado do br-game.js, e três das oito armas eram tudo o que o headset
-         alcançava. */
-      const atual = arsenal.indexOf(gun);
-      for (let i = 1; i <= arsenal.length; i++) {
-        const alvo = (atual + i) % arsenal.length;
-        if (!arsenal[alvo].locked) { switchWeapon(alvo); break; }
-      }
+    if (XRUI.prefs.vinheta) {
+      XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), RUN_SPEED,
+        giroXR.velocidade);
     }
-    teclaXR('KeyR', cmd.recarregar);
-    teclaXR('KeyE', cmd.usar);
-    mouse.shooting = cmd.atirar;
-    /* SEMI-AUTOMÁTICA LÊ O CLIQUE, não o segurar (`gun.auto ? mouse.shooting :
-       mouse.clicked`, logo abaixo em shootUpdate). Sem esta linha a pistola, a
-       sniper e a escopeta ficavam MUDAS em VR — o gatilho acendia `shooting` e
-       nada mais, sem erro e sem console. `clicked` é consumido e zerado a cada
-       frame, então só a borda de subida pode escrevê-lo. */
-    if (cmd.atirarAgora) mouse.clicked = true;
-    mouse.aiming = cmd.mirar || XRArma.mirando();   // botão OU arma trazida ao olho
+    /* PAINEL ABERTO NÃO JOGA. Sem esta guarda, o gatilho que escolhe "SAIR DA
+       PARTIDA" dispara um tiro no mesmo frame, e o analógico do menu anda com o
+       jogador no mundo. Soltar as teclas presas é parte do acordo: sair da
+       tradução de entrada com botão apertado deixaria a tecla travada. */
+    if (ui3d.capturando) { if (_teclasXR.size) soltarTeclasXR(); mouse.shooting = false; }
+    else {
+      teclaXR('KeyW', cmd.andar.y > 0.15);
+      teclaXR('KeyS', cmd.andar.y < -0.15);
+      teclaXR('KeyD', cmd.andar.x > 0.15);
+      teclaXR('KeyA', cmd.andar.x < -0.15);
+      teclaXR('Space', cmd.pular);
+      // agachar de verdade: baixar a cabeça vale tanto quanto o botão
+      teclaXR('ControlLeft', cmd.agachar || XR.corpo.agachado);
+      teclaXR('ShiftLeft', cmd.correr);
+      /* CICLA a arma pelas destravadas. Sem isto o jogador fica com a arma
+         inicial a partida inteira: o Touch não tem fileira de números, e a roda
+         do mouse não existe no headset. Escreve o MESMO `justPressed` do teclado,
+         então a troca continua sendo o código já testado. */
+      if (cmd.trocarArma) {
+        /* Cicla o arsenal INTEIRO, chamando a troca direto. Antes isto escrevia
+           `Digit1..3` e parava aí: as armas 4 a 8 do BR só existem num listener de
+           teclado do br-game.js, e três das oito armas eram tudo o que o headset
+           alcançava. */
+        const atual = arsenal.indexOf(gun);
+        for (let i = 1; i <= arsenal.length; i++) {
+          const alvo = (atual + i) % arsenal.length;
+          if (!arsenal[alvo].locked) { switchWeapon(alvo); break; }
+        }
+      }
+      teclaXR('KeyR', cmd.recarregar);
+      teclaXR('KeyE', cmd.usar);
+      mouse.shooting = cmd.atirar;
+      /* SEMI-AUTOMÁTICA LÊ O CLIQUE, não o segurar (`gun.auto ? mouse.shooting :
+         mouse.clicked`, logo abaixo em shootUpdate). Sem esta linha a pistola, a
+         sniper e a escopeta ficavam MUDAS em VR — o gatilho acendia `shooting` e
+         nada mais, sem erro e sem console. `clicked` é consumido e zerado a cada
+         frame, então só a borda de subida pode escrevê-lo. */
+      if (cmd.atirarAgora) mouse.clicked = true;
+      mouse.aiming = cmd.mirar || XRArma.mirando();   // botão OU arma trazida ao olho
+    }
   }
 
   if (!state.started || state.paused) {
@@ -3265,6 +3338,12 @@ function tick(forceDt) {
     apoio: XR.punho('left') || XR.mao('left'),
     cabeca: camera.getWorldPosition(_xrCabeca), dt,
     oculto: state.driving || state.flying,
+  });
+  /* DEPOIS da arma, e isso é contrato: o painel de munição é filho do
+     `weaponRoot`, e ler antes deixaria o número um frame atrás da arma. */
+  if (xrOn) XRHud.update({
+    arma: weaponRoot, pulso: XR.punho('left') || XR.mao('left'),
+    cabeca: camera.getWorldPosition(_xrCabeca),
   });
   if (window.__CityDestruction) window.__CityDestruction.tick(dt);
 
@@ -3935,11 +4014,20 @@ window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
-  XRArma, XRInterage,
+  XRArma, XRInterage, XRUI, XRHud,
   MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
   // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como
   // verificar de fora que a troca de arma do headset chegou a trocar alguma coisa.
   get gunIndex() { return arsenal.indexOf(gun); },
+  /* O YAW DA VISTA, NO MUNDO — fonte única para quem precisa saber "pra onde o
+     jogador está olhando". Em XR `camera.quaternion` é a pose da cabeça
+     RELATIVA AO RIG, e o giro artificial mora no rig: lê-lo direto dá erro de
+     até 180°. Isso já custou o movimento invertido aqui dentro, e ainda estava
+     vivo no br-game.js em três lugares — inclusive no `rotY` ENVIADO AO
+     SERVIDOR, ou seja, os outros jogadores viam o avatar virado pro lado
+     errado. Fora de XR a câmera é filha da cena e isto é idêntico ao que havia
+     antes. */
+  yawDaVista() { _eulerVista.setFromQuaternion(vistaMundo(), 'YXZ'); return _eulerVista.y; },
   /* QA: a mira REAL do jogo (a mesma que `fire()` usa). Sem isto não há como
      verificar de fora que o tiro sai da mão e não da cabeça. */
   mira: () => ({
@@ -3959,6 +4047,12 @@ window.__game = {
     get shaderCount() { return csm.shaders.size; },
     get autoUpdateMask() { return csmShadowMask('autoUpdate'); },
     get scheduledUpdateMask() { return csmLastUpdateMask; },
+    /* QA: o que o preset de sessão XR mexe. Sem isto não há como verificar de
+       fora que sair do headset devolve a sombra ao monitor — e essa
+       verificação já falhou uma vez por não existir. */
+    get castShadow() { return csm.lights.map(l => l.castShadow); },
+    get maxFar() { return csm.maxFar; },
+    get cfgMaxFar() { return CFG.CSM_MAX_FAR; },
   },
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   MENU,      // painéis do menu único (multiplayer-client.js e QA)

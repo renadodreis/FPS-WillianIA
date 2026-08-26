@@ -98,6 +98,31 @@ async function instalarCorpo() {
 }
 
 /* ---------- pose do headset pela API do runtime ---------- */
+/* CAMINHA até o ponto, em vez de teleportar. A 72 Hz um humano andando
+   depressa cobre ~2 cm por frame; o rig tem um teto de 15 cm por frame
+   justamente para que um salto de tracking (ou um `recenter`) não vire uma
+   travessia de parede. Um teste que salta 1,4 m num frame não mede caminhada,
+   mede teleporte — e mediria o teto em vez do produto. */
+async function andarAte(x, y, z, yawGraus, pitchGraus, ms) {
+  const dev = window.__xrEmulado;
+  const p0 = { x: dev.position.x, y: dev.position.y, z: dev.position.z };
+  const dist = Math.hypot(x - p0.x, z - p0.z);
+  const passos = Math.max(1, Math.ceil(dist / 0.05));     // 5 cm por etapa
+  for (let i = 1; i <= passos; i++) {
+    const k = i / passos;
+    dev.position.set(p0.x + (x - p0.x) * k, p0.y + (y - p0.y) * k, p0.z + (z - p0.z) * k);
+    await new Promise(r => setTimeout(r, 40));            // ~3 frames por etapa
+  }
+  /* o fim do passo é escrito aqui mesmo, e não delegado: `page.evaluate`
+     serializa só a função recebida — o escopo do arquivo não viaja junto. */
+  dev.position.set(x, y, z);
+  const ay = yawGraus * Math.PI / 180, ax = pitchGraus * Math.PI / 180;
+  const sy = Math.sin(ay / 2), cy = Math.cos(ay / 2);
+  const sx = Math.sin(ax / 2), cx = Math.cos(ax / 2);
+  dev.quaternion.set(cy * sx, sy * cx, -sy * sx, cy * cx);
+  await new Promise(r => setTimeout(r, ms || 400));
+}
+
 async function porCabeca(x, y, z, yawGraus, pitchGraus, ms) {
   const dev = window.__xrEmulado;
   dev.position.set(x, y, z);
@@ -244,7 +269,7 @@ describe('corpo do jogador em VR (runtime emulado IWER)', { skip: !CHROME && 'Ch
   it('andar pelo cômodo anda no JOGO — e sem arrastar a cabeça', async () => {
     await h.play(porCabeca, 0, 1.7, 0, 0, 0, 700);
     const antes = await h.play(medir);
-    await h.play(porCabeca, 1.0, 1.7, -1.0, 0, 0, 900);
+    await h.play(andarAte, 1.0, 1.7, -1.0, 0, 0, 900);
     const m = await h.play(medir);
     const andouCabeca = Math.hypot(m.cabecaX - antes.cabecaX, m.cabecaZ - antes.cabecaZ);
     const andouJogo = Math.hypot(m.playerX - antes.playerX, m.playerZ - antes.playerZ);
@@ -257,7 +282,7 @@ describe('corpo do jogador em VR (runtime emulado IWER)', { skip: !CHROME && 'Ch
       `${andouJogo.toFixed(3)} m: o corpo do jogador ficou para trás`);
     assert.ok(Math.hypot(m.corpoX - m.cabecaX, m.corpoZ - m.cabecaZ) < 0.22,
       'e o boneco ficou longe da cabeça');
-    await h.play(porCabeca, 0, 1.7, 0, 0, 0, 800);
+    await h.play(andarAte, 0, 1.7, 0, 0, 0, 800);
   });
 
   /* ---------------- agachar de verdade ---------------- */

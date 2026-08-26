@@ -62,6 +62,7 @@ export function planoDeQualidade({ cascatas = 4, agressivo = false } = {}) {
 
 export function createXrQuality({ renderer, getCsm = () => null, CFG = null }) {
   let salvo = null;
+  let fbAplicado = 1;   // espelho local: o three não expõe getter dessa escala
   /* PREGUIÇOSO de propósito: o CSM do jogo nasce depois desta fábrica, e
      receber o objeto pronto cairia na zona morta do `const`. */
   const oCsm = () => (typeof getCsm === 'function' ? getCsm() : null);
@@ -74,15 +75,22 @@ export function createXrQuality({ renderer, getCsm = () => null, CFG = null }) {
       castShadow: luzes.map(l => l.castShadow),
       maxFar: csm ? csm.maxFar : null,
       csmMaxFarCfg: CFG ? CFG.CSM_MAX_FAR : null,
-      framebuffer: renderer.xr.getFramebufferScaleFactor
-        ? renderer.xr.getFramebufferScaleFactor() : 1,
+      /* NÃO EXISTE getter de escala de framebuffer no three r185 — só o
+         setter. Guardar "o que eu mesmo apliquei" é a única leitura honesta;
+         perguntar ao renderer devolvia `undefined` e caía num literal, o que
+         fazia a asserção do teste passar sempre. Um valor que não pode falhar
+         não é uma verificação, é enfeite. */
+      framebuffer: fbAplicado,
       foveacao: renderer.xr.getFoveation ? renderer.xr.getFoveation() : null,
     };
     const p = planoDeQualidade({ cascatas: luzes.length, ...opts });
     for (let i = 0; i < luzes.length; i++) luzes[i].castShadow = i < p.cascatasLigadas;
     if (csm) csm.maxFar = p.maxFar;
     if (CFG) CFG.CSM_MAX_FAR = p.maxFar;          // quem recalcula lê daqui
-    if (renderer.xr.setFramebufferScaleFactor) renderer.xr.setFramebufferScaleFactor(p.framebuffer);
+    if (renderer.xr.setFramebufferScaleFactor) {
+      renderer.xr.setFramebufferScaleFactor(p.framebuffer);
+      fbAplicado = p.framebuffer;
+    }
     if (renderer.xr.setFoveation) renderer.xr.setFoveation(p.foveacao);
     return { ...p, aplicado: true };
   }
@@ -98,7 +106,10 @@ export function createXrQuality({ renderer, getCsm = () => null, CFG = null }) {
     }
     if (csm && salvo.maxFar !== null) csm.maxFar = salvo.maxFar;
     if (CFG && salvo.csmMaxFarCfg !== null) CFG.CSM_MAX_FAR = salvo.csmMaxFarCfg;
-    if (renderer.xr.setFramebufferScaleFactor) renderer.xr.setFramebufferScaleFactor(salvo.framebuffer);
+    if (renderer.xr.setFramebufferScaleFactor) {
+      renderer.xr.setFramebufferScaleFactor(salvo.framebuffer);
+      fbAplicado = salvo.framebuffer;
+    }
     if (renderer.xr.setFoveation && salvo.foveacao !== null) renderer.xr.setFoveation(salvo.foveacao);
     salvo = null;
     return true;
