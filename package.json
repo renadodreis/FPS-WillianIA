@@ -23,7 +23,8 @@
     "vr:baseline": "node scripts/vr-baseline.js",
     "vr:emulado": "node scripts/vr-emulado.js",
     "vr:censo": "node scripts/vr-censo.js",
-    "vr:controles": "node scripts/vr-controles.js"
+    "vr:controles": "node scripts/vr-controles.js",
+    "test:vr": "node scripts/test-vr.js"
   },
   "engines": {
     "node": ">=18"

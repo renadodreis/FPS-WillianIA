@@ -110,5 +110,13 @@ mexer no repositório de outra pessoa — só com pedido explícito.
 - **Cuidado com o que mede o harness em vez do produto.** `startBRMatch` pula a
   fase da nave DE PROPÓSITO; uma sonda que lê a fase logo depois "prova" que o
   jogo não começa da nave — e não prova nada.
+- **Suíte interrompida deixa servidor órfão segurando porta fixa, e isso lê
+  como regressão.** Testes de browser sobem `server.js` numa porta fixa por
+  arquivo; matar a suíte no meio (Ctrl+C, task cancelada) deixa esse processo
+  vivo, reparentado pro init. A próxima execução do MESMO arquivo falha com
+  `test did not finish before its parent and was cancelled` — que parece defeito
+  de código e é porta ocupada. Já custou uma investigação inteira. `npm run
+  test:vr` limpa órfão PROVADO (processo do `server.js` deste repo com pai
+  morto) antes de rodar, e nunca encosta na porta 3000.
 - **Monitor com `pgrep` casa com a própria linha de comando.** `until ! pgrep -f
   "run-tests"` nunca termina, porque o shell que o executa contém `run-tests`.

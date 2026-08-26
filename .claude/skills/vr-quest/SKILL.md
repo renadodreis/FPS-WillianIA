@@ -91,6 +91,28 @@ Duas leituras da camada 2 que enganam:
 - **`Hand tracking enabled: 0` + nenhum controle ativo = sessão sem entrada
   nenhuma**, e isso é o aparelho, não o jogo.
 
+## O ciclo curto: `npm run test:vr`
+
+A suíte completa leva ~16 min, e ciclo inviável vira gente pulando teste.
+`npm run test:vr` roda em ~2,5 min:
+
+- **todo** `test/xr-*.test.js` — casado por padrão, não por lista, pra não
+  esquecer arquivo novo que um agente acrescentar;
+- os testes de PC que a mudança de VR alcança (arma, mira, rig, balística,
+  toque), porque a fonte da mira e o cálculo de direção são os MESMOS: quebrar
+  VR quebra PC;
+- a regressão de segurança, que é invariante do projeto.
+
+**Não substitui `npm test`.** O ciclo declarado pelo dono é deploy → suíte
+completa → redeploy; isto é a peneira de antes.
+
+Ele também limpa **servidor órfão** antes de rodar. Motivo: teste de browser
+sobe `server.js` em porta FIXA por arquivo, e suíte interrompida deixa esse
+processo vivo. A execução seguinte do mesmo arquivo falha com `test did not
+finish before its parent and was cancelled` — que lê como regressão e é porta
+ocupada. Só encerra órfão PROVADO (processo deste repo com o pai já morto) e
+nunca encosta na porta 3000, que é o servidor ao vivo do dev.
+
 ## Medir sem ninguém dentro do headset
 
 `npm run vr:baseline -- --target=quest --immersive=1` faz o ciclo inteiro.
