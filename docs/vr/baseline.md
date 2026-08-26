@@ -111,15 +111,25 @@ SMAA). Duas execuções, variação < 0,3 %.
 | Payload de boot | **10,57 MB** em 146 requisições | — | — | cabe folgado no APK |
 | Boot até 1º frame | **2,38 s** (desktop, servidor local) — **ver correção abaixo** | 3 s | 4 s | sem folga pro Quest |
 
-> **CORREÇÃO (2026-08-26).** Este 2,38 s **não reproduz**. Auditoria posterior
-> mediu, com a MESMA ferramenta (`scripts/vr-baseline.js`) e na mesma máquina,
-> 2,94–3,03 s — e mediu 2,97 s também no commit ANTERIOR a qualquer mudança de
-> boot, ou seja, a diferença não veio de regressão: o 2,38 s original foi
-> colhido em condição mais favorável (cache/disco quente, máquina menos
-> carregada) e virou uma barra que o próprio repo não alcança em condição
-> normal. Fica aqui como advertência de método: **uma medição só não é
-> baseline** — o número que vale é a mediana de várias, com a condição
-> declarada.
+> **NOTA DE MÉTODO (2026-08-26).** Este número foi contestado e depois
+> CONFIRMADO. Uma auditoria mediu 2,94–3,03 s e eu registrei aqui que o 2,38 s
+> "não reproduzia" — estava errado. Uma segunda auditoria mediu **14 execuções
+> com a máquina ociosa: mediana 2,28 s**, e provou por experimento controlado
+> que os 2,94 s vinham de **carga de máquina** (com 8 de 12 núcleos ocupados:
+> 3337–3373 ms). A assinatura estava no próprio artefato da primeira medição:
+> `html` levando 1104 ms contra 191–457 ms — servidor local demorando 3–5× pra
+> devolver HTML estático é máquina ocupada, não regressão do jogo.
+>
+> **A barra oficial passa a ser:** `primeiroFrameMs` com **mediana ≤ 2,50 s em
+> N ≥ 7 execuções e nenhuma execução acima de 3,00 s**, com a condição
+> declarada — máquina ociosa (load de 1 min < 1,5), cache do navegador frio,
+> servidor local, Chrome headless com GPU real, 1280×720, seed 424242. O 2,38 s
+> não vira pass/fail porque cai DENTRO da faixa de ruído (5 das 14 execuções
+> ficam acima dele por acaso).
+>
+> Lição, e ela é minha: **medição sem condição declarada não é medida.** Errei
+> duas vezes no mesmo número — primeiro publicando pouca amostra, depois
+> "corrigindo" com amostra contaminada.
 
 Por pose (mediana de ~8 s cada):
 

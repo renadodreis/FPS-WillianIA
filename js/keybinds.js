@@ -31,8 +31,9 @@
      2. Quando a tecla física É o código padrão de uma ação, mas essa
         ação foi remapeada pra OUTRO lugar, a tecla antiga virou uma
         porta dos fundos — `resolveIncomingCode()` devolve
-        `{ suppress: true }` e quem chama tem que impedir o evento de
-        continuar (`stopImmediatePropagation`).
+        `{ suppress: true }`, e quem chama torna a tecla INERTE renomeando
+        o código (nunca matando o evento: ver o docbloco de
+        `resolveIncomingCode`).
 
    Um listener em fase de CAPTURA no `window` roda ANTES de qualquer
    listener em fase de bolha no MESMO `window` — é a ordem de despacho
@@ -205,9 +206,16 @@ export function rebind(bindings, actionId, newCode) {
 
    Dado o código FÍSICO que acabou de ser pressionado e os bindings
    atuais, devolve o que fazer:
-     · { suppress:true }               → tecla órfã: quem chama tem que
-                                          IMPEDIR o evento de continuar
-                                          (stopImmediatePropagation).
+     · { suppress:true }               → tecla órfã: quem chama torna a
+                                          tecla INERTE pro jogo renomeando
+                                          o código (ex.: `Orfa_<código>`).
+                                          NUNCA matando o evento: este
+                                          módulo é consumido por um
+                                          listener em CAPTURA no `window`,
+                                          e `stopImmediatePropagation` ali
+                                          apaga a tecla pra página inteira
+                                          — quebrou a navegação por teclado
+                                          do menu e da tela de morte.
      · { rewritten:true, code }        → tecla remapeada: quem chama
                                           reescreve `e.code` pro `code`
                                           devolvido ANTES do evento

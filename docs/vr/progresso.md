@@ -375,3 +375,30 @@ O que ele DE FATO entregou, medido pelo porteiro em 5 rodadas (mediana):
 É ganho real e é o que o jogador sente primeiro — a tela deixa de ficar morta —
 mas **não** é o que foi anunciado. O anúncio dizia "primeiro frame antecipado"; o
 que antecipou foi o menu ficar utilizável.
+
+---
+
+## Correção da correção · 2026-08-26
+
+A seção anterior ("Correção de números do boot") **estava errada e fica
+retratada aqui**, com o mesmo destaque que teve o erro.
+
+Eu registrei que o baseline de 2,38 s "não reproduz". **Reproduz.** A segunda
+auditoria mediu 14 execuções com a máquina ociosa — mediana **2,28 s**, min
+1995, máx 2607 — e demonstrou por experimento controlado que os 2,94–3,03 s da
+primeira auditoria eram **carga de máquina**: repetindo com 8 de 12 núcleos
+ocupados, deu 3337–3373 ms. A prova estava no artefato da própria medição
+contestada — `html` em 1104 ms contra 191–457 ms nas medições limpas.
+
+Ou seja: o que estava errado era a **refutação**, não o baseline. Eu troquei um
+número certo por um errado porque aceitei uma medição sem checar a condição em
+que ela foi feita.
+
+O que segue valendo da seção anterior: a melhora anunciada de **2661 → 2465 ms
+no primeiro frame** continua não reproduzindo, e o ganho real do trabalho de
+boot continua sendo o menu utilizável ~473 ms mais cedo e o primeiro conteúdo
+pintado ~824 ms mais cedo.
+
+**Barra oficial** (proposta pelo porteiro, com amostra e condição): mediana
+≤ 2,50 s em N ≥ 7 execuções, nenhuma acima de 3,00 s, com máquina ociosa e cache
+frio. Contra ela, o HEAD passa: mediana 2,28 s, máximo 2,61 s.

@@ -320,8 +320,14 @@
          continua sendo o único lido pelo jogo inteiro — só o CAMINHO
          até lá mudou.
        · tecla padrão órfã (a ação foi remapeada pra outro lugar)
-         → `stopImmediatePropagation()`: a tecla antiga vira letra morta,
-         nunca sobra funcionando escondida.
+         → o código é RENOMEADO pra `Orfa_<código>`, que nenhum sistema do
+         jogo conhece: a tecla fica inerte pro jogo e o evento segue vivo
+         pra página. NÃO use `stopImmediatePropagation` aqui — como este
+         listener roda em CAPTURA no `window`, matar o evento o apaga antes
+         de `document` e do elemento focado, e leva junto quem não tem nada
+         a ver com o remap: o ESPAÇO que ativa o `.mbtn` focado do menu
+         (js/menuscene.js) e os botões da tela de morte (game.js), os dois
+         lendo `e.key`.
        · nada remapeado → passa direto, byte a byte igual a antes.
 
      `isTrusted` é o portão: só teclado FÍSICO passa por aqui. Eventos
@@ -429,9 +435,18 @@ import {
        da sala, e o Tab para de navegar entre campos — que é exatamente o bug
        nº 18 do QA-REPORT.md, já corrigido uma vez neste repo. */
     const alvo = e.target;
-    if (alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' ||
-        alvo.isContentEditable)) return;
-    if (PREVENT_DEFAULT_CODES.includes(e.code)) e.preventDefault();
+    const digitando = !!(alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' ||
+        alvo.isContentEditable));
+    /* A guarda vale SÓ pro `preventDefault` — jamais pra tradução da tecla.
+       Sair do handler aqui (o que esta guarda fazia antes) desemparelhava
+       keydown de keyup: quem segurasse a tecla remapeada, abrisse o chat com
+       ENTER e soltasse DENTRO do campo tinha o keyup engolido — `game.js`
+       desligava o código FÍSICO e o CANÔNICO ficava ligado pra sempre. O
+       personagem andava sozinho depois de fechar o chat (medido: 6,97 m sem
+       tecla apertada). Soltar tecla precisa SEMPRE chegar traduzido.
+       Agir enquanto o jogador digita já é impedido no destino: `game.js:1328`
+       ignora tecla quando o alvo é campo de texto. */
+    if (!digitando && PREVENT_DEFAULT_CODES.includes(e.code)) e.preventDefault();
 
     if (listening) {
       e.preventDefault();
