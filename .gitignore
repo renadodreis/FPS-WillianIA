@@ -1,6 +1,20 @@
 node_modules/
 .agents/
-.claude/
+# `.claude/*` e não `.claude/` de propósito: excluindo o DIRETÓRIO o git nem
+# entra nele, e a negação abaixo não teria efeito nenhum. Excluindo o conteúdo,
+# a exceção funciona.
+.claude/*
+# EXCEÇÃO: as skills do projeto são CÓDIGO DE PROCESSO e vão pro repo. Sem isto
+# elas morrem na máquina de quem escreveu — que é exatamente o que não pode
+# acontecer com conhecimento que custou caro pra descobrir.
+# Só as skills REAIS deste projeto. O diretório também guarda symlinks pro
+# cache de plugins da máquina (codebase-design, systematic-debugging, ...) —
+# esses são do ambiente de quem desenvolve, não do repo, e commitá-los criaria
+# links quebrados pra qualquer outra pessoa.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/vr-quest/
+!.claude/skills/test-runner/
 skills-lock.json
 .venv/
 docker-compose.prod.yml

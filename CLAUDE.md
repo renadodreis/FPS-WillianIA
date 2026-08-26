@@ -27,6 +27,27 @@ quebrou o jogo antes.
   `npm run build:castle`. Como recebe cache imutável, qualquer mudança de bytes
   exige uma v3 e a atualização conjunta do loader e dos testes.
 
+- **VR/WebXR: o jogo NÃO move a cabeça do jogador.** Em XR o three sobrescreve a
+  pose da câmera todo frame relativa ao PAI — o grafo é `scene > xrRig > camera`,
+  o jogo move o RIG (nos pés) e o headset move a câmera. `camera.position` deixa
+  de ser coordenada de mundo. O rig NASCE PREGUIÇOSO porque todo `Object3D`
+  consome 4 números do `Math.random` seedado no UUID, e criá-lo no boot
+  deslocaria o worldgen de todos. Recoil, screen shake e passeio de câmera do
+  menu continuam sendo calculados, mas não chegam na câmera: arrastar a vista de
+  quem está de headset é enjoo, não game feel. Detalhes e armadilhas de
+  ferramenta na skill `vr-quest` (`.claude/skills/vr-quest/`), que é para ser
+  mantida atualizada.
+
+## Fluxo de trabalho (git flow)
+
+`dev` → `hom` → `prod`. Trabalho novo sai de `dev`; `hom` é o que está em
+homologação; `prod` é o que está no ar. Nada entra em `hom` sem `npm test`
+verde, e nada entra em `prod` sem ter passado por `hom`.
+
+**`origin` é o repositório do WILL (`wewewe21`), `fork` é o do Renato
+(`renadodreis`).** Empurrar vai para o `fork`. Mandar coisa para o `origin` é
+mexer no repositório de outra pessoa — só com pedido explícito.
+
 ## Testes
 
 - **Suíte completa:** `npm test` (`scripts/run-tests.js` já roda sequencial com
@@ -48,3 +69,24 @@ quebrou o jogo antes.
 ## Commits
 
 - Não expor IP, DNS ou detalhes de infraestrutura/deploy em commits nem em docs.
+
+## Lições de método (custaram caro, valem para o repo inteiro)
+
+- **Uma medição só não é baseline, e medição sem condição declarada não é
+  medida.** Um número de boot publicado com poucas execuções virou critério de
+  aprovação, foi "refutado" por uma medição feita com a máquina carregada, e a
+  refutação estava errada. Só com N=14 e condição escrita (máquina ociosa, cache
+  frio) o assunto fechou. Sinal de máquina carregada no próprio artefato: o
+  `html` levando ~1 s em vez de ~200–450 ms.
+- **Teste verde não prova tela certa.** Cinco arquivos de teste de rig de roda
+  passavam enquanto o carro aparecia com as rodas na altura da janela na PRIMEIRA
+  tela que todo jogador vê — porque todos bootavam já em jogo, e o menu não tinha
+  teste. O buraco não era de cobertura de código, era de cobertura de ESTADO.
+- **Auditoria de quem escreveu não é auditoria.** Nesta base, sete defeitos reais
+  só apareceram em revisão independente — inclusive defeitos introduzidos por
+  correções de outros defeitos. Cada rodada de "está pronto" tinha algo atrás.
+- **Cuidado com o que mede o harness em vez do produto.** `startBRMatch` pula a
+  fase da nave DE PROPÓSITO; uma sonda que lê a fase logo depois "prova" que o
+  jogo não começa da nave — e não prova nada.
+- **Monitor com `pgrep` casa com a própria linha de comando.** `until ! pgrep -f
+  "run-tests"` nunca termina, porque o shell que o executa contém `run-tests`.
