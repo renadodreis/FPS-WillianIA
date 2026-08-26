@@ -1,7 +1,7 @@
 /* vida ambiente: borboletas, pássaros, fogueira, bandeiras — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
-import { noSeed } from './meshutils.js';
+import { noSeed, fuseBody } from './meshutils.js';
 
 export function createAmb(deps) {
   const { rand, TAU, _v1, _v2, heightAt, biomeAt, addObstacle, SFX, FX, scene, csmMat, Structures, player } = deps;
@@ -97,7 +97,19 @@ export function createAmb(deps) {
   }
   bflies.forEach(reanchor);
 
-  /* ---- bandos de pássaros circulando alto ---- */
+  /* ---- bandos de pássaros circulando alto ----
+     Quinze planos IDÊNTICOS (mesma geometria, mesmo material) espalhados por
+     três bandos: quinze draw calls por olho sempre que a câmera pega o céu.
+     Vira UMA InstancedMesh de 15, pelo mesmo caminho das asas acima — as
+     malhas continuam nascendo (cada `new THREE.Mesh` come 4 sorteios do
+     `Math.random` seedado, e a ordem de consumo é contrato), só que agora
+     como PORTADORAS DE TRANSFORMAÇÃO: o update anima `b.m` como sempre e a
+     matriz dele é copiada pra instância.
+
+     `frustumCulled = false` pelo mesmo motivo das borboletas: a esfera de uma
+     InstancedMesh não acompanha as instâncias, e os três bandos cobrem
+     ±300 m — a esfera honesta nunca seria descartada. Uma call fixa é melhor
+     que bando sumindo do céu. */
   const birds = [];
   const birdMat = new THREE.MeshBasicMaterial({ color: 0x1d2126, side: THREE.DoubleSide });
   const birdGeo = new THREE.PlaneGeometry(0.95, 0.22);
@@ -106,10 +118,18 @@ export function createAmb(deps) {
     for (let i = 0; i < 5; i++) {
       const m = new THREE.Mesh(birdGeo, birdMat);
       m.rotation.x = -0.35;
-      scene.add(m);
       birds.push({ m, center, r: rand(16, 42), h: rand(26, 46), a: rand(TAU), sp: rand(0.22, 0.4) * (f % 2 ? 1 : -1), ph: rand(TAU) });
     }
   }
+  const birdInst = noSeed(() => {
+    const m = new THREE.InstancedMesh(birdGeo, birdMat, birds.length);
+    m.name = 'passaros';
+    m.frustumCulled = false;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    birds.forEach((b, i) => { b.m.updateMatrix(); m.setMatrixAt(i, b.m.matrix); });
+    scene.add(m);
+    return m;
+  });
 
   /* ---- pólen dourado flutuando (1 draw call) ---- */
   const MOTES = 70;
@@ -125,9 +145,21 @@ export function createAmb(deps) {
   motes.frustumCulled = false;
   scene.add(motes);
 
-  /* ---- acampamento do spawn: fogueira, pedras, banco e tenda ---- */
+  /* ---- acampamento do spawn: fogueira, pedras, banco e tenda ----
+     Eram DOZE malhas soltas na cena (3 lenhas + 7 pedras + banco + tenda) e
+     três materiais. Como o `camera.far` é VIEW_DIST + 600, elas continuam
+     sendo desenhadas do outro lado do mapa, atrás de uma névoa que já satura
+     em 420 m — na pose de castelo o acampamento custava 20 draw calls
+     estéreo sem colocar um pixel na tela. Fundidas por material viram TRÊS
+     malhas, com os vértices no mesmo ponto do mundo.
+
+     As peças continuam nascendo na mesma ordem e com o mesmo consumo de
+     `rand`/UUID (contrato do worldgen); o que mudou é que elas entram numa
+     raiz temporária em vez da cena, e quem vai pra cena é o resultado da
+     fusão. Mesmo padrão das asas de borboleta, logo acima. */
   const campY = heightAt(2, -2);
   {
+    const pecas = [];
     const wood = csmMat(new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 0.8 }));
     const stone = csmMat(new THREE.MeshStandardMaterial({ color: 0x7e7a73, roughness: 0.9 }));
     const canvasM = csmMat(new THREE.MeshStandardMaterial({ color: 0xc26b3a, roughness: 0.85, side: THREE.DoubleSide }));
@@ -136,19 +168,19 @@ export function createAmb(deps) {
       log.position.set(2, campY + 0.28, -2);
       log.rotation.set(0.5, i * TAU / 3, 0.45);
       log.castShadow = true;
-      scene.add(log);
+      pecas.push(log);
     }
     for (let i = 0; i < 7; i++) { // círculo de pedras
       const st = new THREE.Mesh(new THREE.SphereGeometry(rand(0.09, 0.15), 7, 5), stone);
       const a = i / 7 * TAU;
       st.position.set(2 + Math.cos(a) * 0.78, campY + 0.06, -2 + Math.sin(a) * 0.78);
-      scene.add(st);
+      pecas.push(st);
     }
     const bench = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 1.7, 8), wood);
     bench.rotation.z = Math.PI / 2;
     bench.position.set(2.2, campY + 0.18, -0.2);
     bench.castShadow = true;
-    scene.add(bench);
+    pecas.push(bench);
     // tenda em A
     const s1 = new THREE.PlaneGeometry(1.5, 2.3); s1.rotateX(-Math.PI / 2); s1.rotateZ(0.96);  s1.translate(-0.44, 0.62, 0);
     const s2 = new THREE.PlaneGeometry(1.5, 2.3); s2.rotateX(-Math.PI / 2); s2.rotateZ(-0.96); s2.translate(0.44, 0.62, 0);
@@ -156,11 +188,24 @@ export function createAmb(deps) {
     tent.position.set(5.6, campY, -4.2);
     tent.rotation.y = 0.5;
     tent.castShadow = true;
-    scene.add(tent);
+    pecas.push(tent);
     addObstacle(5.6, -4.2, 1.3);
+    /* A raiz é IDENTIDADE e some depois: `fuseBody` leva os vértices pro
+       espaço dela, então cada malha fundida pode ir direto pra cena sem
+       ganhar um Group de intermediário (e o `scene.add` já a desparenta). */
+    noSeed(() => {
+      const raiz = new THREE.Group();
+      for (const p of pecas) raiz.add(p);
+      for (const m of fuseBody(raiz).meshes) scene.add(m);
+    });
   }
-  // chamas da fogueira (3 quads aditivos cruzados)
-  const flameMat = new THREE.MeshBasicMaterial({ color: 0xffa53d, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  /* chamas da fogueira (3 quads aditivos cruzados)
+     `forceSinglePass`: `transparent` + `DoubleSide` faz o three desenhar o
+     objeto DUAS vezes (passe de BackSide e passe de FrontSide) — e o quad é
+     plano, então um dos dois passes já sai inteiro descartado pelo culling de
+     face e só gasta a draw call. Mesmo argumento, e mesma prova, das asas de
+     borboleta acima: o pixel é idêntico, a call é metade. */
+  const flameMat = new THREE.MeshBasicMaterial({ color: 0xffa53d, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true });
   const fireFlames = [];
   for (let i = 0; i < 3; i++) {
     const f = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.85), flameMat);
@@ -193,13 +238,17 @@ export function createAmb(deps) {
       escreveAsas(wings, i, b);
     }
     wings.instanceMatrix.needsUpdate = true;
-    // pássaros circulam batendo asas
-    for (const b of birds) {
+    // pássaros circulam batendo asas (a malha é portadora: a matriz vai pra instância)
+    for (let i = 0; i < birds.length; i++) {
+      const b = birds[i];
       b.a += b.sp * dt;
       b.m.position.set(b.center.x + Math.cos(b.a) * b.r, b.h + Math.sin(t * 0.6 + b.ph) * 2, b.center.z + Math.sin(b.a) * b.r);
       b.m.rotation.y = -b.a + (b.sp > 0 ? 0 : Math.PI);
       b.m.scale.y = 0.45 + Math.abs(Math.sin(t * 7 + b.ph)) * 0.85;
+      b.m.updateMatrix();
+      birdInst.setMatrixAt(i, b.m.matrix);
     }
+    birdInst.instanceMatrix.needsUpdate = true;
     // pólen acompanha o player
     motes.position.set(player.pos.x, player.pos.y, player.pos.z);
     motes.rotation.y += dt * 0.025;

@@ -182,7 +182,13 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
      atravessando direção que o próprio jogo reportava bloqueada. Os saltos vêm
      de três lugares — glitch de tracking, `recenter()` (que muda a ORIGEM e não
      é andar) e o acumulado de quando o jogo não estava drenando. */
-  it('o passo de um frame tem TETO, e o excedente é jogado fora', () => {
+  it('o passo de um frame tem TETO, e o excedente ESCOA — não é jogado fora', () => {
+    /* A primeira versão deste teste cobrava que o excedente fosse DESCARTADO, e
+       essa era a decisão errada: a cabeça do jogador vai para `(x,z) + passo`,
+       então tirar do acumulado o que o jogo não absorveu arrasta a VISTA de
+       volta. Medido com o descarte no lugar: morto, um passo físico de 0,80 m
+       movia a cabeça 0,000 m — o mundo congelava. O teto protege o COLISOR de
+       teleportar; o acumulado protege a CABEÇA de ser puxada. São duas coisas. */
     xr.enter();
     camera.position.set(0, 1.7, 0);
     xr.place(0, 0, 0, 0);
@@ -190,10 +196,30 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     xr.place(0, 0, 0, 0);
     const p = xr.consumirPasso();
     assert.ok(Math.hypot(p.x, p.z) <= 0.1501,
-      `um salto de 3 m entregou ${Math.hypot(p.x, p.z).toFixed(3)} m ao jogo: atravessa parede`);
-    const sobra = xr.consumirPasso();
-    assert.equal(+Math.hypot(sobra.x, sobra.z).toFixed(3), 0,
-      'o excedente ficou represado — ao ser liberado, o colisor teleporta');
+      `um salto de 3 m entregou ${Math.hypot(p.x, p.z).toFixed(3)} m ao jogo num frame: o colisor teleporta`);
+    let total = Math.hypot(p.x, p.z), voltas = 1;
+    for (; voltas < 60; voltas++) {
+      const q = xr.consumirPasso();
+      const m = Math.hypot(q.x, q.z);
+      if (m < 1e-6) break;
+      assert.ok(m <= 0.1501, `a volta ${voltas} entregou ${m.toFixed(3)} m — o teto vale sempre`);
+      total += m;
+    }
+    assert.ok(total > 1.5,
+      `o acumulado escoou só ${total.toFixed(2)} m: o excedente foi descartado e a vista seria arrastada`);
+    assert.ok(voltas > 8, `escoou em ${voltas} frames — rápido demais para não ser um pulo`);
+  });
+
+  it('o acumulado tem teto próprio: a cabeça não se perde do corpo', () => {
+    xr.enter();
+    camera.position.set(0, 1.7, 0);
+    xr.place(0, 0, 0, 0);
+    camera.position.set(40, 1.7, 0);         // absurdo: erro de rastreio, não jogador
+    xr.place(0, 0, 0, 0);
+    xr.consumirPasso();
+    const resto = xr.passoPendente;
+    assert.ok(Math.hypot(resto.x, resto.z) <= 2.01,
+      `sobraram ${Math.hypot(resto.x, resto.z).toFixed(1)} m de acumulado: a cabeça ficaria longe do corpo`);
   });
 
   it('o teto preserva a DIREÇÃO do passo, não só o tamanho', () => {

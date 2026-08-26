@@ -3,9 +3,14 @@
    ================================================================ */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { fuseBody } from './meshutils.js';
 
 export function createPickups(deps) {
   const { heightAt, SFX, scene, Structures, showBanner, centerMsg, getGun, updateAmmoHUD, updateInvHUD, updateArmorHUD, player, inventory } = deps;
+  /* Receita fundida por TIPO de drop: os 26 do pool montam os mesmos 5
+     modelos, então a geometria mesclada é a mesma pra todos (`cache` de
+     fuseBody) — 5 buffers de vértice em vez de 130 cópias iguais. */
+  const FUSAO = new Map();
   const N = 26;
   const pool = [];
   const mAmmoBox = new THREE.MeshStandardMaterial({ color: 0x3a4a2e, roughness: 0.6, metalness: 0.2 });
@@ -48,6 +53,24 @@ export function createPickups(deps) {
       const band = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.03, 6, 14), mNadeR);
       band.rotation.x = Math.PI / 2; g.add(band);
     }
+    /* FUSÃO POR MATERIAL. O drop de munição eram QUATRO malhas (a caixa e as
+       três cápsulas de latão) e o kit médico TRÊS (a caixa e os dois braços da
+       cruz) — cada uma é uma draw call POR OLHO. Medido em estéreo, os drops
+       vivos custavam 34 das 460 draw calls do bloco de mundo na pose de
+       castelo. Fundido por material o modelo cai pra duas malhas, com os
+       vértices no mesmo ponto e o material EXATAMENTE o mesmo (o balde é a
+       identidade do material, então cor, emissivo e registro no CSM não se
+       mexem).
+
+       As malhas continuam nascendo uma a uma: cada `new THREE.Mesh` come 4
+       sorteios do `Math.random` seedado, e a ordem de consumo é contrato do
+       worldgen — `fuseBody` roda dentro de `noSeed` e só reorganiza o que já
+       existe. O `cache` por tipo faz os 26 do pool dividirem UM buffer de
+       vértices em vez de 26 cópias iguais — e, junto, o material do pernil e
+       os dois da armadura (que nascem por chamada) passam a ser um só. Os
+       outros 25 de cada continuam sendo CRIADOS, porque é o consumo deles que
+       o contrato do rand cobra; só não são mais usados. */
+    fuseBody(g, { cache: FUSAO, cacheKey: type });
     return g;
   }
   for (let i = 0; i < N; i++) {

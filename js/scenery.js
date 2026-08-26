@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+import { fuseBody } from './meshutils.js';
 
 export function createScenery() {
   const loader = new GLTFLoader();
@@ -113,6 +114,27 @@ export function createScenery() {
     const root = new THREE.Group();
     root.add(orient);
     const size = b2.getSize(new THREE.Vector3());
+    /* ---- FUSÃO POR MATERIAL: o prop chega do GLB em pedaços -------------
+       O `wooden_barrel.glb` vem com VINTE malhas e UM material só; a casa da
+       árvore, com catorze e dois. Cada malha é uma draw call POR OLHO, e em
+       estéreo isso apareceu grande na medição: na pose de castelo, três
+       barris a 460 m — atrás da névoa, que satura em VIEW_DIST (420 m), ou
+       seja invisíveis — custavam 120 das 702 draw calls do frame.
+
+       `fuseBody` sem ossos é exatamente a fusão estática que falta aqui:
+       agrupa por (material + bandeiras de render), mescla, e devolve UMA
+       malha por balde. Material igual ⇒ mesma cor, mesmo mapa, mesmo
+       registro no CSM; bandeira igual ⇒ mesma sombra e mesmo culling. Os
+       vértices são levados pro espaço de `root` antes de mesclar, então
+       ficam no MESMO ponto do mundo — é isso que
+       test/world-drawcalls.test.js cobra, caixa por material.
+
+       Vem DEPOIS de `size`: a caixa do prop (que vira colisor em game.js)
+       é medida na hierarquia original, e fundir não pode mexer nela.
+
+       Roda em `noSeed` (dentro de `fuseBody`): criar geometria e malha
+       consome o `Math.random` seedado, e a ordem de consumo é contrato. */
+    fuseBody(root);
     return { root, size };
   }
 

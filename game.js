@@ -62,6 +62,8 @@ import { createXrWeapon } from './js/xr/xrweapon.js';
 import { createXrInteract } from './js/xr/xrinteract.js';
 import { createXrUi } from './js/xr/xrui.js';
 import { createXrHud } from './js/xr/xrhud.js';
+import { createXrHaptics } from './js/xr/xrhaptics.js';
+import { createXrFrameRate } from './js/xr/xrframerate.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
@@ -366,6 +368,15 @@ camera.position.set(0, 3, 8);
    seedado (linha ~201) e deslocaria o worldgen inteiro. Quem cria o rig
    é a primeira sessão de verdade, muito depois do mundo montado. */
 const entradaXR = criarEntradaXR();
+/* TATO E TAXA DE QUADROS DA SESSÃO. Nenhum dos dois aloca `Object3D` — só
+   número e objeto simples — então podem nascer aqui sem gastar os 4 números do
+   `Math.random` seedado do UUID. Fora de XR `getSession()` devolve null e o
+   `emitir` sai na terceira linha. */
+const XRTato = createXrHaptics({
+  getSession: () => (renderer.xr && renderer.xr.getSession && renderer.xr.getSession()) || null,
+});
+const XRTaxa = createXrFrameRate();   // alvo 72 Hz
+let _uiFocoAntes = '';                // borda de hover do painel, pro tique de UI
 let xrYaw = 0;              // giro artificial acumulado (js/xr/xrturn.js), em radianos
 const _passoXR = { x: 0, z: 0 };   // passo físico do cômodo, drenado do rig por frame
 let aoMudarSessaoXr = () => {}; // preenchido lá embaixo, quando o botão existe
@@ -380,7 +391,12 @@ const XR = createXrBoot({ THREE, renderer, scene, camera,
      vaza pro desktop é regressão de PC. */
   getCsm: () => csm, CFG,
   onEnter: () => aoMudarSessaoXr(),
-  onExit: () => { XRArma.exit(); XRInterage.exit(); aoMudarSessaoXr(); } });
+  /* TUDO que a sessão criou sai aqui. Sem `XRUI.exit()`/`XRHud.exit()` o
+     painel de VR ficava GRUDADO NO MONITOR depois de tirar o headset —
+     `depthTest: false` e `renderOrder` alto, por cima do jogo, com o jogo
+     pausado e sem nenhum caminho de fechar. E o gatilho era a própria pausa
+     por perda de foco: tirar o aparelho abria o painel sozinho. */
+  onExit: () => { XRArma.exit(); XRInterage.exit(); XRUI.exit(); XRHud.exit(); aoMudarSessaoXr(); } });
 /* FOVEAÇÃO: o three nasce em 1.0 — o MÁXIMO ("Set default foveation to
    maximum", WebXRManager.js:46). Foveação máxima manda o compositor renderizar
    a PERIFERIA em resolução baixa; no Quest isso é um borrão que acompanha a
@@ -1261,7 +1277,10 @@ function showBanner(html, dur = 3500) {
 const HitFeel = createHitFeel({ ui, SFX, FX, camera });
 /* aceita sabor ('hit' | 'head' | 'kill') e o booleano antigo (compat) */
 function showHitmarker(flavor) {
-  HitFeel.hitmarker(flavor === true ? 'kill' : flavor === false || !flavor ? 'hit' : flavor);
+  const sabor = flavor === true ? 'kill' : flavor === false || !flavor ? 'hit' : flavor;
+  HitFeel.hitmarker(sabor);
+  // o tato conta a MESMA história que a tela: hit < head < kill
+  XRTato.emitir('acerto', { sabor, mao: 'right' });
 }
 function addKillFeed(html) {
   const div = document.createElement('div');
@@ -2130,6 +2149,7 @@ function startReload(t) {
   if (reloadBlocked()) return; // R dirigindo/morto não toca SFX nem recarrega
   if (gun.reloading || gun.mag === gun.magSize || gun.reserve <= 0) return;
   gun.reloading = true;
+  XRTato.emitir('recarga', { mao: 'right' });   // carregador sai
   gun.reloadEnd = t + gun.reloadTime;
   // escopeta: cartucho a cartucho ao longo da MESMA duração (a bomba continua
   // percorrendo o curso inteiro); o último cartucho entra no reloadEnd.
@@ -2143,6 +2163,7 @@ function finishReload() {
   if (reloadBlocked()) return; // recarga pendente só completa fora do estado bloqueado (sem soft-lock)
   const take = Math.min(gun.magSize - gun.mag, gun.reserve);
   gun.mag += take; gun.reserve -= take;
+  XRTato.emitir('recarga-pronta', { mao: 'right' });   // ferrolho: forte e curto
   gun.reloading = false;
   updateAmmoHUD();
 }
@@ -2153,6 +2174,7 @@ function updateReload(t) {
   if (gun.parts.pump) {
     if (t >= (gun.nextShellT || Infinity) && gun.mag < gun.magSize && gun.reserve > 0) {
       gun.mag += 1; gun.reserve -= 1; updateAmmoHUD(); SFX.reload();
+      XRTato.emitir('recarga-pronta', { mao: 'right' });   // escopeta, cartucho a cartucho
       gun.nextShellT = t + (gun.reloadPerShell || gun.reloadTime);
     }
     if (gun.mag >= gun.magSize || gun.reserve <= 0) gun.reloading = false;
@@ -2222,6 +2244,11 @@ function miraDirecao(out) {
 const _hitAgg = new THREE.Vector3();
 const _missEnd = new THREE.Vector3();
 function fire(t) {
+  /* TATO DO TIRO, antes de qualquer ramo: vale pra faca, foguete, laser e
+     hitscan. A mão é a que segura a arma. O peso sai de `shotTrauma(gun)`
+     dentro do módulo — o MESMO número do screenshake, então arma pesada pesa
+     nos dois sentidos. */
+  XRTato.emitir('tiro', { arma: gun, mao: 'right' });
   // faca (melee): golpe curto, sem munição/flash/som de tiro
   if (gun.melee) {
     gun.cycleT = 0.34; gun.cycleDur = 0.34;
@@ -2500,6 +2527,8 @@ function playerDamage(dmg, fromPos, cause) {
   damageFlash(lethalNext ? 1.6 : clamp(0.55 + dmg * 0.016, 0.55, 1.2));
   addTrauma(clamp(0.14 + dmg * 0.006, 0.14, 0.55));
   SFX.hurt();
+  // dano é no CORPO, não na arma: as duas mãos
+  XRTato.emitir('dano', { dano: dmg, letal: lethalNext });
   if (fromPos) { // seta apontando de onde veio o dano
     _euler.setFromQuaternion(camera.quaternion);
     const worldAng = Math.atan2(fromPos.x - player.pos.x, fromPos.z - player.pos.z);
@@ -2794,6 +2823,8 @@ const XRUI = createXrUi({
        fechar. Menu principal dentro do mundo é a próxima rodada. */
     sair: () => { voltarAoMenu(); XR.exit(); },
     reaparecer: () => restartMatch(),
+    // em partida online o morto fica morto até a rodada acabar
+    podeReaparecer: () => !window.__BR_active,
   },
 });
 const XRHud = createXrHud({
@@ -2811,8 +2842,18 @@ const XRHud = createXrHud({
     granadas: inventory.nades,
     medkits: inventory.medkits,
     abates: kills,
-    br: (window.__BR_active && window.__BR_debug)
-      ? { fase: window.__BR_debug.S.phase, vivos: window.__BR_debug.S.alive, tempo: '', zona: '' } : null,
+    br: (window.__BR_active && window.__BR_debug) ? (() => {
+      /* `tempo` e `zona` chegavam como string vazia literal: dois dos itens do
+         HUD estavam cabeados e cegos. O relógio da partida é `S.matchT()` e o
+         estado do gás é o rótulo do controlador de zona. */
+      const D = window.__BR_debug, t = Math.max(0, Math.floor(D.S.matchT ? D.S.matchT() : 0));
+      const mm = String(Math.floor(t / 60)).padStart(2, '0'), ss = String(t % 60).padStart(2, '0');
+      return {
+        fase: D.S.phase, vivos: D.S.alive,
+        tempo: `${mm}:${ss}`,
+        zona: D.zc ? (D.zc.label || (D.zc.closesIn > 0 ? `zona fecha em ${Math.ceil(D.zc.closesIn)}s` : '')) : '',
+      };
+    })() : null,
     // o DOM continua sendo o MODELO do feed; o painel do pulso é só a vista
     feed: ui.killfeed ? Array.prototype.slice.call(ui.killfeed.children, -3).map(e => e.textContent) : [],
   }),
@@ -3108,6 +3149,10 @@ function tick(forceDt) {
   if (xrOn && !state.started && !XRUI.aberto) startGame(false);
   // saiu da sessão com botão apertado: sem isto a tecla fica presa pra sempre
   if (!xrOn && _teclasXR.size) soltarTeclasXR();
+  /* Sessão acabou (headset tirado, botão do sistema, bateria): solta o ouvinte
+     de `frameratechange` e o pulso em voo. Os dois saem na primeira linha
+     quando não há nada a soltar — chamar por frame no desktop é de graça. */
+  if (!xrOn) { XRTaxa.soltar(); XRTato.soltar(); _uiFocoAntes = ''; }
 
   /* A ARMA MORA NA MÃO, NÃO NA CABEÇA. Fora de XR ela é filha da câmera e
      mirar é girar a vista. Em XR isso colaria a arma no rosto: o jogador teria
@@ -3127,11 +3172,22 @@ function tick(forceDt) {
   if (xrOn) {
     const sessao = renderer.xr.getSession && renderer.xr.getSession();
     const fontes = sessao ? sessao.inputSources : null;
+    /* DECLARA A TAXA. A sessão nasce a 90 Hz por herança; 90 dá 11,11 ms por
+       frame contra 13,89 a 72 — 25% mais orçamento numa linha, num quadro que
+       está a 4,3× do teto de draw calls. Idempotente. */
+    XRTaxa.aplicar(sessao);
     /* O painel come a entrada enquanto está aberto — senão o gatilho que
        escolhe "SAIR DA PARTIDA" dispara um tiro no mesmo frame. `ler(fontes)`
        continua rodando SEMPRE para que as bordas (apertar ≠ segurar) não
        mintam na hora de fechar. */
     const ui3d = XRUI.update({ dt, fontes, maos: { left: XR.mao('left'), right: XR.mao('right') } });
+    /* TATO DO PAINEL. O módulo da UI não emite evento de foco: devolve o item
+       sob o raio e o que foi acionado. A BORDA é calculada aqui — um tique por
+       linha nova, um clique por escolha, na mão que está apontando. */
+    const alvoUi = ui3d.item ? ui3d.item.id + '|' + ui3d.item.zona : '';
+    if (alvoUi && alvoUi !== _uiFocoAntes) XRTato.emitir('ui-foco', { mao: ui3d.mao || 'right' });
+    _uiFocoAntes = alvoUi;
+    if (ui3d.acionou) XRTato.emitir('ui-toque', { mao: ui3d.mao || 'right' });
     /* Headset tirado ou menu do sistema aberto = sessão 'visible-blurred' ou
        'hidden'. A loja exige que o app pause sozinho nesse caso, e não só no
        botão. */
@@ -3156,8 +3212,15 @@ function tick(forceDt) {
        passo fazia o rig acumular enquanto o jogador estava morto ou dirigindo
        (medido: 1,200 m e 1,005 m) e despejar tudo num frame ao voltar — o
        colisor teleportava. O teto de `consumirPasso` cuida do resto. */
-    XR.consumirPasso(_passoXR);
+    /* DRENA SÓ QUANDO PODE APLICAR. Drenar sempre parecia resolver o
+       represamento, e criou coisa pior: o passo saía do acumulado sem entrar em
+       `player.pos`, e como a cabeça vai para `(x,z) + passo`, a VISTA era
+       arrastada de volta — morto, o mundo congelava. O represamento já está
+       resolvido do lado certo: `consumirPasso` tem teto por frame e devolve o
+       excedente ao acumulado, então o que ficou guardado escoa em alguns frames
+       em vez de teleportar o colisor de uma vez. */
     if (!state.driving && !state.flying && !player.dead) {
+      XR.consumirPasso(_passoXR);
       player.pos.x += _passoXR.x;
       player.pos.z += _passoXR.z;
     }

@@ -194,10 +194,17 @@ export function createXrUi({
 
   function linhas() {
     if (modo === 'morte') {
-      return [
-        { id: 'reaparecer', tipo: 'botao', txt: 'JOGAR DE NOVO' },
-        { id: 'sair', tipo: 'botao', txt: 'VOLTAR AO MENU' },
-      ];
+      /* "JOGAR DE NOVO" só existe no SOLO. Em partida online o jogador morto
+         fica morto até a rodada acabar: o menu de DOM esconde o botão, e
+         oferecê-lo aqui dava um botão MORTO — a ação recusava com um aviso no
+         console e o painel se reabria sozinho. Botão que não faz nada é pior
+         que botão ausente. */
+      const l = [];
+      if (!acoes.podeReaparecer || acoes.podeReaparecer()) {
+        l.push({ id: 'reaparecer', tipo: 'botao', txt: 'JOGAR DE NOVO' });
+      }
+      l.push({ id: 'sair', tipo: 'botao', txt: 'VOLTAR AO MENU' });
+      return l;
     }
     const p = prefsGiro();
     const l = [

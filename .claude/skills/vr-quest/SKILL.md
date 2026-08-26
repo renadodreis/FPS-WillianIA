@@ -153,6 +153,54 @@ Uma linha por segundo do runtime: FPS real contra o modo de tela, tempo de
 aplicação, ocupação de GPU/CPU, térmica e memória. É a mesma fonte do OVR
 Metrics Tool.
 
+## A armadilha que mais se repete: ANDAIME QUE VIRA PRODUTO
+
+**Já aconteceu SEIS vezes nesta frente.** O padrão é sempre o mesmo, e é uma
+consequência inevitável de o agente que escreve o módulo não poder editar o
+`game.js`:
+
+1. O módulo novo existe, mas ninguém o chama — sem fiação, não há o que medir.
+2. O teste instala um condutor próprio (chama `update()` por frame, ou cria a
+   própria instância do módulo) para haver comportamento.
+3. A fiação entra no `game.js`.
+4. Agora **duas coisas** conduzem o mesmo produto, e o teste mede a briga.
+
+O que isso já produziu, medido:
+
+| onde | sintoma |
+|---|---|
+| giro | 60 °/s por um segundo virou **117,9°** — contava duas vezes |
+| painel | o clique em "GIRO" alternava o valor **duas vezes e voltava** ao original |
+| taxa de quadros | teste cobrava "a sessão nasce a 90" depois de a fiação já declarar 72 |
+| háptico | duas instâncias escrevendo no MESMO atuador; o pulso do jogo aparecia no lugar do pulso do teste |
+
+**A regra:** no momento em que a fiação entra, o andaime tem que virar
+observador. Use a instância do jogo (`window.__game.XRUI`, `G.XRTato`), não uma
+cópia; conte frames por `renderer.info.render.frame`, não por uma cadeia de
+`requestAnimationFrame` própria; e não chame a função que o `game.js` chama.
+
+E o corolário: **quando a fiação entra, o teste do agente muda de significado.**
+Um caso que cobrava "a sessão nasce a 90 Hz" passa a cobrar que a correção NÃO
+exista. Reler os testes do agente depois de aplicar o wiring é parte de aplicar
+o wiring.
+
+## Teste que não pode falhar não é teste
+
+Aconteceu aqui, e passou despercebido até uma auditoria independente: um caso
+asseverava `renderer.xr.getFramebufferScaleFactor() === 1`. Esse getter **não
+existe** no three r185 — a expressão caía num literal e a asserção passava
+sempre, enquanto em produção a função que ela deveria proteger tinha **zero
+chamadas** e o preset de sessão vazava para o monitor.
+
+Antes de escrever cada asserção, diga qual mudança de produção a faria falhar. E
+prove: reinjete o defeito e veja o teste morrer. Guarda de constante (`X > Y`
+onde X e Y são literais do próprio módulo) e tautologia geométrica (ângulo
+depois de um `lookAt`) são as duas famílias mais comuns de teste inútil.
+
+Comparação de tempo também engana: três `emitir` no mesmo turno síncrono podem
+compartilhar o mesmo `performance.now()`, e `startTime >` falha sem nada estar
+errado. Compare o CONTEÚDO.
+
 ## O KIT É A BASE. Dublê escrito à mão é erro primário
 
 **Teste de controle de VR se escreve acionando o runtime emulado, não inventando

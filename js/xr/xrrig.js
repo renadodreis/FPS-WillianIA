@@ -144,18 +144,35 @@ export function createXrRig({ THREE, scene, camera }) {
      certa: o jogador não "tem direito" a metros guardados de quando não estava
      jogando. */
   const PASSO_MAX = 0.15;
+  /* Teto do acumulado. Andar fisicamente longe do colisor é legítimo — o
+     jogador está mesmo andando no quarto dele — mas não pode crescer sem fim,
+     ou a cabeça se perde do corpo. Dois metros é a ordem de grandeza de uma
+     área de jogo doméstica. */
+  const RESIDUO_MAX = 2.0;
 
   function consumirPasso(alvo, limite = PASSO_MAX) {
     const out = alvo || { x: 0, z: 0 };
     const m = Math.hypot(passoX, passoZ);
     if (m > limite) {
-      // corta na direção do passo e JOGA FORA o resto: represar viraria teleporte
+      /* Entrega o teto e SUBTRAI só o entregue: o resto CONTINUA no acumulado.
+         Descartar o excedente era o conserto óbvio e estava errado — a cabeça
+         do jogador vai para `(x,z) + passo`, então tirar do acumulado o que o
+         jogo não absorveu ARRASTA A VISTA DE VOLTA. Medido: morto, um passo
+         físico de 0,80 m movia a cabeça 0,000 m (a vista congelava); e pausar,
+         andar um metro e retomar dava 0,850 m de salto num frame. Trocar
+         "colisor teleporta" por "cabeça teleporta" é piorar: em VR o segundo é
+         a categoria pior. Com a subtração parcial, um metro acumulado escoa em
+         sete frames sem que nada pule. */
       const k = limite / m;
       out.x = passoX * k; out.z = passoZ * k;
+      passoX -= out.x; passoZ -= out.z;
+      // e o acumulado tem teto próprio: além dele o jogador se perderia do corpo
+      const r = Math.hypot(passoX, passoZ);
+      if (r > RESIDUO_MAX) { const kr = RESIDUO_MAX / r; passoX *= kr; passoZ *= kr; }
     } else {
       out.x = passoX; out.z = passoZ;
+      passoX = 0; passoZ = 0;
     }
-    passoX = 0; passoZ = 0;
     return out;
   }
 

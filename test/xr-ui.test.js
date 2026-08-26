@@ -406,6 +406,22 @@ describe('painel de sessão em VR (IWER, sessão imersiva real)', { skip: !CHROM
     console.log(`      1,2 s de analógico com o painel fechado: ${d.toFixed(2)} m`);
   });
 
+  it('no SOLO a tela de morte oferece JOGAR DE NOVO', async () => {
+    const r = await h.play(async () => {
+      const antes = window.__BR_active;
+      window.__BR_active = false;                 // solo
+      window.__UI.fechar();
+      await window.__A.espera(150);
+      window.__UI.abrir('morte');
+      await window.__A.espera(350);
+      const ids = window.__U.estado().linhas.map(l => l.id);
+      window.__BR_active = antes;
+      return ids;
+    });
+    assert.ok(r.includes('reaparecer'),
+      `no solo a tela de morte não ofereceu jogar de novo: ${r.join(', ')}`);
+  });
+
   it('SAIR DA PARTIDA existe, é acionável e encerra a sessão', async () => {
     /* ÚLTIMO da bateria de propósito: a ação é a do jogo e encerra a partida E
        a sessão imersiva — `voltarAoMenu()` aterrissa no menu principal, que
@@ -413,8 +429,11 @@ describe('painel de sessão em VR (IWER, sessão imersiva real)', { skip: !CHROM
        rodada veio fechar. Medir com contador em dublê provaria só que a função
        foi chamada; o que importa é que o jogador realmente SAI. */
     const r = await h.play(async () => {
-      await window.__U.menu();
-      await window.__A.espera(300);
+      // o caso anterior deixa o painel em modo morte: volta pra pausa antes
+      window.__UI.fechar();
+      await window.__A.espera(200);
+      window.__UI.abrir('pausa');
+      await window.__A.espera(350);
       const tinhaLinha = !!window.__U.linha('sair');
       window.__U.apontar('right', window.__U.linha('sair').centro);
       await window.__A.espera(220);
@@ -438,8 +457,14 @@ describe('painel de sessão em VR (IWER, sessão imersiva real)', { skip: !CHROM
       return { ids: e.linhas.map(l => l.id), modo: e.modo, dist: e.distancia, aberto: e.aberto };
     });
     assert.equal(r.modo, 'morte');
-    assert.ok(r.ids.includes('reaparecer'), `a tela de morte não oferece reaparecer: ${r.ids.join(', ')}`);
     assert.ok(r.ids.includes('sair'), `a tela de morte não oferece sair: ${r.ids.join(', ')}`);
+    /* JOGAR DE NOVO só no SOLO: em partida online o morto fica morto até a
+       rodada acabar. O harness nasce ONLINE (`online: true` no bootGame, que
+       liga `__BR_active`) — armadilha conhecida deste arquivo de ajuda —, então
+       aqui a ausência é o comportamento certo, e o caso seguinte cobre o solo. */
+    assert.ok(!r.ids.includes('reaparecer'),
+      `em partida online a tela de morte ofereceu "jogar de novo": ${r.ids.join(', ')} — ` +
+      'a ação recusa e o painel se reabre sozinho, ou seja, botão morto');
     assert.ok(r.dist > 0.75 && r.dist < 1.25, `painel de morte a ${r.dist.toFixed(2)} m`);
     assert.equal(r.aberto, true);
   });
