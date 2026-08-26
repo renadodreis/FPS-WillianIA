@@ -52,6 +52,18 @@ function eixos(fonte) {
   return { x: num(a[2]), y: num(a[3]) };
 }
 
+/* `session.inputSources` NÃO é um Array: é um `XRInputSourceArray`, e
+   `Array.isArray()` devolve FALSE nele. Guardar a entrada com `Array.isArray`
+   descarta os dois controles TODO FRAME no aparelho — sem erro, sem console,
+   só analógico morto. Aceite qualquer coisa iterável ou com `length`. */
+function comoLista(v) {
+  if (Array.isArray(v)) return v;
+  if (!v || typeof v !== 'object') return [];
+  if (typeof v[Symbol.iterator] === 'function') return Array.from(v);
+  if (typeof v.length === 'number') return Array.prototype.slice.call(v);
+  return [];
+}
+
 function botao(fonte, i) {
   const g = fonte && fonte.gamepad;
   const b = g && g.buttons && g.buttons[i];
@@ -67,7 +79,7 @@ export function criarEntradaXR() {
       girar: 0,
       atirar: false, mirar: false, pular: false, agachar: false, recarregar: false, usar: false,
     };
-    const lista = Array.isArray(fontes) ? fontes : [];
+    const lista = comoLista(fontes);
     let esquerda = null, direita = null;
     for (const f of lista) {
       if (!f) continue;

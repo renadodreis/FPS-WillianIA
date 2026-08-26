@@ -132,6 +132,38 @@ describe('botões', () => {
   });
 });
 
+describe('o que o WebXR ENTREGA de verdade (não é Array)', () => {
+  /* ESTE É O BUG QUE PASSOU. `session.inputSources` é um `XRInputSourceArray`,
+     NÃO um `Array`: `Array.isArray()` devolve FALSE nele. O guarda defensivo
+     `Array.isArray(fontes) ? fontes : []` descartava os dois controles TODO
+     FRAME, no aparelho, para sempre — e nenhum teste pegou porque os dublês
+     daqui eram arrays comuns. Testar o dublê em vez da realidade é como o
+     controle "não funcionar" com 20 testes verdes. */
+  function comoOWebXREntrega(itens) {
+    // array-like com length e índices, iterável, mas NÃO Array — igual ao real
+    const o = { length: itens.length, [Symbol.iterator]: Array.prototype[Symbol.iterator] };
+    itens.forEach((v, i) => { o[i] = v; });
+    return o;
+  }
+
+  it('lê analógico de um XRInputSourceArray (array-like, não Array)', () => {
+    const fontes = comoOWebXREntrega([mao('left', [0, 0, 0, -1])]);
+    assert.equal(Array.isArray(fontes), false, 'o dublê tem que NÃO ser Array, senão não testa nada');
+    const r = entrada.ler(fontes);
+    assert.ok(r.andar.y > 0.9, `controle ignorado: veio ${r.andar.y}`);
+  });
+
+  it('lê giro de um array-like', () => {
+    const r = entrada.ler(comoOWebXREntrega([mao('right', [0, 0, 1, 0])]));
+    assert.equal(r.girar, -1);
+  });
+
+  it('lê botão de um array-like', () => {
+    const r = entrada.ler(comoOWebXREntrega([mao('right', [0, 0, 0, 0], [true])]));
+    assert.equal(r.atirar, true);
+  });
+});
+
 describe('robustez — controle é hardware, e hardware falta', () => {
   it('sem fonte de entrada nenhuma devolve tudo zerado', () => {
     for (const v of [undefined, null, [], {}]) {

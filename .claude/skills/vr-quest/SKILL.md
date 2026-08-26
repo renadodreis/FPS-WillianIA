@@ -164,6 +164,35 @@ grama. Decidido: não usar. Cortar draw calls paga melhor e ajuda os dois olhos.
 
 ## Controles Touch (js/xr/xrinput.js)
 
+### `session.inputSources` NÃO é um Array — e essa foi a armadilha mais cara
+
+`Array.isArray(session.inputSources)` devolve **`false`**. O tipo é
+`XRInputSourceArray`: tem `length`, tem índices, é iterável — e não é `Array`.
+O guarda defensivo mais natural do mundo,
+
+```js
+const lista = Array.isArray(fontes) ? fontes : [];   // descarta os DOIS controles
+```
+
+descartava os controles **todo frame, no aparelho, para sempre**. Sem erro, sem
+console, sem exceção: só analógico morto. Aceite qualquer coisa iterável ou com
+`length` (`Array.from` / `Array.prototype.slice.call`).
+
+O mesmo vale, por precaução, para `gamepad.axes` e `gamepad.buttons`: são
+`FrozenArray`, e não há promessa de que sigam sendo `Array` real.
+
+**A lição de método é maior que o bug.** Vinte testes de unidade estavam verdes
+e o dono do projeto relatou "os controles não funcionam" **cinco vezes**. Os
+dublês dos testes eram arrays comuns — ou seja, testavam o dublê, não a
+realidade. Guarda defensivo que engole entrada é pior que ausência de guarda:
+falha em silêncio e ainda parece cuidado.
+
+Por isso existe `test/xr-controle-anda.test.js`: teste de PRODUTO (entra em
+sessão, injeta uma coleção com a forma real do navegador, cobra deslocamento do
+jogador em metros). Removendo o `comoLista()` ele acusa `moveu 0.000 m` — o
+sintoma exato do relato. **Todo dublê de API de navegador tem que ter a forma da
+API, não a forma conveniente.**
+
 - **Eixos: use os índices 2 e 3**, não 0 e 1. O par 0/1 é de touchpad, que o
   Touch não tem — ler 0/1 dá analógico morto no aparelho, e isso não se descobre
   sem um Quest na mão. Eixo 3 negativo é "pra frente".
