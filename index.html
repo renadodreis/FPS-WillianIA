@@ -422,6 +422,15 @@ import {
 
   function handleKey(e) {
     if (!e.isTrusted) return; // sintético (toque) — nunca intercepta
+    /* DIGITANDO NUM CAMPO, TECLA É TEXTO — NÃO É COMANDO. Mesma guarda do
+       game.js:1328, e ela precisa vir ANTES do preventDefault: este
+       interceptador roda em fase de CAPTURA, ou seja, antes de todo mundo.
+       Sem isto, o espaço nunca chega no campo de nick, no chat nem no código
+       da sala, e o Tab para de navegar entre campos — que é exatamente o bug
+       nº 18 do QA-REPORT.md, já corrigido uma vez neste repo. */
+    const alvo = e.target;
+    if (alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' ||
+        alvo.isContentEditable)) return;
     if (PREVENT_DEFAULT_CODES.includes(e.code)) e.preventDefault();
 
     if (listening) {
