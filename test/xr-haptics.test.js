@@ -39,9 +39,13 @@ const PORT = 3450;
    POLÍTICA PURA — o vocabulário, sem three, sem sessão, sem headset.
    ================================================================ */
 describe('vocabulário de pulsos (unidade, sem navegador)', () => {
-  let planoDePulso, PULSO_MIN_MS, PULSO_MAX_MS, PRIORIDADE;
+  /* As constantes de faixa do módulo NÃO são importadas de propósito: as
+     asserções de duração usam literais próprios. Todo pulso nasce de um clamp
+     com essas constantes, então compará-las consigo mesmas seria o clamp
+     reafirmando o clamp — verde para qualquer valor que editem. */
+  let planoDePulso, PRIORIDADE;
   before(async () => {
-    ({ planoDePulso, PULSO_MIN_MS, PULSO_MAX_MS, PRIORIDADE } =
+    ({ planoDePulso, PRIORIDADE } =
       await import('../js/xr/xrhaptics.js'));
   });
 
@@ -103,7 +107,12 @@ describe('vocabulário de pulsos (unidade, sem navegador)', () => {
     assert.ok(hit.ms < head.ms && head.ms < kill.ms, `${hit.ms} / ${head.ms} / ${kill.ms}`);
     // e mais curto que o hitmarker visual (110/170/260 ms em js/hitfeel-core.js):
     // tato é clique de confirmação, não segunda animação
-    assert.ok(hit.ms < 110 && head.ms < 170 && kill.ms < 260);
+    /* Números LITERAIS e apertados, escolhidos contra a medição real
+       (22/34/… ms), não contra o teto do módulo: `kill.ms < 260` era
+       impossível de falhar porque o clamp do próprio módulo é 250. */
+    assert.ok(hit.ms < 40, `hit em ${hit.ms} ms — o tique do acerto ficou longo demais`);
+    assert.ok(head.ms > hit.ms && head.ms < 90, `head em ${head.ms} ms`);
+    assert.ok(kill.ms > head.ms && kill.ms < 160, `kill em ${kill.ms} ms`);
   });
 
   it('a recarga é das DUAS mãos, em tempos diferentes e papéis diferentes', () => {
@@ -166,8 +175,11 @@ describe('vocabulário de pulsos (unidade, sem navegador)', () => {
     for (const p of todos) {
       assert.ok(p.intensidade > 0 && p.intensidade <= 1,
         `intensidade ${p.intensidade} fora de 0..1 (MDN: 0.0 a 1.0)`);
-      assert.ok(p.ms >= PULSO_MIN_MS && p.ms <= PULSO_MAX_MS,
-        `duração ${p.ms} ms fora da faixa util ${PULSO_MIN_MS}..${PULSO_MAX_MS}`);
+      /* LITERAIS, não as constantes do módulo: todo pulso nasce de um clamp
+         com essas mesmas constantes, então compará-las consigo mesmas é o
+         clamp reafirmando o clamp — verde para qualquer valor que editem. */
+      assert.ok(p.ms >= 8 && p.ms <= 250,
+        `duração ${p.ms} ms fora do que um VCM de headset entrega de forma útil`);
       assert.ok(p.mao === 'left' || p.mao === 'right');
       assert.ok(Number.isFinite(p.prioridade));
     }
@@ -180,10 +192,13 @@ describe('vocabulário de pulsos (unidade, sem navegador)', () => {
   });
 
   it('a tabela de prioridade põe o dano acima de tudo e a UI abaixo de tudo', () => {
-    assert.ok(PRIORIDADE.dano > PRIORIDADE.acerto);
-    assert.ok(PRIORIDADE.acerto > PRIORIDADE.tiro);
-    assert.ok(PRIORIDADE.tiro > PRIORIDADE['ui-toque']);
-    assert.ok(PRIORIDADE['ui-toque'] > PRIORIDADE['ui-foco']);
+    /* Comparar a tabela consigo mesma não prova nada: os dois lados de cada
+       `>` saem do módulo sob teste. O que prova é a ORDEM esperada, escrita
+       aqui de forma independente, e a preempção de verdade (caso mais abaixo). */
+    const esperada = ['ui-foco', 'ui-toque', 'recarga', 'tiro', 'acerto', 'dano'];
+    const ordenada = esperada.slice().sort((a, b) => (PRIORIDADE[a] || 0) - (PRIORIDADE[b] || 0));
+    assert.deepEqual(ordenada, esperada,
+      `a ordem de prioridade virou ${ordenada.join(' < ')}; a esperada é ${esperada.join(' < ')}`);
   });
 });
 
@@ -569,5 +584,110 @@ describe('háptico na sessão de verdade', { skip: !CHROME && 'Chrome não encon
     assert.equal(r.presenting, false, 'a sessão não terminou — o caso não mediu o fora da sessão');
     assert.equal(r.saiu, 0, 'emitiu pulso sem sessão');
     assert.deepEqual(r.erros, [], `erros no console durante a sessão: ${r.erros.join(' | ')}`);
+  });
+});
+
+describe('o JOGO emite háptico — o caminho de produção, não o módulo', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* O BURACO QUE ESTE BLOCO FECHA, e ele é grande. Todos os outros casos deste
+     arquivo chamam `emitir()` à mão, numa instância criada pelo teste: provam a
+     camada de aplicação do módulo, e NENHUM prova que o game.js chama alguma
+     coisa. Apagando as oito linhas de `XRTato.emitir` do game.js, a suíte
+     inteira continuava verde e o defeito original — "zero háptico, com dois
+     atuadores disponíveis" — voltava sem ninguém ver.
+
+     Aqui não se chama `emitir`. Aperta-se o GATILHO, e o pulso tem que
+     aparecer no atuador porque `fire()` o emitiu. É a diferença entre testar o
+     módulo e testar o jogo. */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: 3454 }); });
+  after(async () => { if (h) await h.close(); });
+
+  it('ATIRAR com o gatilho faz o controle da arma vibrar', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game, MP = window.__MP;
+      const ler = () => {
+        const s = MP.renderer.xr.getSession();
+        for (const f of Array.from(s.inputSources)) {
+          if (f.handedness !== 'right' || !f.gamepad) continue;
+          const a = (f.gamepad.hapticActuators || [])[0];
+          const reg = a && window.IWER && window.IWER.P_GAMEPAD ? a[window.IWER.P_GAMEPAD] : null;
+          return reg && reg.lastPulse ? { ...reg.lastPulse } : null;
+        }
+        return null;
+      };
+      A.solta(); await A.espera(400);
+      const arma = G.arsenal[G.gunIndex];
+      arma.mag = 30; arma.reloading = false; arma.lastShot = -99;
+      const antes = ler();
+      A.botao('right', 'trigger', 1);
+      await A.espera(300);
+      A.solta();
+      await A.espera(150);
+      return { antes, depois: ler(), saiuBala: arma.mag < 30 };
+    });
+    assert.equal(r.saiuBala, true, 'o gatilho não disparou — o teste não chegou a exercitar o tiro');
+    assert.ok(r.depois, 'nenhum pulso chegou no controle da arma ao ATIRAR pelo gatilho');
+    assert.ok(!r.antes || r.depois.startTime > r.antes.startTime || r.depois.value !== r.antes.value,
+      'o registro do atuador não mudou com o tiro: o game.js não está emitindo háptico');
+    assert.ok(r.depois.value > 0 && r.depois.duration > 0,
+      `pulso vazio: ${JSON.stringify(r.depois)}`);
+  });
+
+  it('LEVAR DANO faz as DUAS mãos vibrarem — dano é no corpo, não na arma', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game, MP = window.__MP;
+      const ler = qual => {
+        const s = MP.renderer.xr.getSession();
+        for (const f of Array.from(s.inputSources)) {
+          if (f.handedness !== qual || !f.gamepad) continue;
+          const a = (f.gamepad.hapticActuators || [])[0];
+          const reg = a && window.IWER && window.IWER.P_GAMEPAD ? a[window.IWER.P_GAMEPAD] : null;
+          return reg && reg.lastPulse ? { ...reg.lastPulse } : null;
+        }
+        return null;
+      };
+      A.solta(); await A.espera(400);
+      const antes = { e: ler('left'), d: ler('right') };
+      G.player.health = 100;
+      MP.playerDamage(18, { type: 'qa' });     // o caminho real de dano do jogo
+      await A.espera(200);
+      return { antes, depois: { e: ler('left'), d: ler('right') }, vida: G.player.health };
+    });
+    assert.ok(r.vida < 100, 'o dano não foi aplicado — o teste não exercitou o caminho');
+    assert.ok(r.depois.e, 'a mão esquerda não sentiu o dano');
+    assert.ok(r.depois.d, 'a mão direita não sentiu o dano');
+    assert.equal(r.depois.e.value, r.depois.d.value, 'as duas mãos sentiram intensidades diferentes');
+  });
+
+  it('SEM FOCO o jogo não vibra — pelo caminho real, não por parâmetro de teste', async () => {
+    /* O caso antigo do portão injetava `getVisibilidade`, que o game.js NÃO
+       passa: exercitava um ramo que só o teste usa. O caminho de produção lê
+       `sessao.visibilityState`, e é esse que precisa de asserção. */
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game, MP = window.__MP, dev = window.__xrEmulado;
+      const ler = () => {
+        const s = MP.renderer.xr.getSession();
+        for (const f of Array.from(s.inputSources)) {
+          if (f.handedness !== 'right' || !f.gamepad) continue;
+          const a = (f.gamepad.hapticActuators || [])[0];
+          const reg = a && window.IWER && window.IWER.P_GAMEPAD ? a[window.IWER.P_GAMEPAD] : null;
+          return reg && reg.lastPulse ? { ...reg.lastPulse } : null;
+        }
+        return null;
+      };
+      A.solta(); await A.espera(300);
+      dev.updateVisibilityState('visible-blurred');
+      await A.espera(250);
+      const antes = ler();
+      const saiu = G.XRTato.emitir('dano', { dano: 40 });   // o mais prioritário de todos
+      await A.espera(150);
+      const depois = ler();
+      dev.updateVisibilityState('visible');
+      await A.espera(300);
+      return { antes, depois, nSaiu: saiu.length, vis: 'visible-blurred' };
+    });
+    assert.equal(r.nSaiu, 0,
+      `sem foco saíram ${r.nSaiu} pulsos: a loja exige ignorar entrada e saída de controle sem foco`);
+    assert.deepEqual(r.depois, r.antes, 'o atuador mudou com a sessão borrada');
   });
 });

@@ -301,7 +301,12 @@ describe('draw calls do mundo — props de GLB, acampamento e pássaros', { skip
   it('mercado: continua com uma malha e a mesma silhueta', () => {
     assert.equal(sonda.props.mercado.length, 1);
     const m = sonda.props.mercado[0];
-    assert.ok(m.meshes <= 1, `mercado: ${m.meshes} malhas`);
+    assert.equal(m.meshes, 1, `mercado: ${m.meshes} malhas (era 1 depois da fusão)`);
+    /* `<= 1` aceitava ZERO, ou seja, a peça sumida passava. E sem checar a
+       chave, um balde recusado só aparecia como TypeError adiante — reprovava
+       por acidente, não por asserção. */
+    const chaveM = Object.keys(m.porMat);
+    assert.equal(chaveM.length, 1, `mercado: ${chaveM.length} materiais`);
     perto(m.porMat[Object.keys(m.porMat)[0]], OURO.mercado, 'mercado');
   });
 

@@ -64,6 +64,7 @@ import { createXrUi } from './js/xr/xrui.js';
 import { createXrHud } from './js/xr/xrhud.js';
 import { createXrHaptics } from './js/xr/xrhaptics.js';
 import { createXrFrameRate } from './js/xr/xrframerate.js';
+import { criarLocomocaoXR } from './js/xr/xrlocomotion.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
@@ -390,13 +391,13 @@ const XR = createXrBoot({ THREE, renderer, scene, camera,
      medido por subtração). Aplicado ao entrar e DESFEITO ao sair — preset que
      vaza pro desktop é regressão de PC. */
   getCsm: () => csm, CFG,
-  onEnter: () => aoMudarSessaoXr(),
   /* TUDO que a sessão criou sai aqui. Sem `XRUI.exit()`/`XRHud.exit()` o
      painel de VR ficava GRUDADO NO MONITOR depois de tirar o headset —
      `depthTest: false` e `renderOrder` alto, por cima do jogo, com o jogo
      pausado e sem nenhum caminho de fechar. E o gatilho era a própria pausa
      por perda de foco: tirar o aparelho abria o painel sozinho. */
-  onExit: () => { XRArma.exit(); XRInterage.exit(); XRUI.exit(); XRHud.exit(); aoMudarSessaoXr(); } });
+  onEnter: () => { XRAndar.aplicar(); aoMudarSessaoXr(); },
+  onExit: () => { XRAndar.restaurar(); XRArma.exit(); XRInterage.exit(); XRUI.exit(); XRHud.exit(); aoMudarSessaoXr(); } });
 /* FOVEAÇÃO: o three nasce em 1.0 — o MÁXIMO ("Set default foveation to
    maximum", WebXRManager.js:46). Foveação máxima manda o compositor renderizar
    a PERIFERIA em resolução baixa; no Quest isso é um borrão que acompanha a
@@ -1594,6 +1595,25 @@ const player = {
   armor: 0, armorMax: 50, // escudo azul (recompensa do COLOSSO)
 };
 const WALK_SPEED = 5.2, RUN_SPEED = 8.6, CROUCH_SPEED = 2.6, ADS_SPEED = 3.4;
+/* VELOCIDADE DENTRO DO HEADSET. Os quatro números acima são convenção de FPS de
+   monitor: o jogo ANDA a 5,2 m/s — mais rápido do que um humano CORRE — e corre
+   a 8,6, que é velocidade de atleta. No monitor ninguém estranha; dentro do
+   headset, com o corpo parado, é a maior fonte de conflito visual-vestibular
+   que sobrou neste porte. Fora da sessão este módulo devolve exatamente os
+   números do PC, então o desktop não muda em nada. */
+const XRAndar = criarLocomocaoXR({
+  /* A ACELERAÇÃO do PC entra no `base` junto com as velocidades, e isso não é
+     opcional: sem ela `aceleracao()` devolve 0, `accelK` vira 0 e o jogador não
+     anda NEM NO MONITOR. Foi o que aconteceu quando este wiring nasceu com só
+     os quatro números de velocidade — o desktop parou de andar em silêncio, e
+     quem pegou foi o teste que compara os dois lados da saída da sessão. */
+  base: {
+    andar: WALK_SPEED, correr: RUN_SPEED, agachar: CROUCH_SPEED, mirar: ADS_SPEED,
+    aceleraSolo: 11, aceleraAr: 2.6,
+  },
+  apresentando: () => XR.presenting,
+  armazem: (() => { try { return window.localStorage; } catch { return null; } })(),
+});
 const GRAVITY = 22, JUMP_VEL = 8.4;
 
 /* modelos 3D reais: armas GLB nas mãos + corpo rigado em primeira pessoa
@@ -1705,10 +1725,10 @@ function playerUpdate(dt, t) {
   _v3.set(0, 0, 0).addScaledVector(_v1, fwd).addScaledVector(_v2, str);
   if (_v3.lengthSq() > 1) _v3.normalize();
 
-  let speed = WALK_SPEED;
-  if (sprinting) speed = RUN_SPEED;
-  if (mouse.aiming) speed = ADS_SPEED;
-  speed = lerp(speed, CROUCH_SPEED, player.crouchT);
+  let speed = XRAndar.andar;
+  if (sprinting) speed = XRAndar.correr;
+  if (mouse.aiming) speed = XRAndar.mirar;
+  speed = lerp(speed, XRAndar.agachar, player.crouchT);
   if (player.pos.y < WATER_LEVEL + 0.6) speed *= 0.45; // vadear água pesa
 
   // aceleração suave, independente de framerate (canhão > deslizar > controle)
@@ -1724,7 +1744,12 @@ function playerUpdate(dt, t) {
     player.vel.x = damp(player.vel.x, player.slideDir.x * sp, 8, dt);
     player.vel.z = damp(player.vel.z, player.slideDir.z * sp, 8, dt);
   } else {
-    const accelK = player.onGround ? 11 : 2.6;
+    /* A ACELERAÇÃO é onde as fontes de conforto CONVERGEM: aceleração
+       instantânea é mais confortável que gradual, e a Meta chama isso de
+       velocidade quantizada. Uma rampa de 270 ms é exatamente o estímulo que
+       as duas recomendações mandam evitar. Fora da sessão devolve o 11/2,6 de
+       sempre. */
+    const accelK = XRAndar.aceleracao(player.onGround);
     player.vel.x = damp(player.vel.x, _v3.x * speed, accelK, dt);
     player.vel.z = damp(player.vel.z, _v3.z * speed, accelK, dt);
   }
@@ -1793,7 +1818,7 @@ function playerUpdate(dt, t) {
   // ---- game feel: bob, dip de aterrissagem, passos ----
   const spdXZ = Math.hypot(player.vel.x, player.vel.z);
   const moving = spdXZ > 0.5 && player.onGround;
-  player.bobAmp = damp(player.bobAmp, moving ? Math.min(1, spdXZ / RUN_SPEED) : 0, 8, dt);
+  player.bobAmp = damp(player.bobAmp, moving ? Math.min(1, spdXZ / XRAndar.correr) : 0, 8, dt);
   player.bobTime += dt * (5.6 + spdXZ * 0.85);
   // mola do dip de pouso
   player.landDipVel += (-player.landDip * 130 - player.landDipVel * 11) * dt;
@@ -3241,7 +3266,10 @@ function tick(forceDt) {
        três eventos separados (Movement, Rotation, Acceleration), não só a andar;
        o túnel de giro só começa acima de 45°/s pra não piscar na mira fina. */
     if (XRUI.prefs.vinheta) {
-      XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), RUN_SPEED,
+      /* O teto da vinheta é a corrida QUE VALE na sessão, não a do monitor:
+         com a velocidade de VR (2,8 m/s) e o teto do PC (8,6), a periferia
+         mal fechava e o túnel virava enfeite. */
+      XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), XRAndar.correr,
         giroXR.velocidade);
     }
     /* PAINEL ABERTO NÃO JOGA. Sem esta guarda, o gatilho que escolhe "SAIR DA
@@ -4077,7 +4105,7 @@ window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
-  XRArma, XRInterage, XRUI, XRHud,
+  XRArma, XRInterage, XRUI, XRHud, XRTato, XRTaxa, XRAndar,
   MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
   // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como
   // verificar de fora que a troca de arma do headset chegou a trocar alguma coisa.

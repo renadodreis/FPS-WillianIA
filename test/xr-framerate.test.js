@@ -171,20 +171,32 @@ describe('taxa aplicada na sessão de verdade', { skip: !CHROME && 'Chrome não 
   });
 
   it('chamar todo frame não vira enxurrada de pedidos', async () => {
-    /* O wiring do game.js chama isto dentro do laço. Sem idempotência seriam
-       ~72 promessas por segundo e um evento por chamada. */
+    /* ESTE CASO NÃO PODIA FALHAR, e a auditoria pegou. Ele contava eventos de
+       `frameratechange` com a sessão JÁ em 72: `escolherTaxa` devolvia
+       'ja-esta' e nem chegava a pedir, então zero eventos era o resultado com
+       ou sem a guarda de idempotência. Agora a sessão é empurrada para 90
+       antes, para que a primeira das 50 chamadas TENHA trabalho a fazer — sem
+       a guarda, as outras 49 pediriam de novo. */
     const r = await h.play(async () => {
       const s = window.__MP.renderer.xr.getSession();
-      const antes = window.__mudancas.length;
-      for (let i = 0; i < 50; i++) await window.__FR.aplicar(s);
-      await new Promise(res => setTimeout(res, 60));
-      return { antes, depois: window.__mudancas.length, taxa: s.frameRate,
-        det: await window.__FR.aplicar(s) };
+      /* Empurra para 90 e mede SEM ceder o laço: o game.js reconquista os 72
+         em um frame, e qualquer espera aqui deixaria ele resolver antes das 50
+         chamadas — o teste voltaria a medir zero por construção. */
+      window.__mudancas.length = 0;
+      const p = s.updateTargetFrameRate(90);
+      const pedidos = [];
+      for (let i = 0; i < 50; i++) pedidos.push((await window.__FR.aplicar(s)).motivo);
+      await p;
+      await new Promise(res => setTimeout(res, 200));
+      return {
+        pediram: pedidos.filter(m => m !== 'ja-esta' && m !== 'em-voo').length,
+        final: s.frameRate,
+      };
     });
-    assert.equal(r.depois, r.antes,
-      `50 chamadas produziram ${r.depois - r.antes} eventos de mudança de taxa`);
-    assert.equal(r.taxa, 72);
-    assert.equal(r.det.motivo, 'ja-esta');
+    assert.equal(r.final, 72, `a sessão terminou em ${r.final} Hz`);
+    assert.ok(r.pediram <= 2,
+      `das 50 chamadas, ${r.pediram} viraram pedido de verdade — sem a guarda de ` +
+      'idempotência seriam ~72 por segundo, cada uma com sua promessa e seu evento');
   });
 
   it('o módulo SEGUE a taxa quando o sistema muda por fora', async () => {

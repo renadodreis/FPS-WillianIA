@@ -402,3 +402,21 @@ pintado ~824 ms mais cedo.
 **Barra oficial** (proposta pelo porteiro, com amostra e condição): mediana
 ≤ 2,50 s em N ≥ 7 execuções, nenhuma acima de 3,00 s, com máquina ociosa e cache
 frio. Contra ela, o HEAD passa: mediana 2,28 s, máximo 2,61 s.
+
+## Pendente de fiação: chat, placar e lobby no mundo (rodada 5)
+
+O módulo `js/xr/xrsocial.js` (615 linhas) e `test/xr-social.test.js` (616) foram
+escritos e 11 dos 15 casos passam **sem fiação**. Os 4 que faltam exigem o
+wiring no `game.js`/`br-game.js`, e o agente que os escreveu não chegou a
+entregá-lo — a sessão dele acabou antes.
+
+Os arquivos estão guardados fora do repo (scratchpad da sessão,
+`pendente-social/`) em vez de commitados sem fiação, por dois motivos: código
+que ninguém importa é código morto no repo, e um teste que falha por falta de
+fiação envenena a faixa de VR para todo mundo.
+
+**O que falta, e por que não foi feito às pressas:** o chat dá a volta no
+SERVIDOR (`br-game.js`), o placar lê o roster que o servidor manda, e o painel
+precisa ganhar ABAS em `js/xr/xrui.js`. É integração de rede em três arquivos de
+donos diferentes — exatamente o tipo de coisa que, feita com pressa no fim de
+uma rodada, vira o defeito que a rodada seguinte gasta o dia consertando.
