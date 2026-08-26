@@ -23,6 +23,18 @@
       (test/render-quality.test.js). Vantagem de quem usa headset não é
       otimização, é defeito de projeto.
 
+      O preset MEXE na grama — e a distinção é exatamente a que o
+      `js/config.js` já faz. O que ele troca é o `GRASS_LOD_RING`: o anel a
+      partir do qual a LÂMINA passa a ter 2 segmentos de altura em vez de 4.
+      Nenhuma lâmina sai do mapa, nenhuma encolhe, o tapete não encurta —
+      some a subdivisão intermediária de uma geometria que, àquela distância,
+      é sub-pixel. Quantidade, altura e alcance são medidos com e sem o preset
+      em test/xr-quality.test.js, dentro da mesma sessão.
+
+   4. **Não inventa condutor.** Tudo aqui é escrito em objetos que o jogo já
+      lê por frame (as luzes do CSM, o `CFG`). Nenhum consumidor precisa de
+      fiação nova — que é como nasce o andaime-que-vira-produto.
+
    O QUE SOBRA, e de onde vem cada número (censo por subtração,
    `npm run vr:censo`, mono, pose de spawn):
 
@@ -57,6 +69,34 @@ export function planoDeQualidade({ cascatas = 4, agressivo = false } = {}) {
        máximo, e foi assim que o jogo rodou até agora). 0,2 mantém o centro
        nítido; no modo agressivo 0,4 ainda é bem melhor que o padrão. */
     foveacao: agressivo ? 0.4 : 0.2,
+    /* ---- GRAMA: LOD DE LÂMINA, e NADA ALÉM DISSO ------------------------
+       Anel (distância de Chebyshev em chunks de 10 m) a partir do qual a
+       lâmina troca a geometria de 4 para 2 segmentos de altura. Base, meio e
+       ponta caem nos MESMOS pontos; some a subdivisão intermediária, que a
+       essa distância é sub-pixel (js/grass.js). É por isso que isto NÃO é o
+       vetor de wallhack que o resto do arquivo recusa: a contagem de lâminas,
+       a altura sorteada e o raio do tapete não são tocados — e há caso
+       medindo os três em test/xr-quality.test.js.
+
+       1, e não um número inventado: é o mesmo anel que o perfil de CELULAR
+       (js/config.js, MOBILE_CFG.GRASS_LOD_RING) já leva a hardware real. O
+       desktop usa 4.
+
+       Quanto paga, medido em sessão immersive-vr (IWER), mundo congelado com
+       `MP.setTimeScale(0)`, sombra desligada, GLB do Guardião carregado, seed
+       424242, spread 0 nas 9 amostras, A/B DENTRO da mesma sessão (comparar
+       absoluto entre execuções é o erro que já produziu o "não atribuído
+       −1144" nesta frente). Triângulos ESTÉREO da grama, por subtração:
+
+         pose      anel 4 (desktop)   anel 1 (preset)      Δ
+         spawn        964 800            699 480       −265 320  (−27,5%)
+         cidade       546 720            402 000       −144 720  (−26,5%)
+         castelo      868 320            619 080       −249 240  (−28,7%)
+
+       0 no modo agressivo: só a célula sob os pés fica com a lâmina completa.
+       Negativo nunca — aí deixaria de ser LOD por distância e a grama que o
+       jogador encosta a mão perderia detalhe. */
+    anelGrama: agressivo ? 0 : 1,
   };
 }
 
@@ -82,11 +122,21 @@ export function createXrQuality({ renderer, getCsm = () => null, CFG = null }) {
          não é uma verificação, é enfeite. */
       framebuffer: fbAplicado,
       foveacao: renderer.xr.getFoveation ? renderer.xr.getFoveation() : null,
+      /* O QUE ESTAVA VALENDO, não o padrão de desktop: num celular o
+         `applyMobileCfg` já deixou 1 aqui antes de a grama nascer, e devolver
+         4 na saída PIORARIA o quadro de quem ficou no celular. */
+      grassLodRingCfg: CFG ? CFG.GRASS_LOD_RING : null,
     };
     const p = planoDeQualidade({ cascatas: luzes.length, ...opts });
     for (let i = 0; i < luzes.length; i++) luzes[i].castShadow = i < p.cascatasLigadas;
     if (csm) csm.maxFar = p.maxFar;
     if (CFG) CFG.CSM_MAX_FAR = p.maxFar;          // quem recalcula lê daqui
+    /* GRAMA: sem fiação nova. `js/grass.js` relê `CFG.GRASS_LOD_RING` a cada
+       `atualizarLods()`, que roda dentro do `Grass.update()` que o game.js já
+       chama uma vez por frame — o mesmo canal do CSM_MAX_FAR logo acima.
+       Preset de sessão que precisa de condutor novo é como nasce o
+       andaime-que-vira-produto; aqui não há condutor nenhum a inventar. */
+    if (CFG) CFG.GRASS_LOD_RING = p.anelGrama;
     if (renderer.xr.setFramebufferScaleFactor) {
       renderer.xr.setFramebufferScaleFactor(p.framebuffer);
       fbAplicado = p.framebuffer;
@@ -106,6 +156,11 @@ export function createXrQuality({ renderer, getCsm = () => null, CFG = null }) {
     }
     if (csm && salvo.maxFar !== null) csm.maxFar = salvo.maxFar;
     if (CFG && salvo.csmMaxFarCfg !== null) CFG.CSM_MAX_FAR = salvo.csmMaxFarCfg;
+    /* O vazamento da grama é o mais silencioso dos três: o monitor ficaria com
+       a lâmina de 2 segmentos a partir do primeiro anel PARA SEMPRE, e nada no
+       console diria nada. Há caso saindo da sessão de verdade (`XR.exit()`)
+       e lendo o LOD de cada chunk depois. */
+    if (CFG && salvo.grassLodRingCfg !== null) CFG.GRASS_LOD_RING = salvo.grassLodRingCfg;
     if (renderer.xr.setFramebufferScaleFactor) {
       renderer.xr.setFramebufferScaleFactor(salvo.framebuffer);
       fbAplicado = salvo.framebuffer;

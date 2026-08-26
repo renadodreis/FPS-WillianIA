@@ -51,7 +51,24 @@ export function createGrass(deps) {
      dia precisasse recalcular. As duas lâminas têm a MESMA extensão (o LOD só
      tira subdivisão), então a do baseBlade serve para as duas. */
   baseBlade.computeBoundingSphere();
-  const LOD_RING = CFG.GRASS_LOD_RING || 4; // chunks além deste anel usam a reduzida
+  /* O ANEL É LIDO POR FRAME, NÃO CONGELADO NO BOOT — e isso é o que permite o
+     preset da sessão XR (js/xr/xrquality.js) trocá-lo ao entrar no headset e
+     devolvê-lo ao sair, pelo MESMO canal por onde ele já mexe no
+     `CFG.CSM_MAX_FAR`. Nenhuma fiação nova: quem chama `atualizarLods()` é o
+     `update()` que o game.js já executa uma vez por frame.
+
+     `Number.isFinite` e não `|| 4`: anel ZERO é um valor legítimo (só a célula
+     sob os pés fica com a lâmina completa) e `||` o transformava calado em 4 —
+     um preset agressivo que não faria nada, sem erro nenhum. Há caso de teste
+     e mutante provando exatamente isso.
+
+     O que a troca em runtime NÃO pode fazer, e não faz: mexer em quantidade,
+     altura ou alcance de lâmina. Ela só decide, por chunk, QUAL das duas
+     geometrias compartilhadas de lâmina o chunk aponta. */
+  const anelLod = () => {
+    const v = CFG.GRASS_LOD_RING;
+    return Number.isFinite(v) ? v : 4;
+  };
   const bladeTriangles = geo => (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
 
   /* ================= ESFERA DE CULLING DO CHUNK =====================
@@ -344,9 +361,10 @@ export function createGrass(deps) {
     chunk.reduzida = reduzida;
   }
   function atualizarLods() {
+    const anel = anelLod();
     for (const ch of chunks)
       aplicarLod(ch, lodForcado !== null ? lodForcado
-        : Math.max(Math.abs(ch.cx - centerX), Math.abs(ch.cz - centerZ)) > LOD_RING);
+        : Math.max(Math.abs(ch.cx - centerX), Math.abs(ch.cz - centerZ)) > anel);
   }
   atualizarLods();
 

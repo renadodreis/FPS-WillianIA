@@ -365,6 +365,13 @@ o PRNG seedado, e super-chunks engrossam o culling e SOBEM triângulo). Isso é
 decisão de produto, não de otimização: ou a grama muda, ou o teto de triângulo
 muda.
 
+> **ATUALIZADO em 2026-08-26, sobre `c070737`.** A grama SAIU do "fora de
+> escopo": há uma alavanca de geometria que não encosta no PRNG e não rala
+> grama, e ela já está no ar em XR. Ver
+> "[A grama dentro da sessão XR](#a-grama-dentro-da-sessão-xr-medido-em-2026-08-26-sobre-c070737)".
+> O que continua verdadeiro é a conclusão: **mesmo com a alavanca no extremo,
+> o teto de 500 k não é alcançável.**
+
 ---
 
 ## Achado colateral do plano far: o céu noturno já perdeu 96 % das estrelas
@@ -461,6 +468,10 @@ frame ainda ficaria acima de 434 k. O corte do far leva a 737 k.
 e mexer na grama esbarra no `Math.random` seedado e na regra de que grama rala é
 wallhack contra quem está deitado no mato.
 
+> **ATUALIZADO em 2026-08-26.** A grama mudou o quanto podia mudar sem esbarrar
+> em nenhum dos dois: o preset de sessão troca o LOD DE LÂMINA e tira 28,7 % do
+> triângulo dela na pose de castelo. **Não bastou** — ver a seção abaixo.
+
 ## O lead dos `frustumCulled = false` NÃO era defeito
 
 Investigado e descartado com medição: ligar o culling em todos eles rende 2 a 6
@@ -472,3 +483,240 @@ que estava no código já dizia isso, e estava certo.
 Um culling por instância feito à mão teria teto de 5 a 9% do frame, ao preço de
 reordenar matriz por frame para 2.600 flores e de risco novo sobre o worldgen. O
 corte do far entrega o triplo disso numa linha. **Recomendado não fazer.**
+
+---
+
+## A grama dentro da sessão XR (medido em 2026-08-26, sobre `c070737`)
+
+A frente anterior parou aqui: *"o teto de triângulo não é alcançável sem mexer
+na grama"*, com a grama declarada fora de escopo. Esta seção mede a grama por
+dentro, aplica a única alavanca que não viola nenhum invariante e diz, com
+número, **onde ela chega e onde ela não chega**.
+
+### Condição de medição (sem isto nada abaixo é medida)
+
+Sessão `immersive-vr` real (IWER, preset Quest 3, dois olhos), entrada pelo
+MENU (é o único caminho em que o botão de VR existe), **mundo congelado com
+`MP.setTimeScale(0)`**, sombra desligada durante a atribuição, **GLB do
+Guardião carregado** (`hasModel >= 10`, 20 confirmados), seed 424242,
+`tier=baixo`, 9 amostras por ponto com **spread 0** em todas.
+
+**Todo número é A/B DENTRO da mesma sessão**, com o preset sendo aplicado e
+desfeito pela instância do JOGO (`G.XR.qualidade`) — nunca por um condutor do
+harness. Comparar absoluto entre execuções é o erro que já produziu o "não
+atribuído −1144" registrado mais acima.
+
+### O que a grama é, por dentro
+
+169 chunks (grade 13×13, `GRASS_CHUNKS`), **1005 lâminas por chunk**
+(`PER_CHUNK = floor(GRASS_TOTAL / 169)`), um `InstancedMesh` por chunk. A
+lâmina é `PlaneGeometry(0.1, 1, 1, N)`: **2·N triângulos**, com N = 4 perto e
+N = 2 além do anel `CFG.GRASS_LOD_RING`. Ou seja **8 ou 4 triângulos por
+lâmina**, e nada mais — não há terceiro botão de geometria na lâmina.
+
+E o culling é POR CHUNK: no three r185 o `WebGLRenderer` roda `projectObject`
+**uma vez**, com a `ArrayCamera` da sessão, e depois desenha a MESMA lista nos
+dois olhos (`renderScene` por sub-câmera). Logo:
+
+```
+triângulos estéreo da grama = 2 × 1005 × Σ (triângulos por lâmina do chunk)
+                                          chunks no frustum da ArrayCamera
+```
+
+Essa fórmula foi conferida contra a medição por subtração em **24 pontos** (os
+sete anéis mais o piso forçado, nas três poses) e bateu **triângulo a
+triângulo, exato, nos 24** — com spread 0 em todas as amostras. Ou seja: a
+tabela abaixo é medida, e ainda por cima previsível.
+
+Chunks no frustum, por anel de Chebyshev:
+
+| pose | total | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| spawn | 78 | 1 | 8 | 9 | 11 | 13 | 17 | 19 |
+| cidade | 50 | – | – | – | 7 | 11 | 15 | 17 |
+| castelo | 70 | 1 | 6 | 7 | 11 | 13 | 15 | 17 |
+
+### Quanto a grama custa em cada anel (por olho)
+
+| anel | spawn | cidade | **castelo** |
+|---|--:|--:|--:|
+| 6 (nada reduzido) | 627 120 | 402 000 | 562 800 |
+| 5 | 550 740 | 333 660 | 494 460 |
+| **4 — desktop de hoje** | **482 400** | **273 360** | **434 160** |
+| 3 | 430 140 | 229 140 | 381 900 |
+| 2 | 385 920 | 201 000 | 337 680 |
+| **1 — preset XR (e o do celular)** | **349 740** | **201 000** | **309 540** |
+| 0 (modo agressivo) | 317 580 | 201 000 | 285 420 |
+| piso: tudo a 2 segmentos | 313 560 | 201 000 | 281 400 |
+
+Na cidade nenhum chunk do frustum está a menos de 3 anéis, então os anéis 0-2
+dão o mesmo número — não há o que reduzir a mais. E o mundo SEM grama, por
+olho, nas mesmas medições: **293 281** (spawn), **279 768** (cidade),
+**302 453** (castelo).
+
+**Draw calls não se movem**: 156 / 100 / 140 estéreo, idênticos com e sem o
+preset. O LOD troca a geometria do chunk, não o número de chunks.
+
+### O que entrou
+
+`js/xr/xrquality.js` passou a incluir `anelGrama` no plano e a escrever
+`CFG.GRASS_LOD_RING` ao entrar na sessão, devolvendo o valor anterior ao sair —
+o mesmo canal por onde ele já mexia no `CFG.CSM_MAX_FAR`. `js/grass.js` passou
+a **reler** esse campo a cada `atualizarLods()` em vez de congelá-lo no boot.
+**Zero fiação nova**: quem chama `atualizarLods()` é o `Grass.update()` que o
+`game.js` já executa uma vez por frame.
+
+Frame inteiro, estéreo, mesma sessão, sombra desligada:
+
+| pose | sem preset (anel 4) | com preset (anel 1) | Δ | por olho |
+|---|--:|--:|--:|--:|
+| spawn | 1 551 362 | 1 286 042 | −265 320 (−17,1 %) | 775 681 → **643 021** |
+| cidade | 1 106 256 | 961 536 | −144 720 (−13,1 %) | 553 128 → **480 768** |
+| castelo | 1 473 226 | 1 223 986 | −249 240 (−16,9 %) | 736 613 → **611 993** |
+
+Só a grama: **482 → 350 k** (spawn), **273 → 201 k** (cidade),
+**434 → 310 k** por olho (castelo, **−28,7 %**).
+
+### Por que isto é LOD e não wallhack — medido em pixel, não prometido
+
+A regra do repo é dura e está certa: grama mais rala, mais baixa ou com menos
+alcance é wallhack contra quem está deitado no mato. As três provas:
+
+1. **Quantidade, altura e alcance**: 169 chunks e 1005 lâminas em cada, com e
+   sem o preset; `PATCH_RADIUS` idêntico; e os **bytes** de matriz de
+   instância, fase de vento e tint de 12 chunks **iguais byte a byte** nos dois
+   estados. O LOD troca só `position/normal/uv/index` — atributos
+   COMPARTILHADOS entre chunks —, nunca as instâncias.
+2. **A lâmina reduzida tem a mesma extensão**: o afunilamento é LINEAR em `y`,
+   então base e ponta caem no mesmo ponto com 4 ou com 2 segmentos
+   (`alturaMax`, `larguraBase` e `larguraTopo` idênticos). O que some é a
+   subdivisão intermediária da curvinha `z = y²·0,18`.
+3. **A pergunta direta, em pixels.** Alvo opaco do tamanho de um corpo deitado
+   (2,0 × 0,55 m) plantado a 18/25/32 m, olho **em pé a 1,6 m olhando para
+   baixo** — a pose real de quem procura alguém deitado. De **1 847 pixels** de
+   alvo sem grama nenhuma na frente, passam **94 px com o anel do desktop** e
+   **94 px com o anel do headset**. Uma varredura independente com 12 poses
+   (18/25/32/40 m × 0,15/0,3/0,5 m de altura, 2 856 px de alvo) deu
+   **108 px no anel 4, 103 no anel 1 e 95 no anel 0** — a lâmina reduzida
+   esconde de leve MAIS, e a diferença caso a caso é de poucos pixels para os
+   dois lados: é lâmina individual mudando de lugar, não buraco no mato.
+
+   A primeira versão desse caso media com o olho DEITADO olhando o horizonte e
+   dava 100 % de ocultamento em toda configuração — a grama dos primeiros 15 m,
+   que o preset não toca, saturava a medida. **Teste que não pode falhar não é
+   teste**; o olho subiu, e aí ele distingue.
+
+   Medindo a cobertura de tela da grama inteira na mesma cena, a lâmina
+   reduzida cobre **MAIS**, não menos: 214 513 px no anel 4 contra 225 406 px
+   no anel 1 (+5,1 %) de 480 000. Faz sentido — sem os pontos intermediários a
+   lâmina interpola em linha reta entre base e ponta em vez de acompanhar a
+   curva, e fica um pouco mais ereta.
+
+E o `Math.random`: a troca de anel não consome **um** sorteio. Duas janelas de
+40 frames com o mundo congelado, uma com a troca no meio, dão a MESMA contagem
+de chamadas — e em produção `Math.random` É o fluxo seedado (o `game.js` troca
+a função e nunca a devolve), então contar chamadas é a leitura direta do
+invariante. Reinjetando um `Math.random()` na troca de LOD, o caso morre.
+
+Rede: `test/xr-quality.test.js` (14 casos novos, 23 no total), com
+**7 mutantes provados**
+— anel congelado no boot, `aplicar()` sem escrever o CFG, `restaurar()` sem
+devolver, lâmina reduzida com metade da altura, lâmina reduzida mais estreita,
+um `Math.random()` na troca de LOD, e o `|| 4` engolindo o anel ZERO do modo
+agressivo. Todos morreram, e cada um matou o caso que devia matar.
+
+### O veredito honesto: 500 k continua fora de alcance
+
+Pose de castelo, nesta execução, por olho:
+
+```
+mundo sem grama ......................... 302 453
+grama, anel 4 (desktop) ................. 434 160  →  frame 736 613
+grama, anel 1 (preset que entrou) ....... 309 540  →  frame 611 993
+grama, anel 0 (modo agressivo) .......... 285 420  →  frame 587 873
+grama, PISO absoluto (tudo 2 segmentos) . 281 400  →  frame 583 853
+                                            teto ...... 500 000
+```
+
+**Com a alavanca no extremo — todas as lâminas do mapa com 2 segmentos — o
+frame ainda fica 17 % acima do teto.** E o extremo entrega só **28 k por olho a
+mais** que o preset que entrou: os chunks do frustum estão concentrados nos
+anéis externos, que o anel 4 já reduzia; o anel 1 pega os 31 chunks dos anéis
+2-4, e do anel 1 para o piso sobram apenas os **7 chunks** dos anéis 0 e 1.
+Não há margem escondida aqui.
+
+O que faltaria, em número: sobram **197 547 triângulos por olho** de orçamento
+para a grama depois do resto do mundo. Com 70 chunks de 1005 lâminas no
+frustum, isso é **2,8 triângulos por lâmina** — e a lâmina de 2 segmentos custa
+4. **Não existe combinação de anel que caiba.**
+
+As três saídas, todas de produto e todas do dono:
+
+1. **Terceiro degrau de LOD: lâmina de 1 segmento (2 triângulos).** Base e
+   ponta continuam nos mesmos pontos (o afunilamento é linear); o que some é o
+   último ponto da curva, e a lâmina vira uma reta entre raiz e ponta. Piso com
+   ela: **140 700 por olho** (frame 443 153 — abaixo do teto). Para caber em
+   500 k bastaria menos: com 8·x + 4·y + 2·z ≤ 196 sobre 70 chunks, cabem
+   **os anéis 0-1 a 4 segmentos, o anel 2 a 2 segmentos e do anel 3 (~25 m)
+   para fora a 1 segmento**. É mudança de APARÊNCIA da grama de perto-média
+   distância, e por isso não foi feita aqui.
+2. **Cortar o `far` para `CFG.VIEW_DIST`** (a decisão já registrada duas
+   seções acima) tira ~76 k por olho do "mundo sem grama" na pose de castelo —
+   e não tira nada da grama, que vive toda dentro de 65 m. Mundo sem grama iria
+   a ~226 k; somado ao PISO da grama (281 k) dá **~507 k**: encosta no teto e
+   **não passa**. Sozinho não resolve; com o item 1 sobra folga larga.
+3. **Mudar o teto.** 500 k por olho é um alvo escrito para um mundo com menos
+   vegetação. Este mundo tem 169 845 lâminas de grama por decisão de arte.
+
+**O que NÃO é saída, e continua não sendo:** baixar `GRASS_TOTAL` ou
+`GRASS_CHUNKS` (alimentam o `Math.random` seedado — quem usa headset jogaria
+num mundo diferente do dos outros da mesma partida), encurtar o raio do tapete,
+baixar a altura da lâmina ou expor qualquer disso como opção do jogador. É
+wallhack, e `test/render-quality.test.js` trava.
+
+### Lead medido que NÃO foi seguido (fica registrado)
+
+A grama tem `edgeFade` no vertex shader: a lâmina encolhe a ZERO entre
+`0,72·PATCH_RADIUS` (46,8 m) e `0,97·PATCH_RADIUS` (63,05 m) de distância da
+CÂMERA. Lâmina com `edgeFade = 0` tem x e y multiplicados por zero — o quad
+degenera numa linha e **não pinta pixel nenhum**, mas continua sendo desenhado
+e contado. Pela geometria da grade, ~24 dos 169 chunks (as quinas dos anéis 5
+e 6) estão INTEIROS além dos 63 m e portanto são invisíveis por construção.
+
+Pular esses chunks seria gratuito visualmente (é o mesmo argumento do frustum
+culling). Não foi feito por dois motivos: o ganho estimado é ~9 % do triângulo
+da grama, e **valeria para o desktop também** — está fora do escopo "preset de
+sessão XR, desktop não muda uma lâmina". Fica anotado com o número para quem
+pegar a próxima rodada.
+
+---
+
+## O que o corte do `far` custou, medido em PIXELS (validação independente)
+
+O commit anunciou "invisível". Isso vale no chão e **não** vale no alto. Medido
+pixel a pixel pela validação de `c070737`:
+
+| de onde | quadro que muda |
+|---|--:|
+| no chão | **0,03 %** |
+| do castelo | 2,73 % |
+| de paraquedas | 4,36 % |
+| **da nave do BR** | **13,10 %** |
+
+E a cor prova o mecanismo: a névoa `(185,208,225)` é substituída por céu
+`(218,219,219)`, com borda dura a 420 m.
+
+**Nenhuma informação de jogo se perde** — o que estava além de 420 m já era
+100 % cor de névoa, e os feixes de findability continuam visíveis (verificado
+por pixel). O que se perde é **paisagem**: da nave, o horizonte distante vira
+céu em vez de neblina.
+
+A troca: −22,9 % de draw call em toda pose (castelo 558 → 430 na bancada da
+validação; o *delta* reproduz, o absoluto varia com a bancada).
+
+Se a queda da nave for considerada um momento de vitrine — e num battle royale
+ela é a primeira coisa que o jogador vê —, a alternativa é um `far` maior
+**só durante a fase da nave e do paraquedas**, voltando a 420 m ao tocar o
+chão. Custa uma linha por transição de fase e devolve a paisagem justamente
+onde ela aparece. **Não foi feito**: é mudança de comportamento por fase, e
+merece a medição própria antes de entrar.
