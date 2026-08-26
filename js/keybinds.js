@@ -14,7 +14,7 @@
    ================================================================
    POR QUE O JOGO NEM PRECISA SER EDITADO PRA ISTO VALER
 
-   game.js lê teclado assim (game.js:1326-1333):
+   game.js lê teclado assim (game.js:1352-1358):
 
      window.addEventListener('keydown', e => { keys[e.code] = true; ... });
 
@@ -64,7 +64,7 @@ export const STORAGE_KEY = 'callofai_keys';
        de CANCELAR a captura de uma nova tecla (ver a camada fina).
 
    `aliases`: códigos que o jogo já aceita como sinônimo do padrão
-   (game.js:1555-1556 faz `keys.ShiftLeft || keys.ShiftRight`, mesma
+   (game.js:1581 faz `keys.ShiftLeft || keys.ShiftRight`, mesma
    coisa pra Control). Um alias PADRÃO só é órfão (suprimido) quando a
    ação sai do cluster {code, ...aliases} inteiro — ver resolveIncomingCode. */
 export const ACTIONS = Object.freeze([
@@ -91,9 +91,15 @@ export const ACTIONS = Object.freeze([
                  antes do navegador na maioria das combinações; um
                  preventDefault daqui não segura o menu Iniciar/Spotlight
                  abrindo no meio do tiroteio. */
-const RESERVED = new Set(['Escape', 'MetaLeft', 'MetaRight']);
+/* Enter/NumpadEnter entram aqui pelo MESMO motivo do Escape: em partida,
+   ENTER é o ÚNICO jeito de abrir o chat (br-game.js), e lá a comparação é
+   `e.code === 'Enter'`. Ligar uma ação nessa tecla fazia o chat parar de
+   abrir, sem nenhum outro caminho pra ele — e o painel aceitava e mostrava
+   "ENTER" numa boa. Tecla que é a única porta de uma função não pode ser
+   sequestrada por remapeamento. */
+const RESERVED = new Set(['Escape', 'MetaLeft', 'MetaRight', 'Enter', 'NumpadEnter']);
 
-/* Mesmo conjunto que game.js:1329 já protegia (Space rola a página,
+/* Mesmo conjunto que game.js:1355 já protegia (Space rola a página,
    ControlLeft não faz nada sozinho mas soma na barra, Tab troca o foco
    e tira o teclado do jogo). Exportado porque quem instala o listener
    real (index.html) precisa chamar `e.preventDefault()` — aqui é só o

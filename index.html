@@ -429,7 +429,7 @@ import {
   function handleKey(e) {
     if (!e.isTrusted) return; // sintético (toque) — nunca intercepta
     /* DIGITANDO NUM CAMPO, TECLA É TEXTO — NÃO É COMANDO. Mesma guarda do
-       game.js:1328, e ela precisa vir ANTES do preventDefault: este
+       game.js:1354, e ela precisa vir ANTES do preventDefault: este
        interceptador roda em fase de CAPTURA, ou seja, antes de todo mundo.
        Sem isto, o espaço nunca chega no campo de nick, no chat nem no código
        da sala, e o Tab para de navegar entre campos — que é exatamente o bug
@@ -448,6 +448,20 @@ import {
        ignora tecla quando o alvo é campo de texto. */
     if (!digitando && PREVENT_DEFAULT_CODES.includes(e.code)) e.preventDefault();
 
+    /* CAPTURAR TECLA VALE SOBRE O JOGO, NUNCA SOBRE O TEXTO. O modo
+       "esperando tecla" pode ficar pendente (ativação sem foco, que existe em
+       navegador que não foca botão no clique e em tecnologia assistiva). Sem
+       esta saída, ele engolia a PRIMEIRA tecla digitada num campo e regravava
+       o binding em silêncio — digitar "abc" dava "bc", e a ação ia parar em A. */
+    if (listening && digitando) {
+      // começou a digitar noutro lugar: a captura perdeu o sentido — cancela em
+      // vez de deixar o botão travado em "…" esperando pra sempre
+      const btn = btnFor(listening);
+      stopListening(btn);
+      paintAll();
+      say('Captura cancelada: você começou a digitar em outro campo.');
+      return;
+    }
     if (listening) {
       e.preventDefault();
       e.stopImmediatePropagation(); // enquanto captura, NADA vaza pro jogo
