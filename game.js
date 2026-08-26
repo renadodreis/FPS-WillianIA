@@ -57,6 +57,8 @@ import { createPerfHud } from './js/perfhud.js';
 import { createXrBoot } from './js/xr/xrboot.js';
 import { criarEntradaXR, SNAP_RAD } from './js/xr/xrinput.js';
 import { createXrButton, xrButtonState } from './js/xr/xrbutton.js';
+import { createXrWeapon } from './js/xr/xrweapon.js';
+import { createXrInteract } from './js/xr/xrinteract.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
@@ -363,8 +365,10 @@ camera.position.set(0, 3, 8);
 const entradaXR = criarEntradaXR();
 let xrYaw = 0;              // giro artificial acumulado (snap turn), em radianos
 let aoMudarSessaoXr = () => {}; // preenchido lá embaixo, quando o botão existe
+const _xrCabeca = new THREE.Vector3();
 const XR = createXrBoot({ THREE, renderer, scene, camera,
-  onEnter: () => aoMudarSessaoXr(), onExit: () => aoMudarSessaoXr() });
+  onEnter: () => aoMudarSessaoXr(),
+  onExit: () => { XRArma.exit(); XRInterage.exit(); aoMudarSessaoXr(); } });
 /* FOVEAÇÃO: o three nasce em 1.0 — o MÁXIMO ("Set default foveation to
    maximum", WebXRManager.js:46). Foveação máxima manda o compositor renderizar
    a PERIFERIA em resolução baixa; no Quest isso é um borrão que acompanha a
@@ -2193,7 +2197,11 @@ const _rayDir = new THREE.Vector3(), _rayOrig = new THREE.Vector3(), _hitPos = n
    controle faria o tiro sair para TRÁS da mão. Por isso a direção é extraída
    do quaternion de mundo aqui, de um jeito só, que vale para os dois. */
 const _qMira = new THREE.Quaternion();
-const fonteDaMira = () => (XR.presenting && XR.mao('right')) || camera;
+/* A ordem aqui é a hierarquia da verdade: a linha de mira da ARMA (a ocular do
+   perfil, que é onde o jogador põe o olho), depois o PUNHO, e só então o raio de
+   mira do controle. O punho vem antes do raio porque os dois divergem 45,4° e
+   5,2 cm no Touch — o -Z do grip é a direção do POLEGAR, não do cano. */
+const fonteDaMira = () => (XR.presenting && (XRArma.miraNode() || XR.punho('right') || XR.mao('right'))) || camera;
 function miraOrigem(out) { return fonteDaMira().getWorldPosition(out); }
 function miraDirecao(out) {
   return out.set(0, 0, -1).applyQuaternion(fonteDaMira().getWorldQuaternion(_qMira)).normalize();
@@ -2749,6 +2757,13 @@ let Cannon = null; // Canhão de Circo — criado no FIM do init (pós-worldgen)
 let MapToys = null; // 5 atrações do mapa — idem; Interact e playerUpdate leem via referência
 let Secrets = null; // 3 segredos (armas trancadas) — depende de MapToys, vem por último
 const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets, isMobile: __mobile });
+/* A arma na mão e o alvo de interação marcado no MUNDO: em VR não existe centro
+   de tela onde pendurar retículo nem dica de "aperte E". */
+const XRArma = createXrWeapon({ THREE, WeaponRig, arsenal });
+const XRInterage = createXrInteract({
+  THREE, scene, player, state, heightAt, Structures, Car, Heli, arsenal,
+  getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets,
+});
 
 /* ================== minimapa / radar (canvas 2D) ================== */
 const MiniMap = (() => {
@@ -3047,7 +3062,7 @@ function tick(forceDt) {
      evitar. Reconciliado por frame (e não uma vez ao entrar) porque a mão
      aparece e some com o controle: dormiu, desligou, só um pareado. */
   {
-    const paiDaArma = (xrOn && XR.mao('right')) || camera;
+    const paiDaArma = (xrOn && (XR.punho('right') || XR.mao('right'))) || camera;
     if (weaponRoot.parent !== paiDaArma) paiDaArma.add(weaponRoot);
   }
 
@@ -3103,7 +3118,7 @@ function tick(forceDt) {
        nada mais, sem erro e sem console. `clicked` é consumido e zerado a cada
        frame, então só a borda de subida pode escrevê-lo. */
     if (cmd.atirarAgora) mouse.clicked = true;
-    mouse.aiming = cmd.mirar;
+    mouse.aiming = cmd.mirar || XRArma.mirando();   // botão OU arma trazida ao olho
   }
 
   if (!state.started || state.paused) {
@@ -3182,6 +3197,10 @@ function tick(forceDt) {
   if (!window.__BR_active) { Boss.update(dt, t); Missions.update(); }
   // Visitante volta ao BR quando a sala permite (playtest: "o alien sumiu")
   if (!window.__BR_active || window.__BR_alien) Alien.update(dt, t);
+  if (xrOn) XRInterage.update({
+    maoRaio: XR.mao('left'), maoPunho: XR.punho('left'),
+    fontes: (renderer.xr.getSession && renderer.xr.getSession() || {}).inputSources, dt,
+  });
   Interact.update(dt, t);
   if (Cannon) Cannon.update(dt, t);
   if (MapToys) MapToys.update(dt, t);
@@ -3209,6 +3228,15 @@ function tick(forceDt) {
     applyFpsCamera(dt, t);
     carCameraUpdate(dt);
   }
+  /* DEPOIS do applyFpsCamera, e isso é contrato: a pose de desktop (hipV, bob,
+     sway do mouse) é escrita lá, e aplicar a mão antes faria o desktop
+     sobrescrever a mão de volta. */
+  if (xrOn) XRArma.aplicar({
+    gun, weaponRoot, punho: XR.punho('right'), raio: XR.mao('right'),
+    apoio: XR.punho('left') || XR.mao('left'),
+    cabeca: camera.getWorldPosition(_xrCabeca), dt,
+    oculto: state.driving || state.flying,
+  });
   if (window.__CityDestruction) window.__CityDestruction.tick(dt);
 
   /* grama reativa: player E carro dobram as lâminas */
@@ -3878,6 +3906,7 @@ window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
+  XRArma, XRInterage,
   MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
   // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como
   // verificar de fora que a troca de arma do headset chegou a trocar alguma coisa.

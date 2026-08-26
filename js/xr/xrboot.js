@@ -18,6 +18,8 @@ import { createXrRig } from './xrrig.js';
 import { createXrSession } from './xrsession.js';
 import { createXrHands } from './xrhands.js';
 import { createXrComfort } from './xrcomfort.js';
+import { criarGiroXR } from './xrturn.js';
+import { criarCorpoXR } from './xrbody.js';
 
 export function createXrBoot({ THREE, renderer, scene, camera,
   nav = typeof navigator === 'undefined' ? null : navigator,
@@ -28,6 +30,14 @@ export function createXrBoot({ THREE, renderer, scene, camera,
   const session = createXrSession({ renderer, navigator: nav, onEnter, onExit, onVisibility });
   const hands = createXrHands({ renderer });
   const comfort = createXrComfort({ THREE, camera });
+  /* `localStorage` não é só "pode estar cheio": em iframe com sandbox o próprio
+     ACESSO à propriedade lança. Sem preferência salva o giro cai no padrão. */
+  let armazem;
+  try { armazem = (win && win.localStorage) || null; } catch { armazem = null; }
+  /* Nenhum dos dois aloca `Object3D` — só números e matrizes. É o que permite
+     nascerem aqui, no boot, sem tocar no fluxo seedado do worldgen. */
+  const giro = criarGiroXR({ armazem });
+  const corpo = criarCorpoXR({ THREE, camera });
 
   const apresentando = () => !!(renderer.xr && renderer.xr.isPresenting === true);
 
@@ -36,7 +46,7 @@ export function createXrBoot({ THREE, renderer, scene, camera,
   function sync() {
     const p = apresentando();
     if (p && !rig.entered) { rig.enter(); hands.anexar(rig.rig); comfort.anexar(); }
-    else if (!p && rig.entered) { comfort.soltar(); hands.exit(); rig.exit(); }
+    else if (!p && rig.entered) { comfort.soltar(); hands.exit(); corpo.soltar(); rig.exit(); }
     return p;
   }
 
@@ -49,11 +59,17 @@ export function createXrBoot({ THREE, renderer, scene, camera,
     enter: () => { hands.criar(); return session.enter(); },
     exit: () => session.exit(),
     place: (x, y, z, yaw) => rig.place(x, y, z, yaw),
+    /* passo físico do jogador que o jogo ainda não absorveu (ver js/xr/xrrig.js):
+       drenar isto na posição do jogador põe o colisor debaixo da CABEÇA. */
+    consumirPasso: alvo => rig.consumirPasso(alvo),
     headWorldPosition: alvo => rig.headWorldPosition(alvo),
     get presenting() { return apresentando(); },
     get rig() { return rig.rig; },
     mao: qual => hands.mao(qual),
+    punho: qual => hands.punho(qual),
     conforto: comfort,
+    giro,        // política de giro (js/xr/xrturn.js): suave, passos, preferência
+    corpo,       // altura, postura e o boneco (js/xr/xrbody.js)
     get visibility() { return session.visibility; },
   };
 }

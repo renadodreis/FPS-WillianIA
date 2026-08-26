@@ -337,6 +337,48 @@ API, não a forma conveniente.**
   veículo e arma continuam sendo o código já testado. Controle novo não pode
   virar física nova.
 
+### `gripSpace` e `targetRaySpace` NÃO são intercambiáveis
+
+A spec do WebXR define dois espaços por controle:
+
+- **`targetRaySpace`** (`renderer.xr.getController(i)`) — "para onde aponta".
+- **`gripSpace`** (`renderer.xr.getControllerGrip(i)`) — a palma: *"if the user was
+  holding a straight rod in their hand, the origin rests at their palm"*. O **-Z
+  do grip é a direção do POLEGAR**, não do cano.
+
+A spec e o MDN mandam usar o **grip** para posicionar o modelo que está na mão
+(*"The gripSpace should be used instead to place the renderable model of a
+tracked-pointer"*), e a doc do three repete a divisão. Medido aqui contra a
+`gripOffsetMatrix` oficial da Meta para o Touch: os dois espaços divergem
+**45,4° e 5,2 cm**. Pendurar a arma no raio de mira dá punho torto e cano fora
+de lugar — e é indistinguível de "a mira está horrível" para quem está jogando.
+
+**Objeto de grip criado depois do `setSession` só recebe pose no frame
+seguinte.** Ler `visible` na mesma chamada dá falso negativo.
+
+### A mira sai da ARMA, não do controle
+
+Hierarquia: linha de mira da arma (a ocular do perfil, onde o jogador põe o
+olho) → punho → raio do controle → câmera. E a pose da arma tem que ser escrita
+**depois** do `applyFpsCamera`: a pose de desktop (offset de quadril, bob de
+caminhada, sway do mouse) é escrita lá, e aplicar a mão antes faz o desktop
+sobrescrever a mão de volta.
+
+**ADS em VR é físico.** Não é FOV animado por botão: mede-se o recuo da arma em
+direção ao olho e o desvio lateral. É por isso que existe a indústria de
+gunstock. Arma enfiada na cara **some** em vez de ser empurrada — empurrar
+desgruda a arma da mão, que é exatamente o defeito que se veio consertar.
+
+**Duas mãos:** a direção sai da linha entre as mãos, com histerese no engate
+(0,20 / 0,32 m). Sem amortecer, a mira SALTA no momento do engate, porque a
+linha entre as mãos e a direção de cada mão divergem.
+
+### `__BR_active` do harness esconde meia interação
+
+`test/helpers/harness.js` nasce com `online: true`, logo `__BR_active = true` —
+e isso esconde a branch de baú/bazuca de `js/interact.js`. Teste de interação
+solo que não desliga a bandeira mede o vazio.
+
 ### A mão mira, a cabeça olha
 
 Levar o desenho de FPS de mouse pra VR sem revisão produz a pior experiência
