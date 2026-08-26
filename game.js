@@ -359,7 +359,22 @@ const scene = new THREE.Scene();
 const FOG_COLOR = new THREE.Color(0xb9d1e4);
 scene.fog = new THREE.Fog(FOG_COLOR, CFG.VIEW_DIST * 0.5, CFG.VIEW_DIST);
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.08, CFG.VIEW_DIST + 600);
+/* O `far` é o da NÉVOA, não 600 m além dela. A névoa é linear e satura em
+   `CFG.VIEW_DIST`: tudo entre 420 e 1020 m era desenhado 100% da cor da névoa —
+   pixel que não muda nada na tela e custa draw call em dobro no headset.
+   Medido em sessão estéreo, mundo congelado: castelo 500 → 374 draw calls
+   (−25%) e 1,67 M → 1,48 M triângulos.
+
+   Duas coisas tinham que ser resolvidas ANTES, e foram:
+   1. Os feixes de findability (`js/farbeacon.js`) prendem o z no far e
+      continuam visíveis de qualquer canto do mapa — sem isso, encurtar o far
+      apagaria um recurso de orientação.
+   2. As estrelas moravam a 1500 m e já eram recortadas hoje (o céu noturno
+      estava 96% vazio); foram trazidas para 300 m em js/env.js.
+
+   O que muda na tela: relevo além de 420 m deixa de ocluir o que está além de
+   420 m — e esse relevo é 100% cor de névoa. Dentro dos 420 m, idêntico. */
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.08, CFG.VIEW_DIST);
 camera.position.set(0, 3, 8);
 
 /* ---- XR (Quest) ----

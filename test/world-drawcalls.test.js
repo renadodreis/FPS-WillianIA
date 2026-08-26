@@ -580,3 +580,67 @@ describe('draw calls do mundo — props de GLB, acampamento e pássaros', { skip
       'em HEAD os 6 feixes soltos custavam 6, dois passes cada)');
   });
 });
+
+describe('o céu noturno cabe no campo de visão', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* O DOMO DE ESTRELAS MORAVA FORA DO ALCANCE DA CÂMERA. Ele era montado a
+     1500 m e colado na câmera todo frame, contra um `far` de 1020: a GPU
+     recortava quase tudo, e o jogador via um céu noturno 96% vazio sem que
+     ninguém tivesse decidido isso. Medido em pixels de estrela pintados: 46
+     com far 1020 contra 1082 com far 4000.
+
+     Não é detalhe estético: enquanto o domo dependesse de um `far` longo, a
+     maior alavanca de desempenho do porte VR ficava travada — encurtar o far
+     acabaria com o céu. Trazer o domo para dentro do campo destrava as duas
+     coisas de uma vez.
+
+     Aqui se mede GEOMETRIA, não pixel: contagem de pixels de estrela é frágil
+     (depende de exposição, de bloom, do horário e de onde a câmera está
+     olhando) e já me devolveu zero nos dois lados de uma comparação em que o
+     efeito existia. O que não é frágil é a distância do domo comparada ao
+     alcance da câmera. */
+  let h;
+  before(async () => { h = await bootGame({ port: 3496 }); });
+  after(async () => { if (h) await h.close(); });
+
+  it('todas as estrelas ficam DENTRO do alcance da câmera', async () => {
+    const r = await h.play(() => {
+      const MP = window.__MP;
+      let pontos = null;
+      MP.scene.traverse(o => {
+        if (!pontos && o.isPoints && o.geometry && o.geometry.attributes.position
+            && o.geometry.attributes.position.count > 300) pontos = o;
+      });
+      if (!pontos) return { achou: false };
+      const p = pontos.geometry.attributes.position;
+      let maxR = 0, minR = Infinity;
+      for (let i = 0; i < p.count; i++) {
+        const r2 = Math.hypot(p.getX(i), p.getY(i), p.getZ(i));
+        if (r2 > maxR) maxR = r2;
+        if (r2 < minR) minR = r2;
+      }
+      return {
+        achou: true, n: p.count, maxR: +maxR.toFixed(1), minR: +minR.toFixed(1),
+        far: MP.camera.far, temFog: pontos.material.fog !== false,
+      };
+    });
+    assert.equal(r.achou, true, 'não achei o domo de estrelas na cena');
+    assert.ok(r.maxR < r.far,
+      `a estrela mais distante está a ${r.maxR} m e a câmera enxerga até ${r.far} m: ` +
+      'o céu noturno é recortado pela GPU antes de chegar na tela');
+    assert.equal(r.temFog, false,
+      'as estrelas recebem névoa: dentro do alcance da câmera elas sairiam LAVADAS, ' +
+      'o que troca "recortadas" por "apagadas"');
+    assert.ok(r.n >= 500, `o domo tem ${r.n} estrelas`);
+  });
+
+  it('e ficam FORA da névoa mais densa, para não virarem borrão', async () => {
+    const r = await h.play(() => {
+      const MP = window.__MP;
+      return { fogFar: MP.scene.fog ? MP.scene.fog.far : null, far: MP.camera.far };
+    });
+    assert.ok(r.fogFar !== null, 'a cena perdeu a névoa');
+    assert.ok(r.far <= r.fogFar + 1,
+      `a câmera enxerga até ${r.far} m mas a névoa satura em ${r.fogFar}: ` +
+      'tudo entre os dois é desenhado 100% da cor da névoa — pixel que não muda nada e custa draw call');
+  });
+});

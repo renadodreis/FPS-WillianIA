@@ -26,17 +26,38 @@ export function createEnv(deps) {
   let weather = 'limpo', weatherK = 0, thunderT = 9, flashT = 0;
   let nightK = 0, dayK = 1, goldenK = 0;
 
-  // estrelas no domo
+  /* ESTRELAS NO DOMO — e o raio é escolhido, não arbitrário.
+
+     O domo vivia a 1500 m e é colado na câmera todo frame, contra um `far` de
+     1020: a GPU recortava quase tudo. Medido em pixels de estrela pintados:
+     **46 com far 1020**, contra 1082 com far 4000 — ou seja, o céu noturno
+     estava 96% vazio sem que ninguém tivesse decidido isso. E o valor piorava
+     junto com qualquer encurtamento de `far`, que é justamente a maior alavanca
+     de desempenho do porte VR.
+
+     300 m cabe com folga dentro de qualquer `far` que se queira usar. O
+     tamanho na tela não muda com o raio porque o material é
+     `sizeAttenuation: false` — o ponto tem tamanho em PIXELS, não em metros —
+     e a direção de cada estrela é a mesma, então o céu é o mesmo céu.
+
+     `fog: false` é obrigatório junto: a névoa é linear e satura em
+     `CFG.VIEW_DIST` (420 m); a 300 m o domo cairia dentro dela e as estrelas
+     sairiam lavadas — trocaríamos "recortadas" por "apagadas".
+
+     A contagem de chamadas do `Math.random` não muda: mesmo laço, mesmo
+     `randomDirection()`, só o multiplicador é outro. */
   const starGeo = new THREE.BufferGeometry();
   const sp = new Float32Array(520 * 3);
+  const R_ESTRELAS = 300;
   for (let i = 0; i < 520; i++) {
     const v = new THREE.Vector3().randomDirection();
     if (v.y < 0.06) v.y = Math.abs(v.y) + 0.08;
-    sp[i * 3] = v.x * 1500; sp[i * 3 + 1] = v.y * 1500; sp[i * 3 + 2] = v.z * 1500;
+    sp[i * 3] = v.x * R_ESTRELAS; sp[i * 3 + 1] = v.y * R_ESTRELAS; sp[i * 3 + 2] = v.z * R_ESTRELAS;
   }
   starGeo.setAttribute('position', new THREE.BufferAttribute(sp, 3));
   const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({
-    color: 0xcfe2ff, size: 2.0, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false }));
+    color: 0xcfe2ff, size: 2.0, sizeAttenuation: false, transparent: true, opacity: 0,
+    depthWrite: false, fog: false }));
   stars.frustumCulled = false;
   scene.add(stars);
 
