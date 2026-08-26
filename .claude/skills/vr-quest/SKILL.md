@@ -9,6 +9,19 @@ description: Use ao desenvolver, medir ou depurar o porte VR deste jogo no Meta 
 30 minutos entra aqui, com o sintoma e a medição. Ela existe porque quase todo
 item abaixo foi descoberto do jeito caro.
 
+## Regra permanente: isto não acaba até o dono mandar parar
+
+O porte VR está em **loop de correção contínua por decisão do dono do projeto**.
+Só ele encerra. Sem ordem dele, o estado padrão é continuar consertando.
+
+O critério de pronto é **dele**, não da suíte: "os testes passam" não é entrega;
+entrega é o jogo estar plenamente jogável dentro do headset. Cada entrega fecha
+o ciclo **deploy → suíte completa → redeploy**.
+
+E a regra que já foi quebrada caro: **estudar a documentação e como os FPS de VR
+existentes resolvem o problema ANTES de codar**. Levar solução de PC pro VR sem
+revisão é o erro que gerou quase todos os defeitos desta frente.
+
 ## A regra que resume tudo
 
 **Verificação de um instante não vale nada — o que vale é o que aguenta dez

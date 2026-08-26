@@ -38,6 +38,28 @@ quebrou o jogo antes.
   ferramenta na skill `vr-quest` (`.claude/skills/vr-quest/`), que é para ser
   mantida atualizada.
 
+## Regra permanente do porte VR (definida pelo dono do projeto)
+
+**O desenvolvimento do VR não para até o dono mandar parar. Só ele pode
+encerrar.** Enquanto não houver essa ordem, o estado padrão é: continuar
+consertando o jogo.
+
+- **Qualidade acima de tudo, e o critério é o dono.** "Passou nos testes" não é
+  entrega; entrega é o jogo estar plenamente jogável no headset. Se ele disser
+  que está ruim, está ruim — e o trabalho recomeça, sem discussão sobre escopo.
+- **Nada de gambiarra.** Estudar a documentação e como os jogos de VR existentes
+  resolvem o problema ANTES de codar. Trazer a experiência do que já funciona no
+  gênero em vez de inventar.
+- **Ciclo obrigatório a cada entrega: deploy → suíte completa → redeploy.**
+  Deploy manual primeiro quando ele quiser testar na hora; a suíte roda depois e
+  o redeploy fecha.
+- **Testes primários primeiro.** Testar o dublê em vez da plataforma já deixou
+  passar cinco rodadas de "os controles não funcionam" com a suíte verde. Ver a
+  skill `vr-quest`: o kit emulado é a base, e o teste mede a coisa (direção,
+  ângulo, posição), nunca um proxy conveniente (distância, contagem).
+- **Se acabarem os tokens, o dono manda `continue` e o desenvolvimento segue
+  exatamente de onde parou.**
+
 ## Fluxo de trabalho (git flow)
 
 `dev` → `hom` → `prod`. Trabalho novo sai de `dev`; `hom` é o que está em
