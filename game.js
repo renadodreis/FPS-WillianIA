@@ -81,6 +81,8 @@ const MenuGate = {
   broken: null,      // sala online inutilizável de vez (br-game.js não carregou)
   soloChosen: false, // o jogador escolheu SOLO e SAIU da sala (reversível)
   voltando: false,   // clicou em MULTIJOGADOR vindo do solo: reconectando
+  bootLabel: '',     // fase atual do boot, pra etiqueta de progresso (ver bootFase)
+  bootFases: [],      // histórico das fases já anunciadas — QA/teste de progresso honesto
 };
 let __voltaTimer = 0;
 /* multiplayer-client.js é script CLÁSSICO e roda ANTES deste módulo
@@ -119,7 +121,10 @@ function paintMenu() {
      partida rodando o #overlay é tela de PAUSA, e prometer "NOVO JOGO" ali
      seria mentira (startGame recusa). */
   let texto = null, travado = true, motivo = '';
-  if (!MenuGate.wired) texto = 'CARREGANDO O MUNDO...';
+  // etiqueta honesta: mesmo prefixo de sempre (index.html nasce com ele, e
+  // /CARREGANDO/i é o sinal que outros testes/scripts já leem) + a fase REAL
+  // que acabou de terminar (ver bootFase) — nunca uma barra fake.
+  if (!MenuGate.wired) texto = 'CARREGANDO O MUNDO...' + (MenuGate.bootLabel ? ` (${MenuGate.bootLabel})` : '');
   else if (!jogando) { travado = false; texto = __mpSocket ? '▶ JOGAR SOLO' : '▶ NOVO JOGO — SOLO'; }
   if (MenuGate.wired && MenuGate.voltando)
     motivo = '⏳ VOLTANDO PRA SALA ONLINE... SE O MAPA JÁ TIVER MUDADO, A PÁGINA RECARREGA.';
@@ -173,6 +178,25 @@ function paintMenu() {
       : '';
     warn.hidden = !brAoVivo;
   }
+}
+/* PROGRESSO HONESTO DO BOOT — troca a etiqueta "CARREGANDO O MUNDO..." por
+   uma fase REAL (o texto só muda quando aquele pedaço do worldgen já
+   terminou de rodar; ver as chamadas `await bootFase(...)` espalhadas pelo
+   módulo) e cede a vez ao navegador pra pintar essa mudança AGORA — sem o
+   `await` aqui, `paintMenu()` mexeria no DOM mas o resto do boot, que é
+   síncrono, continuaria bloqueando o thread principal até o fim, e o
+   usuário nunca veria a troca de etiqueta antes do módulo inteiro acabar.
+   `setTimeout(0)`, não `requestAnimationFrame`: a aba pode estar oculta
+   durante um teste automatizado (rAF não dispara — ver o comentário
+   equivalente em scripts/vr-baseline.js) e o boot não pode depender disso
+   pra continuar. `bootFases` é só o registro cru pra QA (test/carregamento-
+   progresso.test.js) prezar que são fases DE VERDADE, não uma etiqueta
+   estática mudando de cor. */
+async function bootFase(label) {
+  MenuGate.bootLabel = label;
+  MenuGate.bootFases.push(label);
+  paintMenu();
+  await new Promise(resolve => setTimeout(resolve, 0));
 }
 /* ganchos do multiplayer-client.js: a sala online caiu / voltou (o BR pode
    chegar atrasado, e nesse caso o menu volta a ser dele) */
@@ -651,6 +675,7 @@ const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simp
   // de cada chunk é determinístico por (cx,cz) no RNG local da grama, então
   // QUANDO ele é preenchido não muda um byte do mundo.
   rebuildBudget: __mobile ? MOBILE_GRASS_REBUILD_BUDGET : undefined });
+await bootFase('terreno e grama');
 
 /* ================================================================
    VEGETAÇÃO — árvores (2 LODs), pedras e flores, tudo InstancedMesh
@@ -868,6 +893,7 @@ const treeSpots = []; // posições das árvores (LOD + minimapa)
     }
   }
 }
+await bootFase('construções e árvores');
 
 /* re-balanceia LOD por distância (perto = detalhada, longe = barata) */
 const TREE_LOD_DIST = 70;
@@ -2628,6 +2654,7 @@ const Missions = (() => {
   refresh();
   return { update, get idx() { return idx; }, set idx(v) { idx = clamp(v, 0, list.length); refresh(); } };
 })();
+await bootFase('criaturas e missões');
 
 /* ================================================================
    INTERAÇÃO — baús, bazuca, veículos (tecla E)
@@ -2844,6 +2871,7 @@ const MenuCam = createMenuCamera({ THREE, camera, heightAt, shots: MENU_SHOTS,
      socket cai e o multiplayer recarrega a página no meio do menu (raiz do
      cancelamento em cadeia de test/br-drops; ver test/menuscene-gate.test.js). */
   mayTour: () => { const s = prewarm.stats; return s.runs > 0 && s.queued === 0; } });
+await bootFase('cenário e câmeras');
 
 /* O DONO DO LOOP É O RENDERER, e não o `requestAnimationFrame` da janela.
    Dentro de uma sessão WebXR quem agenda frame é `session.requestAnimationFrame`
@@ -2851,6 +2879,11 @@ const MenuCam = createMenuCamera({ THREE, camera, heightAt, shots: MENU_SHOTS,
    three só sabe trocar uma fila pela outra se o loop for dele. No desktop
    `setAnimationLoop` cai no mesmo `requestAnimationFrame` de sempre — a
    cadência não muda. */
+/* true assim que o primeiro tick() sincrono já rodou — ver o bloco
+   "PRIMEIRO FRAME ANTECIPADO" logo depois de Grass.refreshAll(). Evita que
+   startLoop(), religado no fim do módulo por hábito, desenhe um SEGUNDO
+   frame de graça antes mesmo do loop contínuo começar. */
+let __primeiroFrameFeito = false;
 function startLoop() {
   renderer.setAnimationLoop(() => tick());
   /* O PRIMEIRO FRAME É SÍNCRONO, e isso não é detalhe: o `animate()` antigo
@@ -2858,8 +2891,11 @@ function startLoop() {
      frame E desenhava um AGORA, ainda dentro da avaliação do módulo. Um
      refactor que devia ser neutro no desktop não pode apagar isso calado:
      é ele que põe a primeira imagem na tela e que roda a primeira rodada de
-     prewarm de shader antes de qualquer coisa depender delas. */
-  tick();
+     prewarm de shader antes de qualquer coisa depender delas.
+     Hoje esse primeiro tick() já rolou mais cedo (ver noSeedRender), então
+     aqui só falta religar o loop CONTÍNUO — rodar de novo desenharia um
+     frame idêntico à toa. */
+  if (!__primeiroFrameFeito) { __primeiroFrameFeito = true; tick(); }
 }
 function stepPhysics(dt, intendedDt = dt) {
   const stepsBefore = world.stepnumber;
@@ -3539,6 +3575,13 @@ $('mpPanel').addEventListener('click', e => e.stopPropagation());
    (index.html nasce com .disabled) em vez de aceitar clique que não faz nada. */
 MenuGate.wired = true;
 paintMenu();
+/* Cede a vez ao navegador IMEDIATAMENTE depois de destravar o botão: até
+   aqui o boot já fez praticamente tudo que pesa (terreno, grama,
+   construções, criaturas, missões, câmeras — ver os bootFase() acima); o
+   que falta é fiação de UI barata. Sem este `await`, o clique já valeria
+   mas ninguém veria o botão destravar antes do módulo inteiro terminar
+   (mesmo motivo do bootFase, só que aqui não muda etiqueta — só pinta). */
+await new Promise(resolve => setTimeout(resolve, 0));
 
 /* ---- botão de VR ----
    Só nasce se `isSessionSupported('immersive-vr')` disser sim (ou se for um
@@ -3624,6 +3667,44 @@ Secrets = createSecrets({ scene, player, SFX, FX, csmMat, Structures, heightAt, 
     return b;
   } });
 
+/* PRIMEIRO FRAME ANTECIPADO — daqui pra trás já rodou TODO o worldgen
+   sensível à seed (terreno, grama, construções, criaturas, Canhão/atrações/
+   segredos, que são noSeed — comentário do Canhão, js/cannon.js:28); daqui
+   pra frente só fica o instantâneo da partida zero (só LEITURA) e fiação de
+   UI/HUD/menu/VR que o jogador nunca vê atrás do painel do menu.
+
+   Historicamente o primeiro `composer.render()` de verdade só rolava na
+   ÚLTIMA linha do módulo (startLoop, lá embaixo) — um atraso puro no
+   primeiro pixel (medido: ~2,4 s no desktop, scripts/vr-baseline.js) que
+   não protegia coisa nenhuma, já que nada daquele resto é necessário pro
+   tick() do MENU (ele só toca XR/MenuCam/Grass/Env/Car/Heli/Animals/FX/
+   Amb/Water/Volcano — todos prontos aqui).
+
+   `noSeedRender` é o MESMO truque do Canhão/torre (js/cannon.js:32,
+   js/structures.js:247): troca `Math.random` por um gerador PRÓPRIO
+   enquanto o frame roda e devolve o original no `finally`. Existe porque
+   um `render()` de verdade pode linkar programa de sombra e criar
+   `Material`/`Object3D` novo por baixo dos panos (three r185, sob demanda)
+   — cada um gasta 4 números do stream. Isolar isso é seguro por
+   CONSTRUÇÃO: não importa quantos objetos o three crie aqui dentro, o
+   stream seedado sai do outro lado exatamente onde entrou. `rebucketTrees`
+   roda ANTES pra esse frame já mostrar as árvores na posição/LOD certos
+   (senão a InstancedMesh nasceria com matriz zerada até a chamada antiga
+   lá embaixo). `startLoop()`, mais abaixo, só religa o loop CONTÍNUO — ver
+   `__primeiroFrameFeito`. */
+rebucketTrees(0, 0);
+{
+  let __bootRng = 0xB0075EED >>> 0;
+  const noSeedRender = fn => {
+    const R = Math.random;
+    Math.random = () => (__bootRng = (__bootRng * 1664525 + 1013904223) >>> 0) / 4294967296;
+    try { return fn(); } finally { Math.random = R; }
+  };
+  noSeedRender(() => tick());
+  __primeiroFrameFeito = true;
+}
+await bootFase('afinando os últimos detalhes');
+
 /* INSTANTÂNEO DA PARTIDA ZERO — aqui, e não antes: é o último ponto do boot
    em que nada foi jogado ainda. É este estado que "JOGAR DE NOVO" restaura, e
    é o mesmo que um reload com a mesma seed reproduziria. Só LÊ (nenhuma
@@ -3636,6 +3717,7 @@ window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
+  MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
   get Cannon() { return Cannon; },
   get MapToys() { return MapToys; },
   get Secrets() { return Secrets; },
@@ -3813,9 +3895,9 @@ window.__MP = {
   socket: __mpSocket, spawn: __mpSpawn,
 };
 
-rebucketTrees(0, 0);
-/* Mundo montado e ninguém jogando ainda: melhor momento do processo inteiro
-   pra linkar os programas. O menu segue chamando prewarmIfIdle pros GLBs que
-   ainda estão baixando. */
-prewarmIfIdle(performance.now());
+/* O primeiro frame e o primeiro prewarm já rolaram mais cedo (ver
+   "PRIMEIRO FRAME ANTECIPADO", logo depois de Secrets) — hoje o mundo
+   inteiro monta bem antes de chegar aqui. startLoop() só falta religar o
+   loop CONTÍNUO (setAnimationLoop); o menu segue chamando prewarmIfIdle
+   pros GLBs que ainda estão baixando (ver o fim de tick()). */
 startLoop();
