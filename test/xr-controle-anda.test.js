@@ -174,34 +174,92 @@ describe('controles de VR no runtime emulado (IWER)', { skip: !CHROME && 'Chrome
   });
 
   it('clique do analógico faz CORRER', async () => {
-    const andando = await h.play(andouCom, [['stick', 'left', 0, -1]], 1000);
-    const correndo = await h.play(andouCom,
-      [['stick', 'left', 0, -1], ['botao', 'left', 'thumbstick', 1]], 1000);
-    assert.ok(correndo > andando * 1.15,
-      `correndo ${correndo.toFixed(2)} m contra andando ${andando.toFixed(2)} m: o sprint não chega`);
+    /* Mede a VELOCIDADE ESTABILIZADA, não a distância acumulada. Distância a
+       partir do repouso mistura a rampa de aceleração com o jitter de frame da
+       sessão, e o teste ficava intermitente medindo a mesma corrida que já
+       funcionava. Velocidade depois da rampa é a grandeza que o jogador sente. */
+    const velMedia = async correr => {
+      const A = window.__A, MP = window.__MP;
+      A.solta(); await A.espera(250);
+      A.stick('left', 0, -1);
+      if (correr) A.botao('left', 'thumbstick', 1);
+      await A.espera(700);                       // deixa a rampa assentar
+      const am = [];
+      for (let i = 0; i < 10; i++) {
+        await A.espera(50);
+        am.push(Math.hypot(MP.player.vel.x, MP.player.vel.z));
+      }
+      A.solta();
+      am.sort((a, b) => a - b);
+      return am[am.length >> 1];                 // mediana: imune a um frame torto
+    };
+    const andando = await h.play(velMedia, false);
+    const correndo = await h.play(velMedia, true);
+    assert.ok(correndo > andando * 1.3,
+      `andando ${andando.toFixed(2)} m/s contra correndo ${correndo.toFixed(2)} m/s: ` +
+      'o sprint não chega no jogo');
   });
 
-  it('analógico direito gira em PASSOS de 45°, um por inclinada', async () => {
-    const r = await h.play(async () => {
-      const A = window.__A, G = window.__game;
-      const yaw = () => G.camera.parent ? G.camera.parent.rotation.y : 0;
-      A.solta(); await A.espera(200);
-      const y0 = yaw();
-      A.stick('right', 1, 0);
-      await A.espera(600);                             // segurando: não pode repetir
-      const segurando = yaw() - y0;
-      A.solta(); await A.espera(300);
-      A.stick('right', 1, 0);
-      await A.espera(300);
-      const segundo = yaw() - y0;
-      A.solta();
-      return { segurando, segundo };
+
+  /* O GIRO MUDOU DE CONTRATO e este teste mudou junto: era snap de 45° fixo, e
+     virou contínuo por padrão com passos por opção do jogador. A Meta manda
+     "default to comfort-friendly options (snap turn)" e o Immersive Web SDK
+     nasce em snap — mas o dono do projeto reprovou o passo em jogo, e o critério
+     é dele. Os dois modos existem; o que não pode é só um existir.
+     A profundidade do giro (velocidade, rampa, zona morta, pivô) mora em
+     test/xr-turn.test.js; aqui se cobre a TROCA DE MODO ponta a ponta. */
+  const girarPor = async (modo, ms) => {
+    const A = window.__A, G = window.__game, MP = window.__MP;
+    G.XR.giro.preferir({ modo, velocidade: 120, passo: 45 });
+    A.solta(); await A.espera(250);
+    const q = new MP.THREE.Quaternion(), v = new MP.THREE.Vector3();
+    const olhar = () => {
+      G.XR.rig.updateMatrixWorld(true);
+      G.camera.getWorldQuaternion(q);
+      v.set(0, 0, -1).applyQuaternion(q);
+      return Math.atan2(-v.x, -v.z);
+    };
+    const y0 = olhar();
+    A.stick('right', 1, 0);
+    await A.espera(ms);
+    A.stick('right', 0, 0);
+    await A.espera(200);
+    let d = olhar() - y0;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    A.solta();
+    return d * 180 / Math.PI;
+  };
+
+  it('modo CONTÍNUO: segurar gira sem parar, proporcional ao tempo', async () => {
+    const curto = await h.play(girarPor, 'suave', 300);
+    const longo = await h.play(girarPor, 'suave', 900);
+    assert.ok(Math.abs(longo) > Math.abs(curto) * 1.8,
+      `300 ms rendeu ${curto.toFixed(1)}° e 900 ms rendeu ${longo.toFixed(1)}°: ` +
+      'no contínuo o tempo tem que mandar');
+    assert.ok(curto < 0, `analógico pra direita rendeu ${curto.toFixed(1)}° — sinal errado é giro invertido`);
+  });
+
+  it('modo EM PASSOS: segurar dá UM passo só, não uma rajada', async () => {
+    const um = await h.play(girarPor, 'passos', 900);
+    assert.ok(Math.abs(Math.abs(um) - 45) < 6,
+      `segurar 900 ms no modo passos rendeu ${um.toFixed(1)}° — tinha que ser um passo de 45°`);
+  });
+
+  it('a preferência do jogador SOBREVIVE, é ela que decide', async () => {
+    const r = await h.play(() => {
+      const G = window.__game;
+      G.XR.giro.preferir({ modo: 'passos', passo: 30 });
+      const a = { ...G.XR.giro.prefs };
+      G.XR.giro.preferir({ modo: 'suave', velocidade: 240 });
+      const b = { ...G.XR.giro.prefs };
+      G.XR.giro.preferir({ modo: 'suave', velocidade: 120 });
+      return { a, b };
     });
-    const passo = Math.PI / 4;
-    assert.ok(Math.abs(Math.abs(r.segurando) - passo) < 0.05,
-      `segurar meio segundo girou ${(r.segurando * 180 / Math.PI).toFixed(1)}° — tinha que ser um passo de 45°`);
-    assert.ok(Math.abs(Math.abs(r.segundo) - 2 * passo) < 0.05,
-      `soltar e inclinar de novo tinha que dar o segundo passo, deu ${(r.segundo * 180 / Math.PI).toFixed(1)}°`);
+    assert.equal(r.a.modo, 'passos');
+    assert.equal(r.a.passo, 30, 'a Meta sugere 30/45/90 — o jogador tem que poder escolher');
+    assert.equal(r.b.modo, 'suave');
+    assert.equal(r.b.velocidade, 240);
   });
 });
 
@@ -419,21 +477,24 @@ describe('conforto: vinheta de túnel e piscada no giro', { skip: !CHROME && 'Ch
     assert.ok(r < 0.1, `parou e a periferia continuou fechada em ${(r * 100).toFixed(0)}%`);
   });
 
-  it('o passo de giro PISCA', async () => {
-    const r = await h.play(async () => {
-      const A = window.__A, C = window.__game.XR.conforto;
+  it('o passo de giro PISCA, e o giro contínuo NÃO', async () => {
+    /* A piscada é o tratamento do corte seco do snap. No giro contínuo não há
+       corte: piscar ali seria um estrobo a cada mira fina. */
+    const medir = async modo => {
+      const A = window.__A, G = window.__game, C = G.XR.conforto;
+      G.XR.giro.preferir({ modo, velocidade: 120, passo: 45 });
       A.solta(); await A.espera(300);
-      const antes = C.piscando;
+      let pico = 0;
       A.stick('right', 1, 0);
-      await A.espera(40);                        // dentro da janela de ~80 ms
-      const durante = C.piscando;
+      for (let i = 0; i < 12; i++) { await A.espera(25); pico = Math.max(pico, C.piscando); }
       A.solta(); await A.espera(400);
-      const depois = C.piscando;
-      return { antes, durante, depois };
-    });
-    assert.equal(r.antes, 0, 'estava piscando sem ninguém girar');
-    assert.ok(r.durante > 0.1, `o passo de giro não escureceu nada (${r.durante})`);
-    assert.equal(r.depois, 0, 'a piscada não voltou ao normal — o jogador ficaria no escuro');
+      return { pico, depois: C.piscando };
+    };
+    const passos = await h.play(medir, 'passos');
+    const suave = await h.play(medir, 'suave');
+    assert.ok(passos.pico > 0.1, `o passo de giro não escureceu nada (${passos.pico})`);
+    assert.equal(passos.depois, 0, 'a piscada não voltou — o jogador ficaria no escuro');
+    assert.equal(suave.pico, 0, `o giro contínuo piscou (${suave.pico}): seria estrobo a cada mira fina`);
   });
 
   it('a vinheta existe na cena e some ao sair do VR', async () => {

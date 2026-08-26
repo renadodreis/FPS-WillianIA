@@ -27,6 +27,10 @@ export function createXrRig({ THREE, scene, camera }) {
   let paiAnterior = null;
   let poseSalva = null;
   let dentro = false;
+  /* passo FÍSICO acumulado: o quanto o jogador andou pelo cômodo e o jogo
+     ainda não absorveu. Ver o cabeçalho de `place`. */
+  let passoX = 0, passoZ = 0;
+  let cabecaX = 0, cabecaZ = 0, temBase = false;
 
   /* transform LOCAL da câmera antes de entrar: em XR ele é sobrescrito
      todo frame, então sem cópia não há como devolver o desktop intacto */
@@ -53,6 +57,10 @@ export function createXrRig({ THREE, scene, camera }) {
     camera.position.set(0, 0, 0);
     camera.quaternion.identity();
     camera.scale.set(1, 1, 1);
+    /* zera o passo físico: a sessão nova começa com o jogador onde ele está,
+       e a base é redefinida no primeiro `place` (a pose real da cabeça só
+       chega no primeiro frame da sessão — antes disso seria um passo falso). */
+    passoX = 0; passoZ = 0; temBase = false;
     dentro = true;
     return rig;
   }
@@ -69,12 +77,59 @@ export function createXrRig({ THREE, scene, camera }) {
     dentro = false;
   }
 
-  /* `y` é a cota do CHÃO sob o jogador; `yaw` é o giro artificial (snap
-     turn), somado ao giro real da cabeça pelo próprio headset. */
+  /* `y` é a cota do CHÃO sob o jogador; `yaw` é o giro artificial, somado ao
+     giro real da cabeça pelo próprio headset.
+
+     O GIRO PIVOTA NA CABEÇA, NÃO NA ORIGEM DO RIG — e isto foi um defeito
+     medido, não um refinamento. Antes daqui, `place` fazia
+     `rig.position.set(x,y,z); rig.rotation.y = yaw`: o rig girava em torno da
+     PRÓPRIA ORIGEM. Só que o headset quase nunca está sobre ela — o jogador
+     anda pelo cômodo. Com a cabeça 0,71 m fora do centro, um passo de 45°
+     TELEPORTAVA a cabeça 55,4 cm de lado (a corda do arco). O mundo girava e
+     escorregava embaixo do jogador ao mesmo tempo: é o "viro com o controle e
+     move igual PC, esse movimento não existe em VR" do relato. Nenhum jogo de
+     VR gira assim; todos giram em torno do eixo vertical que passa pela
+     cabeça. Aqui a conta é: coloque o rig de modo que a cabeça caia no ponto
+     pedido, seja qual for o yaw.
+
+     O PASSO FÍSICO NÃO PODE SUMIR NESSA CONTA. Se a cabeça é fixada em (x,z)
+     todo frame, andar pelo cômodo deixa de mover o jogador — o jogo passaria a
+     ARRASTAR a cabeça de volta, que é a coisa proibida. Por isso o
+     deslocamento físico é medido aqui e ACUMULADO (`passoX/passoZ`): a cabeça
+     vai para `(x,z) + passo`. Sem mais nada, o comportamento é o de sempre
+     (andar pelo cômodo anda). Quem chama pode DRENAR esse passo com
+     `consumirPasso()` e somá-lo na posição de jogo — aí o colisor passa a
+     seguir a cabeça, e a cota do terreno passa a ser amostrada embaixo dela.
+     A cabeça não pula na troca: o que entra em `x,z` sai de `passo`. */
   function place(x, y, z, yaw) {
     if (!dentro || !rig) return; // fora do XR não existe rig — e criar um custaria rand
-    rig.position.set(x, y, z);
+    const hx = camera.position.x, hz = camera.position.z;
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    if (!temBase) { cabecaX = hx; cabecaZ = hz; temBase = true; }
+    // passo do cômodo desde o frame anterior, levado do espaço do rig pro mundo
+    const dx = hx - cabecaX, dz = hz - cabecaZ;
+    cabecaX = hx; cabecaZ = hz;
+    passoX += dx * c + dz * s;
+    passoZ += -dx * s + dz * c;
     rig.rotation.y = yaw;
+    // rig = alvo da cabeça menos a posição da cabeça já girada pelo yaw
+    rig.position.set(
+      x + passoX - (hx * c + hz * s),
+      y,
+      z + passoZ - (-hx * s + hz * c),
+    );
+  }
+
+  /* Devolve (e zera) o passo físico ainda não absorvido pelo jogo, em MUNDO.
+     Quem chama soma isso na posição do jogador ANTES da física do frame: daí
+     em diante o colisor está debaixo da cabeça, e não onde o jogador estava
+     quando entrou na sessão. Chamar é opcional; não chamar mantém o
+     comportamento antigo. */
+  function consumirPasso(alvo) {
+    const out = alvo || { x: 0, z: 0 };
+    out.x = passoX; out.z = passoZ;
+    passoX = 0; passoZ = 0;
+    return out;
   }
 
   /* A leitura que todo código de jogo deveria usar no lugar de
@@ -84,8 +139,9 @@ export function createXrRig({ THREE, scene, camera }) {
   }
 
   return {
-    enter, exit, place, headWorldPosition,
+    enter, exit, place, headWorldPosition, consumirPasso,
     get rig() { return rig; },
     get entered() { return dentro; },
+    get passoPendente() { return { x: passoX, z: passoZ }; },
   };
 }

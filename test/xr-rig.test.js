@@ -128,13 +128,50 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     assert.deepEqual(mundo.toArray().map(v => +v.toFixed(3)), [120, 9.7, -60]);
   });
 
-  it('o giro do rig gira a cabeça em torno do próprio rig', () => {
+  /* O GIRO PIVOTA NA CABEÇA. Este teste já afirmou o contrário — "o giro do
+     rig gira a cabeça em torno do próprio rig" — e o número passava porque a
+     conta estava certa para o pivô errado. No aparelho isso é a queixa nº 1 do
+     dono: com a cabeça 0,71 m fora do centro do espaço de jogo, um passo de
+     45° TELEPORTAVA a vista 55,4 cm de lado (medido em sessão imersiva, ver
+     test/xr-turn.test.js). Girar tem que girar, não deslizar. */
+  it('girar o rig NÃO desloca a cabeça: o pivô é ela', () => {
     xr.enter();
-    camera.position.set(0, 1.7, -1); // cabeça 1 m à frente do centro do rig
-    xr.place(0, 0, 0, Math.PI / 2);  // 90° pra esquerda
-    const mundo = xr.headWorldPosition(new THREE.Vector3());
-    assert.equal(+mundo.x.toFixed(3), -1, 'o que estava à frente vai pro lado');
-    assert.equal(+mundo.z.toFixed(3) + 0, 0); // `+ 0` só normaliza o -0 do seno
+    camera.position.set(0.71, 1.7, -1);  // jogador fora do centro do cômodo
+    xr.place(0, 0, 0, 0);                // primeiro frame: fixa a base
+    const antes = xr.headWorldPosition(new THREE.Vector3());
+    for (const yaw of [Math.PI / 4, Math.PI / 2, Math.PI, -Math.PI / 3]) {
+      xr.place(0, 0, 0, yaw);
+      const agora = xr.headWorldPosition(new THREE.Vector3());
+      assert.ok(Math.hypot(agora.x - antes.x, agora.z - antes.z) < 1e-6,
+        `girando ${(yaw * 180 / Math.PI).toFixed(0)}° a cabeça andou ` +
+        `${Math.hypot(agora.x - antes.x, agora.z - antes.z).toFixed(3)} m de lado`);
+      assert.equal(+agora.y.toFixed(6), +antes.y.toFixed(6));
+    }
+  });
+
+  /* E o passo FÍSICO não pode sumir na conta do pivô: se a cabeça é fixada no
+     ponto pedido todo frame, andar pelo cômodo deixa de mover o jogador — o
+     jogo passaria a arrastar a cabeça de volta, que é a coisa proibida. */
+  it('andar pelo cômodo move a cabeça, e o passo fica disponível pro jogo', () => {
+    xr.enter();
+    camera.position.set(0, 1.7, 0);
+    xr.place(50, 0, -20, 0);
+    const antes = xr.headWorldPosition(new THREE.Vector3());
+    camera.position.set(0.8, 1.7, -0.6);   // passo físico de 1 m
+    xr.place(50, 0, -20, 0);
+    const agora = xr.headWorldPosition(new THREE.Vector3());
+    assert.equal(+(agora.x - antes.x).toFixed(3), 0.8, 'o passo físico sumiu');
+    assert.equal(+(agora.z - antes.z).toFixed(3), -0.6);
+    const passo = xr.consumirPasso();
+    assert.equal(+passo.x.toFixed(3), 0.8, 'o jogo não recebeu o passo pra absorver');
+    assert.equal(+passo.z.toFixed(3), -0.6);
+    assert.equal(+xr.consumirPasso().x.toFixed(3), 0, 'drenar duas vezes conta duas vezes');
+    /* Absorvido pelo jogo, o mesmo passo entra na posição de jogo e sai do
+       acumulado: a cabeça não pode pular na troca. */
+    xr.place(50.8, 0, -20.6, 0);
+    const depois = xr.headWorldPosition(new THREE.Vector3());
+    assert.equal(+(depois.x - agora.x).toFixed(3), 0, 'a cabeça pulou ao absorver o passo');
+    assert.equal(+(depois.z - agora.z).toFixed(3), 0);
   });
 
   it('o rig fica nos PÉS: a altura do olho vem só da pose da cabeça', () => {

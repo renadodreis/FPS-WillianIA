@@ -55,7 +55,8 @@ import { installFastSAP } from './js/sapbroadphase.js';
 import { autoTierSettings } from './js/gputier.js';
 import { createPerfHud } from './js/perfhud.js';
 import { createXrBoot } from './js/xr/xrboot.js';
-import { criarEntradaXR, SNAP_RAD } from './js/xr/xrinput.js';
+import { criarEntradaXR } from './js/xr/xrinput.js';
+import { eixoDeGiro } from './js/xr/xrturn.js';
 import { createXrButton, xrButtonState } from './js/xr/xrbutton.js';
 import { createXrWeapon } from './js/xr/xrweapon.js';
 import { createXrInteract } from './js/xr/xrinteract.js';
@@ -363,7 +364,8 @@ camera.position.set(0, 3, 8);
    seedado (linha ~201) e deslocaria o worldgen inteiro. Quem cria o rig
    é a primeira sessão de verdade, muito depois do mundo montado. */
 const entradaXR = criarEntradaXR();
-let xrYaw = 0;              // giro artificial acumulado (snap turn), em radianos
+let xrYaw = 0;              // giro artificial acumulado (js/xr/xrturn.js), em radianos
+const _passoXR = { x: 0, z: 0 };   // passo físico do cômodo, drenado do rig por frame
 let aoMudarSessaoXr = () => {}; // preenchido lá embaixo, quando o botão existe
 const _xrCabeca = new THREE.Vector3();
 const XR = createXrBoot({ THREE, renderer, scene, camera,
@@ -3073,26 +3075,45 @@ function tick(forceDt) {
      câmera do jogador é justamente o que não se pode fazer. */
   if (xrOn) {
     const sessao = renderer.xr.getSession && renderer.xr.getSession();
-    const cmd = entradaXR.ler(sessao ? sessao.inputSources : null);
-    if (cmd.girar) {
-      xrYaw += cmd.girar * SNAP_RAD;
-      /* PISCADA NO PASSO. O giro de 45° instantâneo é a opção confortável, mas
-         o corte seco desorienta — foi o "roda a tela sem experiência" do
-         relato. Escurecer por ~80 ms dá ao cérebro o tratamento de um piscar
-         de olhos, que é a técnica clássica pra isso. */
-      XR.conforto.piscar();
+    const fontes = sessao ? sessao.inputSources : null;
+    const cmd = entradaXR.ler(fontes);
+
+    /* O BONECO É DO JOGADOR, NÃO DA CÂMERA. Pendurado na câmera ele afunda o
+       quanto o jogador for mais baixo que o modelo (medido: −0,30 m a 1,60 m de
+       olho, −0,65 m a 1,25 m) e tomba junto com o pescoço ao olhar pra baixo.
+       Anexar por frame porque o rig só nasce no XR.sync (anexar é idempotente). */
+    if (XR.rig) XR.corpo.anexar(XR.rig, FpBody.bodyRoot);
+    XR.corpo.update(dt);
+
+    /* O COLISOR SEGUE A CABEÇA. Andar pelo cômodo movia a vista e deixava a
+       cápsula parada: o jogador atravessava parede andando de verdade e a cota
+       do terreno era lida onde ele ESTAVA. Drenado ANTES do playerUpdate, a
+       física do frame já roda debaixo da cabeça — e a cabeça não pula, porque o
+       que entra em player.pos sai do acumulado do rig (js/xr/xrrig.js). */
+    if (!state.driving && !state.flying && !player.dead) {
+      XR.consumirPasso(_passoXR);
+      player.pos.x += _passoXR.x;
+      player.pos.z += _passoXR.z;
     }
-    /* TÚNEL AO ANDAR: a periferia fecha conforme a velocidade e some parado.
-       Reduzir o fluxo óptico periférico é a recomendação da Meta para
-       locomoção suave, e é a periferia da retina que alimenta a sensação de
-       auto-movimento que o ouvido interno não confirma. */
-    XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), RUN_SPEED);
+
+    /* GIRO: contínuo por padrão, em passos por opção do jogador
+       (js/xr/xrturn.js explica por que o padrão diverge do "default to snap"
+       da Meta). O pivô é a cabeça, e isso é do rig. */
+    const giroXR = XR.giro.atualizar(dt, eixoDeGiro(fontes));
+    xrYaw = XR.giro.yaw;
+    if (giroXR.passo) XR.conforto.piscar();   // só o modo em passos pisca
+    /* VINHETA: a periferia fecha ao andar E ao girar. A vinheta da Meta reage a
+       três eventos separados (Movement, Rotation, Acceleration), não só a andar;
+       o túnel de giro só começa acima de 45°/s pra não piscar na mira fina. */
+    XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), RUN_SPEED,
+      giroXR.velocidade);
     teclaXR('KeyW', cmd.andar.y > 0.15);
     teclaXR('KeyS', cmd.andar.y < -0.15);
     teclaXR('KeyD', cmd.andar.x > 0.15);
     teclaXR('KeyA', cmd.andar.x < -0.15);
     teclaXR('Space', cmd.pular);
-    teclaXR('ControlLeft', cmd.agachar);   // segurar agacha, apertar durante o sprint desliza
+    // agachar de verdade: baixar a cabeça vale tanto quanto o botão
+    teclaXR('ControlLeft', cmd.agachar || XR.corpo.agachado);
     teclaXR('ShiftLeft', cmd.correr);
     /* CICLA a arma pelas destravadas. Sem isto o jogador fica com a arma
        inicial a partida inteira: o Touch não tem fileira de números, e a roda
