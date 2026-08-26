@@ -302,12 +302,62 @@ API, não a forma conveniente.**
   veículo e arma continuam sendo o código já testado. Controle novo não pode
   virar física nova.
 
+### A mão mira, a cabeça olha
+
+Levar o desenho de FPS de mouse pra VR sem revisão produz a pior experiência
+possível: a arma é filha da CÂMERA e `fire()` usa `camera.getWorldDirection`,
+então o jogador precisa **apontar o rosto** para o inimigo. A recomendação da
+Meta é ancorar a ação de entrada no controle. Em VR a cabeça olha; a mão mira.
+
+Aqui isso é `js/xr/xrhands.js` + a fonte única `miraOrigem`/`miraDirecao` no
+game.js, com fallback pra câmera quando não há mão na sessão (controle dormindo,
+só um pareado) — pior experiência é melhor que arma sem direção.
+
+Duas armadilhas, as duas silenciosas:
+
+- **`getWorldDirection` devolve o +Z do objeto.** Só `Camera` sobrescreve para
+  -Z. Usado direto no objeto do controle, o tiro sai **para trás da mão**.
+  Extraia a direção do quaternion de mundo: `set(0,0,-1).applyQuaternion(q)`
+  vale para os dois.
+- **Os objetos de controle têm que existir ANTES de `setSession`.** O three
+  associa entrada a controle dentro do `inputsourceschange`:
+
+  ```js
+  for ( let i = 0; i < controllers.length; i ++ ) { ... }   // WebXRManager.js
+  ```
+
+  Com `controllers` vazio (ninguém chamou `getController` ainda) o laço não
+  roda, o índice fica -1 e a fonte de entrada é **DESCARTADA** — e o evento não
+  se repete. Sintoma: mão em `visible:false`, pose identidade, para sempre, sem
+  erro e sem console. Por isso `criar()` (antes de pedir a sessão) é separado de
+  `anexar()` (depois, quando o rig existe).
+
+### Direção é do MUNDO, nunca da câmera local
+
+`camera.quaternion` em XR é a pose da CABEÇA RELATIVA AO RIG. Calcular "pra
+frente" com ela ignora o giro do rig: um passo de snap turn, ou o jogador virado
+de corpo, e andar pra frente o leva para o lado oposto do que ele enxerga.
+Girado 180°, **exatamente invertido** — foi o relato "pra frente vai pra trás".
+Use o quaternion de MUNDO (`getWorldQuaternion`), que inclui o rig.
+
+**E teste DIREÇÃO, não distância.** O teste que existia media quantos metros o
+jogador andou e ficava verde com o movimento apontando para trás. O que pega é
+o produto escalar entre o deslocamento e a vista: 1 é pra frente, **-1 é o bug**.
+
 ### Conforto é contrato, não gosto
 
 - **Giro em PASSOS de 45°, um por inclinada.** Girar o mundo suave debaixo de
   quem está fisicamente parado é a causa mais conhecida de enjoo — o olho vê
   rotação que o ouvido interno não sente. Segurar pro lado não pode girar em
   rajada: o analógico precisa voltar ao centro.
+- **Vinheta de túnel ao andar e piscada no giro** (`js/xr/xrcomfort.js`).
+  Reduzir o fluxo óptico PERIFÉRICO durante a locomoção é a recomendação da
+  Meta: é a periferia da retina que alimenta a sensação de auto-movimento que o
+  ouvido interno não confirma. E o passo de 45° instantâneo, sem piscada, lê
+  como "a tela girou sozinha" — ~80 ms de escuro dão ao cérebro o tratamento de
+  um piscar de olhos. A vinheta vive DENTRO da cena (em XR o EffectComposer está
+  fora do caminho) e é filha da CÂMERA: presa a outro pai ela escorrega quando o
+  jogador vira a cabeça, o que é pior que não ter vinheta.
 - **Zona morta de 0,18, DESCONTADA e não cortada.** O analógico descansa em ±0,1
   sozinho; sem zona morta o jogador anda sem querer, e andar sem querer em VR é
   enjoo na veia.
