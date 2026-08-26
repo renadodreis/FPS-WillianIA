@@ -16,6 +16,8 @@
 import { xrEnv } from './xrenv.js';
 import { createXrRig } from './xrrig.js';
 import { createXrSession } from './xrsession.js';
+import { createXrHands } from './xrhands.js';
+import { createXrComfort } from './xrcomfort.js';
 
 export function createXrBoot({ THREE, renderer, scene, camera,
   nav = typeof navigator === 'undefined' ? null : navigator,
@@ -24,6 +26,8 @@ export function createXrBoot({ THREE, renderer, scene, camera,
   const env = xrEnv(win);
   const rig = createXrRig({ THREE, scene, camera });
   const session = createXrSession({ renderer, navigator: nav, onEnter, onExit, onVisibility });
+  const hands = createXrHands({ renderer });
+  const comfort = createXrComfort({ THREE, camera });
 
   const apresentando = () => !!(renderer.xr && renderer.xr.isPresenting === true);
 
@@ -31,20 +35,25 @@ export function createXrBoot({ THREE, renderer, scene, camera,
      Devolve se está em XR e deixa o grafo coerente com isso. */
   function sync() {
     const p = apresentando();
-    if (p && !rig.entered) rig.enter();
-    else if (!p && rig.entered) rig.exit();
+    if (p && !rig.entered) { rig.enter(); hands.anexar(rig.rig); comfort.anexar(); }
+    else if (!p && rig.entered) { comfort.soltar(); hands.exit(); rig.exit(); }
     return p;
   }
 
   return {
     env, sync,
     isSupported: () => session.isSupported(),
-    enter: () => session.enter(),
+    /* `hands.criar()` ANTES de pedir a sessão: o three só associa entrada a
+       controle se os objetos já existirem quando o `inputsourceschange` chegar
+       (ver js/xr/xrhands.js). Criado depois, o controle nunca recebe pose. */
+    enter: () => { hands.criar(); return session.enter(); },
     exit: () => session.exit(),
     place: (x, y, z, yaw) => rig.place(x, y, z, yaw),
     headWorldPosition: alvo => rig.headWorldPosition(alvo),
     get presenting() { return apresentando(); },
     get rig() { return rig.rig; },
+    mao: qual => hands.mao(qual),
+    conforto: comfort,
     get visibility() { return session.visibility; },
   };
 }

@@ -97,6 +97,72 @@ describe('controles de VR no runtime emulado (IWER)', { skip: !CHROME && 'Chrome
     assert.ok(d > 1.0, `analógico no batente por 1 s moveu ${d.toFixed(3)} m: a entrada não chega no jogo`);
   });
 
+  /* ANDAR TEM DIREÇÃO, e medir só distância foi o erro que deixou passar o
+     defeito mais grosseiro de todos: "pra frente vai pra trás". A conta do
+     movimento sai de `camera.quaternion` — que em XR é a rotação da cabeça
+     RELATIVA AO RIG, não a do mundo. Com o rig girado (snap turn) ou com o
+     jogador fisicamente virado, o "pra frente" do jogo aponta para outro lugar
+     que não o "pra frente" que ele está vendo. */
+  const alinhamento = async passosDeGiro => {
+    const A = window.__A, G = window.__game, MP = window.__MP;
+    A.solta();
+    await A.espera(200);
+    for (let i = 0; i < passosDeGiro; i++) {     // gira com o analógico direito
+      A.stick('right', 1, 0);
+      await A.espera(180);
+      A.stick('right', 0, 0);
+      await A.espera(180);
+    }
+    // para onde o jogador ESTÁ OLHANDO, no mundo
+    const olhar = new MP.THREE.Vector3();
+    G.camera.getWorldDirection(olhar);
+    olhar.y = 0; olhar.normalize();
+    MP.player.vel.x = 0; MP.player.vel.z = 0;
+    const p0 = [MP.player.pos.x, MP.player.pos.z];
+    A.stick('left', 0, -1);
+    await A.espera(900);
+    A.solta();
+    const dx = MP.player.pos.x - p0[0], dz = MP.player.pos.z - p0[1];
+    const dist = Math.hypot(dx, dz);
+    return { dist, alinhado: dist < 0.05 ? 0 : (dx / dist) * olhar.x + (dz / dist) * olhar.z };
+  };
+
+  it('andar PRA FRENTE vai pra onde o jogador olha, sem girar', async () => {
+    const r = await h.play(alinhamento, 0);
+    assert.ok(r.alinhado > 0.9,
+      `andou ${r.dist.toFixed(2)} m numa direção com alinhamento ${r.alinhado.toFixed(2)} ` +
+      'com a vista (1 = pra frente, -1 = pra trás)');
+  });
+
+  it('andar PRA FRENTE continua indo pra frente depois de girar 180°', async () => {
+    /* Quatro passos de 45° = 180°. Se o movimento sair do quaternion LOCAL da
+       câmera, o jogador anda para o lado oposto do que enxerga — que é
+       exatamente o relato "pra frente vai pra trás". */
+    const r = await h.play(alinhamento, 4);
+    assert.ok(r.alinhado > 0.9,
+      `depois de girar 180°, andar pra frente deu alinhamento ${r.alinhado.toFixed(2)} ` +
+      `(andou ${r.dist.toFixed(2)} m). Negativo = movimento invertido.`);
+  });
+
+  it('andar PRA TRÁS vai pra trás da vista', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game, MP = window.__MP;
+      A.solta(); await A.espera(200);
+      const olhar = new MP.THREE.Vector3();
+      G.camera.getWorldDirection(olhar); olhar.y = 0; olhar.normalize();
+      MP.player.vel.x = 0; MP.player.vel.z = 0;
+      const p0 = [MP.player.pos.x, MP.player.pos.z];
+      A.stick('left', 0, 1);
+      await A.espera(900);
+      A.solta();
+      const dx = MP.player.pos.x - p0[0], dz = MP.player.pos.z - p0[1];
+      const dist = Math.hypot(dx, dz);
+      return { dist, alinhado: dist < 0.05 ? 0 : (dx / dist) * olhar.x + (dz / dist) * olhar.z };
+    });
+    assert.ok(r.alinhado < -0.9,
+      `puxar o analógico pra trás deu alinhamento ${r.alinhado.toFixed(2)} (esperado ≈ -1)`);
+  });
+
   it('analógico no centro NÃO anda', async () => {
     const d = await h.play(andouCom, [], 1000);
     assert.ok(d < 0.3, `parado, o jogador andou ${d.toFixed(3)} m — andar sem querer em VR é enjoo`);
@@ -231,5 +297,151 @@ describe('o limite do emulado — medido, não suposto', { skip: !CHROME && 'Chr
     assert.equal(r.ehArray, true,
       `o IWER mudou: agora inputSources é ${r.tipo}. Reveja o caso de forma nativa em xr-input.test.js`);
     assert.equal(r.herdaDeArray, true);
+  });
+});
+
+describe('em VR a MÃO mira, não a cabeça', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* O relato foi "a minha cabeça está movendo a mira da arma, ou seja, pra eu
+     mirar no inimigo, movo a cabeça". Vinha de a arma ser filha da CÂMERA e de
+     `fire()` usar `camera.getWorldDirection` — desenho de FPS de mouse levado
+     pra VR sem revisão. A recomendação da Meta é ancorar a ação de entrada no
+     controle: em VR a cabeça olha, a mão mira. */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: PORT + 3 }); });
+  after(async () => { if (h) await h.close(); });
+
+  const angulo = (a, b) => {
+    const d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    return Math.acos(Math.max(-1, Math.min(1, d))) * 180 / Math.PI;
+  };
+
+  it('a mira sai da MÃO', async () => {
+    const r = await h.play(() => window.__game.mira());
+    assert.equal(r.naMao, true, 'a mira ainda está saindo da câmera dentro da sessão');
+  });
+
+  it('a arma é filha da mão direita, não da câmera', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, MP = window.__MP;
+      let o = MP.scene.getObjectByName('weaponRoot') || null;
+      if (!o) { // sem nome: acha pelo pai declarado
+        o = G.WeaponRig && G.WeaponRig.root ? G.WeaponRig.root : null;
+      }
+      const cam = G.camera;
+      // sobe a cadeia procurando a câmera
+      let p = o && o.parent, viaCamera = false;
+      while (p) { if (p === cam) { viaCamera = true; break; } p = p.parent; }
+      return { achou: !!o, viaCamera };
+    });
+    if (r.achou) {
+      assert.equal(r.viaCamera, false, 'a arma continua pendurada na câmera: mirar seria mover a cabeça');
+    }
+  });
+
+  it('VIRAR A CABEÇA não muda para onde a arma aponta', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game, dev = window.__xrEmulado;
+      A.solta(); await A.espera(200);
+      const antes = G.mira().direcao;
+      // gira o headset 60° — só a cabeça, a mão fica parada
+      const q = dev.quaternion, a = Math.PI / 6;
+      q.y = Math.sin(a); q.w = Math.cos(a); q.x = 0; q.z = 0;
+      await A.espera(400);
+      const depois = G.mira().direcao;
+      q.y = 0; q.w = 1;
+      await A.espera(200);
+      return { antes, depois };
+    });
+    assert.ok(angulo(r.antes, r.depois) < 5,
+      `virar a cabeça 60° moveu a mira ${angulo(r.antes, r.depois).toFixed(1)}°: ` +
+      'o jogador estaria mirando com o rosto');
+  });
+
+  it('MOVER A MÃO muda para onde a arma aponta', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game, dev = window.__xrEmulado;
+      A.solta(); await A.espera(200);
+      const antes = G.mira().direcao;
+      const q = dev.controllers.right.quaternion, a = Math.PI / 6;   // 60° de rotação
+      q.y = Math.sin(a); q.w = Math.cos(a); q.x = 0; q.z = 0;
+      await A.espera(400);
+      const depois = G.mira().direcao;
+      q.y = 0; q.w = 1;
+      await A.espera(200);
+      return { antes, depois };
+    });
+    assert.ok(angulo(r.antes, r.depois) > 45,
+      `girar a mão 60° moveu a mira só ${angulo(r.antes, r.depois).toFixed(1)}°: ` +
+      'a mão não está comandando a mira');
+  });
+});
+
+describe('conforto: vinheta de túnel e piscada no giro', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* Enjoo em VR é conflito sensorial: o olho vê movimento que o ouvido interno
+     não sente. A recomendação da Meta para locomoção é reduzir o fluxo óptico
+     PERIFÉRICO durante o movimento, porque é a periferia da retina que alimenta
+     a sensação de auto-movimento. E o passo de giro instantâneo, sem piscada,
+     lê como "a tela girou sozinha" — que foi o relato. */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: PORT + 4 }); });
+  after(async () => { if (h) await h.close(); });
+
+  it('parado, a visão fica INTEIRA — a vinheta não cobra preço à toa', async () => {
+    const r = await h.play(async () => {
+      window.__A.solta();
+      await window.__A.espera(900);
+      return window.__game.XR.conforto.tunel;
+    });
+    assert.ok(r < 0.05, `parado e com a periferia fechada em ${(r * 100).toFixed(0)}%`);
+  });
+
+  it('correndo, a periferia FECHA', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A;
+      A.solta(); await A.espera(200);
+      A.stick('left', 0, -1);
+      A.botao('left', 'thumbstick', 1);          // correndo
+      await A.espera(1200);
+      const t = window.__game.XR.conforto.tunel;
+      A.solta();
+      return t;
+    });
+    assert.ok(r > 0.4, `correndo e a periferia só fechou ${(r * 100).toFixed(0)}%`);
+  });
+
+  it('a vinheta REABRE ao parar — não fica escuro pra sempre', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A;
+      A.stick('left', 0, -1); await A.espera(800);
+      A.solta(); await A.espera(1500);
+      return window.__game.XR.conforto.tunel;
+    });
+    assert.ok(r < 0.1, `parou e a periferia continuou fechada em ${(r * 100).toFixed(0)}%`);
+  });
+
+  it('o passo de giro PISCA', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, C = window.__game.XR.conforto;
+      A.solta(); await A.espera(300);
+      const antes = C.piscando;
+      A.stick('right', 1, 0);
+      await A.espera(40);                        // dentro da janela de ~80 ms
+      const durante = C.piscando;
+      A.solta(); await A.espera(400);
+      const depois = C.piscando;
+      return { antes, durante, depois };
+    });
+    assert.equal(r.antes, 0, 'estava piscando sem ninguém girar');
+    assert.ok(r.durante > 0.1, `o passo de giro não escureceu nada (${r.durante})`);
+    assert.equal(r.depois, 0, 'a piscada não voltou ao normal — o jogador ficaria no escuro');
+  });
+
+  it('a vinheta existe na cena e some ao sair do VR', async () => {
+    const dentro = await h.play(() => {
+      const m = window.__game.XR.conforto.malha;
+      return { existe: !!m, visivel: !!(m && m.visible), paiEhCamera: !!(m && m.parent === window.__game.camera) };
+    });
+    assert.deepEqual(dentro, { existe: true, visivel: true, paiEhCamera: true },
+      'a vinheta precisa ser filha da CÂMERA: presa a outro pai, ela escorrega quando o jogador vira a cabeça');
   });
 });

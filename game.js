@@ -1574,6 +1574,21 @@ const recoil = {
   kickZ: 0, kickRot: 0, shotIdx: 0, lastShotT: -9,
 };
 
+/* ROTAÇÃO DA VISTA NO MUNDO — a única que serve para decidir direção em VR.
+
+   Em XR `camera.quaternion` é a pose da CABEÇA RELATIVA AO RIG (o three
+   reescreve os dois todo frame; o grafo é `scene > xrRig > camera`). Calcular
+   "pra frente" a partir dela ignora o giro do rig: assim que o jogador dá um
+   passo de snap turn, ou simplesmente se vira de corpo, andar pra frente o leva
+   para o lado oposto do que ele enxerga. Girado 180°, o movimento fica
+   exatamente invertido — e foi assim que chegou o relato "pra frente vai pra
+   trás". Fora de XR a câmera é filha da cena e os dois são a mesma coisa.
+
+   `getWorldQuaternion` usa a `matrixWorld` do último render — um frame de
+   atraso, imperceptível, e é a leitura correta. */
+const _qVista = new THREE.Quaternion();
+const vistaMundo = () => (XR.presenting ? camera.getWorldQuaternion(_qVista) : camera.quaternion);
+
 function playerUpdate(dt, t) {
   /* CANAL ANALÓGICO DO TOQUE, somado ao teclado. Sem dedo na tela,
      `tMove.active` é false e `tMove.mag` é 0 — o resultado do teclado sai
@@ -1600,9 +1615,10 @@ function playerUpdate(dt, t) {
   }
   player.slideT -= dt;
 
-  // direção desejada no plano XZ a partir do yaw da câmera
-  _v1.set(0, 0, -1).applyQuaternion(camera.quaternion); _v1.y = 0; _v1.normalize();
-  _v2.set(1, 0, 0).applyQuaternion(camera.quaternion);  _v2.y = 0; _v2.normalize();
+  // direção desejada no plano XZ a partir do yaw da câmera NO MUNDO
+  const _qv = vistaMundo();
+  _v1.set(0, 0, -1).applyQuaternion(_qv); _v1.y = 0; _v1.normalize();
+  _v2.set(1, 0, 0).applyQuaternion(_qv);  _v2.y = 0; _v2.normalize();
   _v3.set(0, 0, 0).addScaledVector(_v1, fwd).addScaledVector(_v2, str);
   if (_v3.lengthSq() > 1) _v3.normalize();
 
@@ -2115,6 +2131,26 @@ SFX.setSpatial({
 });
 
 const _rayDir = new THREE.Vector3(), _rayOrig = new THREE.Vector3(), _hitPos = new THREE.Vector3();
+
+/* DE ONDE O JOGADOR MIRA. Fora de XR é a câmera — mirar é girar a vista com o
+   mouse, e a arma é filha da câmera. Em XR isso vira a pior experiência
+   possível: a arma cola na cabeça e acertar exige APONTAR O ROSTO para o
+   inimigo. A recomendação da Meta é ancorar a ação de entrada no CONTROLE, não
+   na cabeça. Em VR a cabeça olha; a MÃO mira.
+
+   Sem mão na sessão (controle dormindo, só um pareado), cai na câmera: pior
+   experiência é melhor que arma sem direção.
+
+   ARMADILHA DO THREE: `getWorldDirection` devolve o +Z do objeto — só
+   `Camera` sobrescreve para devolver -Z. Usar o método direto no objeto do
+   controle faria o tiro sair para TRÁS da mão. Por isso a direção é extraída
+   do quaternion de mundo aqui, de um jeito só, que vale para os dois. */
+const _qMira = new THREE.Quaternion();
+const fonteDaMira = () => (XR.presenting && XR.mao('right')) || camera;
+function miraOrigem(out) { return fonteDaMira().getWorldPosition(out); }
+function miraDirecao(out) {
+  return out.set(0, 0, -1).applyQuaternion(fonteDaMira().getWorldQuaternion(_qMira)).normalize();
+}
 const _hitAgg = new THREE.Vector3();
 const _missEnd = new THREE.Vector3();
 function fire(t) {
@@ -2124,8 +2160,8 @@ function fire(t) {
     addTrauma(HitCore.shotTrauma(gun));
     recoil.kickZ += 0.12; recoil.kickRot += 0.1;
     SFX.melee();
-    camera.getWorldPosition(_rayOrig);
-    camera.getWorldDirection(_rayDir);
+    miraOrigem(_rayOrig);
+    miraDirecao(_rayDir);
     if (window.__BR_melee) window.__BR_melee(_rayOrig, _rayDir, gun.dmg);
     return;
   }
@@ -2150,8 +2186,8 @@ function fire(t) {
     recoil.pitchVel += 2.3;
     recoil.kickZ += 0.28;
     recoil.kickRot += 0.2;
-    camera.getWorldPosition(_rayOrig);
-    camera.getWorldDirection(_rayDir);
+    miraOrigem(_rayOrig);
+    miraDirecao(_rayDir);
     muzzle.getWorldPosition(_v3);
     // voando, o tiro sai do HELICÓPTERO, não da câmera de perseguição (10m atrás)
     if (state.flying) { _v3.copy(Heli.group.position); _v3.y += 1.6; _rayOrig.copy(_v3); }
@@ -2185,7 +2221,7 @@ function fire(t) {
   // ---- spread por arma (quadril > mirando; mover/pular abre o cone) ----
   const spd = Math.hypot(player.vel.x, player.vel.z);
   const spread = lerp(gun.spreadHip, gun.spreadAds, adsT) + spd * 0.0006 + (player.onGround ? 0 : 0.012);
-  camera.getWorldPosition(_rayOrig);
+  miraOrigem(_rayOrig);
   muzzle.getWorldPosition(_v3);
   // voando, origem do tiro é o HELICÓPTERO — a câmera de perseguição fica ~10m
   // atrás e o servidor rejeitaria a origem longe da posição autoritativa
@@ -2197,7 +2233,7 @@ function fire(t) {
   let hitAny = false, killAny = false, headAny = false, totalDmg = 0;
   let remoteHit = false, missEndSet = false;
   for (let p = 0; p < gun.pellets; p++) {
-    camera.getWorldDirection(_rayDir);
+    miraDirecao(_rayDir);
     _v1.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(spread * Math.sqrt(Math.random()));
     _rayDir.add(_v1).normalize();
 
@@ -2956,6 +2992,16 @@ function tick(forceDt) {
      Sai quando existir menu dentro do mundo (Fase 5). */
   if (xrOn && !state.started) startGame(false);
 
+  /* A ARMA MORA NA MÃO, NÃO NA CABEÇA. Fora de XR ela é filha da câmera e
+     mirar é girar a vista. Em XR isso colaria a arma no rosto: o jogador teria
+     que apontar a CABEÇA para o inimigo, que é a experiência que a Meta manda
+     evitar. Reconciliado por frame (e não uma vez ao entrar) porque a mão
+     aparece e some com o controle: dormiu, desligou, só um pareado. */
+  {
+    const paiDaArma = (xrOn && XR.mao('right')) || camera;
+    if (weaponRoot.parent !== paiDaArma) paiDaArma.add(weaponRoot);
+  }
+
   /* CONTROLES DO HEADSET. A intenção vira as MESMAS teclas que o teclado
      escreveria: assim colisão, rampa, escada, veículo e arma continuam sendo
      o código já testado, e não uma segunda física só pra VR. O giro é em
@@ -2964,7 +3010,19 @@ function tick(forceDt) {
   if (xrOn) {
     const sessao = renderer.xr.getSession && renderer.xr.getSession();
     const cmd = entradaXR.ler(sessao ? sessao.inputSources : null);
-    xrYaw += cmd.girar * SNAP_RAD;
+    if (cmd.girar) {
+      xrYaw += cmd.girar * SNAP_RAD;
+      /* PISCADA NO PASSO. O giro de 45° instantâneo é a opção confortável, mas
+         o corte seco desorienta — foi o "roda a tela sem experiência" do
+         relato. Escurecer por ~80 ms dá ao cérebro o tratamento de um piscar
+         de olhos, que é a técnica clássica pra isso. */
+      XR.conforto.piscar();
+    }
+    /* TÚNEL AO ANDAR: a periferia fecha conforme a velocidade e some parado.
+       Reduzir o fluxo óptico periférico é a recomendação da Meta para
+       locomoção suave, e é a periferia da retina que alimenta a sensação de
+       auto-movimento que o ouvido interno não confirma. */
+    XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), RUN_SPEED);
     keys['KeyW'] = cmd.andar.y > 0.15;
     keys['KeyS'] = cmd.andar.y < -0.15;
     keys['KeyD'] = cmd.andar.x > 0.15;
@@ -3774,6 +3832,13 @@ window.__game = {
   // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como
   // verificar de fora que a troca de arma do headset chegou a trocar alguma coisa.
   get gunIndex() { return arsenal.indexOf(gun); },
+  /* QA: a mira REAL do jogo (a mesma que `fire()` usa). Sem isto não há como
+     verificar de fora que o tiro sai da mão e não da cabeça. */
+  mira: () => ({
+    origem: miraOrigem(new THREE.Vector3()).toArray(),
+    direcao: miraDirecao(new THREE.Vector3()).toArray(),
+    naMao: !!(XR.presenting && XR.mao('right')),
+  }),
   get Cannon() { return Cannon; },
   get MapToys() { return MapToys; },
   get Secrets() { return Secrets; },
