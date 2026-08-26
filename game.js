@@ -64,7 +64,7 @@ import { createXrUi } from './js/xr/xrui.js';
 import { createXrHud } from './js/xr/xrhud.js';
 import { createXrHaptics } from './js/xr/xrhaptics.js';
 import { createXrFrameRate } from './js/xr/xrframerate.js';
-import { criarLocomocaoXR } from './js/xr/xrlocomotion.js';
+import { criarLocomocaoXR, ROTULOS as ROTULOS_ANDAR } from './js/xr/xrlocomotion.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
@@ -377,6 +377,15 @@ const XRTato = createXrHaptics({
   getSession: () => (renderer.xr && renderer.xr.getSession && renderer.xr.getSession()) || null,
 });
 const XRTaxa = createXrFrameRate();   // alvo 72 Hz
+/* PEGAR ITEM vibra. O vocabulário de pulsos já previa `pegar` e ele era o
+   único dos seis eventos sem emissor. Os dois lugares que pegam coisa do chão
+   (js/interact.js e js/pickups.js) passam pelo mesmo `SFX.pickup()`, então
+   decorar o som é o gancho exato — e não obriga os dois módulos a conhecerem
+   háptico de VR, que não é assunto deles. */
+{
+  const somPegar = SFX.pickup.bind(SFX);
+  SFX.pickup = (...a) => { XRTato.emitir('pegar', { mao: 'right' }); return somPegar(...a); };
+}
 let _uiFocoAntes = '';                // borda de hover do painel, pro tique de UI
 let xrYaw = 0;              // giro artificial acumulado (js/xr/xrturn.js), em radianos
 const _passoXR = { x: 0, z: 0 };   // passo físico do cômodo, drenado do rig por frame
@@ -2836,6 +2845,7 @@ const XRInterage = createXrInteract({
    pausar, mudar o conforto ou sair da partida. */
 const XRUI = createXrUi({
   THREE, scene, camera, giro: XR.giro,
+  andar: XRAndar, rotulosAndar: ROTULOS_ANDAR,
   armazem: (() => { try { return window.localStorage; } catch { return null; } })(),
   acoes: {
     pausar: () => setPaused(true),
@@ -2852,6 +2862,41 @@ const XRUI = createXrUi({
     podeReaparecer: () => !window.__BR_active,
   },
 });
+/* CONVERSA, PLACAR E SALA DENTRO DO MUNDO. As três telas sociais do BR são DOM,
+   e DOM não chega ao compositor dentro da sessão: o campo de texto do chat
+   recebe foco e fica invisível, o placar fica invisível e o lobby inteiro fica
+   invisível. Elas viram ABAS deste mesmo painel — e não um quarto objeto na
+   cena, que custaria mais draw call por olho.
+   Nenhum canal novo: as mensagens saem pelo evento `chat` que o br-game.js já
+   usa (o servidor já limita a cadência e já corta o tamanho), e o placar lê o
+   `roster` que o servidor já transmite — que de propósito NÃO carrega posição,
+   porque transmitir posição seria wallhack. */
+XRUI.conectarSocial({
+  ler: () => {
+    const D = window.__BR_debug;
+    const t = (D && D.S && D.S.matchT) ? Math.max(0, Math.floor(D.S.matchT())) : 0;
+    const mm = String(Math.floor(t / 60)).padStart(2, '0'), ss = String(t % 60).padStart(2, '0');
+    return {
+      eu: { id: (window.__MP_init && window.__MP_init.id) || '' },
+      partida: (D && D.S && D.S.matchNum) || '',
+      tempo: (D && D.S && D.S.phase === 'PLAY') ? `${mm}:${ss}` : '',
+    };
+  },
+  enviar: msg => { if (__mpSocket) __mpSocket.emit('chat', { msg }); },
+  acoes: {
+    /* mesmo evento do botão do lobby de DOM: o servidor recusa quem não é
+       anfitrião, e o painel só oferece o botão a quem é. FECHA porque quem
+       manda começar quer jogar — painel aberto mantém o jogo pausado. */
+    comecar: () => { if (__mpSocket) __mpSocket.emit('requestStart'); XRUI.fechar(); },
+    sair: () => { voltarAoMenu(); XR.exit(); },
+  },
+});
+/* OS DOIS ALIMENTADORES — ouvintes ADITIVOS no mesmo socket. O br-game.js
+   continua dono do log de chat e do placar de DOM; nada aqui os substitui. */
+if (__mpSocket) {
+  __mpSocket.on('roster', d => XRUI.social.roster(d));
+  __mpSocket.on('chat', d => XRUI.social.receber(d));
+}
 const XRHud = createXrHud({
   THREE,
   ler: () => ({

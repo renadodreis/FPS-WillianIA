@@ -43,17 +43,36 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
 
   const apresentando = () => !!(renderer.xr && renderer.xr.isPresenting === true);
 
+  /* RESET DE REFERENCIAL. O sistema dispara `reset` no espaço de referência
+     quando o jogador recentra a vista ou quando o piso é redefinido: a ORIGEM
+     muda, o jogador não anda. Sem escutar isso, a mudança de origem chega ao
+     rig disfarçada de passo físico gigante e teleporta o jogador no mundo pela
+     própria distância dele até o centro. O ouvinte é preso uma vez por sessão e
+     morre com ela. */
+  let espacoOuvido = null;
+  let resets = 0;   // QA: quantos resets de referencial chegaram
+  function ouvirReset() {
+    const esp = renderer.xr.getReferenceSpace && renderer.xr.getReferenceSpace();
+    if (!esp || esp === espacoOuvido || typeof esp.addEventListener !== 'function') return;
+    espacoOuvido = esp;
+    esp.addEventListener('reset', () => { resets++; rig.rebasear(); });
+  }
+
   /* Chamado uma vez por frame, ANTES de qualquer código mexer em câmera.
      Devolve se está em XR e deixa o grafo coerente com isso. */
   function sync() {
     const p = apresentando();
     if (p && !rig.entered) { rig.enter(); hands.anexar(rig.rig); comfort.anexar(); quality.aplicar(); }
+    /* Por frame, e não só ao entrar: no primeiro frame da sessão o espaço de
+       referência ainda pode não existir, e o three troca o espaço quando o jogo
+       pede outro tipo. A função sai na primeira linha quando já está ouvindo. */
+    if (p) ouvirReset();
     /* `quality.restaurar()` PRIMEIRO, e a ordem importa menos que o fato de ele
        estar aqui: esta linha já foi escrita uma vez e sumiu quando outro wiring
        reescreveu o mesmo `else if`. O sintoma era mudo — o jogador tirava o
        headset e seguia no monitor com duas cascatas de sombra apagadas e o
        alcance da sombra em 90 m, para sempre. Regressão de PC nascida de VR. */
-    else if (!p && rig.entered) { quality.restaurar(); comfort.soltar(); hands.exit(); corpo.soltar(); rig.exit(); }
+    else if (!p && rig.entered) { espacoOuvido = null; quality.restaurar(); comfort.soltar(); hands.exit(); corpo.soltar(); rig.exit(); }
     return p;
   }
 
@@ -69,6 +88,7 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
     /* passo físico do jogador que o jogo ainda não absorveu (ver js/xr/xrrig.js):
        drenar isto na posição do jogador põe o colisor debaixo da CABEÇA. */
     consumirPasso: alvo => rig.consumirPasso(alvo),
+    rebasear: () => rig.rebasear(),
     headWorldPosition: alvo => rig.headWorldPosition(alvo),
     get presenting() { return apresentando(); },
     get rig() { return rig.rig; },
@@ -79,5 +99,6 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
     giro,        // política de giro (js/xr/xrturn.js): suave, passos, preferência
     corpo,       // altura, postura e o boneco (js/xr/xrbody.js)
     get visibility() { return session.visibility; },
+    get resetsRecebidos() { return resets; },
   };
 }

@@ -378,4 +378,205 @@ describe('draw calls do mundo — props de GLB, acampamento e pássaros', { skip
       Math.min(...depois.map(p => Math.hypot(p[0], p[2])));
     assert.ok(espalhamento > 50, `bandos separados (espalhamento ${espalhamento.toFixed(0)} m)`);
   });
+
+  /* ================================================================
+     FEIXES DE FINDABILITY (js/farbeacon.js)
+
+     Os 6 feixes verticais — 5 marcos de atração (js/maptoys.js) e o
+     ninho do atirador (js/secrets.js) — existem PARA serem vistos de
+     longe: são declarados `fog: false` justamente por isso. Eles são a
+     única coisa que impedia encurtar `camera.far` de 1020 m para os
+     420 m em que a névoa já satura, um corte medido em −126 draw calls
+     estéreo na pose de castelo.
+
+     Duas coisas os prendiam:
+
+     1. `transparent` + `DoubleSide` faz o three desenhar a malha em DOIS
+        passes (traseiras, depois frentes). Em mistura ADITIVA com
+        `depthWrite: false` a ordem não muda um pixel — o segundo passe
+        era draw call jogada fora. Medido: 6 stereo por frame.
+     2. Além do plano far a geometria é RECORTADA pela GPU, e o objeto
+        ainda é descartado no culling da CPU. O truque é o mesmo que o
+        addon `Sky` do three usa há anos: prender o z de clip no far em
+        vez de deixar recortar.
+
+     Este bloco é a rede dos dois: se alguém tirar o `forceSinglePass`,
+     o passe duplo volta; se alguém tirar o clamp do vertex shader, o
+     feixe distante SOME com far curto — e o caso de pixel abaixo é o
+     que enxerga isso (foi verificado removendo o clamp: 0 pixels).
+     ================================================================ */
+
+  /* Caixa que os vértices de cada feixe ocupam NO MUNDO, colhida em HEAD
+     3cc8eea (6 malhas soltas, seed 424242). Fundir só muda como se
+     desenha: se um número aqui se mexer, mexeu no que se vê. */
+  const OURO_FEIXES = {
+    '8a3ffb': [[-337.550, 1.060, -224.950], [-335.650, 47.060, -223.050]],
+    'ffe14a': [[-226.415, 6.800, 286.134], [-224.515, 52.800, 288.034]],
+    '53c7ff': [[-183.866, 4.773, 5.515], [-181.966, 50.773, 7.415]],
+    'd7343a': [[-122.248, 11.309, 409.897], [-120.348, 57.309, 411.797]],
+    'ff8ad4': [[-11.697, 1.751, -4.220], [-9.797, 47.751, -2.320]],
+    'ff3b30': [[224.690, 22.606, -360.198], [226.290, 54.606, -358.598]],
+  };
+
+  /* Roda na página: acha as malhas de farol pelo carimbo do módulo e
+     devolve, POR COR DE FEIXE, a caixa de mundo dos vértices daquela cor. */
+  function sondaFeixes() {
+    const MP = window.__MP, THREE = MP.THREE;
+    const round = v => Math.round(v * 1000) / 1000;
+    const farois = [], aditivosSoltos = [];
+    MP.scene.traverse(o => {
+      const m = o.material;
+      if (!o.isMesh || !m || Array.isArray(m)) return;
+      if (m.userData && m.userData.farbeacon) { farois.push(o); return; }
+      // sobra de feixe solto: aditivo + fog:false, o desenho antigo
+      if (m.type === 'MeshBasicMaterial' && m.fog === false &&
+          m.blending === THREE.AdditiveBlending) aditivosSoltos.push(o);
+    });
+
+    const porCor = {};
+    let malhas = 0;
+    for (const o of farois) {
+      malhas++;
+      o.updateMatrixWorld(true);
+      const g = o.geometry, p = g.attributes.position, cor = g.attributes.color;
+      const v = new THREE.Vector3(), c = new THREE.Color();
+      for (let i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
+        // a cor por vértice está no espaço de trabalho (linear): volta pra sRGB
+        // pra bater com o getHexString() do material que existia antes
+        c.fromBufferAttribute(cor, i);
+        const chave = c.getHexString(THREE.SRGBColorSpace);
+        if (!porCor[chave]) porCor[chave] = [[1e9, 1e9, 1e9], [-1e9, -1e9, -1e9]];
+        const b = porCor[chave];
+        for (let j = 0; j < 3; j++) {
+          const q = v.getComponent(j);
+          if (q < b[0][j]) b[0][j] = q;
+          if (q > b[1][j]) b[1][j] = q;
+        }
+      }
+    }
+    for (const k in porCor) porCor[k] = porCor[k].map(a => a.map(round));
+
+    return {
+      malhas, soltos: aditivosSoltos.length, porCor,
+      props: farois.map(o => ({
+        nome: o.name,
+        forceSinglePass: o.material.forceSinglePass === true,
+        fog: o.material.fog,
+        aditivo: o.material.blending === THREE.AdditiveBlending,
+        depthWrite: o.material.depthWrite,
+        vertexColors: o.material.vertexColors === true,
+        frustumCulled: o.frustumCulled,
+        opacidade: o.material.opacity,
+        // o clamp do far tem que estar NO SHADER COMPILADO, não só na fonte
+        clampNoPrograma: !!(o.material.program &&
+          /gl_Position\.z\s*=\s*min/.test(o.material.program.vertexShader || '')),
+      })),
+    };
+  }
+
+  it('feixes de findability: uma malha por módulo, em passe único', async () => {
+    const r = await h.play(sondaFeixes);
+    assert.equal(r.soltos, 0,
+      `${r.soltos} feixes ainda soltos: cada um paga draw call por conta`);
+    assert.equal(r.malhas, 2,
+      `os 6 feixes viraram ${r.malhas} malhas (o alvo é 2: atrações + segredo)`);
+    for (const p of r.props) {
+      assert.equal(p.forceSinglePass, true,
+        `${p.nome}: sem forceSinglePass, transparent+DoubleSide paga DOIS passes`);
+      assert.equal(p.fog, false, `${p.nome}: o feixe tem que furar a névoa`);
+      assert.equal(p.aditivo, true, `${p.nome}: mistura aditiva (é o que torna a ordem irrelevante)`);
+      assert.equal(p.depthWrite, false, `${p.nome}: feixe não escreve profundidade`);
+      assert.equal(p.vertexColors, true, `${p.nome}: a cor de cada feixe vive no vértice`);
+      assert.equal(p.frustumCulled, false,
+        `${p.nome}: com far curto o culling da CPU mataria o feixe distante`);
+    }
+  });
+
+  it('feixes: cada cor ocupa exatamente o mesmo espaço de antes', async () => {
+    const r = await h.play(sondaFeixes);
+    const cores = Object.keys(r.porCor).sort();
+    assert.deepEqual(cores, Object.keys(OURO_FEIXES).sort(),
+      `as cores dos feixes mudaram: ${cores.join(',')}`);
+    for (const cor of cores) perto(r.porCor[cor], OURO_FEIXES[cor], `feixe ${cor}`);
+  });
+
+  it('feixes: com far = VIEW_DIST o feixe a 600 m ainda pinta pixels', async () => {
+    const medido = await h.play(() => {
+      const MP = window.__MP, THREE = MP.THREE, R = MP.renderer;
+      const alvo = new THREE.Vector3(-121.298, 34.309, 410.847); // feixe d7343a
+      const cam = new THREE.PerspectiveCamera(75,
+        R.domElement.width / R.domElement.height, 0.08, MP.CFG.VIEW_DIST);
+      // 600 m na horizontal e bem acima do relevo: linha de visada limpa
+      cam.position.set(alvo.x - 600, alvo.y + 60, alvo.z);
+      cam.lookAt(alvo);
+      cam.updateMatrixWorld(true);
+      const dist = cam.position.distanceTo(alvo);
+
+      const farois = [];
+      MP.scene.traverse(o => {
+        if (o.isMesh && o.material && !Array.isArray(o.material) &&
+            o.material.userData && o.material.userData.farbeacon) farois.push(o);
+      });
+
+      const gl = R.getContext();
+      const w = R.domElement.width, hh = R.domElement.height;
+      const quadro = () => {
+        R.render(MP.scene, cam);
+        const buf = new Uint8Array(w * hh * 4);
+        gl.readPixels(0, 0, w, hh, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        return buf;
+      };
+      const com = quadro();
+      for (const f of farois) f.visible = false;
+      const sem = quadro();
+      for (const f of farois) f.visible = true;
+      let difs = 0, maxD = 0;
+      for (let i = 0; i < com.length; i += 4) {
+        const d = Math.max(Math.abs(com[i] - sem[i]), Math.abs(com[i + 1] - sem[i + 1]),
+          Math.abs(com[i + 2] - sem[i + 2]));
+        if (d > 2) difs++;
+        if (d > maxD) maxD = d;
+      }
+      return { difs, maxD, dist: Math.round(dist), far: MP.CFG.VIEW_DIST, pixels: w * hh };
+    });
+    assert.ok(medido.dist > medido.far,
+      `a câmera do caso precisa estar ALÉM do far (${medido.dist} m contra far ${medido.far})`);
+    assert.ok(medido.difs > 100,
+      `com far = ${medido.far} m o feixe a ${medido.dist} m pintou só ${medido.difs} pixels ` +
+      '(sem o clamp do vertex shader a GPU recorta o feixe e dá 0)');
+  });
+
+  it('feixes: os dois faróis juntos custam no máximo 2 draw calls', async () => {
+    const medido = await h.play(() => {
+      const G = window.__game, MP = window.__MP, R = MP.renderer;
+      const farois = [];
+      MP.scene.traverse(o => {
+        if (o.isMesh && o.material && !Array.isArray(o.material) &&
+            o.material.userData && o.material.userData.farbeacon) farois.push(o);
+      });
+      const autoSalvo = R.info.autoReset, sombraSalva = R.shadowMap.enabled;
+      R.info.autoReset = false;
+      R.shadowMap.enabled = false;
+      const frame = () => {
+        G.tick(0);
+        R.info.reset();
+        R.render(MP.scene, MP.camera);
+        return R.info.render.calls;
+      };
+      for (let i = 0; i < 20; i++) frame();
+      const com = frame();
+      for (const f of farois) f.visible = false;
+      for (let i = 0; i < 3; i++) frame();
+      const sem = frame();
+      for (const f of farois) f.visible = true;
+      R.info.autoReset = autoSalvo;
+      R.shadowMap.enabled = sombraSalva;
+      return { com, sem, n: farois.length };
+    });
+    assert.equal(medido.n, 2, 'dois faróis na cena');
+    assert.ok(medido.com - medido.sem <= 2,
+      `os faróis custaram ${medido.com - medido.sem} draw calls mono (teto 2; ` +
+      'em HEAD os 6 feixes soltos custavam 6, dois passes cada)');
+  });
 });

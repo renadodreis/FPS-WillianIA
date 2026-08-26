@@ -367,3 +367,56 @@ describe('corpo do jogador em VR (runtime emulado IWER)', { skip: !CHROME && 'Ch
     assert.deepEqual(r.rot.map(v => +v.toFixed(4)), [0, 0, 0]);
   });
 });
+
+describe('RECENTRAR não move o jogador no mundo', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* NENHUM TESTE DESTE REPO CHAMAVA `recenter()` — e era exatamente ali que
+     moravam os dois piores defeitos de duas rodadas seguidas. Recentrar muda o
+     REFERENCIAL (a origem do espaço de jogo), não move ninguém no mundo: quem
+     está a 78 cm do centro e recentra continua exatamente onde estava.
+
+     Sem o rebase, a mudança de origem chegava ao rig disfarçada de passo físico
+     gigante, e o jogador era teleportado pela PRÓPRIA distância dele até o
+     centro: medido 0,7778 m a 0,78 m de distância, e 1,4142 m a 1,41 m. O
+     defeito nasceu de uma correção, foi corrigido, e voltou na correção
+     seguinte — três rodadas no mesmo lugar, sempre sem teste que olhasse. */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: 3426 }); });
+  after(async () => { if (h) await h.close(); });
+
+  const recentrarDe = async (x, z) => {
+    const A = window.__A, G = window.__game, MP = window.__MP, dev = window.__xrEmulado;
+    A.solta();
+    dev.position.set(0, 1.7, 0);
+    await A.espera(400);
+    // caminha até o ponto, em etapas de gente — teleporte não é caminhada
+    const passos = Math.max(1, Math.ceil(Math.hypot(x, z) / 0.05));
+    for (let i = 1; i <= passos; i++) {
+      dev.position.set((x * i) / passos, 1.7, (z * i) / passos);
+      await A.espera(40);
+    }
+    await A.espera(600);                       // deixa o passo escoar pro colisor
+    const antes = [MP.player.pos.x, MP.player.pos.z];
+    dev.recenter();
+    await A.espera(700);
+    const depois = [MP.player.pos.x, MP.player.pos.z];
+    return {
+      andou: Math.hypot(depois[0] - antes[0], depois[1] - antes[1]),
+      distancia: Math.hypot(x, z),
+      yaw: G.XR.giro.yaw,
+    };
+  };
+
+  it('recentrar a 0,78 m do centro não desloca o jogador', async () => {
+    const r = await h.play(recentrarDe, 0.55, -0.55);
+    assert.ok(r.andou < 0.02,
+      `recentrar de ${r.distancia.toFixed(2)} m deslocou o jogador ${r.andou.toFixed(4)} m — ` +
+      'mudar a origem não é andar');
+  });
+
+  it('recentrar a 1,41 m também não desloca — e o erro crescia com a distância', async () => {
+    const r = await h.play(recentrarDe, 1.0, -1.0);
+    assert.ok(r.andou < 0.02,
+      `recentrar de ${r.distancia.toFixed(2)} m deslocou ${r.andou.toFixed(4)} m: ` +
+      'o deslocamento acompanhava a distância ao centro, que é a assinatura do defeito');
+  });
+});

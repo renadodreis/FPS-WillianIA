@@ -540,3 +540,51 @@ describe('sair do headset não pode mudar o PC', { skip: !CHROME && 'Chrome não
       `no monitor o jogador andou a ${r.v.toFixed(3)} m/s — o desktop é 5,200`);
   });
 });
+
+describe('a velocidade é ESCOLHÍVEL pelo painel — senão não existe', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* Os três perfis existiam e NENHUM tinha chamador em produção: o painel não
+     tinha linha de velocidade, e `proximo()`/`preferir()` só eram tocados por
+     teste. Isso não era "uma opção faltando" — era um defeito de jogabilidade
+     com consequência medida: a zona de gás fecha a 5,50 / 4,38 / 3,46 m/s nas
+     três primeiras fases e o perfil de conforto corre a 2,80. Quem jogava de
+     headset não conseguia fugir do gás e não tinha como pedir mais velocidade.
+     Opção sem caminho até ela é o mesmo que não existir. */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: 3506 }); });
+  after(async () => { if (h) await h.close(); });
+
+  it('o painel oferece a linha de VELOCIDADE', async () => {
+    const r = await h.play(async () => {
+      const G = window.__game;
+      G.XRUI.abrir('pausa');
+      await new Promise(res => setTimeout(res, 400));
+      const e = G.XRUI.estado();
+      return { ids: e.linhas.map(l => l.id), linha: e.linhas.find(l => l.id === 'andarPerfil') || null };
+    });
+    assert.ok(r.linha, `o painel de pausa não tem linha de velocidade: ${r.ids.join(', ')}`);
+    assert.equal(r.linha.tipo, 'escolha');
+    assert.ok(r.linha.val && r.linha.val.length > 0, 'a linha não mostra o perfil em vigor');
+  });
+
+  it('acionar a linha CICLA o perfil e a velocidade muda de verdade', async () => {
+    const r = await h.play(async () => {
+      const G = window.__game;
+      G.XRUI.abrir('pausa');
+      await new Promise(res => setTimeout(res, 350));
+      const vistos = [];
+      for (let i = 0; i < 4; i++) {
+        vistos.push({ perfil: G.XRAndar.plano.perfil, correr: +G.XRAndar.correr.toFixed(2) });
+        G.XRUI.acionarPorId ? G.XRUI.acionarPorId('andarPerfil') : G.XRAndar.proximo();
+        await new Promise(res => setTimeout(res, 250));
+      }
+      G.XRAndar.preferir({ velocidade: 'conforto' });
+      return vistos;
+    });
+    const perfis = new Set(r.map(v => v.perfil));
+    assert.ok(perfis.size >= 3, `o ciclo só alcançou ${[...perfis].join(', ')}`);
+    const corridas = r.map(v => v.correr);
+    assert.ok(Math.max(...corridas) >= 6.0,
+      `a corrida mais rápida oferecida é ${Math.max(...corridas)} m/s — o gás fecha a 5,50 m/s ` +
+      'nas primeiras fases, então o jogador de headset ficaria sem como fugir');
+  });
+});

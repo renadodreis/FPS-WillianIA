@@ -31,6 +31,7 @@ export function createXrRig({ THREE, scene, camera }) {
      ainda não absorveu. Ver o cabeçalho de `place`. */
   let passoX = 0, passoZ = 0;
   let cabecaX = 0, cabecaZ = 0, temBase = false;
+  let pedidoRebase = 0;   // frames de carência do reset de referencial (ver rebasear)
 
   /* transform LOCAL da câmera antes de entrar: em XR ele é sobrescrito
      todo frame, então sem cópia não há como devolver o desktop intacto */
@@ -60,7 +61,7 @@ export function createXrRig({ THREE, scene, camera }) {
     /* zera o passo físico: a sessão nova começa com o jogador onde ele está,
        e a base é redefinida no primeiro `place` (a pose real da cabeça só
        chega no primeiro frame da sessão — antes disso seria um passo falso). */
-    passoX = 0; passoZ = 0; temBase = false;
+    passoX = 0; passoZ = 0; temBase = false; pedidoRebase = 0;
     dentro = true;
     return rig;
   }
@@ -105,6 +106,18 @@ export function createXrRig({ THREE, scene, camera }) {
     if (!dentro || !rig) return; // fora do XR não existe rig — e criar um custaria rand
     const hx = camera.position.x, hz = camera.position.z;
     const c = Math.cos(yaw), s = Math.sin(yaw);
+    /* Um reset pendente vira base nova AQUI, com a pose já atualizada, e leva
+       o acumulado junto: depois de o referencial mudar, o acumulado descreve um
+       mundo que não existe mais. */
+    /* CARÊNCIA, não um frame só. O evento `reset` chega ANTES de a pose nova
+       alcançar a câmera — medido: rebasear no frame do evento pegava a pose
+       VELHA, e o salto da origem entrava como passo nos frames seguintes, com
+       a trilha do deslocamento subindo em degraus de 0,15 m até completar a
+       distância inteira. Alguns frames de carência cobrem a latência sem
+       precisar adivinhar a ordem em que o navegador entrega as duas coisas.
+       O custo é ignorar até ~4 cm de caminhada real durante a carência, e só
+       quando o jogador recentra — que é justamente quando ele está parado. */
+    if (pedidoRebase > 0) { pedidoRebase--; temBase = false; passoX = 0; passoZ = 0; }
     if (!temBase) { cabecaX = hx; cabecaZ = hz; temBase = true; }
     // passo do cômodo desde o frame anterior, levado do espaço do rig pro mundo
     const dx = hx - cabecaX, dz = hz - cabecaZ;
@@ -144,36 +157,55 @@ export function createXrRig({ THREE, scene, camera }) {
      certa: o jogador não "tem direito" a metros guardados de quando não estava
      jogando. */
   const PASSO_MAX = 0.15;
-  /* Teto do acumulado. Andar fisicamente longe do colisor é legítimo — o
-     jogador está mesmo andando no quarto dele — mas não pode crescer sem fim,
-     ou a cabeça se perde do corpo. Dois metros é a ordem de grandeza de uma
-     área de jogo doméstica. */
-  const RESIDUO_MAX = 2.0;
-
+  /* Frames de carência depois de um reset de referencial. Três cobrem a
+     latência medida entre o evento e a pose nova chegar na câmera. */
+  const REBASE_FRAMES = 3;
   function consumirPasso(alvo, limite = PASSO_MAX) {
     const out = alvo || { x: 0, z: 0 };
     const m = Math.hypot(passoX, passoZ);
     if (m > limite) {
-      /* Entrega o teto e SUBTRAI só o entregue: o resto CONTINUA no acumulado.
-         Descartar o excedente era o conserto óbvio e estava errado — a cabeça
-         do jogador vai para `(x,z) + passo`, então tirar do acumulado o que o
-         jogo não absorveu ARRASTA A VISTA DE VOLTA. Medido: morto, um passo
-         físico de 0,80 m movia a cabeça 0,000 m (a vista congelava); e pausar,
-         andar um metro e retomar dava 0,850 m de salto num frame. Trocar
-         "colisor teleporta" por "cabeça teleporta" é piorar: em VR o segundo é
-         a categoria pior. Com a subtração parcial, um metro acumulado escoa em
-         sete frames sem que nada pule. */
+      /* Entrega o teto e SUBTRAI só o entregue. O resto CONTINUA no acumulado
+         — e isso não é detalhe de implementação, é o desenho: o acumulado É a
+         posição da cabeça em relação ao colisor. Mexer nele move a vista.
+
+         As três versões erradas deste mesmo trecho, todas medidas:
+           1. represar (não drenar quando o jogo não podia absorver) →
+              1,2 m guardados despejados de uma vez, o COLISOR teleportava;
+           2. descartar o excedente → a cabeça era ARRASTADA de volta: morto,
+              um passo físico de 0,80 m movia a vista 0,000 m;
+           3. cortar o acumulado num teto → a VISTA saltava pela diferença,
+              com fórmula exata `acumulado − 2,15` (5 m davam 2,85 m de pulo).
+
+         O teto protege só o COLISOR, que é quem atravessa parede se pular. A
+         0,15 m por frame ele alcança 2 m de atraso em menos de 0,2 s, sem que
+         a cabeça sinta nada — quem se aproxima é o corpo. */
       const k = limite / m;
       out.x = passoX * k; out.z = passoZ * k;
       passoX -= out.x; passoZ -= out.z;
-      // e o acumulado tem teto próprio: além dele o jogador se perderia do corpo
-      const r = Math.hypot(passoX, passoZ);
-      if (r > RESIDUO_MAX) { const kr = RESIDUO_MAX / r; passoX *= kr; passoZ *= kr; }
     } else {
       out.x = passoX; out.z = passoZ;
       passoX = 0; passoZ = 0;
     }
     return out;
+  }
+
+  /* RECENTRAR NÃO É ANDAR. `recenter()` (ou o `reset` que o sistema dispara ao
+     redefinir o piso/origem) muda o REFERENCIAL, não move ninguém no mundo. Sem
+     isto, a mudança de origem chega como um passo físico gigante e o jogador é
+     teleportado pelo próprio tamanho do deslocamento dele até o centro —
+     medido: 0,78 m fora do centro, 0,7778 m de deslocamento; a 1,41 m, 1,4142.
+     Rebasear apaga a memória da pose anterior e joga fora o acumulado, porque
+     depois de um reset o acumulado descreve um mundo que não existe mais. */
+  function rebasear() {
+    /* MARCA, não executa. O evento `reset` chega ANTES de o `place()` deste
+       frame ler a pose nova: zerar aqui apagaria um acumulado que ainda não
+       existe, e logo depois o `place()` mediria o salto da origem como passo
+       físico e o jogador seria teleportado do mesmo jeito. Medido: a trilha do
+       deslocamento subia em degraus de 0,15 m — o próprio teto de entrega,
+       escoando um passo que nunca deveria ter nascido.
+       Com a marca, quem consome é o `place()`, na ordem certa, seja qual for
+       a ordem em que o navegador entrega as duas coisas. */
+    pedidoRebase = REBASE_FRAMES;
   }
 
   /* A leitura que todo código de jogo deveria usar no lugar de
@@ -183,7 +215,7 @@ export function createXrRig({ THREE, scene, camera }) {
   }
 
   return {
-    enter, exit, place, headWorldPosition, consumirPasso,
+    enter, exit, place, headWorldPosition, consumirPasso, rebasear,
     get rig() { return rig; },
     get entered() { return dentro; },
     get passoPendente() { return { x: passoX, z: passoZ }; },

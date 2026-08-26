@@ -91,8 +91,28 @@
    NADA É CRIADO NO BOOT. Todo `Object3D` gasta 4 números do `Math.random`
    seedado no UUID e a ordem de consumo é contrato do worldgen: o painel nasce
    na PRIMEIRA ABERTURA, dentro da sessão, muito depois do mundo pronto.
+
+   AS ABAS (conversa, placar, sala). A §7 de docs/vr/referencia-ui.md deixou
+   três pendências do critério H1 — chat, placar e lobby do BR — com o caminho
+   já escolhido: "o caminho honesto é o painel de sessão ganhar abas — não um
+   quarto objeto". É o que `social` faz aqui.
+
+   A divisão de trabalho é a que mantém o custo em ZERO draw call a mais: o
+   módulo js/xr/xrsocial.js não cria `Object3D` nenhum, ele PINTA neste mesmo
+   canvas e responde a este mesmo raio. A faixa do título (104 px) vira a faixa
+   de abas — o corpo do painel não muda de altura, e por isso as linhas de
+   pausa/morte continuam exatamente onde estavam.
+
+   E há UM condutor só: quem chama `apontar`/`acionar`/`pintar` do módulo
+   social é este `update()`, uma vez por frame. Foi a armadilha que apareceu
+   seis vezes nesta frente — dois donos do mesmo gatilho fazem o clique valer
+   duas vezes e voltar ao valor original.
+
+   Sem `social`, este arquivo se comporta byte por byte como antes: o jogo sem
+   a fiação não ganha aba nenhuma.
    ================================================================ */
 import { CHAVE } from './xrturn.js';
+import { createXrSocial } from './xrsocial.js';
 
 /* Distância e tamanho: ver o cabeçalho (Meta MR design guidelines + Oculus BP).
    ALT sai de LARG pelo aspecto do canvas — esticar textura é borrão de graça. */
@@ -165,8 +185,15 @@ function gravarExtra(armazem, campos) {
 
 export function createXrUi({
   THREE, scene, camera, giro = null, acoes = {},
+  /* Política de velocidade de locomoção (js/xr/xrlocomotion.js). Sem ela a
+     linha simplesmente não aparece — o painel é o de antes. */
+  andar = null, rotulosAndar = null,
   win = typeof window === 'undefined' ? null : window,
   armazem = null,
+  /* `{ ler, enviar, acoes }` da conversa/placar/sala. `null` = sem abas, que é
+     o painel de antes. Pode chegar depois por `conectarSocial` — a sala do BR
+     só existe quando o socket responde, e o painel nasce junto com o jogo. */
+  social = null,
 } = {}) {
   const _olho = new THREE.Vector3(), _fwd = new THREE.Vector3(), _v = new THREE.Vector3();
   const _q = new THREE.Quaternion(), _alvo = new THREE.Vector3();
@@ -182,9 +209,25 @@ export function createXrUi({
   let menuAntes = false, selAntes = false, pausamos = false;
   let maoAtiva = null;                 // 'left' | 'right' | null
   let ultimoAcionado = null;
+  let sobSocial = null;                // zona do módulo social sob o raio
 
   const extra = { vinheta: true, ...lerExtra(armazem) };
   extra.vinheta = extra.vinheta !== false;
+
+  /* UMA instância, sempre. `conectarSocial` chamado de novo RECONFIGURA a que
+     já existe em vez de criar outra: duas instâncias na mesma superfície é a
+     armadilha desta frente (o clique alternava o valor duas vezes e voltava).
+     Criar aqui é seguro porque o módulo social não cria `Object3D` nenhum e
+     não gasta `Math.random` — há teste cravando as duas coisas. */
+  let soc = null;
+  function conectarSocial(cfg) {
+    if (!soc) soc = createXrSocial({ faixa: TITULO_PX, ...(cfg || {}) });
+    else if (cfg) soc.conectar(cfg);
+    pintado = '';
+    return soc;
+  }
+  if (social) conectarSocial(social);
+  const tituloAba = () => (modo === 'morte' ? 'MORTE' : 'PAUSA');
 
   /* ---------------------------------------------------------------- */
   /* LINHAS. Montadas a cada leitura porque o slider que aparece depende do
@@ -215,6 +258,17 @@ export function createXrUi({
       l.push({ id: 'passo', tipo: 'valor', txt: 'ÂNGULO DO PASSO', val: Math.round(p.passo) + '°' });
     } else {
       l.push({ id: 'velocidade', tipo: 'valor', txt: 'VELOCIDADE DO GIRO', val: Math.round(p.velocidade) + '°/s' });
+    }
+    /* VELOCIDADE DE LOCOMOÇÃO. Sem esta linha os três perfis existiam e nenhum
+       tinha como ser escolhido — e isso não era só uma opção faltando: a zona
+       de gás fecha a 5,50 m/s nas primeiras fases e o perfil de conforto corre
+       a 2,80, então quem jogava de headset NÃO CONSEGUIA FUGIR DO GÁS e não
+       tinha como pedir mais velocidade. Opção sem caminho até ela é o mesmo
+       que não existir. */
+    if (andar) {
+      const perfil = (andar.plano && andar.plano.perfil) || 'conforto';
+      const rot = (rotulosAndar && rotulosAndar[perfil]) || perfil.toUpperCase();
+      l.push({ id: 'andarPerfil', tipo: 'escolha', txt: 'VELOCIDADE', val: rot });
     }
     l.push({ id: 'vinheta', tipo: 'escolha', txt: 'VINHETA DE CONFORTO', val: extra.vinheta ? 'LIGADA' : 'DESLIGADA' });
     l.push({ id: 'recentrar', tipo: 'botao', txt: 'RECENTRAR A VISTA' });
@@ -268,9 +322,18 @@ export function createXrUi({
     if (!ctx) return;
     const ls = linhas();
     const assin = modo + '|' + hoverLinha + '|' + hoverZona + '|' +
-      ls.map(l => l.id + ':' + (l.val || '')).join(',');
+      ls.map(l => l.id + ':' + (l.val || '')).join(',') +
+      (soc ? '|' + soc.assinatura() : '');
     if (assin === pintado) return;
     pintado = assin;
+
+    /* ABA SOCIAL: a tela inteira é do módulo, faixa de abas inclusa. Pintar as
+       linhas de pausa por baixo seria desenhar duas UIs no mesmo canvas. */
+    if (soc && soc.aba !== 'pausa') {
+      soc.pintar(ctx, { w: CANVAS_W, h: CANVAS_H, titulo: tituloAba() });
+      if (textura) textura.needsUpdate = true;
+      return;
+    }
 
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     ctx.fillStyle = 'rgba(8,12,18,0.90)';
@@ -279,11 +342,18 @@ export function createXrUi({
     ctx.lineWidth = 4;
     ctx.strokeRect(2, 2, CANVAS_W - 4, CANVAS_H - 4);
 
+    /* A FAIXA DO TÍTULO É A MESMA FAIXA DAS ABAS. Com a fiação social o título
+       não some: ele vira o rótulo da primeira aba (PAUSA / MORTE), e o corpo
+       do painel não muda de altura — as linhas continuam onde estavam. */
+    if (soc) soc.pintarAbas(ctx, { w: CANVAS_W, faixa: TITULO_PX, titulo: tituloAba() });
+    else {
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#9dd8ff';
+      ctx.font = 'bold 56px system-ui, sans-serif';
+      ctx.fillText(modo === 'morte' ? 'VOCÊ MORREU' : 'PAUSA', 44, TITULO_PX / 2 + 6);
+    }
     ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#9dd8ff';
-    ctx.font = 'bold 56px system-ui, sans-serif';
-    ctx.fillText(modo === 'morte' ? 'VOCÊ MORREU' : 'PAUSA', 44, TITULO_PX / 2 + 6);
 
     const alturaLinha = (CANVAS_H - TITULO_PX) / Math.max(1, ls.length);
     for (let i = 0; i < ls.length; i++) {
@@ -406,6 +476,7 @@ export function createXrUi({
 
   function acionar(l, zona) {
     ultimoAcionado = l.id;
+    if (l.id === 'andarPerfil') { if (andar && andar.proximo) andar.proximo(); return true; }
     if (l.id === 'retomar') { fechar(); return true; }
     if (l.id === 'sair') { fechar(); return chamar('sair'); }
     if (l.id === 'reaparecer') { fechar(); return chamar('reaparecer'); }
@@ -434,6 +505,12 @@ export function createXrUi({
   /* ---------------------------------------------------------------- */
   function abrir(qual = 'pausa') {
     modo = qual === 'morte' ? 'morte' : 'pausa';
+    /* MORRER NUNCA PODE ESCONDER A SAÍDA. Quem morre com o PLACAR aberto
+       receberia a tela de morte por baixo da tabela: as opções de morte moram
+       no corpo da primeira aba, e ninguém adivinha que precisa clicar numa aba
+       para achar como sair. É o mesmo critério I4 ("nenhum estado sem saída")
+       que fez este painel existir. */
+    if (modo === 'morte' && soc) soc.selecionar('pausa');
     montar();
     if (!aberto) {
       aberto = true;
@@ -456,6 +533,8 @@ export function createXrUi({
     if (painel) painel.visible = false;
     if (raioLinha) raioLinha.visible = false;
     hoverLinha = -1; maoAtiva = null;
+    sobSocial = null;
+    if (soc) soc.soltar();
     if (pausamos) { pausamos = false; chamar('retomar'); }
     return true;
   }
@@ -514,9 +593,19 @@ export function createXrUi({
       }
     }
 
+    /* QUEM É O DONO DO PONTO. O módulo social responde primeiro: se ele
+       reivindica (faixa de abas, ou qualquer ponto do corpo enquanto uma aba
+       social está aberta), o painel NÃO marca linha própria — senão o placar
+       desenhado por cima teria RETOMAR e SAIR DA PARTIDA escondidos atrás. */
+    sobSocial = null;
+    if (soc) {
+      if (alvo) sobSocial = soc.apontar(alvo.u, alvo.v);
+      else soc.soltar();
+    }
+
     const ls = linhas();
     let novaLinha = -1, novaZona = 'linha';
-    if (alvo) {
+    if (alvo && !sobSocial) {
       const iy = (0.5 - alvo.y / ALT) * CANVAS_H;
       if (iy >= TITULO_PX) {
         const idx = Math.floor((iy - TITULO_PX) / ((CANVAS_H - TITULO_PX) / ls.length));
@@ -531,7 +620,11 @@ export function createXrUi({
     selAntes = selAgora;
 
     let acionou = null;
-    if (bordaSel && hoverLinha >= 0) {
+    if (bordaSel && sobSocial) {
+      acionou = soc.acionar();
+      if (acionou) ultimoAcionado = acionou;
+      pintado = '';   // trocou de aba, mandou mensagem, virou página: repinta
+    } else if (bordaSel && hoverLinha >= 0) {
       const l = ls[hoverLinha];
       if (acionar(l, hoverZona)) acionou = l.id;
       pintado = '';   // valor mudou: força repintar
@@ -540,9 +633,17 @@ export function createXrUi({
 
     return {
       aberto, capturando: true, mao: maoAtiva,
-      item: hoverLinha >= 0 ? { id: ls[hoverLinha].id, zona: hoverZona } : null,
+      item: itemSob(ls),
       acionou,
     };
+  }
+
+  /* O que está sob o raio, no formato que o game.js usa pro tato (um tique por
+     alvo novo). A zona social entra com `zona: 'social'` para que o id sozinho
+     não colida com uma linha de mesmo nome (`sair` existe nos dois). */
+  function itemSob(ls) {
+    if (sobSocial) return { id: sobSocial.id, zona: 'social' };
+    return hoverLinha >= 0 ? { id: ls[hoverLinha].id, zona: hoverZona } : null;
   }
 
   function exit() {
@@ -551,10 +652,19 @@ export function createXrUi({
     if (raioLinha) { raioLinha.visible = false; if (raioLinha.parent) raioLinha.parent.remove(raioLinha); }
     painel = null; raioLinha = null; ctx = null; textura = null;
     hoverLinha = -1; menuAntes = false; selAntes = false; pintado = '';
+    /* o módulo social SOBREVIVE à sessão: ele é só dado (conversa recebida,
+       roster, aba escolhida) e recriá-lo jogaria fora o histórico a cada vez
+       que o jogador tira o aparelho. O que não pode sobreviver é o ALVO. */
+    sobSocial = null;
+    if (soc) soc.soltar();
   }
 
   return {
     abrir, fechar, update, exit,
+    /* A FIAÇÃO SOCIAL ENTRA POR AQUI, e é sempre a MESMA instância (ver o
+       cabeçalho): chamar de novo reconfigura, nunca duplica. */
+    conectarSocial,
+    get social() { return soc; },
     get aberto() { return aberto; },
     get modo() { return modo; },
     get painel() { return painel; },
@@ -596,9 +706,13 @@ export function createXrUi({
             centro: centro.toArray(), menos: menos.toArray(), mais: mais.toArray(),
           };
         }),
-        item: hoverLinha >= 0 ? { id: ls[hoverLinha].id, zona: hoverZona } : null,
+        item: itemSob(ls),
         mao: maoAtiva,
         ultimoAcionado,
+        /* as abas, para QA: `aba` é a que está aberta e `social` é o estado
+           interno do módulo. Nada aqui ACIONA nada. */
+        aba: soc ? soc.aba : null,
+        social: soc ? soc.estado() : null,
       };
     },
   };

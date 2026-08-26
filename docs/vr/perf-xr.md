@@ -125,7 +125,7 @@ Os 460 do "mundo" na pose de castelo, por dono:
 | dono | calls | o que era |
 |---|--:|---|
 | 3 barris de madeira | 120 | `wooden_barrel.glb` cru: **20 malhas, 1 material** |
-| 3 baús | 48 | 8 materiais — já é o piso desse conjunto |
+| 3 baús | 48 | 8 malhas, 4 materiais — piso mesmo assim (ver o porquê lá embaixo) |
 | 5 drops de loot | 34 | munição = caixa + 3 cápsulas soltas |
 | casa da árvore | 28 | GLB cru: 14 malhas, 2 materiais |
 | 2 carros do mundo | 28 | GLB cru: 7 malhas |
@@ -197,44 +197,278 @@ vistos através da névoa, e são os candidatos naturais àqueles 5 pixels.
 
 ---
 
-## A maior alavanca que sobrou é uma DECISÃO DO DONO, não uma correção
+## A maior alavanca que sobrou é uma DECISÃO DO DONO — e o preço dela caiu a zero
 
 A câmera nasce com `far = CFG.VIEW_DIST + 600` (1020 m) enquanto a névoa é
 linear e satura em `CFG.VIEW_DIST` (420 m). Tudo entre 420 e 1020 m é desenhado
 **100 % da cor da névoa** — pixel que não muda nada na tela.
 
-Encurtar o far para 420 m, medido em mono no mesmo frame congelado, comparando o
-framebuffer pixel a pixel (600×450):
+O que segurava o corte não era técnico: os feixes de findability de
+`js/secrets.js` e `js/maptoys.js` são declarados `fog: false` justamente para
+serem vistos de longe (*"a névoa lavava a cor e o feixe sumia de longe"*,
+*"feixe identificável a qualquer distância"*). Com far em 420 m eles sumiriam
+além disso.
 
-| pose | far 1020 | far 420 | pixels diferentes | maxΔ |
+**`js/farbeacon.js` tirou esse preço da mesa** (rodada de 2026-08-26, sobre
+`3cc8eea`). Os seis feixes viraram DUAS malhas — uma por módulo, cor por
+vértice — em passe único, com o z de clip preso no far pelo mesmo truque que o
+addon `Sky` do three usa (`gl_Position.z = min(z, w*0.999999)`). Não há passada
+de render nova, nem camada extra, nem trabalho por frame.
+
+Medido em sessão `immersive-vr` (IWER), mundo congelado com `MP.setTimeScale(0)`,
+sombra desligada, GLB do Guardião carregado, seed 424242, `tier=baixo`,
+`spread 0` em todas as amostras — os quatro estados dentro da MESMA sessão, com
+os seis feixes de HEAD recriados em runtime ao lado dos novos.
+
+> **Por que o absoluto não bate com os 508 da seção anterior.** Aquela medição
+> partiu do jogo já rodando; esta entra em sessão pelo MENU (é o único jeito de
+> o botão de VR existir) e teleporta o jogador, então o stream de grama assenta
+> num estado diferente. A mesma sequência de poses repetida deu 482–514 na pose
+> de castelo entre execuções. **Por isso todo número desta seção é A/B DENTRO
+> da mesma sessão** — comparar absoluto entre execuções é o erro que já
+> produziu o "não atribuído −1144" registrado acima.
+
+| pose | HEAD, far 1020 | HEAD, far 420 | **farol, far 420** | Δ contra HEAD |
 |---|--:|--:|--:|--:|
-| castelo | 412 calls · 842 k tris | **179 calls · 691 k tris** | 5 de 270 000 (0,002 %) | 25 |
-| cidade | 114 · 538 k | 114 · 538 k | 1 246 (0,46 %) | 35 |
-| spawn | 148 · 593 k | 148 · 593 k | 12 (0,004 %) | 29 |
+| spawn | 322 | 322 | **314** | −8 |
+| cidade | 376 | 338 | **334** | −42 |
+| castelo | **482** | 372 | **372** | **−110 (−22,8 %)** |
 
-**−57 % de draw call na pior pose, numa linha.** E mesmo assim não foi aplicado,
-por um motivo que não é técnico:
+E o custo dos feixes, por subtração, é o mesmo em TODA pose:
+**HEAD 12 draw calls estéreo · farol 4**. Ou seja, a opção 3 ("ficar com os
+dois") não custa complexidade: ela **já paga −8 calls hoje**, com o far intacto.
 
-**Corta um recurso de level design, de propósito colocado ali.** Os feixes de
-findability de `js/secrets.js` e `js/maptoys.js` são declarados com
-`fog: false`, e os comentários do próprio código dizem por quê — *"a névoa
-lavava a cor e o feixe sumia de longe"* e *"feixe identificável a qualquer
-distância"*. Eles existem para serem vistos de longe; com far em 420 m, somem
-além disso. Provavelmente são exatamente aqueles 5 pixels da pose de castelo.
+Triângulos na pose de castelo: 1,626 M → 1,473 M estéreo com o far curto.
 
-As opções, para quem decide o produto:
+**O que falta é UMA LINHA do `game.js`, e ela é do dono:**
 
-1. **Manter como está.** Paga 233 draw calls na pior pose para que os feixes
-   sejam vistos de qualquer canto do mapa de 1100 m.
-2. **Cortar o far.** Ganha os 233 e os feixes passam a aparecer só dentro de
-   420 m — perde-se a função de orientação à distância.
-3. **Cortar o far e tirar os feixes do corte** (camada separada, ou segunda
-   passada de render só para eles). Fica com os dois, ao custo de complexidade
-   nova no caminho de render, que em XR é onde menos se quer complexidade.
+```
+game.js:359   new THREE.PerspectiveCamera(75, …, 0.08, CFG.VIEW_DIST + 600)
+                                                            ^^^^^^^^^^^^^^^^
+                                                       → CFG.VIEW_DIST
+```
 
-Há ainda um lead secundário de TRIÂNGULO (não de draw call): cinco pontos do
-`game.js` marcam `frustumCulled = false`, somando ~249 k triângulos desenhados
-sempre, em qualquer pose. Mesma família do defeito que custava 40 draw calls nos
-inimigos, e vale investigar caso a caso — cada um desses provavelmente tem uma
-justificativa como a que os inimigos tinham (esfera de bounds errada), e a
-correção é dar bounds certos, não religar o culling às cegas.
+Com ela a pior pose sai de **241 para 186 draw calls por olho** (teto 180).
+
+### O que muda de aparência, dito na cara
+
+Comparação pixel a pixel do framebuffer (mono, 800×600, câmera fixa apontada
+para três feixes diferentes a 60, 250 e 600 m), decompondo a diferença:
+
+| o que se compara | pixels diferentes de 480 000 | maxΔ |
+|---|--:|--:|
+| passe duplo × passe único (mesmas 6 malhas) | 0–24 | **1** |
+| 6 malhas × 2 faróis mesclados, far 1020 | 0–12 | 30 |
+| far 1020 × far 420, feixe a 600 m | 218–299 | 48 |
+
+- O ±1 é arredondamento de 8 bits: somar aditivo em dois passes arredonda duas
+  vezes. É a prova de que `forceSinglePass` em mistura aditiva é gratuito.
+- Os ≤12 pixels da fusão são ordem de sort do transparente (uma malha ocupa uma
+  posição só na fila) — e, num dos casos, o clamp devolvendo um feixe que
+  estava sendo FATIADO pelo plano far a 1033 m.
+- A terceira linha é a mudança pretendida: com far curto o feixe além de 420 m
+  deixa de ser escondido por relevo que também está além de 420 m — relevo que
+  àquela distância é 100 % cor de névoa. **Dentro dos 420 m a oclusão é
+  idêntica.**
+
+Rede: `test/world-drawcalls.test.js` (4 casos novos). O caso de pixel foi
+verificado com o defeito reinjetado — sem o clamp o feixe a 603 m pinta
+**0 pixels** e o teste morre.
+
+---
+
+## O lead de TRIÂNGULO dos `frustumCulled = false`: investigado, e NÃO é defeito
+
+Cinco pontos do `game.js` desligam o culling. Um a um, medidos:
+
+| ponto | o que é | estado medido |
+|---|---|---|
+| `game.js:775` `treeHiMesh` | InstancedMesh de árvore LOD-alto | **morta**: quando os 4 GLB de árvore carregam, `game.js:1017` faz `count = 0; visible = false` |
+| `game.js:776` `treeLoMesh` | árvore LOD-baixo, mapa inteiro | 178 instâncias · 13,5 k tris mono |
+| `game.js:1009` `treeVariantMeshes` | 4 InstancedMesh de GLB, mapa inteiro | 0–1 instância nas poses medidas |
+| `game.js:1132` `rocks` | 240 pedras, mapa inteiro | 19,2 k tris mono |
+| `game.js:1171` `flowers` | 2 600 flores, mapa inteiro | 10,4 k tris mono |
+| `game.js:1222` `cacti` | 160 saguaros, deserto | 38,1 k tris mono — **238 tris cada** |
+
+**Religar o culling não paga, e a medição é direta:** ligando
+`frustumCulled = true` em TODOS os objetos da cena que o tinham desligado,
+
+| pose | calls antes | calls depois | triângulos |
+|---|--:|--:|--:|
+| spawn | 372 | 366 | 1 551 378 → 1 548 534 |
+| cidade | 378 | 368 | idem, −2 844 |
+| castelo | 484 | 482 | idem |
+
+**A razão é estrutural, não um bounds errado** — e é aqui que este caso difere
+do dos inimigos. Para uma `InstancedMesh` o three testa UMA esfera que cobre
+TODAS as instâncias (`Frustum.intersectsObject`). Essas cinco cobrem o mapa (ou
+o deserto inteiro), a câmera está sempre dentro dessa esfera, e o teste sempre
+passa. `frustumCulled = false` só pula uma verificação que daria "visível" de
+qualquer jeito — o comentário do `game.js:775` já diz isso, e está certo.
+
+O custo real é POR INSTÂNCIA, e o `WebGLRenderer` não faz culling por instância
+de `InstancedMesh` (só `BatchedMesh` faz). Teto medido de um culling por
+instância feito à mão (contando quantas instâncias caem no frustum de fato):
+
+| malha | instâncias | dentro do frustum (spawn / cidade / castelo) | tris desenhados sempre (estéreo) |
+|---|--:|--:|--:|
+| cacti | 160 | 19 / 71 / 56 | 76 160 |
+| rocks | 240 | 69 / 81 / 139 | 38 400 |
+| treeLo | 178 | 88 / 55 / 121 | 27 056 |
+| flowers | 2 600 | 864 / 776 / 1 675 | 20 800 |
+
+Total desenhado sempre: **162 k triângulos estéreo**. Com culling por instância
+PERFEITO sobraria 40 k / 61 k / 81 k — economia de 41 k a 61 k **por olho**,
+contra 731 k / 563 k / 825 k por olho de frame (a MESMA execução que contou as
+instâncias; entre execuções o total varia ~1 %). **5 a 9 %**, ao preço de
+reordenar matriz de instância por frame (2 600 flores), fiação em `game.js` e
+risco novo em cima do worldgen seedado. O corte do far entrega **153 k
+triângulos estéreo na pose de castelo em uma linha**, sem nada disso.
+
+**Recomendação: não fazer.** Se um dia se quiser mexer, o alvo é o cacto —
+238 triângulos por saguaro é mais que o triplo de uma árvore (76), e são 160
+deles desenhados em qualquer canto do mapa. Isso é geometria de conteúdo, não
+culling.
+
+---
+
+## O teto de TRIÂNGULO não é alcançável sem mexer na grama
+
+Pose de castelo, estéreo: 1,626 M triângulos = **813 k por olho**, contra teto
+de 500 k. Por dono, tudo por subtração DENTRO da mesma execução congelada (a
+linha da grama sai por diferença: total instanciado desenhado menos as
+instanciadas nomeadas abaixo):
+
+| dono | tris estéreo | por olho |
+|---|--:|--:|
+| **grama** (≈68 chunks no frustum) | **868 k** | **434 k** |
+| terreno (1 malha) | 194 k | 97 k |
+| buggy do spawn | 92 k | 46 k |
+| cactos | 76 k | 38 k |
+| castelo do boss | 47 k | 24 k |
+| vulcão | 45 k | 22 k |
+| pedras | 38 k | 19 k |
+| casa da árvore | 31 k | 16 k |
+| árvores LOD-baixo | 27 k | 14 k |
+| 2 caminhões do mundo | 43 k | 21 k |
+| arma em primeira pessoa | 21 k | 11 k |
+| flores | 21 k | 10 k |
+
+**A grama sozinha é 87 % do teto de 500 k por olho.** Apagando literalmente
+todo o resto do mundo, o frame ainda ficaria em 434 k. O corte do far leva o
+total de 813 k para 737 k por olho — ainda 47 % acima do teto.
+
+Ou seja: **o critério de draw call é alcançável (186 por olho com o far curto,
+contra teto de 180); o de triângulo não é, e a única alavanca que existe é a
+grama** — que está fora de escopo por decisão anterior (`GRASS_CHUNKS` alimenta
+o PRNG seedado, e super-chunks engrossam o culling e SOBEM triângulo). Isso é
+decisão de produto, não de otimização: ou a grama muda, ou o teto de triângulo
+muda.
+
+---
+
+## Achado colateral do plano far: o céu noturno já perdeu 96 % das estrelas
+
+Medindo o corte do far apareceu isto, e é **defeito de hoje, não consequência do
+corte**. `js/env.js:31-41` monta o campo de estrelas num raio de **1500 m** e
+depois faz `stars.position.copy(camera.position)` todo frame — ou seja, as
+estrelas ficam SEMPRE a 1500 m do olho, contra um `camera.far` de 1020 m. A GPU
+recorta quase tudo.
+
+Medido (mono, 800×600, câmera olhando o céu, opacidade das estrelas forçada em
+0,9, contagem por diferença de framebuffer com e sem elas):
+
+| `camera.far` | pixels de estrela |
+|---|--:|
+| 1020 (hoje) | **46** |
+| 420 (com o corte) | **0** |
+| 4000 (todas cabem) | 1082 |
+
+**Hoje o jogador vê 4 % do céu que o código desenha.** Com o far curto, zero.
+
+O conserto é barato e não muda um pixel do que se vê HOJE em nenhum outro
+lugar: o material é `sizeAttenuation: false`, então o tamanho da estrela na tela
+NÃO depende da distância — encolher o raio da esfera de estrelas (1500 → algo
+dentro do far, ex.: `VIEW_DIST * 0.6`) mantém exatamente as mesmas direções e o
+mesmo tamanho em pixels, e só para de ser recortada.
+
+**Não foi aplicado de propósito:** é mudança do que o jogador VÊ à noite (de
+quase nada para o céu inteiro), e mudança de aparência é decisão do dono, não
+de quem estava medindo desempenho. Fica registrado com o número.
+
+---
+
+## Leads medidos que NÃO valem (para não serem re-investigados)
+
+- **Religar `frustumCulled`**: ≤10 draw calls e 2 844 triângulos. Ver acima.
+- **Culling por instância nas InstancedMesh de mundo**: 5–9 % de triângulo,
+  CPU por frame + fiação em `game.js`. Ver acima.
+- **Fundir os baús**: 8 malhas por baú, mas **4 materiais** que diferem em
+  `roughness`/`metalness`/`emissive` (e o `glow` é escrito em runtime por
+  `markOpened`), mais a tampa que GIRA e a pilha de tesouro que SOME. 8 é o
+  piso sem consolidar material. 48 calls estéreo na pose de castelo.
+- **Fundir os esqueletos**: 4 submalhas, 4 materiais — assinatura de aparência
+  IDÊNTICA (`MeshPhysicalMaterial`, branco, rough 1, metal 0), o que difere é o
+  MAPA: `skeleton.v1.glb` traz 4 texturas webp distintas, uma por material.
+  Fundir exige atlas (rebuild de asset). 48 calls estéreo (6 esqueletos).
+- **`forceSinglePass` no resto da cena**: varrida a cena inteira por
+  `transparent && side === DoubleSide && !forceSinglePass`, 17 objetos visíveis,
+  ganho total **8 calls estéreo** — dos quais 6 eram os feixes (feito). O que
+  sobra são 2 calls na mira da arma (`js/weaponrig.js:172`, `reticleMat`), e a
+  mira é uma cruz de dois quads: passe único trocaria a ordem de mistura entre
+  eles. 1 call por olho não paga mexer no que o jogador encara.
+- **Grama**: ver a seção acima. Continua fora.
+
+---
+
+## As duas decisões do dono estão LIGADAS — e uma delas conserta um bug de hoje
+
+Com o farol (`js/farbeacon.js`) os feixes de findability deixaram de ser o
+motivo para manter o `far` longo: eles agora prendem o z no far e continuam
+visíveis de qualquer canto do mapa (medido: a 603 m pintam 218 px com far 420;
+sem o clamp, 0). **A opção de cortar o far passou a custar zero em level
+design.** O ganho: castelo 482 → 372 draw calls estéreo, ou 241 → 186 por olho,
+contra teto de 180.
+
+**Mas cortar o far MATA o céu noturno**, e por causa de um defeito que já existe
+hoje: `js/env.js` monta as estrelas a **1500 m** e as cola na câmera todo frame,
+contra um `far` de 1020 — a GPU já recorta 96% delas. Medido em pixels de
+estrela pintados: **46 com far 1020**, **0 com far 420**, **1082 com far 4000**.
+
+Ou seja, hoje o jogador já vê um céu quase vazio sem que ninguém tenha decidido
+isso, e encurtar o far esvaziaria de vez.
+
+As duas mudanças são de **aparência**, então são suas:
+
+1. **Encolher o raio das estrelas** para caber no far. O material usa
+   `sizeAttenuation: false`, então direção e tamanho em pixels não mudam — o céu
+   volta a ter as estrelas que sempre deveria ter tido. Isso é conserto de bug,
+   e vale independente do resto.
+2. **Encurtar o far para 420 m.** −22,8% de draw call na pior pose. O que muda
+   na tela: relevo além de 420 m deixa de ocluir o que está além de 420 m — e
+   esse relevo é 100% cor de névoa. Dentro dos 420 m a oclusão é idêntica.
+
+Feita a 1, a 2 fica sem contraindicação conhecida. Feita a 2 sem a 1, o céu
+noturno acaba.
+
+## O teto de TRIÂNGULO não é alcançável sem mexer na grama
+
+Castelo: **813 k triângulos por olho** contra teto de 500 k — e a **grama
+sozinha é 434 k**, 87% do teto. Apagando literalmente todo o resto do mundo, o
+frame ainda ficaria acima de 434 k. O corte do far leva a 737 k.
+
+**Ou a grama muda, ou o teto muda.** Isso é decisão de produto, não otimização —
+e mexer na grama esbarra no `Math.random` seedado e na regra de que grama rala é
+wallhack contra quem está deitado no mato.
+
+## O lead dos `frustumCulled = false` NÃO era defeito
+
+Investigado e descartado com medição: ligar o culling em todos eles rende 2 a 6
+draw calls e 2.844 triângulos. A razão é o oposto do caso dos inimigos — numa
+`InstancedMesh` o three testa UMA esfera que cobre TODAS as instâncias; as cinco
+cobrem o mapa, a câmera está sempre dentro, o teste sempre passa. O comentário
+que estava no código já dizia isso, e estava certo.
+
+Um culling por instância feito à mão teria teto de 5 a 9% do frame, ao preço de
+reordenar matriz por frame para 2.600 flores e de risco novo sobre o worldgen. O
+corte do far entrega o triplo disso numa linha. **Recomendado não fazer.**

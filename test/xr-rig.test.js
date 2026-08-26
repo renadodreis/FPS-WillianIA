@@ -210,16 +210,62 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     assert.ok(voltas > 8, `escoou em ${voltas} frames — rápido demais para não ser um pulo`);
   });
 
-  it('o acumulado tem teto próprio: a cabeça não se perde do corpo', () => {
+  it('o acumulado NÃO é cortado — cortá-lo teleporta a vista', () => {
+    /* A terceira versão errada deste trecho cortava o acumulado num teto de
+       2 m, e a medição achou a fórmula do estrago: acumulado de X metros dava
+       X − 2,15 de SALTO DE VISTA (5 m → 2,85 m). O acumulado é a posição da
+       cabeça em relação ao colisor: mexer nele move o mundo debaixo do
+       jogador. Quem tem teto é a entrega ao colisor, não a memória da cabeça. */
     xr.enter();
     camera.position.set(0, 1.7, 0);
     xr.place(0, 0, 0, 0);
-    camera.position.set(40, 1.7, 0);         // absurdo: erro de rastreio, não jogador
+    const cabeca0 = xr.headWorldPosition(new THREE.Vector3());
+    camera.position.set(5, 1.7, 0);          // 5 m: erro de rastreio absurdo
     xr.place(0, 0, 0, 0);
+    const cabeca1 = xr.headWorldPosition(new THREE.Vector3());
+    assert.equal(+(cabeca1.x - cabeca0.x).toFixed(3), 5,
+      'a cabeça não acompanhou o movimento físico');
+    xr.consumirPasso();                       // o jogo absorve o que cabe num frame
+    xr.place(0, 0, 0, 0);                     // e o rig é recolocado no MESMO ponto
+    const cabeca2 = xr.headWorldPosition(new THREE.Vector3());
+    const salto = Math.abs(cabeca2.x - cabeca1.x);
+    assert.ok(salto <= 0.1501,
+      `a vista saltou ${salto.toFixed(3)} m ao drenar: o acumulado foi cortado`);
+  });
+
+  it('o acumulado ESCOA inteiro, por mais fundo que esteja', () => {
+    xr.enter();
+    camera.position.set(0, 1.7, 0);
+    xr.place(0, 0, 0, 0);
+    camera.position.set(5, 1.7, 0);
+    xr.place(0, 0, 0, 0);
+    let total = 0, voltas = 0;
+    for (; voltas < 200; voltas++) {
+      const p = xr.consumirPasso();
+      const m = Math.hypot(p.x, p.z);
+      if (m < 1e-6) break;
+      assert.ok(m <= 0.1501, `a volta ${voltas} entregou ${m.toFixed(3)} m ao colisor`);
+      total += m;
+    }
+    assert.ok(Math.abs(total - 5) < 0.01,
+      `escoaram ${total.toFixed(2)} m de 5: o excedente foi jogado fora em vez de entregue`);
+  });
+
+  it('REBASEAR (recentrar) não gera passo nenhum', () => {
+    /* Recentrar muda o REFERENCIAL, não move ninguém. Sem rebasear, a mudança
+       de origem chega ao rig como passo físico gigante e o jogador é
+       teleportado pela própria distância dele até o centro — medido em sessão:
+       0,78 m fora do centro davam 0,7778 m de deslocamento no mundo. */
+    xr.enter();
+    camera.position.set(0.8, 1.7, -0.6);
+    xr.place(10, 0, 20, 0);
     xr.consumirPasso();
-    const resto = xr.passoPendente;
-    assert.ok(Math.hypot(resto.x, resto.z) <= 2.01,
-      `sobraram ${Math.hypot(resto.x, resto.z).toFixed(1)} m de acumulado: a cabeça ficaria longe do corpo`);
+    xr.rebasear();
+    camera.position.set(0, 1.7, 0);          // o reset levou a cabeça pro centro
+    xr.place(10, 0, 20, 0);
+    const p = xr.consumirPasso();
+    assert.equal(+Math.hypot(p.x, p.z).toFixed(4), 0,
+      `recentrar gerou ${Math.hypot(p.x, p.z).toFixed(3)} m de passo — o jogador seria movido no mundo`);
   });
 
   it('o teto preserva a DIREÇÃO do passo, não só o tamanho', () => {

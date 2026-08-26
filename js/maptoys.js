@@ -14,6 +14,7 @@ import {
   betterMax, betterTime,
 } from './maptoys-core.js';
 import { LAUNCH, horizontalSpeed } from './cannon-core.js';
+import { criarFarol } from './farbeacon.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3();
 const loadNum = (k) => { try { return Number(localStorage.getItem(k)) || 0; } catch (e) { return 0; } };
@@ -286,9 +287,12 @@ export function createMapToys(deps) {
     const poleGeo = new THREE.CylinderGeometry(0.09, 0.14, 9, 8);
     const flagGeo = new THREE.ConeGeometry(0.85, 1.7, 4);
     const poleMat = mat(0x2b2b33, { roughness: 0.7 });
-    // FEIXE de holofote vertical: morro nenhum esconde (testado: mastro de 9 m
-    // sumia atrás de duna a 60 m — o jogador logava e "não via nada")
-    const beamGeo = new THREE.CylinderGeometry(0.45, 0.95, 46, 8, 1, true);
+    /* FEIXE de holofote vertical: morro nenhum esconde (testado: mastro de 9 m
+       sumia atrás de duna a 60 m — o jogador logava e "não via nada").
+       Os cinco feixes viram UMA malha (js/farbeacon.js): cinco malhas
+       transparentes DoubleSide pagavam DOIS passes cada, e o culling por
+       objeto ainda apagaria o feixe distante se o `camera.far` encurtar. */
+    const feixes = [];
     const mk = (x, z, color) => {
       const y = heightAt(x, z);
       const pole = new THREE.Mesh(poleGeo, poleMat);
@@ -297,12 +301,7 @@ export function createMapToys(deps) {
         { color, emissive: color, emissiveIntensity: 0.35, roughness: 0.5 })));
       flag.rotation.z = -Math.PI / 2; flag.position.set(x + 0.8, y + 8.55, z);
       scene.add(flag);
-      const beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({
-        color, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending,
-        depthWrite: false, side: THREE.DoubleSide, fog: false, // fog lavava a cor — feixe identificável a qualquer distância
-      }));
-      beam.position.set(x, y + 23, z);
-      scene.add(beam);
+      feixes.push({ x, y, z, cor: color, altura: 46, raioTopo: 0.45, raioBase: 0.95 });
       landmarks.push({ x, z, color });
     };
     if (cannonSpot) mk(cannonSpot.x + 3.2, cannonSpot.z, 0xd7343a); // canhão + argolas
@@ -310,6 +309,7 @@ export function createMapToys(deps) {
     mk(gal.spot.x - 6, gal.spot.z, 0xffe14a);
     mk(fw.spot.x + 2.2, fw.spot.z + 2.2, 0xff8ad4);
     mk(xyl.spot.x, xyl.spot.z - 3, 0x53c7ff);
+    scene.add(criarFarol(feixes, { opacidade: 0.3, nome: 'farolAtracoes' }));
   });
 
   // ===================================================================== //

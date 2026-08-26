@@ -27,6 +27,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MELODY, SECRETS, pickNestTower, pickVaultInterior, createMelodyTracker } from './secrets-core.js';
+import { criarFarol } from './farbeacon.js';
 
 const RAINBOW = [0xff5d5d, 0xffa23a, 0xffe14a, 0x8ce65a, 0x53c7ff, 0x7b7bff, 0xff8ad4, 0xffffff];
 const _a = new THREE.Vector3();
@@ -68,13 +69,13 @@ export function createSecrets(deps) {
   }
 
   /* feixe vertical fino: o padrão de findability da casa (js/maptoys.js).
-     fog:false porque a névoa lavava a cor e o feixe sumia de longe. */
+     fog:false porque a névoa lavava a cor e o feixe sumia de longe — e
+     js/farbeacon.js completa o serviço: passe único (aditivo não precisa
+     do segundo passe do DoubleSide) e z de clip preso no far, para o
+     feixe não sumir se alguém encurtar o `camera.far`. */
   function beam(x, y, z, color, h = 40) {
-    const g = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.8, h, 8, 1, true),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.26,
-        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
-    g.position.set(x, y + h / 2, z);
-    root.add(g);
+    root.add(criarFarol([{ x, y, z, cor: color, altura: h, raioTopo: 0.35, raioBase: 0.8 }],
+      { opacidade: 0.26, nome: 'farolSegredo' }));
   }
 
   // ===================================================================== //
