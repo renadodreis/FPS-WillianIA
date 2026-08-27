@@ -47,6 +47,19 @@ describe('os julgadores do kit de sessão humana', () => {
     assert.equal(r.verde, false, '`abaixoDaTaxa` voltou a ser calculado e não lido');
   });
 
+  it('E1 não julga com campo AUSENTE — campo faltando não é campo zerado', () => {
+    /* `undefined > 0` é false: uma leitura sem os contadores passava por todas
+       as comparações e saía VERDE. É o mesmo `null <= 2` que fechava o E4 sem
+       amostra nenhuma, sobrevivendo dentro do E1. */
+    for (const k of ['abaixoDe60', 'abaixoDaTaxa', 'staleMax', 'staleSoma']) {
+      const sem = { ...vrapiBom };
+      delete sem[k];
+      const r = vereditoE1(sem, 72);
+      assert.equal(r.verde, null,
+        `sem \`${k}\` o veredito saiu ${r.verde === true ? 'VERDE' : 'VERMELHO'} — sem o número não há veredito: ${r.txt}`);
+    }
+  });
+
   it('E1 nunca inventa: sem amostra, aguarda o aparelho', () => {
     const r = vereditoE1({ amostras: 0 }, 72);
     assert.equal(r.verde, null, 'sem amostra o veredito tem que ficar em aberto, não verde nem vermelho');

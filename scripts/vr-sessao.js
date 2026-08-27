@@ -481,7 +481,13 @@ function instalarSonda() {
       let folga = null, separacao = null;
       if (presenting && XR.headWorldPosition) {
         XR.headWorldPosition(cabeca);
-        folga = cabeca.y - G.groundAt(cabeca.x, cabeca.z, 999);
+        /* O TERCEIRO ARGUMENTO NÃO É "MÁXIMO", É JANELA. `groundAt` só aceita
+           uma plataforma cujo topo esteja até 0,65 m acima da referência
+           (js/terrain.js:175) — passar 999 aceita QUALQUER laje acima, telhado
+           inclusive, e a folga medida vira a distância até o teto em vez do
+           chão. A referência certa são os PÉS do jogador, que é o que o resto
+           do jogo usa. */
+        folga = cabeca.y - G.groundAt(cabeca.x, cabeca.z, G.player.pos.y);
         separacao = Math.hypot(cabeca.x - G.player.pos.x, cabeca.z - G.player.pos.z);
       }
       const frame = R.info.render.frame, ms = performance.now();
@@ -633,6 +639,15 @@ function vereditoE1(vrapi, taxaDeclarada) {
   const falhas = [];
   if (taxaDeclarada !== 72) falhas.push(`taxa declarada = ${taxaDeclarada ?? '—'} (critério: 72)`);
   if (vrapi.fps !== 72) falhas.push(`mediana ${vrapi.fps} (critério: 72)`);
+  /* CAMPO AUSENTE NÃO É CAMPO ZERADO. `undefined > 0` é `false`, então uma
+     leitura sem `abaixoDe60`/`abaixoDaTaxa`/`staleMax` passava por todas as
+     comparações e saía VERDE — é o mesmo `null <= 2` que fechava o E4 sem uma
+     única amostra, sobrevivendo aqui. Sem o número não há veredito. */
+  const faltando = ['abaixoDe60', 'abaixoDaTaxa', 'staleMax', 'staleSoma']
+    .filter(k => typeof vrapi[k] !== 'number' || !isFinite(vrapi[k]));
+  if (faltando.length) {
+    return { txt: `${AGUARDA_APARELHO}: houve amostra, mas faltam campos para julgar (${faltando.join(', ')}).`, verde: null };
+  }
   if (vrapi.abaixoDe60 > 0) falhas.push(`${vrapi.abaixoDe60} amostra(s) abaixo de 60`);
   /* abaixo da taxa DECLARADA pelo modo de tela daquele instante: 71 fps num
      modo de 72 não cai abaixo de 60 e mesmo assim é frame perdido */

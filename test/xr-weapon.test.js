@@ -518,12 +518,25 @@ describe('B7 — o tiro sai do CANO, não da ocular', { skip: !CHROME && 'Chrome
       const perp = Math.hypot(w[0] - u[0] * t, w[1] - u[1] * t, w[2] - u[2] * t);
       const cano = G.canoMundo(), org = m.origem;
       const frente = (cano[0] - org[0]) * md[0] + (cano[1] - org[1]) * md[1] + (cano[2] - org[2]) * md[2];
-      return { perp, frente };
+      /* ÂNGULO CONTRA O CANO, congelado no instante do tiro. É a única medida
+         deste caso que NÃO sai do código de mira: `perp` compara o raio com a
+         linha que o próprio disparo usou, e para hitscan as duas são a mesma
+         reta — zero por álgebra. Validação independente provou isso girando o
+         eixo óptico em 6° com o caso continuando verde. O cano é geometria do
+         modelo desenhado e não gira junto. */
+      const cd = G.canoDoTiro();
+      const nc = Math.hypot(cd[0], cd[1], cd[2]) || 1;
+      const graus = Math.acos(Math.max(-1, Math.min(1,
+        u[0] * cd[0] / nc + u[1] * cd[1] / nc + u[2] * cd[2] / nc))) * 180 / Math.PI;
+      return { perp, frente, graus };
     });
     assert.ok(r.frente > 0,
       `o cano está ${r.frente.toFixed(3)} m ATRÁS da ocular na direção da mira — a geometria da arma está invertida`);
     assert.ok(r.perp < 0.02,
       `a 10 m o tiro passa a ${(r.perp * 100).toFixed(2)} cm do ponto que a alça indica (teto 2 cm) — ` +
       'é a diferença entre acertar e errar uma cabeça de 16 cm');
+    assert.ok(r.graus < 0.5,
+      `o tiro sai a ${r.graus.toFixed(3)}° do CANO (teto 0,5°): a alça aponta para um lado e a arma para outro. ` +
+      'A 10 m, 0,5° já são 8,7 cm');
   });
 });

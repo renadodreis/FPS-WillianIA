@@ -2302,13 +2302,30 @@ const _direcaoDoTiro = new THREE.Vector3();  // QA: e para onde, ANTES do spread
    quando a sonda chega. B3 pergunta se o tiro sai por onde a alça apontava
    NAQUELE instante, e é isto que responde. */
 const _miraOrigDoTiro = new THREE.Vector3(), _miraDirDoTiro = new THREE.Vector3();
+/* QA: para onde o CANO apontava no instante do tiro. Ler o cano depois do
+   disparo mede o RECUO — numa automática ele já subiu quase um grau quando a
+   sonda chega, e 0,88° a 10 m são 15 cm de "defeito" que não existe. */
+const _canoDirDoTiro = new THREE.Vector3();
+const _qCanoQA = new THREE.Quaternion();
+function marcarCanoQA() {
+  _canoDirDoTiro.set(0, 0, -1).applyQuaternion(muzzle.getWorldQuaternion(_qCanoQA));
+}
 /* Registra o que ESTE disparo usou. Tem que ser chamada em TODO ramo de
    `fire()` que dá `return` cedo: a faca e a bazuca saíam antes da linha de
    registro, então `origemDoTiro()` devolvia o valor da arma ANTERIOR e
    qualquer medição feita com a faca na mão media o fuzil de antes. */
+/* DUAS COISAS DIFERENTES, e juntá-las já produziu um teste que não podia
+   falhar: o TIRO (de onde saiu, para onde foi) e a LINHA DE MIRA daquele
+   instante. Na bazuca a versão anterior copiava a direção JÁ CONVERGIDA por
+   cima do registro da mira — as duas viravam a mesma reta, e comparar uma reta
+   consigo mesma dá zero por álgebra. A mira é registrada antes de qualquer
+   convergência, pelo `marcarMiraQA`. */
+function marcarMiraQA(orig, dir) {
+  _miraOrigDoTiro.copy(orig); _miraDirDoTiro.copy(dir);
+}
 function marcarTiroQA(orig, dir) {
   _origemDoTiro.copy(orig); _direcaoDoTiro.copy(dir);
-  _miraOrigDoTiro.copy(orig); _miraDirDoTiro.copy(dir);
+  marcarCanoQA();
 }
 function fire(t) {
   /* TATO DO TIRO, antes de qualquer ramo: vale pra faca, foguete, laser e
@@ -2325,6 +2342,7 @@ function fire(t) {
     miraOrigem(_rayOrig);
     miraDirecao(_rayDir);
     if (window.__BR_melee) window.__BR_melee(_rayOrig, _rayDir, gun.dmg);
+    marcarMiraQA(_rayOrig, _rayDir);
     marcarTiroQA(_rayOrig, _rayDir);
     return;
   }
@@ -2351,25 +2369,44 @@ function fire(t) {
     recoil.kickRot += 0.2;
     miraOrigem(_rayOrig);
     miraDirecao(_rayDir);
+    marcarMiraQA(_rayOrig, _rayDir);   // a mira CRUA, antes de qualquer convergência
     muzzle.getWorldPosition(_v3);
     // voando, o tiro sai do HELICÓPTERO, não da câmera de perseguição (10m atrás)
     if (state.flying) { _v3.copy(Heli.group.position); _v3.y += 1.6; _rayOrig.copy(_v3); }
     // convergência: o foguete nasce na BOCA REAL do tubo mas voa até o ponto
     // mirado na linha central (primeiro obstáculo ou zero de 120 m). Parede
     // colada na boca continua sendo atingida — a colisão parte do muzzle.
-    const zeroD = Math.max(4, Math.min(rayBlockedAt(_rayOrig, _rayDir, 240), 120));
-    _v1.copy(_rayOrig).addScaledVector(_rayDir, zeroD);
-    _rayDir.copy(_v1).sub(_v3).normalize();
+    /* EM XR A BAZUCA NÃO ZERA. A zeragem por `rayBlockedAt` converge o foguete
+       do tubo para o primeiro obstáculo à frente — e a distância desse
+       obstáculo MUDA a cada tiro. Medido em sessão: zeragem indo de 5,60 a
+       120,00 m entre dois disparos, ângulo de até 2,4172°, 2,23 m de desvio a
+       100 m. Ângulo que anda sozinho não dá para compensar na mão. O foguete
+       passa a sair paralelo à linha de mira, com o afastamento constante da
+       altura da alça — e ele tem estilhaço, então centímetros não decidem
+       nada; o que decidia era a deriva.
+       No monitor a zeragem fica: lá o cano está a centímetros do eixo da
+       câmera, o erro é pequeno, e mudar isso mexeria na mira do PC sem
+       necessidade. */
+    if (XR.presenting) {
+      _v1.copy(_rayOrig).addScaledVector(_rayDir, 120);
+    } else {
+      const zeroD = Math.max(4, Math.min(rayBlockedAt(_rayOrig, _rayDir, 240), 120));
+      _v1.copy(_rayOrig).addScaledVector(_rayDir, zeroD);
+      _rayDir.copy(_v1).sub(_v3).normalize();
+    }
     // BR: até aqui a bazuca do outro jogador era INVISÍVEL E MUDA — o
     // lançamento não gerava evento nenhum (o shotHit só nasce no acerto).
     // Reaproveita o `shotFired` que já existe: os outros clientes ouvem o
     // disparo sair do tubo e cronometram o estrondo pelo tempo de voo.
     // (antes do Rockets.fire: js/rockets.js reusa o _v1 compartilhado)
     if (window.__BR_shotMiss) window.__BR_shotMiss(_v3, _v1, 'BAZUCA');
-    Rockets.fire(_v3, _rayDir);
-    /* o foguete nasce na boca (`_v3`) e voa em `_rayDir` — é ISSO que fica
-       registrado, e não a linha de mira que originou o cálculo */
-    marcarTiroQA(_v3, _rayDir);
+    /* EM XR O FOGUETE NASCE NA LINHA DE MIRA, pelo mesmo motivo do hitscan e do
+       projétil do BR: origem no tubo com direção da alça deixa um erro
+       CONSTANTE do tamanho da altura da alça, e erro de origem não fecha em
+       distância nenhuma. No monitor continua saindo do tubo. */
+    const origemFoguete = XR.presenting ? _rayOrig : _v3;
+    Rockets.fire(origemFoguete, _rayDir);
+    marcarTiroQA(origemFoguete, _rayDir);
     return;
   }
 
@@ -2420,6 +2457,7 @@ function fire(t) {
      não da origem do raio (medido por validação independente). */
   _miraOrigDoTiro.copy(_rayOrig);
   miraDirecao(_miraDirDoTiro);
+  marcarCanoQA();
   if (XR.presenting) {
     _rayDir.copy(_miraDirDoTiro);
     /* projeção do cano sobre a linha de mira, sem alocar: quanto o cano
@@ -2457,7 +2495,17 @@ function fire(t) {
     _rayDir.add(_v1).normalize();
 
     // BR online: armas marcadas com projSpeed disparam projétil real (queda + tempo de voo)
-    if (window.__BR_ballistics && gun.projSpeed) { window.__BR_ballistics(_v3, _rayDir, gun); continue; }
+    /* O PROJÉTIL SAI DA MESMA ORIGEM QUE O HITSCAN. Este ramo nascia sempre no
+       cano (`_v3`), e como a alça fica 6 a 20 cm acima dele o erro era
+       CONSTANTE em toda distância — 9,10 cm no fuzil, 20,00 cm no plasma,
+       medido em sessão. Pior que no hitscan: erro de ORIGEM em projétil não
+       fecha em distância nenhuma, então não dá nem para compensar mirando mais
+       alto. E é o caminho do BR, que é o modo jogado de verdade.
+       Fora de XR nada muda: `_rayOrig` é a própria origem da mira. */
+    if (window.__BR_ballistics && gun.projSpeed) {
+      window.__BR_ballistics(XR.presenting ? _rayOrig : _v3, _rayDir, gun);
+      continue;
+    }
 
     // inimigos comuns (esferas analíticas)
     let bestT = Infinity, bestEnemy = null, bestPart = null, bestBoss = false;
@@ -4405,6 +4453,18 @@ window.__game = {
      sai do cano — e a distância entre origem do raio e cano é critério de
      aceite E risco de anti-cheat (o servidor valida alcance a partir dela). */
   canoMundo: () => muzzle.getWorldPosition(new THREE.Vector3()).toArray(),
+  /* QA: para ONDE o cano aponta, no mundo. Referência INDEPENDENTE do código
+     de mira, e é isso que a torna útil: `miraDoTiro()` devolve o vetor que o
+     próprio disparo usou, então comparar o raio com ela é comparar uma reta
+     consigo mesma — distância zero por álgebra, e o teste não pode falhar.
+     Girando o eixo óptico o `miraNode` gira junto e a conta continua dando
+     zero; o CANO não gira, porque ele é o modelo desenhado. Barril aponta
+     para −Z (o +Z de `getWorldDirection` seria o coice). */
+  direcaoDoCano: () => new THREE.Vector3(0, 0, -1)
+    .applyQuaternion(muzzle.getWorldQuaternion(new THREE.Quaternion())).toArray(),
+  /* a mesma coisa, congelada no instante do tiro: é esta que vale para medir
+     alinhamento, porque a outra já viu o recuo */
+  canoDoTiro: () => _canoDirDoTiro.toArray(),
   origemDoTiro: () => _origemDoTiro.toArray(),
   direcaoDoTiro: () => _direcaoDoTiro.toArray(),
   miraDoTiro: () => ({ origem: _miraOrigDoTiro.toArray(), direcao: _miraDirDoTiro.toArray() }),
