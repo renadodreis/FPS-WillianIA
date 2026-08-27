@@ -27,7 +27,7 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
   win = typeof window === 'undefined' ? undefined : window,
   onEnter = () => {}, onExit = () => {}, onVisibility = () => {} } = {}) {
   const env = xrEnv(win);
-  const rig = createXrRig({ THREE, scene, camera });
+  const rig = createXrRig({ THREE, scene, camera, renderer });
   const session = createXrSession({ renderer, navigator: nav, onEnter, onExit, onVisibility });
   const hands = createXrHands({ renderer });
   const comfort = createXrComfort({ THREE, camera });
@@ -63,10 +63,18 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
   function sync() {
     const p = apresentando();
     if (p && !rig.entered) { rig.enter(); hands.anexar(rig.rig); comfort.anexar(); quality.aplicar(); }
-    /* Por frame, e não só ao entrar: no primeiro frame da sessão o espaço de
+    /* A POSE DA CABEÇA VIRA A DESTE FRAME AQUI, no ponto que o cabeçalho já
+       prometia ("ANTES de qualquer código mexer em câmera"). O three só
+       escreve `camera.position` lá dentro de `render()`, no FIM do tick — sem
+       isto, tudo que lê a cabeça durante o frame (o rig, o corpo, o alcance de
+       interação, a mira, o HUD) trabalha com a pose do frame anterior. O
+       `place()` também chama, porque ele roda tarde no tick e não pode
+       depender de quem passou antes; a chamada é idempotente (ver
+       js/xr/xrrig.js).
+       Por frame, e não só ao entrar: no primeiro frame da sessão o espaço de
        referência ainda pode não existir, e o three troca o espaço quando o jogo
        pede outro tipo. A função sai na primeira linha quando já está ouvindo. */
-    if (p) ouvirReset();
+    if (p) { rig.atualizarPose(); ouvirReset(); }
     /* `quality.restaurar()` PRIMEIRO, e a ordem importa menos que o fato de ele
        estar aqui: esta linha já foi escrita uma vez e sumiu quando outro wiring
        reescreveu o mesmo `else if`. O sintoma era mudo — o jogador tirava o

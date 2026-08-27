@@ -352,6 +352,178 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
   });
 });
 
+/* ================================================================
+   A POSE QUE O RIG LÊ É A DESTE FRAME — não a do frame anterior.
+
+   O defeito que sobreviveu a três correções, medido em sessão imersiva:
+   um salto de pose acima do limiar de passo humano deslocava a VISTA por
+   um frame inteiro, do tamanho do salto (0,7778 m recentrando a 0,55/−0,55;
+   1,0000 m num salto de 1 m), com o jogador parado no lugar.
+
+   A CAUSA é a ordem do three (r185), lida no fonte:
+
+     onAnimationFrame  → escreve as sub-câmeras de OLHO com a pose de AGORA
+                       → chama o callback do jogo (o tick)
+     tick              → `place()` lia `camera.position`
+     render()          → só ALI chama `xr.updateCamera(camera)`, que é quem
+                         escreve `camera.position` (three.module.js:17637)
+
+   Logo `camera.position` dentro do tick é a pose que o `render()` do frame
+   PASSADO deixou. O rig era posto no lugar de uma cabeça que já saiu de lá.
+
+   COMO ESTE BLOCO MEDE, e por que o dublê é legítimo aqui: ele encena a
+   ORDEM acima com as três funções cujo contrato eu li no fonte do three —
+   nada mais. E encena também a pegadinha que o atalho óbvio esconde: a
+   matriz de `xr.getCamera()` é a do OLHO ESQUERDO, enquanto a câmera do
+   jogo recebe a câmera de UNIÃO, no meio dos olhos (`setProjectionFromUnion`).
+   Quem trocar a fonte por `getCamera().matrix` conserta o atraso e planta
+   meia distância interpupilar de desvio lateral no mundo — e este bloco
+   falha por isso também.
+
+   A prova de PRODUTO é `test/xr-body.test.js`, em sessão imersiva de
+   verdade, medindo a vista. Aqui é a mecânica, exata e barata.
+   ================================================================ */
+describe('a pose é a DESTE frame, e não a do anterior', () => {
+  const IPD = 0.063;   // Quest 3: a diferença medida entre olho e união foi IPD/2
+
+  /* Encena um frame de XR na ordem do three. `alvo` é onde o jogo manda a
+     cabeça ficar; `pose()` é o headset entregando a pose do frame; `vista()`
+     é o que o `render()` vai compor — rig DESTE frame × pose DESTE frame. */
+  function runtimeXR() {
+    const poseCabeca = new THREE.Matrix4();      // união (o que updateCamera escreve)
+    const olhoEsq = new THREE.Vector3(-IPD / 2, 0, 0);
+    const arrayCam = {
+      matrix: new THREE.Matrix4(),               // three copia a do olho 0 pra cá
+      cameras: [{ matrix: new THREE.Matrix4() }, { matrix: new THREE.Matrix4() }],
+    };
+    const renderer = {
+      xr: {
+        isPresenting: true,
+        getCamera: () => arrayCam,
+        /* O que o three faz: escreve na câmera do jogo a pose da câmera de
+           UNIÃO. (No three isso passa por `parent.matrixWorld⁻¹ ×
+           cameraXR.matrixWorld`, onde o pai cancela — daí a forma direta.) */
+        updateCamera: cam => {
+          poseCabeca.decompose(cam.position, cam.quaternion, cam.scale);
+        },
+      },
+    };
+    let entregue = false;
+    return {
+      renderer,
+      /* passo 1 do frame: o runtime entrega a pose nova */
+      pose(x, z) {
+        poseCabeca.makeTranslation(x, 1.7, z);
+        arrayCam.cameras[0].matrix.makeTranslation(x + olhoEsq.x, 1.7, z);
+        arrayCam.cameras[1].matrix.makeTranslation(x - olhoEsq.x, 1.7, z);
+        arrayCam.matrix.copy(arrayCam.cameras[0].matrix);
+        entregue = true;
+      },
+      /* passo 3 do frame: o render compõe, e só então escreve a câmera do jogo */
+      vista(rig) {
+        assert.ok(entregue, 'o teste compôs um frame sem o runtime ter entregue pose');
+        rig.updateMatrixWorld(true);
+        const m = new THREE.Matrix4().multiplyMatrices(rig.matrixWorld, poseCabeca);
+        const v = new THREE.Vector3().setFromMatrixPosition(m);
+        renderer.xr.updateCamera(camera);   // é aqui que camera.position é escrita
+        return v;
+      },
+    };
+  }
+
+  let rt, xrr;
+  beforeEach(() => {
+    rt = runtimeXR();
+    xrr = createXrRig({ THREE, scene, camera, renderer: rt.renderer });
+    xrr.enter();
+  });
+
+  /* um frame inteiro: pose nova → tick (place) → render */
+  const frame = (px, pz, alvo) => {
+    rt.pose(px, pz);
+    xrr.place(alvo[0], 0, alvo[1], alvo[2] || 0);
+    return rt.vista(xrr.rig);
+  };
+
+  it('a cabeça cai EXATAMENTE onde o rig foi mandado pôr, todo frame', () => {
+    /* Sem isto o erro é de um frame de movimento: pequeno andando, do tamanho
+       do salto quando o jogador recentra. */
+    const alvo = [50, -20];
+    frame(0, 0, alvo);                       // primeiro frame: fixa a base
+    for (let i = 1; i <= 30; i++) {
+      const v = frame(0.02 * i, -0.01 * i, alvo);
+      const passo = xrr.passoPendente;
+      assert.ok(Math.abs(v.x - (alvo[0] + passo.x)) < 1e-9 &&
+                Math.abs(v.z - (alvo[1] + passo.z)) < 1e-9,
+        `frame ${i}: a vista caiu em (${v.x.toFixed(4)}, ${v.z.toFixed(4)}) e o rig foi ` +
+        `mandado pôr a cabeça em (${(alvo[0] + passo.x).toFixed(4)}, ` +
+        `${(alvo[1] + passo.z).toFixed(4)}) — o rig usou a pose de outro frame`);
+    }
+  });
+
+  it('salto de pose acima do limiar NÃO desloca a vista (nem por um frame)', () => {
+    /* O SINTOMA QUE SOBROU DEPOIS DE TRÊS CORREÇÕES. Acima de 0,35 m o delta é
+       recusado como passo — e estava certo. Só que o rig daquele frame tinha
+       sido calculado com a pose VELHA, então a vista aparecia deslocada do
+       tamanho inteiro do salto por um frame. Medido em sessão: 1,0000 m. */
+    const alvo = [0, 0];
+    frame(0, 0, alvo);
+    const antes = frame(0, 0, alvo);
+    const durante = frame(1.0, 0, alvo);     // 1 m num frame: recentrar, não caminhada
+    const depois = frame(1.0, 0, alvo);
+    const salto = Math.hypot(durante.x - antes.x, durante.z - antes.z);
+    assert.ok(salto < 1e-9,
+      `a vista pulou ${salto.toFixed(4)} m no frame do salto de pose`);
+    assert.ok(Math.hypot(depois.x - antes.x, depois.z - antes.z) < 1e-9,
+      'e ainda voltou no frame seguinte — o tranco de ida e volta do relato');
+    const p = xrr.consumirPasso();
+    assert.equal(+Math.hypot(p.x, p.z).toFixed(6), 0,
+      'e o salto não pode virar passo: o colisor atravessaria parede');
+  });
+
+  it('recentrar a 0,78 m do centro não move a vista', () => {
+    /* O caso do validador, com os números dele: 0,55/−0,55 do centro davam
+       0,7778 m de deslocamento da vista por um frame. */
+    const alvo = [10, 20];
+    frame(0, 0, alvo);
+    for (let i = 1; i <= 22; i++) frame(0.025 * i, -0.025 * i, alvo);
+    const antes = frame(0.55, -0.55, alvo);
+    xrr.rebasear();                          // o evento `reset` do espaço de referência
+    const durante = frame(0, 0, alvo);       // a origem foi pro centro; ninguém andou
+    const salto = Math.hypot(durante.x - antes.x, durante.z - antes.z);
+    assert.ok(salto < 1e-9,
+      `recentrar a ${Math.hypot(0.55, 0.55).toFixed(4)} m do centro deslocou a vista ` +
+      `${salto.toFixed(4)} m — é o tranco de um frame, do tamanho da distância ao centro`);
+  });
+
+  it('a caminhada continua chegando ao colisor pelo passo acumulado', () => {
+    /* Cerca contra o conserto preguiçoso: fixar a cabeça no alvo todo frame
+       zeraria os saltos acima E faria andar pelo cômodo não mover ninguém. */
+    const alvo = [0, 0];
+    frame(0, 0, alvo);
+    for (let i = 1; i <= 20; i++) frame(0.03 * i, 0, alvo);
+    let total = 0;
+    for (let i = 0; i < 40; i++) {
+      const p = xrr.consumirPasso();
+      const m = Math.hypot(p.x, p.z);
+      if (m < 1e-9) break;
+      total += m;
+    }
+    assert.ok(Math.abs(total - 0.6) < 1e-6,
+      `0,60 m caminhados renderam ${total.toFixed(4)} m de passo pro jogo`);
+  });
+
+  it('sem renderer o módulo continua lendo camera.position (testes de unidade)', () => {
+    const solto = createXrRig({ THREE, scene, camera });
+    solto.enter();
+    camera.position.set(0, 1.7, 0);
+    solto.place(0, 0, 0, 0);
+    camera.position.set(0.02, 1.7, 0);
+    solto.place(0, 0, 0, 0);
+    assert.equal(+solto.consumirPasso().x.toFixed(3), 0.02);
+  });
+});
+
 describe('posição de mundo da cabeça', () => {
   it('funciona fora do XR, com a câmera solta na cena', () => {
     const mundo = xr.headWorldPosition(new THREE.Vector3());

@@ -406,13 +406,36 @@ describe('RECENTRAR não move o jogador no mundo', { skip: !CHROME && 'Chrome n�
 
        Isto OBSERVA: envolve `place` para ler o efeito dele, sem chamar nada e
        sem mudar o que o jogo faz. */
+    /* E A AMOSTRA SAI DA CÂMERA DE OLHO, não de `camera.getWorldPosition()` —
+       este teste PASSAVA POR ACIDENTE por causa disso, enquanto a validação
+       independente media 0,7778 m de tranco no mesmo cenário.
+
+       O motivo é circular: `camera` é justamente o objeto sob conserto. O three
+       só escreve o transform dela dentro de `render()`, no FIM do tick, então
+       durante o frame ela carrega a pose do frame ANTERIOR — a MESMA pose que
+       o `place()` defeituoso lia. Compor rig(N) × pose(N−1) devolvia os dois
+       erros multiplicados um pelo outro, e o salto se cancelava exato: a sonda
+       independente mediu 0,0000 m por este caminho e 0,7778 m pelo caminho de
+       baixo, no mesmo frame.
+
+       O que o headset recebe é `rig.matrixWorld × cameraXR.cameras[0].matrix`:
+       a sub-câmera de olho, com a pose que `onAnimationFrame` JÁ escreveu para
+       ESTE frame. Tem que ser `.matrix` (o transform no espaço de referência):
+       o `.matrixWorld` dela é escrito direto pelo `WebXRManager` lá no render e
+       aqui ainda está velho, e `getWorldPosition()` nela recalcularia a matriz
+       a partir do transform local — a armadilha documentada em docs/vr/perf-xr.md.
+       Que a origem seja o olho e não o meio dos olhos não muda nada: o olho é
+       rígido com a cabeça, e o que se mede aqui é SALTO, não posição absoluta. */
     const olho = new MP.THREE.Vector3();
+    const _m = new MP.THREE.Matrix4();
+    const xrCam = MP.renderer.xr.getCamera();
     const placeOrig = G.XR.place.bind(G.XR);
     let ant = null, maxSalto = 0;
     G.XR.place = (...args) => {
       const r = placeOrig(...args);
       G.XR.rig.updateMatrixWorld(true);
-      G.camera.getWorldPosition(olho);
+      _m.multiplyMatrices(G.XR.rig.matrixWorld, xrCam.cameras[0].matrix);
+      olho.setFromMatrixPosition(_m);
       const agora = [olho.x, olho.z];
       if (ant) maxSalto = Math.max(maxSalto, Math.hypot(agora[0] - ant[0], agora[1] - ant[1]));
       ant = agora;
@@ -506,5 +529,116 @@ describe('parede não come o rastreio: a vista acompanha o corpo', { skip: !CHRO
     assert.ok(r.vista > r.fisico * 0.85,
       `o jogador andou ${r.fisico} m de verdade e a vista moveu ${r.vista.toFixed(3)} m: ` +
       'o mundo travou enquanto ele andava no quarto — é a parede comendo o rastreio');
+  });
+});
+
+describe('a pose que o rig lê é a DESTE frame', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* CAUSA (a) DO A6, e a razão de três correções seguidas errarem o alvo.
+
+     A ordem do three (r185) num frame de XR:
+
+       `WebXRManager.onAnimationFrame` pega a pose nova e escreve as
+       sub-câmeras de OLHO  →  chama o callback do jogo (o tick)  →  o tick
+       termina em `render()`, e é SÓ ALI que `xr.updateCamera(camera)` escreve
+       `camera.position` (three.module.js:17637).
+
+     Ou seja, `camera.position` lido durante o tick é a pose que o `render()`
+     do frame ANTERIOR deixou, e o rig era posicionado todo frame para uma
+     cabeça que já tinha saído dali. Andando são ~2 cm; num recentrar, num
+     piso redefinido ou numa perda de rastreio é o offset inteiro, e a vista
+     leva um tranco por um frame com o jogador parado. Quem trabalha com a
+     pose do frame passado está sempre consertando o passado.
+
+     ESTE BLOCO MEDE AS DUAS PONTAS, na sessão, sem conduzir nada: a
+     DEFASAGEM (o que o tick tem em mãos contra a pose que este frame desenha)
+     e a VISTA (rig deste frame × olho deste frame, que é o quadro que chega no
+     headset). Só translação: girando a cabeça, olho e centro dos olhos se
+     movem de formas diferentes e a comparação deixaria de ser exata. */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: 3424 }); });
+  after(async () => { if (h) await h.close(); });
+
+  /* Salta a pose da cabeça `dx` metros num frame e devolve o que o jogo viu.
+     Envolver `place` OBSERVA: chama o original e lê o efeito. */
+  const saltarPose = async (dx, dz) => {
+    const G = window.__game, MP = window.__MP, A = window.__A, dev = window.__xrEmulado;
+    const THREE = MP.THREE, xrCam = MP.renderer.xr.getCamera();
+    A.solta();
+    dev.position.set(0, 1.7, 0);
+    await A.espera(900);
+
+    const placeOrig = G.XR.place.bind(G.XR);
+    const lido = new THREE.Vector3(), pose = new THREE.Vector3(), vista = new THREE.Vector3();
+    const _m = new THREE.Matrix4();
+    let antLido = null, antPose = null, antVista = null;
+    let defasagem = 0, saltoVista = 0;
+    G.XR.place = (...args) => {
+      /* O QUE O TICK TEM EM MÃOS quando o rig é posicionado. */
+      lido.copy(G.camera.position);
+      /* A POSE QUE ESTE FRAME VAI DESENHAR: `.matrix` da sub-câmera de olho, já
+         escrita por `onAnimationFrame`. Não `.matrixWorld` (o `WebXRManager` só
+         a escreve no render) nem `getWorldPosition()` nela (recalcularia a
+         matriz do transform local — a armadilha de docs/vr/perf-xr.md). */
+      pose.setFromMatrixPosition(xrCam.cameras[0].matrix);
+      const r = placeOrig(...args);
+      G.XR.rig.updateMatrixWorld(true);
+      _m.multiplyMatrices(G.XR.rig.matrixWorld, xrCam.cameras[0].matrix);
+      vista.setFromMatrixPosition(_m);
+      if (antLido) {
+        /* Defasagem = o quanto o tick DEIXOU DE VER do movimento deste frame.
+           Com pose puramente transladada, o deslocamento do olho e o da cabeça
+           são o MESMO vetor: se o tick está em dia, os dois deltas coincidem. */
+        defasagem = Math.max(defasagem, Math.hypot(
+          (lido.x - antLido[0]) - (pose.x - antPose[0]),
+          (lido.z - antLido[1]) - (pose.z - antPose[1])));
+        saltoVista = Math.max(saltoVista,
+          Math.hypot(vista.x - antVista[0], vista.z - antVista[1]));
+      }
+      antLido = [lido.x, lido.z]; antPose = [pose.x, pose.z]; antVista = [vista.x, vista.z];
+      return r;
+    };
+    await A.espera(300);
+    defasagem = 0; saltoVista = 0;        // ignora o aquecimento da amostragem
+    const colisorAntes = [MP.player.pos.x, MP.player.pos.z];
+    dev.position.set(dx, 1.7, dz);        // o salto, num frame só
+    await A.espera(900);
+    G.XR.place = placeOrig;
+    return {
+      salto: Math.hypot(dx, dz),
+      defasagem,
+      saltoVista,
+      andou: Math.hypot(MP.player.pos.x - colisorAntes[0], MP.player.pos.z - colisorAntes[1]),
+    };
+  };
+
+  it('o que o rig lê acompanha a pose do frame, mesmo num salto de 1 m', async () => {
+    const r = await h.play(saltarPose, 1.0, 0);
+    assert.ok(r.defasagem < 0.05,
+      `no frame do salto de ${r.salto.toFixed(2)} m o tick ainda tinha uma pose ` +
+      `${r.defasagem.toFixed(4)} m atrasada: o rig é posicionado para o frame anterior`);
+  });
+
+  it('e um salto de pose de 1 m NÃO desloca a vista por frame nenhum', async () => {
+    /* O sintoma que sobrou depois de três correções: o limiar de passo humano
+       impedia que virasse passo permanente (o colisor não anda, e isso continua
+       valendo aqui), mas a vista aparecia deslocada do tamanho inteiro do salto
+       por um frame. Medido pela validação independente: 1,0000 m. */
+    const r = await h.play(saltarPose, 1.0, 0);
+    assert.ok(r.saltoVista < 0.05,
+      `a VISTA pulou ${r.saltoVista.toFixed(4)} m num frame com o jogador parado no lugar`);
+    assert.ok(r.andou < 0.05,
+      `e o colisor andou ${r.andou.toFixed(4)} m: um salto de pose não é caminhada`);
+  });
+
+  it('um salto pequeno, de 0,30 m, também não pode aparecer como tranco', async () => {
+    /* Abaixo do limiar o delta é ACEITO como passo, e aí a vista tem que
+       acompanhar a cabeça de mansinho — não pular. É a cerca do outro lado: um
+       conserto que só tratasse o caso rejeitado deixaria este passar. */
+    const r = await h.play(saltarPose, 0.30, 0);
+    assert.ok(r.defasagem < 0.05,
+      `salto de 0,30 m com o tick ${r.defasagem.toFixed(4)} m atrasado`);
+    assert.ok(r.saltoVista <= 0.32,
+      `a vista pulou ${r.saltoVista.toFixed(4)} m para 0,30 m de pose: ` +
+      'o movimento foi contado duas vezes no mesmo frame');
   });
 });

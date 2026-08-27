@@ -13,6 +13,12 @@
    É isso que faz agachar virar agachar de verdade — e é por isso que
    `place()` recebe a cota do TERRENO, nunca a altura da câmera.
 
+   E A POSE QUE O RIG LÊ É A DESTE FRAME, não a do anterior. O three só
+   escreve `camera.position` dentro de `render()`, ou seja DEPOIS do tick:
+   quem lê esse vetor durante o tick está lendo o frame passado. Ver
+   `atualizarPose()` — foi este atraso, e não a decisão do limiar de passo,
+   que fazia a vista levar um tranco de um frame ao recentrar.
+
    POR QUE O RIG NASCE PREGUIÇOSO: durante o boot o `Math.random` global
    vira um mulberry32 seedado (game.js:201) e cada `Object3D` gasta 4
    números desse fluxo só no UUID. A ordem de consumo é contrato — o
@@ -22,7 +28,7 @@
    apertando o botão, muito depois do worldgen.
    ================================================================ */
 
-export function createXrRig({ THREE, scene, camera }) {
+export function createXrRig({ THREE, scene, camera, renderer = null }) {
   let rig = null;
   let paiAnterior = null;
   let poseSalva = null;
@@ -78,6 +84,59 @@ export function createXrRig({ THREE, scene, camera }) {
     dentro = false;
   }
 
+  /* A POSE DESTE FRAME, NÃO A DO FRAME ANTERIOR — e é por isso que três
+     correções seguidas erraram o alvo: quem trabalha com a pose do frame
+     passado está sempre consertando o passado.
+
+     A ordem do three (r185) num frame de XR é:
+
+       1. `WebXRManager.onAnimationFrame` pega `frame.getViewerPose()` e
+          escreve as sub-câmeras de OLHO (`cameraXR.cameras[i].matrix`);
+       2. …e só ENTÃO chama o callback do jogo — o `tick()`;
+       3. o `tick()` termina em `renderer.render()`, que só ali chama
+          `xr.updateCamera(camera)` (three.module.js:17637) e escreve
+          `camera.position`/`quaternion`.
+
+     Ou seja: `camera.position` lido dentro do `tick` é a pose que o passo 3
+     do frame ANTERIOR deixou. O rig era posicionado, todo frame, para uma
+     cabeça que já não estava mais ali. Andando isso são ~2 cm e ninguém vê;
+     num recentrar, num piso redefinido ou numa perda de rastreio é o offset
+     inteiro, e a VISTA leva um tranco de 0,78 a 3,00 m por um frame — com o
+     jogador parado no lugar. Medido em sessão imersiva: salto de pose de
+     1,00 m num frame → 1,0000 m de deslocamento da vista; recentrar a
+     0,55/−0,55 m do centro → 0,7778 m.
+
+     O CONSERTO É PEDIR AO THREE QUE ESCREVA A POSE AGORA. `xr.updateCamera()`
+     é API pública (existe justamente para quem desliga `cameraAutoUpdate`) e
+     é IDEMPOTENTE: ela compõe `camera.matrix` a partir de
+     `parent.matrixWorld⁻¹ × cameraXR.matrixWorld`, e como o próprio
+     `cameraXR.matrixWorld` acabou de ser montado como `parent.matrixWorld ×
+     (pose)`, o pai CANCELA — o resultado não depende de onde o rig está neste
+     instante, e o `render()` logo adiante recalcula tudo de novo com o rig já
+     no lugar e chega no mesmo número.
+
+     POR QUE NÃO LER `xr.getCamera().matrix` DIRETO, que seria mais curto: essa
+     matriz é a do OLHO ESQUERDO (`cameraXR.matrix.copy(cameras[0].matrix)`),
+     não a da cabeça. A câmera do jogo recebe a câmera de UNIÃO, que
+     `setProjectionFromUnion` desloca para o meio dos olhos. Medido aqui: a
+     diferença é constante e vale meia distância interpupilar — 0,0315 m com a
+     cabeça PARADA. Trocar a fonte por essa matriz consertaria o atraso e
+     plantaria 3 cm de desvio lateral no mundo inteiro. `updateCamera()` faz a
+     conta da união com o código do próprio three, e não há o que divergir.
+
+     Sem `renderer` (testes de unidade do módulo) isto é um no-op e quem
+     escreve `camera.position` é o próprio teste. */
+  function atualizarPose() {
+    const xr = renderer && renderer.xr;
+    if (!xr || xr.isPresenting !== true || typeof xr.updateCamera !== 'function') return false;
+    /* Sem sub-câmera não houve pose ainda (primeiro frame, rastreio perdido):
+       `updateCamera` cairia no ramo de câmera única e zeraria a pose. */
+    const xrCam = typeof xr.getCamera === 'function' ? xr.getCamera() : null;
+    if (!xrCam || !xrCam.cameras || xrCam.cameras.length === 0) return false;
+    xr.updateCamera(camera);
+    return true;
+  }
+
   /* `y` é a cota do CHÃO sob o jogador; `yaw` é o giro artificial, somado ao
      giro real da cabeça pelo próprio headset.
 
@@ -104,6 +163,7 @@ export function createXrRig({ THREE, scene, camera }) {
      A cabeça não pula na troca: o que entra em `x,z` sai de `passo`. */
   function place(x, y, z, yaw) {
     if (!dentro || !rig) return; // fora do XR não existe rig — e criar um custaria rand
+    atualizarPose();             // a pose DESTE frame, não a do anterior (ver acima)
     const hx = camera.position.x, hz = camera.position.z;
     const c = Math.cos(yaw), s = Math.sin(yaw);
     /* Um reset pendente vira base nova AQUI, com a pose já atualizada, e leva
@@ -255,6 +315,10 @@ export function createXrRig({ THREE, scene, camera }) {
 
   return {
     enter, exit, place, headWorldPosition, consumirPasso, devolverPasso, rebasear,
+    /* Exposto para o `sync()` (js/xr/xrboot.js) chamar no COMEÇO do frame: o
+       `place()` já se protege sozinho, mas ele roda tarde no tick, e todo o
+       resto (corpo, alcance de interação, HUD, mira) lia a mesma pose velha. */
+    atualizarPose,
     get rig() { return rig; },
     get entered() { return dentro; },
     get passoPendente() { return { x: passoX, z: passoZ }; },
