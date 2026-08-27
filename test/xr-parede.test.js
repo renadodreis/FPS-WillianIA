@@ -268,18 +268,34 @@ describe('o passo que a parede recusa', () => {
     const player = r.player;
     const cabeca = r.trilha[r.trilha.length - 1].cabeca;
     const alvo = { x: 0, z: 0 };
-    let maiorSalto = 0;
+    let maiorSalto = 0, maiorEscoa = 0;
+    let foraAntes = xr.foraDoCorpoM;
     for (let f = 0; f < 1500; f++) {           // sem parede nenhuma agora
       xr.place(player.x, 0, player.z, 0);
       xr.consumirPasso(alvo);
       const d = Math.hypot(alvo.x, alvo.z);
       if (d > maiorSalto) maiorSalto = d;
+      /* QUANTO O `fora` DEVOLVEU NESTE FRAME, e é isto que mede a taxa de
+         escoamento de verdade. `maiorSalto` sozinho NÃO PODE FALHAR: ele lê
+         `alvo` DEPOIS de `consumirPasso`, que já limita a 0,15 m por frame —
+         o clamp garante o assert, não o escoamento. Validação independente
+         multiplicou `ESCOA_FORA` por 167 e este caso ficou VERDE. Foi a
+         décima ocorrência de "teste que passa por acidente" nesta base, e a
+         segunda seguida no mesmo arquivo. */
+      const escoou = foraAntes - xr.foraDoCorpoM;
+      if (escoou > maiorEscoa) maiorEscoa = escoou;
+      foraAntes = xr.foraDoCorpoM;
       player.x += alvo.x; player.z += alvo.z;
     }
     assert.ok(player.x > cabeca - 0.1,
       `o obstáculo sumiu e o colisor ficou em ${player.x.toFixed(4)} m, com a cabeça em ${cabeca.toFixed(4)} m`);
     assert.ok(maiorSalto <= 0.155,
       `o colisor andou ${maiorSalto.toFixed(4)} m num frame só — teleporte`);
+    assert.ok(maiorEscoa <= 0.02,
+      `o \`fora\` devolveu ${maiorEscoa.toFixed(4)} m num frame só (teto 0,02 m). ` +
+      'Despejar a dívida de uma vez é o teleporte de colisor que o anti-cheat do servidor lê como trapaça');
+    assert.ok(maiorEscoa > 0,
+      'o `fora` não escoou nada em 1500 frames — o colisor fica preso para sempre');
   });
 });
 
@@ -788,6 +804,16 @@ describe('dentro da sessão: a parede segura o corpo e escurece a vista',
       assert.ok(r.fiacaoDoJogo > 100,
         `o game.js chamou XR.conforto.intrusao ${r.fiacaoDoJogo} vezes em ${r.frames} frames — ` +
         'a linha de fiação não está no jogo');
+      /* (0b) E A SONDA TAMBÉM É DO JOGO — este assert faltava, e a falta dele foi
+         a NONA ocorrência de "teste que passa por acidente" nesta base. O número
+         era contado, impresso no console e nunca cobrado: arrancando
+         `sondaDeSolidoXR()` da fiação, o arquivo inteiro ficava 25/25 VERDE,
+         incluindo o caso que promete que debruçar sobre um parapeito não apaga a
+         tela — que é exatamente o que a sonda existe para garantir. Contar e
+         imprimir não é testar. */
+      assert.ok(r.fiacaoComSonda > 50,
+        `a sonda de sólido rodou em ${r.fiacaoComSonda} das ${r.fiacaoDoJogo} chamadas — ` +
+        'sem ela a cortina volta a ser só distância, e debruçar num parapeito apaga a tela');
       /* (1) A PAREDE SEGURA O CORPO. Medido em `fa9ed86`: 10,9623 m. */
       assert.ok(r.colisor < 2.0,
         `o colisor andou ${r.colisor.toFixed(4)} m contra a parede — atravessou (vetor de trapaça)`);

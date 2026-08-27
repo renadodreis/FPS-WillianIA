@@ -770,7 +770,13 @@ export function createXrInteract({
         pos: alvoAtual.pos ? [alvoAtual.pos.x, alvoAtual.pos.y, alvoAtual.pos.z] : null,
       } : null,
       aCasca: aCasca(alvoAtual),
-      marcadorVisivel: !!(grupo && grupo.visible),
+      /* METADE DE UM PAR NÃO É CONSERTO. O radial ganhou `visible && parent`
+         quando validação independente mostrou que a API mentia com o objeto
+         fora do grafo — e este aqui, que é o mesmo defeito no mesmo arquivo,
+         ficou para trás. `visible: true` sem pai é invisível na tela e
+         "visível" na API. */
+      marcadorVisivel: !!(grupo && grupo.visible && grupo.parent),
+      marcadorNaCena: !!(grupo && grupo.parent),
       mao: [_maoPos.x, _maoPos.y, _maoPos.z],
       direcao: [_maoDir.x, _maoDir.y, _maoDir.z],
       /* DE ONDE ESTE MÓDULO MEDIU o alcance neste frame — a mesma régua de

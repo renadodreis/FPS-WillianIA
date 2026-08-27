@@ -43,9 +43,13 @@ import { buildChest } from './chestmodel.js';
      de 5 m do helicóptero e a banda de 3,5 m da bazuca — retoque de gameplay
      disfarçado de correção de VR.
    · **Teto absoluto.** Fica acima do pico de encosto de parede medido
-     (0,133 m) e abaixo do ponto em que a tela já está preta (`FORA_MAX = 0,50`
-     em js/xr/xrcomfort.js). É a trava que sobrevive se um dia aparecer
-     separação que o `fora` não explique.
+     (0,133 m). `FORA_MAX` era 0,50 m quando era limiar de CONFORTO, e este
+     texto dizia que o teto ficava ABAIXO do ponto de tela preta; desde que os
+     limiares da cortina passaram a sair da geometria (colisor r = 0,42 +
+     near 0,08 → o outro lado aparece em 0,34 m de separação), `FORA_MAX` é
+     **0,32** e o teto de alcance ficou 1 cm ACIMA dele. Isso é mais
+     restritivo, não menos: no alcance máximo a tela já fechou. É a trava que
+     sobrevive se um dia aparecer separação que o `fora` não explique.
    · **Sem saber a recusa, assume que foi TUDO.** Quem não fia `foraXR` fica
      com a régua no corpo, que é o comportamento de sempre. Errar para o lado
      permissivo aqui seria abrir alcance por parede em silêncio.
