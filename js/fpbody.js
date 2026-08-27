@@ -40,26 +40,114 @@ export function createFpBody(deps) {
     reachBend: 0.95,
     /* Extensão máxima da clavícula rumo à âncora, em metros de MUNDO — e
        DELIBERADAMENTE fora da escala do avatar, ao contrário do resto da
-       calibração do corpo. Medido: escalá-la junto com o boneco (0,45 × 0,89 =
-       0,4025 m em VR) não muda NADA no braço direito, que nunca encosta neste
-       teto (ele para em `alcance × reachBend`), e afasta a mão ESQUERDA da
-       âncora em mais 0,048 m — 0,2992 → 0,3472 m na empunhadura de perto e
-       0,4428 → 0,4914 m na de longe. O braço esquerdo já não alcança o
-       guarda-mão em VR (ver o relatório da rodada: a âncora fica a 0,89–1,03 m
-       do ombro, contra 0,59 m de braço), e encurtar o único recurso que
-       compra alcance só piora o que já está no limite. */
+       calibração do corpo. Medido (§5.5 do docs/vr/referencia-corpo.md):
+       escalá-la junto com o boneco (0,45 × 0,89 = 0,4025 m em VR) não muda
+       NADA no braço direito, que nunca encosta neste teto (ele para em
+       `alcance × reachBend`), e afasta a mão ESQUERDA da âncora em mais
+       0,048 m. O braço esquerdo já não alcança o guarda-mão em VR (a âncora
+       fica a 0,89–1,03 m do ombro, contra 0,59 m de braço).
+
+       0,45 M FICA, E AGORA COM MEDIÇÃO DOS DOIS LADOS. Cortar este teto para
+       um valor anatômico (0,06 m) foi TENTADO e é PIOR: sem a translação, o
+       IK precisa GIRAR o úmero muito mais para alcançar a mesma âncora, e o
+       braço esquerdo passa a varrer o rosto — medido, a malha do `Arm_1.L`
+       foi de 0,1277 m para **0,0158 m** do olho na pose de braço levantado.
+       O teto grande não é elegante, mas é ele que mantém o úmero apontado
+       para longe da cara. O que precisava de limite era a DIREÇÃO da
+       translação (subir e cruzar o esterno), não o tamanho dela — ver
+       `clavUp`/`clavCross` logo abaixo. */
     clavMax: 0.45,
+    /* ...E A CLAVÍCULA TEM JUNTA: ELA NÃO PASSA POR DENTRO DA CABEÇA.
+       Medido em sessão, com a arma trazida ao rosto: a clavícula ESQUERDA
+       terminava em (0,225; −0,195; −0,337) no espaço da raiz, tendo saído de
+       (0; −0,386; +0,070) — ou seja, SUBIU 0,171 m e CRUZOU 0,201 m para o
+       lado direito do esterno, parando à frente do queixo. E como ela carrega
+       a gola inteira, a malha dela ia junto: 0,0259 m do olho, o pior número
+       do critério I3.
+
+       O ombro humano não faz isso. A elevação do acrômio é o gesto de dar de
+       ombros, que este rig não modela, e o acrômio NÃO cruza o esterno — é o
+       mesmo tipo de limite de junta que o VRIK aplica no `maxRootAngle` do
+       quadril. Aqui ficam dois números, em metros de MUNDO, aplicados no
+       espaço do CORPO (que é o do tronco, não o da cabeça): quanto a
+       clavícula pode subir, e quanto pode passar da linha média. Os dois são
+       ZERO, e isso foi medido em degraus: com 0,02 m de folga em cada um, a
+       malha do ombro esquerdo ficava a 0,1304 m do olho; com os dois em zero,
+       a 0,1442 m. O avanço PARA A FRENTE — que é o que compra alcance e o que
+       a §5.5 do referencia-corpo mediu — continua livre até `clavMax`. */
+    clavUp: 0,
+    clavCross: 0,
+    /* A MÃO DO BONECO NÃO ENTRA NO OLHO. O jogador pode encostar o controle
+       no próprio rosto; o corte estático da malha (`eyeCut`) não cobre isso,
+       porque o que chega ali é o braço, que se move. O alvo do IK é empurrado
+       para fora de uma bolha em volta do olho — a mesma ideia de colisão
+       mão↔corpo que os FPS de VR usam para a mão não atravessar o peito. O
+       raio soma os 0,15 m do critério com o tamanho de uma mão (~0,10 m), que
+       é o quanto a malha se estende além do osso do punho. */
+    maoLivre: 0.25,
+    /* O RECORTE DO OLHO — raio e centro da bolha vazia, no espaço da RAIZ do
+       corpo (ou seja, multiplicados pela escala do avatar em VR). O centro
+       fica à frente da raiz porque é lá que o olho mora: js/xr/xrbody.js
+       recua o corpo `RECUO` (0,08–0,14 m) atrás da câmera, o que dá 0,07–0,20
+       em unidades da raiz — 0,10 é o meio dessa faixa e o erro entra como
+       margem do raio. Ver `recortarOlho`. */
+    eyeCut: 0.30,
+    eyeCutZ: 0.10,
+    /* O QUE O CORTE ESTÁTICO NÃO ALCANÇA: a malha que a POSE traz para perto.
+       Sobra do I3 depois de tudo o que é geométrico: com a cabeça girada 60°,
+       o úmero esquerdo cruza à frente do peito e a malha dele chega a
+       0,1446 m do olho — 5,4 mm abaixo do teto. Aqui entra a última guarda,
+       que é a que o gênero usa quando a câmera encosta no avatar: o CORPO
+       recua o tanto que falta. `sentinelas` é quantos vértices a varredura
+       rolante visita POR FRAME: 256 de 2 631, ou seja o corpo inteiro em ~11
+       frames (0,12 s a 90 Hz) — de sobra para uma correção de 15 mm e metade
+       do custo de varrer 512. `applyBoneTransform` são ~4 matrizes 4×4 por
+       vértice, e o orçamento de XR já está 4× estourado (docs/vr/perf-xr.md). E
+       `suspeitosMax` é o tamanho da lista curta que é conferida SEMPRE — quem
+       já violou uma vez não sai do radar enquanto continuar violando.
+       `recuoMax` é o teto do empurrão, e ele existe para
+       este mecanismo nunca virar outro defeito: 0,015 m cabe folgado nos
+       0,05 m de erro de âncora que o critério C5 aceita E fica abaixo dos
+       0,02 m de tolerância da mão na empunhadura (o corpo recua inteiro, e a
+       mão vai junto). Se um dia faltar mais que isso, o teto SEGURA e o
+       número volta a aparecer no teste — que é o comportamento certo para um
+       remendo: ele não pode esconder o defeito seguinte.
+
+       `olhoLivre` NÃO é 0,15 m, e o motivo custou uma rodada: aqui só existe
+       a câmera do JOGO, que em XR fica no CENTRO da cabeça, enquanto o
+       critério mede a partir de CADA OLHO — e o olho está meia distância
+       interpupilar para o lado (medido nesta sessão: 0,0315 m). A guarda via
+       0,26 m onde a sonda via 0,14 m e nunca disparava. 0,19 = 0,15 + 0,035
+       (meia IPD generosa: a faixa do Quest 3 é 53–75 mm) e ainda sobra para o
+       frame de atraso da pose da câmera em XR. É conservador de propósito:
+       errar para o lado de recuar 1 cm é barato; errar para o lado de não
+       recuar é o defeito de volta. */
+    olhoLivre: 0.19,
+    recuoMax: 0.015,
+    recuoSolta: 0.0006,   // quanto o recuo devolve por frame quando não há violação
+    sentinelas: 256,
+    suspeitosMax: 64,
     /* AGACHAR ENCURTA A PERNA. O jogo baixa o olho de 1,62 m para 1,04 m
        (game.js, `eyeH`): 0,58 m é o tanto que a perna tem de encurtar para o
        pé continuar no chão quando o corpo desce junto com a câmera. Em VR
        quem manda é a queda MEDIDA da cabeça, que js/xr/xrbody.js escreve em
        `bodyRoot.userData.encurtar` (metros de mundo). */
     crouchDrop: 0.58,
-    /* Flexão máxima de joelho humano ≈ 150°, ou seja 30° de ângulo INTERNO
-       entre coxa e canela. É esse limite que define quanto a perna consegue
-       encurtar (`pernaDobra`); passar dele deixa a canela deitada em cima da
-       coxa e o boneco vira uma cadeira dobrável. */
-    kneeMin: 30 * Math.PI / 180,
+    /* Flexão máxima de joelho. Era 150° (30° de ângulo INTERNO entre coxa e
+       canela), o limite ATIVO; aqui vale o PASSIVO — 158°, ou 22° internos.
+
+       O motivo é medido, não estético: com a raiz do corpo ancorada na cabeça
+       até o fim (js/xr/xrbody.js), a perna precisa encurtar EXATAMENTE o
+       tanto que o jogador agachou, ou o pé fura o chão a diferença. Num
+       agachamento de 0,60 m de cabeça — que é o agachamento normal do jogo —
+       o limite ativo entregava 0,542 m e faltavam 0,058 m. O limite passivo
+       entrega 0,60 m e o pé fica no lugar.
+
+       E o agachamento fundo de VR é justamente o gesto passivo: a fonte que
+       este repositório já cita para o joelho ([Knee, Wikipédia]) descreve a
+       flexão passiva de ~160° como "heel to buttock" — que é o que o corpo
+       faz num cócoras cheio. 158° deixa 2° de margem do limite publicado. */
+    kneeMin: 22 * Math.PI / 180,
     /* NO AGACHAMENTO O QUADRIL VAI PARA TRÁS — e como aqui o quadril está
        preso debaixo da cabeça (que é quem manda), quem anda é o PÉ, para a
        frente. Não é enfeite: na pose de descanso o tornozelo já fica 0,107 m
@@ -82,8 +170,15 @@ export function createFpBody(deps) {
        O ângulo entra por RAIZ QUADRADA da dobra porque a bainha sobe com o
        cosseno do ângulo (quadrático perto de zero) enquanto o corpo desce
        LINEAR: com o ângulo proporcional, o meio do agachamento ficava com a
-       bainha 0,045 m dentro do chão. */
-    cloakLift: 0.38,
+       bainha 0,045 m dentro do chão.
+
+       0,38 → 0,42 nesta rodada, e o motivo é medido: com a raiz do corpo
+       acompanhando a cabeça ATÉ O FIM (js/xr/xrbody.js), o corpo desce os
+       0,60 m inteiros do agachamento em vez de parar em 0,562 m. São 0,038 m
+       a mais de queda, e quem paga é a bainha — o ponto mais baixo da malha
+       passou a furar o piso em 0,11 m. Recolher 0,46 m de bainha virou
+       recolher ~0,51 m, e o número volta para dentro do teto. */
+    cloakLift: 0.42,
     kneeOut: 0.25,         // joelhos abrem um pouco para fora ao dobrar
   };
 
@@ -117,6 +212,17 @@ export function createFpBody(deps) {
   let legPairs = null; // montado uma vez, quando o rig fica pronto
   let legLen = null;   // { r: {a, b}, l: {a, b} } coxa/canela
   let pernaDobra = 0;  // quanto a perna encurta até o joelho chegar no limite (m)
+  let vertsApagados = 0;  // vértices tirados da malha (ver apagarOsso/recortarOlho)
+  let sentinelas = [];    // todos os vértices da malha, para a varredura rolante
+  const suspeitos = [];   // os que já violaram: verificados todo frame (ver recuarDoOlho)
+  let recuoOlho = 0;      // quanto o corpo recuou neste frame (m) — QA
+  /* Caixa (espaço da RAIZ) do que o recorte do olho tirou da malha. É o número
+     que diz quanto do DESKTOP mudou: lá o corpo é filho da câmera e a raiz É o
+     olho, então esta caixa é exatamente a região que o jogador de monitor
+     deixou de ver. Box3/Vector3 não têm `uuid` e não consomem `Math.random`. */
+  const recorteCaixa = new THREE.Box3();
+  let recorteNaVista = 0;   // quantos desses o desktop enxergava (ver recortarOlho)
+  let olhoMin = Infinity; // menor distância malha↔olho vista neste frame — QA
 
   /* dedos: [curl base, curl ponta] por estado; indicador direito no gatilho */
   const GRIP = {
@@ -135,6 +241,203 @@ export function createFpBody(deps) {
     if (gun.parts && gun.parts.pump) return GRIP.pump;
     if (gun.rocket) return GRIP.bazooka;
     return GRIP.default;
+  }
+
+  /* ================================================================
+     APAGAR UM OSSO DA MALHA — de verdade, vértice e triângulo.
+
+     Peso a partir do qual o vértice é considerado DAQUELE osso. 0,05 apaga
+     também o anel de transição (o pescoço), que é justamente o que fica mais
+     perto do olho; acima disso sobrariam vértices arrastados pelo osso
+     encolhido e o piso de distância voltaria.
+
+     NADA AQUI CRIA `BufferGeometry`, `Material`, `Texture` nem `Object3D`: só
+     `BufferAttribute`, que não tem `uuid` (three r0.185, `core/BufferAttribute.js`)
+     e portanto NÃO consome número do `Math.random` seedado. É contrato do
+     worldgen (CLAUDE.md), e este módulo carrega o GLB de forma assíncrona —
+     gastar número aqui deslocaria o mundo de um jeito que depende da rede.
+     ================================================================ */
+  const OSSO_W = 0.05;
+
+  function apagarOsso(model, osso) {
+    const alvos = new Set();
+    osso.traverse(o => { if (o.isBone) alvos.add(o); });
+    return apagarSe(model, (o, g) => {
+      const sk = o.skeleton;
+      const si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+      if (!sk || !si || !sw) return null;
+      const iAlvo = new Set();
+      sk.bones.forEach((b, i) => { if (alvos.has(b)) iAlvo.add(i); });
+      if (!iAlvo.size) return null;
+      const n = g.attributes.position.count;
+      const marca = new Uint8Array(n);
+      for (let v = 0; v < n; v++) {
+        let w = 0;
+        if (iAlvo.has(si.getX(v))) w += sw.getX(v);
+        if (iAlvo.has(si.getY(v))) w += sw.getY(v);
+        if (iAlvo.has(si.getZ(v))) w += sw.getZ(v);
+        if (iAlvo.has(si.getW(v))) w += sw.getW(v);
+        marca[v] = w >= OSSO_W ? 1 : 0;
+      }
+      return marca;
+    });
+  }
+
+  /* ================================================================
+     O RECORTE DO OLHO — a bolha que nenhuma malha do corpo ocupa.
+
+     O critério I3 proíbe geometria a menos de 0,15 m do olho, e o modelo é
+     ESTILIZADO: mesmo com a cabeça fora da malha, o alto do ombro fica a
+     0,053 m abaixo da câmera e a gola chega a 0,11 m. Nenhum valor de
+     `eyeDrop` conserta isso sem enfiar a câmera no peito — a proporção do
+     boneco é essa (do topo do crânio ao ombro ele tem 0,22 m; gente tem
+     0,36 m). O que a Valve fez com esse mesmo problema foi não desenhar
+     corpo nenhum em Alyx, e o critério C5 aceita as duas saídas; aqui a
+     saída é intermediária e é a do gênero: o corpo fica, e o que cai DENTRO
+     da bolha do olho sai da malha.
+
+     A bolha é medida na POSE DE DESCANSO, no espaço da RAIZ do corpo, e o
+     centro dela é o OLHO — que em VR mora `RECUO` à frente da raiz
+     (js/xr/xrbody.js). Como o corte é estático e a raiz carrega a escala do
+     avatar, o raio é escolhido para o pior caso da trava de escala:
+     `eyeCut × 0,70 = 0,182 m` de folga real contra os 0,15 m exigidos.
+     ================================================================ */
+  function recortarOlho(model, raiz) {
+    const tanV = Math.tan((camera.fov || 75) * Math.PI / 360);
+    const tanH = tanV * (camera.aspect || 1);
+    const olho = new THREE.Vector3(0, 0, -TUNE.eyeCutZ);
+    const _p = new THREE.Vector3();
+    const _m = new THREE.Matrix4();
+    return apagarSe(model, (o, g) => {
+      /* SÓ MATRIZ LOCAL, e isto custou uma rodada: no instante em que o GLB
+         chega, `matrixWorld` da raiz e dos ossos ainda não descrevem a mesma
+         coisa (o corpo é filho da câmera, e a câmera desta página ainda não
+         foi posta no lugar do frame). Medido: o corte varreu a malha inteira
+         e apagou ZERO vértice, porque cada vértice caía num sistema de
+         coordenadas diferente do centro da bolha.
+
+         Na POSE DE DESCANSO o skinning é a identidade por construção
+         (`boneInverse` é a inversa do osso na bind), então o vértice bruto do
+         atributo JÁ é a posição de descanso no espaço da malha. Subir daí até
+         a raiz pela cadeia de matrizes LOCAIS não depende de nada externo. */
+      _m.identity();
+      for (let p = o; p && p !== raiz; p = p.parent) { p.updateMatrix(); _m.premultiply(p.matrix); }
+      const pos = g.attributes.position;
+      const n = pos.count;
+      const marca = new Uint8Array(n);
+      let algum = 0;
+      for (let v = 0; v < n; v++) {
+        _p.fromBufferAttribute(pos, v).applyMatrix4(_m);
+        if (_p.distanceTo(olho) >= TUNE.eyeCut) continue;
+        marca[v] = 1; algum++;
+        recorteCaixa.expandByPoint(_p);
+        /* E QUANTO DISSO O JOGADOR DE MONITOR VIA? No desktop o corpo é filho
+           da câmera e a raiz É o olho, então este ponto já está em coordenadas
+           de câmera. O teste é o frustum: à frente do plano near e dentro do
+           cone. É o número que diz se o recorte cobrou preço no jogo que já
+           está no ar — e ele não pode ficar sem medida só porque a captura de
+           tela do harness não pega o canvas WebGL. */
+        if (-_p.z > camera.near
+          && Math.abs(_p.y) <= tanV * -_p.z && Math.abs(_p.x) <= tanH * -_p.z) recorteNaVista++;
+      }
+      return algum ? marca : null;
+    });
+  }
+
+  /* A LISTA DE TODOS OS VÉRTICES QUE SOBRARAM, para a varredura rolante.
+
+     TENTEI A VERSÃO CURTA PRIMEIRO e ela não serve, então fica registrado: a
+     escolha óbvia é vigiar os vértices que ficam na BORDA DO RECORTE na pose
+     de descanso, e ela falha porque quem chega perto do olho na pose real é o
+     ÚMERO — que na pose de descanso está pendurado ao lado do corpo, longe de
+     qualquer borda. Medido: 128 sentinelas escolhidas por proximidade de
+     descanso, e o recuo disparou ZERO vez enquanto a malha do `Arm_1.L` estava
+     a 0,1446 m do olho.
+
+     O que funciona é varrer TUDO — só que não tudo por frame. Um `slice` por
+     frame (broad phase) mais uma lista curta de suspeitos que já violaram
+     (narrow phase, verificada todo frame). Assim o custo é fixo e a violação,
+     depois de achada, continua sendo vista enquanto durar. */
+  function listarVertices(model) {
+    const todos = [];
+    model.traverse(o => {
+      if (!o.isSkinnedMesh || !o.geometry.attributes.position) return;
+      const n = o.geometry.attributes.position.count;
+      for (let v = 0; v < n; v++) todos.push({ m: o, i: v, susp: false });
+    });
+    return todos;
+  }
+
+  /* Núcleo compartilhado: `marcar(mesh, geometry)` devolve um Uint8Array por
+     vértice (1 = sai) ou null para não mexer nesta malha. */
+  function apagarSe(model, marcar) {
+    let apagados = 0;
+    const vazias = [];
+    model.traverse(o => {
+      if (!o.isSkinnedMesh) return;
+      const g = o.geometry;
+      if (!g.index || !g.attributes || !g.attributes.position) return;
+      const doOsso = marcar(o, g);
+      if (!doOsso) return;
+      const n = g.attributes.position.count;
+
+      /* Triângulo com QUALQUER vértice do osso sai inteiro: deixar o triângulo
+         de transição esticaria a malha até o ponto do osso encolhido, que é
+         exatamente o defeito que estamos tirando do olho. */
+      const src = g.index.array;
+      const fica = [];
+      for (let t = 0; t + 2 < src.length; t += 3) {
+        const a = src[t], b = src[t + 1], c = src[t + 2];
+        if (doOsso[a] || doOsso[b] || doOsso[c]) continue;
+        fica.push(a, b, c);
+      }
+      if (fica.length === src.length) return;
+
+      /* remapeia: só o vértice referenciado sobrevive no atributo */
+      const mapa = new Int32Array(n).fill(-1);
+      let m = 0;
+      for (let k = 0; k < fica.length; k++) if (mapa[fica[k]] < 0) mapa[fica[k]] = m++;
+      apagados += n - m;
+
+      /* CÓPIA CRUA, E ISSO É O PONTO DELICADO: o GLTFLoader entrega
+         `skinIndex`/`skinWeight` INTERCALADOS num só buffer (uma
+         `InterleavedBufferAttribute`), e ali `attr.array` é o buffer INTEIRO —
+         indexar por `v * itemSize` lê o campo do vizinho. Custou uma rodada:
+         os índices de osso saíam embaralhados e `applyBoneTransform` estourava
+         em `skeleton.bones[i].matrixWorld` com `i` fora da faixa. O valor bruto
+         (sem desnormalizar) preserva tipo e escala de qualquer atributo. */
+      const bruto = (at, v, c) => (at.isInterleavedBufferAttribute
+        ? at.data.array[v * at.data.stride + at.offset + c]
+        : at.array[v * at.itemSize + c]);
+      for (const nome of Object.keys(g.attributes)) {
+        const at = g.attributes[nome];
+        const it = at.itemSize;
+        const novo = new at.array.constructor(m * it);
+        for (let v = 0; v < n; v++) {
+          const d = mapa[v];
+          if (d < 0) continue;
+          for (let c = 0; c < it; c++) novo[d * it + c] = bruto(at, v, c);
+        }
+        g.setAttribute(nome, new THREE.BufferAttribute(novo, it, at.normalized));
+      }
+      const Idx = m > 65535 ? Uint32Array : Uint16Array;
+      const novoIdx = new Idx(fica.length);
+      for (let k = 0; k < fica.length; k++) novoIdx[k] = mapa[fica[k]];
+      g.setIndex(new THREE.BufferAttribute(novoIdx, 1));
+      /* a caixa em cache é da malha ANTIGA; quem mede a altura do modelo
+         (js/xr/xrbody.js `medirModelo`) lê `geometry.boundingBox` */
+      g.computeBoundingBox();
+      g.computeBoundingSphere();
+      o.boundingBox = null;
+      o.boundingSphere = null;
+      /* MALHA QUE ERA SÓ CABEÇA some do grafo. No helldiver isso é o
+         `Object_11` inteiro (628 vértices, 288 triângulos): era um objeto
+         desenhado a cada frame para não mostrar nada. Sai daqui uma draw call
+         por olho — em XR, duas. */
+      if (m === 0) vazias.push(o);
+    });
+    for (const o of vazias) if (o.parent) o.parent.remove(o);
+    return apagados;
   }
 
   new GLTFLoader().loadAsync('/assets/models/Personagens/low_poly_helldiver_rig.glb')
@@ -201,8 +504,27 @@ export function createFpBody(deps) {
       if (!B.upR || !B.foR || !B.haR || !B.upL || !B.foL || !B.haL)
         throw new Error('ossos dos braços não encontrados no helldiver');
 
-      // cabeça some (câmera mora dentro dela)
+      /* A CABEÇA NÃO ENCOLHE MAIS: ELA SAI DA MALHA.
+
+         Encolher o osso (`scale 0.0001`) some com a cabeça na TELA e deixa os
+         ~670 vértices dela empilhados no ponto do osso — que mora a 0,0972 no
+         espaço da raiz, ou seja, a 8,2 cm do olho do jogador. Medido em
+         sessão, na malha skinada: era esse bolo o piso permanente de todas as
+         poses (0,082 m), e o critério I3 proíbe qualquer geometria dentro de
+         0,15 m do olho. Objeto invisível na tela continua sendo geometria no
+         olho — o critério mede a MALHA, e a malha estava lá.
+
+         Aqui o triângulo que tem qualquer vértice da cabeça é apagado do
+         índice E o vértice sai do atributo: sobra malha, não vértice órfão.
+         Isso NÃO é perda de conteúdo (a cabeça já era invisível) e ainda
+         devolve vértice e triângulo ao orçamento do Quest. O encolhimento do
+         osso continua, para o anel de transição que sobra no pescoço (peso de
+         cabeça abaixo do corte) descer em vez de subir. */
+      vertsApagados = B.head ? apagarOsso(model, B.head) : 0;
       if (B.head) B.head.scale.setScalar(0.0001);
+      /* E a bolha do olho, DEPOIS da cabeça (menos vértice para varrer). */
+      vertsApagados += recortarOlho(model, bodyRoot);
+      sentinelas = listarVertices(model);
 
       // guarda a pose de descanso de tudo que vamos mexer
       const track = [B.chest, B.torso, B.shR, B.upR, B.foR, B.haR, B.shL, B.upL, B.foL, B.haL,
@@ -266,6 +588,137 @@ export function createFpBody(deps) {
     hand.updateWorldMatrix(true, true);
   }
 
+  /* ================================================================
+     DUAS JUNTAS QUE FALTAVAM, E AS DUAS ESTÃO NO CAMINHO DO OLHO.
+
+     `limitarClavicula` — a clavícula é uma junta, não um elástico. Ela pode
+     avançar (é o que compra alcance) mas não pode SUBIR nem CRUZAR o esterno:
+     medido, ela subia 0,171 m e cruzava 0,201 m, parava à frente do queixo e
+     levava a gola inteira a 0,026 m do olho. Os limites são aplicados no
+     espaço do CORPO — em VR o tronco fica em pé, no desktop ele acompanha a
+     câmera, e nos dois casos "para cima" e "para o lado" são do tronco.
+
+     `foraDoOlho` — o alvo do IK da mão não entra na bolha do olho. Sem isso o
+     jogador encosta o controle no próprio rosto e a mão do boneco vai junto;
+     o corte estático da malha não alcança esse caso porque quem chega ali é
+     um osso que se move. É colisão mão↔corpo, e o preço é a mão do boneco
+     parar `maoLivre` antes do controle nessa (única) situação.
+     ================================================================ */
+  const _clA = new THREE.Vector3(), _clB = new THREE.Vector3();
+  const _olhoW = new THREE.Vector3(), _alvoLivre = new THREE.Vector3();
+
+  function limitarClavicula(sh, delta, sideSign) {
+    /* SÓ EM VR, pelo mesmo motivo de `foraDoOlho`: a pose do desktop foi
+       calibrada com a clavícula solta e não pode mudar. */
+    if (!bodyRoot.parent || bodyRoot.parent === camera) return;
+    sh.getWorldPosition(_clA);                 // pose de descanso (mundo)
+    _clB.copy(_clA).add(delta);
+    bodyRoot.worldToLocal(_clA);               // base, no espaço do corpo
+    bodyRoot.worldToLocal(_clB);               // desejado, no espaço do corpo
+    const s = bodyRoot.scale.x || 1;
+    const teto = TUNE.clavUp / s, lado = TUNE.clavCross / s;
+    if (_clB.y > _clA.y + teto) _clB.y = _clA.y + teto;
+    /* o lado é dado pelo BRAÇO (no rig as duas clavículas nascem no esterno,
+       em x = 0, então a base não distingue esquerda de direita) */
+    if (sideSign > 0) { if (_clB.x < _clA.x - lado) _clB.x = _clA.x - lado; }
+    else if (_clB.x > _clA.x + lado) _clB.x = _clA.x + lado;
+    bodyRoot.localToWorld(_clA);
+    bodyRoot.localToWorld(_clB);
+    delta.copy(_clB).sub(_clA);
+  }
+
+  /* A ÚLTIMA GUARDA: se, DEPOIS de tudo resolvido, alguma sentinela ainda
+     estiver dentro da bolha, o corpo inteiro recua o tanto que falta — na
+     direção oposta à do pior vértice, com teto em `recuoMax`.
+
+     Só em VR. No desktop o corpo é FILHO DA CÂMERA e escrever aqui moveria o
+     boneco que está no ar há meses; a checagem do pai é o gate, e é a mesma
+     que distingue os dois modos no resto do módulo.
+
+     Sem histerese de propósito: `bodyRoot.position` é reescrito por
+     js/xr/xrbody.js todo frame ANTES desta medição, então o valor medido é
+     sempre o do corpo não-recuado. Não acumula, não oscila. */
+  const _sv = new THREE.Vector3(), _fuga = new THREE.Vector3();
+  const recuoMundo = new THREE.Vector3();   // servo do recuo, em metros de MUNDO
+  let varreCursor = 0;
+  function recuarDoOlho() {
+    recuoOlho = 0;
+    if (!sentinelas.length || !bodyRoot.parent || bodyRoot.parent === camera) {
+      /* desktop: o corpo é filho da câmera e nada disto vale — some com o
+         contrato para não deixar recuo velho preso no objeto */
+      recuoMundo.set(0, 0, 0);
+      delete bodyRoot.userData.recuoOlho;
+      return;
+    }
+    camera.getWorldPosition(_olhoW);
+    let falta = 0;
+    olhoMin = Infinity;
+    const ver = s => {
+      s.m.getVertexPosition(s.i, _sv);
+      _sv.applyMatrix4(s.m.matrixWorld);
+      const d = _sv.distanceTo(_olhoW);
+      if (d < olhoMin) olhoMin = d;
+      const f = TUNE.olhoLivre - d;
+      /* O CORPO FOGE DO OLHO, e o sinal aqui já esteve invertido: `olho −
+         vértice` aponta PARA o olho e empurrava a gola para dentro da cara
+         (medido: 0,1748 → 0,1613 m, o servo saturando e piorando). */
+      if (f > falta) { falta = f; _fuga.copy(_sv).sub(_olhoW); }
+      return f > 0;
+    };
+    /* narrow phase: quem já violou continua sendo olhado todo frame, e sai da
+       lista quando para de violar (a marca vive no próprio item, para não
+       varrer o array a cada candidato) */
+    for (let k = suspeitos.length - 1; k >= 0; k--) {
+      if (!ver(suspeitos[k])) { suspeitos[k].susp = false; suspeitos.splice(k, 1); }
+    }
+    /* broad phase: uma fatia do corpo por frame */
+    const passo = Math.min(TUNE.sentinelas, sentinelas.length);
+    for (let k = 0; k < passo; k++) {
+      const s = sentinelas[(varreCursor + k) % sentinelas.length];
+      if (ver(s) && !s.susp && suspeitos.length < TUNE.suspeitosMax) {
+        s.susp = true;
+        suspeitos.push(s);
+      }
+    }
+    varreCursor = (varreCursor + passo) % sentinelas.length;
+
+    /* SERVO, NÃO CORREÇÃO DIRETA — e escrever `bodyRoot.position` aqui NÃO
+       FUNCIONA, o que custou uma rodada e fica registrado: js/xr/xrbody.js
+       reescreve a posição da raiz MAIS TARDE no mesmo frame (game.js chama
+       `FpBody.update` antes de `XR.corpo.update`), então o empurrão era
+       calculado, aplicado e descartado — `recuoOlho` marcava 0,0145 m e a
+       malha continuava exatamente onde estava.
+
+       Então o recuo vai pelo MESMO canal que `pernaDobra` e `encurtar` já
+       usam: `userData` no objeto que os dois módulos compartilham. E como a
+       medição deste frame já enxerga o recuo do frame anterior, o valor é
+       ACUMULADO (servo) e não substituído — substituir criaria o laço
+       clássico: empurra, some o defeito, solta, o defeito volta. */
+    if (falta > 1e-4 && _fuga.lengthSq() > 1e-9) {
+      recuoMundo.addScaledVector(_fuga.normalize(), falta);
+      if (recuoMundo.length() > TUNE.recuoMax) recuoMundo.setLength(TUNE.recuoMax);
+    } else if (recuoMundo.lengthSq() > 1e-12) {
+      recuoMundo.setLength(Math.max(0, recuoMundo.length() - TUNE.recuoSolta));
+    }
+    recuoOlho = recuoMundo.length();
+    bodyRoot.userData.recuoOlho = recuoMundo;
+  }
+
+  function foraDoOlho(alvo) {
+    /* SÓ EM VR, e o desktop provou por que: a âncora de apoio da mão ESQUERDA
+       fica dentro de 0,25 m da câmera na pose calibrada por screenshot, e a
+       bolha empurrava a mão do boneco para fora da arma — medido, 0,0000 →
+       0,0638 m no `test/xr-braco-alcance` de desktop. No monitor não existe
+       estéreo nem plano near de headset: o critério I3 não se aplica, e o que
+       está no ar não pode regredir. O gate é o mesmo do resto do módulo — em
+       VR o corpo é pendurado no RIG, no desktop é filho da CÂMERA. */
+    if (!bodyRoot.parent || bodyRoot.parent === camera) return alvo;
+    camera.getWorldPosition(_olhoW);
+    const d = _olhoW.distanceTo(alvo);
+    if (d >= TUNE.maoLivre || d < 1e-4) return alvo;
+    return _alvoLivre.copy(alvo).sub(_olhoW).multiplyScalar(TUNE.maoLivre / d).add(_olhoW);
+  }
+
   /* IK analítico de 2 ossos com dobra guiada por "pole" (cotovelo) */
   function solveArm(sh, up, fore, hand, len, targetPos, sideSign) {
     /* O COMPRIMENTO QUE ENTRA NO SOLVER É O DESTE FRAME, não o do
@@ -280,21 +733,35 @@ export function createFpBody(deps) {
     // clavícula: âncora além do alcance → o OMBRO estende rumo ao alvo até
     // sobrar dobra de cotovelo (o clamp sozinho deixava o braço reto e a mão
     // curta — a âncora de apoio fica a até ~1 m do ombro em várias armas)
+    /* a bolha do olho entra ANTES da clavícula: os dois olham para o mesmo
+       alvo, e mirar em pontos diferentes deixaria o ombro indo para um lugar
+       onde a mão não vai */
+    const alvo = foraDoOlho(targetPos);
     if (sh) {
-      _v.copy(targetPos).sub(up.getWorldPosition(_v2));
+      _v.copy(alvo).sub(up.getWorldPosition(_v2));
       const need = Math.min(
         Math.max(_v.length() - (L.a + L.b) * TUNE.reachBend, 0), TUNE.clavMax);
       if (need > 1e-4) {
         _v.normalize().multiplyScalar(need);                 // delta em mundo
+        limitarClavicula(sh, _v, sideSign);                  // junta, não elástico
         sh.parent.getWorldQuaternion(_q).invert();
         _v.applyQuaternion(_q).divide(sh.parent.getWorldScale(_v3));
         sh.position.add(_v);
       }
     }
-    // pole: cotovelo pra fora/baixo em relação à câmera
-    camera.getWorldQuaternion(_tq);
+    /* POLE: O COTOVELO ABRE EM RELAÇÃO AO TRONCO, NÃO À CABEÇA.
+
+       Era `camera.getWorldQuaternion` — e no desktop dá exatamente o mesmo
+       número, porque ali o corpo é FILHO da câmera com rotação identidade.
+       Em VR não: a cabeça gira livre e o quadril só a segue depois de 25° de
+       folga de pescoço (js/xr/xrbody.js), então olhar 60° para o lado girava
+       a direção do cotovelo junto com o olhar e varria o úmero esquerdo pela
+       frente do peito. Medido nessa pose: a malha do `Arm_1.L` a 0,1277 m do
+       olho, contra o teto de 0,15 m do critério I3. Cotovelo é junta do
+       tronco; quem manda nele é o ombro, não o pescoço. */
+    bodyRoot.getWorldQuaternion(_tq);
     _poloA.set(sideSign * TUNE.elbowOut, -TUNE.elbowDown, 0.05).applyQuaternion(_tq);
-    dobrar2Ossos(up, fore, hand, L, targetPos, _poloA);
+    dobrar2Ossos(up, fore, hand, L, alvo, _poloA);
     // (o punho é alinhado depois por alignHand — eixo dos dedos + rolagem)
   }
 
@@ -432,7 +899,21 @@ export function createFpBody(deps) {
       ? bodyRoot.userData.encurtar / escala
       : TUNE.crouchDrop * player.crouchT;
     const enc = Math.min(Math.max(pedido, 0), pernaDobra);
-    const k = pernaDobra > 1e-4 ? enc / pernaDobra : 0;
+    /* `k` É A PROFUNDIDADE DO AGACHAMENTO, NÃO A FRAÇÃO DA PERNA USADA — e a
+       diferença entre as duas custou quatro casos de teste.
+
+       Era `enc / pernaDobra`. Parece o mesmo número, e é, enquanto
+       `pernaDobra` não muda. Quando o teto do joelho passou de 150° para 158°
+       de flexão, `pernaDobra` cresceu 11 % e TODO `k` encolheu junto — sem
+       que agachamento nenhum tivesse mudado. Quem paga isso é a CAPA, que
+       recolhe a bainha por `sqrt(k)`: com o `k` menor a bainha subiu menos e
+       o ponto mais baixo da MALHA (que é a bainha, não a bota) afundou no
+       chão. Medido: agachamento raso de 0,25 m passou de dentro do teto para
+       0,0738 m abaixo do piso, sem uma linha do agachamento ter mudado.
+
+       `crouchDrop` é a régua certa: é o agachamento de projeto do jogo, em
+       unidades da raiz, e não se mexe quando o limite do joelho se mexe. */
+    const k = Math.min(1, enc / Math.max(TUNE.crouchDrop, 1e-4));
     if (!legPairs) {
       legPairs = [['l', B.leg1L, B.leg2L, B.footL, 1], ['r', B.leg1R, B.leg2R, B.footR, -1]];
     }
@@ -565,6 +1046,10 @@ export function createFpBody(deps) {
     }
     curlFingers(B.fingersR, g.r[0], g.r[1], g.trigR, true, 0.65);
     curlFingers(B.fingersL, Math.max(0.15, g.l[0] - reachK), Math.max(0.2, g.l[1] - reachK), g.l[0], false, 0.65);
+
+    /* POR ÚLTIMO, e tem de ser por último: mede a malha já resolvida deste
+       frame e recua o corpo se algo ainda estiver dentro do olho (I3). */
+    recuarDoOlho();
   }
 
   const api = {
@@ -574,6 +1059,17 @@ export function createFpBody(deps) {
     /* quanto a perna consegue encurtar antes de o joelho passar do limite
        humano (metros, no espaço da raiz — em VR multiplique pela escala) */
     get pernaDobra() { return pernaDobra; },
+    /* QA: quantos vértices saíram da malha no carregamento (cabeça + bolha do
+       olho). Zero aqui significa que o bolo de geometria voltou a 8 cm do
+       olho (I3). */
+    get vertsSemCabeca() { return vertsApagados; },
+    /* QA: quantas sentinelas estão sendo vigiadas, e quanto o corpo recuou no
+       último frame para nada entrar no olho (metros; teto `TUNE.recuoMax`). */
+    get sentinelas() { return sentinelas.length; },
+    get recuoOlho() { return recuoOlho; },
+    get olhoMin() { return olhoMin; },
+    get recorteCaixa() { return recorteCaixa; },
+    get recorteNaVista() { return recorteNaVista; },
     /* QA: braço e antebraço que o solver ALIMENTOU na lei dos cossenos no
        último frame, em metros de MUNDO. É o número que decide onde o cotovelo
        e a mão param; comparar com a distância real entre os ossos é o que

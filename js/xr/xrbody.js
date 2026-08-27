@@ -95,12 +95,14 @@ export function criarCorpoXR({ THREE, camera }) {
   let alturaCabeca = 0, alturaDePe = 0;
   let agachado = false, agacharFrac = 0;
   let yawCorpo = 0, escala = 1;
+  let afundou = 0;                  // quanto o pé passa do chão (m) — o preço declarado
   let suspeita = false;
   let candidato = 0, candidatoT = 0;   // altura alta ainda não confirmada (ver SUSTENTA)
 
   const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4();
   const _cx = new THREE.Box3(), _cx2 = new THREE.Box3();
   const _f = new THREE.Vector3(), _u = new THREE.Vector3();
+  const _qr = new THREE.Quaternion();
 
   /* Mede o modelo NO ESPAÇO DO PRÓPRIO CORPO. Traversar filho a filho (em vez
      de `Box3.setFromObject` seguido de uma inversão) evita inflar a caixa: uma
@@ -152,6 +154,7 @@ export function criarCorpoXR({ THREE, camera }) {
        do desktop andar agachado pelo resto da partida: js/fpbody.js só cai no
        agachamento do teclado quando este campo NÃO existe. */
     delete corpo.userData.encurtar;
+    delete corpo.userData.recuoOlho;
     if (salvo.pai) salvo.pai.add(corpo);
     else if (corpo.parent) corpo.parent.remove(corpo);
     corpo.position.copy(salvo.position);
@@ -251,24 +254,38 @@ export function criarCorpoXR({ THREE, camera }) {
 
        A CONTA, e é uma só:
 
-         piso     = olho − dobra da perna − tolerância
-         corpo.y  = max(alturaCabeca, piso)
-         encurtar = olho − corpo.y
+         corpo.y  = alturaCabeca        (sempre — a cabeça manda até o fim)
+         encurtar = olho − corpo.y      (o pedido, que a perna clampa em
+                                         `pernaDobra`)
 
-       O pé fica no chão POR CONSTRUÇÃO: ele mora `olho − encurtar` abaixo da
-       origem, e a origem está em `olho − encurtar` acima do piso. Enquanto a
-       perna dá conta, o corpo desce com a cabeça e o ombro fica onde tem de
-       ficar; quem agacha mais fundo do que um joelho humano dobra (150° de
-       flexão, o teto de `pernaDobra`) vê o corpo parar de descer alguns
-       centímetros — e não vê o próprio pé furar o chão, que é o que não dá
-       para consertar depois.
+       ATÉ A RODADA PASSADA HAVIA UM PISO AQUI, e ele era a exceção que
+       reprovava o critério citado três parágrafos acima. Era
+       `max(alturaCabeca, olho − dobraMax − AFUNDA_MAX)`: enquanto a perna
+       dobrava, o corpo descia com a cabeça; passado esse ponto o corpo PARAVA
+       e a cabeça continuava descendo — a raiz do boneco subia acima do olho e
+       o ombro ia junto. Medido por validação independente: com a cabeça a
+       0,95 m — o jogador SENTADO NO CHÃO, que a VRC.Quest.Tracking.1 aceita
+       como modo válido — o ombro ficava **+0,0521 m ACIMA do olho**, com
+       0,20 m de erro de âncora contra os 0,05 m que C5 escreve. Era o
+       `plantFeet` do VRIK voltando pela porta dos fundos.
+
+       O QUE ISSO CUSTA, DECLARADO: o que a perna não dobra vira pé abaixo do
+       chão. Para o preço ficar pequeno no agachamento NORMAL, o joelho de
+       js/fpbody.js passou do limite ativo (150°) para o passivo (158°, a
+       flexão "heel to buttock"), e a perna encurta 0,60 m em vez de 0,542 m —
+       que é exatamente o agachamento de 0,60 m de cabeça que o jogo usa. Quem
+       agacha MAIS que isso (sentar no chão) vê o pé afundar; `afundou` mede
+       quanto, e o número sai no QA em vez de ficar escondido.
+
+       Quem está DENTRO do corpo não vê o próprio pé furar o piso; vê o
+       próprio ombro na frente do olho.
 
        `pernaDobra` chega em unidades da RAIZ do corpo (js/fpbody.js), por
        `userData` no mesmo objeto que este módulo já recebe: não passa pelo
        game.js e não cria objeto nenhum. */
     const dobraMax = (corpo.userData.pernaDobra || 0) * escala;
-    const piso = olho - dobraMax - AFUNDA_MAX;
-    const alturaCorpo = Math.max(alturaCabeca, piso);
+    afundou = Math.max(0, (olho - dobraMax - AFUNDA_MAX) - alturaCabeca);
+    const alturaCorpo = alturaCabeca;
     corpo.userData.encurtar = Math.max(0, olho - alturaCorpo);
     const recuo = RECUO + RECUO_AGACHADO * agacharFrac;
     corpo.position.set(
@@ -276,6 +293,18 @@ export function criarCorpoXR({ THREE, camera }) {
       alturaCorpo,
       camera.position.z + Math.cos(yawCorpo) * recuo,
     );
+    /* E O ÚLTIMO MILÍMETRO VEM DE QUEM VÊ A MALHA. js/fpbody.js mede, depois
+       do IK, se algum vértice ainda está dentro da bolha do olho (critério
+       I3) e publica em `userData.recuoOlho` o empurrão que falta, em metros
+       de MUNDO — mesmo canal de `pernaDobra`/`encurtar`, sem passar pelo
+       game.js. Ele NÃO pode escrever `position` direto: esta função roda
+       depois dele no frame e apagaria o valor. O empurrão é de mundo e a
+       posição é local ao rig, então tira a rotação do rig antes de somar. */
+    const rec = corpo.userData.recuoOlho;
+    if (rec && rec.lengthSq() > 1e-12 && rig) {
+      _f.copy(rec).applyQuaternion(rig.getWorldQuaternion(_qr).invert());
+      corpo.position.add(_f);
+    }
     corpo.rotation.set(0, yawCorpo, 0);   // EM PÉ: nada de pitch nem roll da cabeça
     corpo.scale.setScalar(escala);
   }
@@ -287,6 +316,9 @@ export function criarCorpoXR({ THREE, camera }) {
     get alturaCabeca() { return alturaCabeca; },
     get alturaDePe() { return alturaDePe; },
     get escala() { return escala; },
+    /* QA: metros que o pé passa do chão porque a perna acabou de dobrar. É o
+       preço declarado de a cabeça mandar até o fim (ver `update`). */
+    get afundou() { return afundou; },
     get olhoModelo() { return olhoModelo; },
     get alturaModelo() { return alturaModelo; },
     get referenciaSuspeita() { return suspeita; },

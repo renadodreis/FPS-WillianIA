@@ -76,9 +76,15 @@ async function instalarSondas() {
         noPunho: !!(punho && o.parent === punho),
         aoPunho,
         distancia: d,
-        /* altura angular do painel inteiro: é o que decide se dá pra LER um
-           blip de 3 px no aparelho */
-        grausV: 2 * Math.atan((hud.MAPA_H / 2) / Math.max(1e-6, d)) / GRAU,
+        /* ALTURA ANGULAR DO PAINEL, COM A ESCALA. `MAPA_H` é o tamanho BASE em
+           metros; desde que os painéis passaram a ser projetados na
+           profundidade de conforto, eles são empurrados `k` vezes mais longe E
+           crescidos `k` vezes — usar só o tamanho base subestima o ângulo na
+           mesma razão. O caso passava de qualquer jeito (18° reais contra teto
+           de 6°), mas número que o teste IMPRIME errado é número que alguém vai
+           citar. */
+        grausV: 2 * Math.atan((hud.MAPA_H * o.getWorldScale(new T.Vector3()).y / 2)
+          / Math.max(1e-6, d)) / GRAU,
       };
     },
     /* o yaw que o MINIMAPA usou no último desenho, e o yaw de verdade da

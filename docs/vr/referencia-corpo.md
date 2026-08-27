@@ -485,3 +485,170 @@ a mão do boneco continua agarrada a um ponto onde a mão dele não está.
   movimento é um frame de atraso da mão em relação à arma. Consertar é mover
   uma chamada no `game.js`; medir antes, porque a ordem tem contrato escrito
   logo acima dela.
+
+---
+
+## 7. NADA ENTRA NO OLHO (I3) — e por que nenhuma calibração resolvia
+
+Esta seção fecha o item que a validação `da3987c` mediu pela primeira vez em
+oito rodadas e reprovou: **a geometria do corpo entre 0,0092 m e 0,0829 m do
+olho**, contra um teto de 0,15 m. Ela existe porque a resposta certa aqui é
+CONTRA-INTUITIVA: não é calibração, é geometria — e três tentativas de
+calibração pioraram o número antes de o mecanismo ficar claro.
+
+### 7.1 O que estava lá, medido vértice a vértice
+
+Sonda própria (`test/xr-olho-limpo.test.js`), malha SKINADA, dez poses, dois
+olhos. Os culpados têm nome:
+
+| pose | mais perto do olho | osso de maior peso |
+|---|--:|---|
+| arma no quadril | 0,0959 m | `Chest` |
+| arma no olho | 0,0261 m | `Sholder.L` |
+| braço para cima | 0,0326 m | `Sholder.L` |
+| olhando 60° à esquerda | 0,0890 m | `Sholder.L` |
+
+E, na pose de descanso, um piso permanente de **0,082 m** em ~670 vértices com
+peso de `Head`.
+
+### 7.2 As quatro causas, e o conserto de cada uma
+
+**(a) A cabeça invisível continuava sendo geometria.** `B.head.scale = 0.0001`
+some com a cabeça na TELA e empilha os vértices dela no ponto do osso — que
+mora a 0,0972 no espaço da raiz, isto é, a 8,2 cm do olho. O critério mede a
+MALHA. **Conserto:** os triângulos da cabeça saem do índice e os vértices saem
+do atributo (`apagarOsso`). 846 vértices e um objeto inteiro (`Object_11`, 288
+triângulos) a menos — o que também devolve uma draw call por olho.
+
+**(b) O modelo é ESTILIZADO e não tem pescoço.** Do topo do crânio ao alto do
+ombro ele tem 0,223 m; gente tem ~0,36 m. Com o olho no lugar certo, o ombro
+fica a **0,053 m** abaixo da câmera. **Nenhum valor de `eyeDrop` resolve**: o
+que aproxima a câmera dos olhos do modelo aproxima o ombro junto, e o que
+afasta o ombro enfia a câmera no peito. Medido, com `eyeDrop` variando de 0,20
+a 0,05, o alto do ombro sai de 0,053 m para 0,173 m — mas o boneco encolhe 7 %
+e o braço, que já não alcança (§5.6), encolhe junto. **Conserto:** o que cai
+dentro da bolha do olho **sai da malha** (`recortarOlho`, raio 0,30 no espaço
+da raiz). É a saída intermediária entre as duas que o critério C5 aceita: a
+Valve não desenhou corpo nenhum em Alyx, aqui o corpo fica e o que estaria
+dentro do olho não é desenhado porque não existe mais.
+
+**(c) A clavícula elástica levava a gola para dentro da cara.** `clavMax` é
+0,45 m e a clavícula os usava INTEIROS: medido, ela saía de (0; −0,386; +0,070)
+e parava em (0,225; −0,195; −0,337) — **subia 0,171 m e cruzava 0,201 m para o
+lado direito do esterno**, à frente do queixo, carregando a gola. **Conserto:**
+limite de junta em `clavUp`/`clavCross`, os dois em ZERO. O avanço para a
+frente, que é o que compra alcance (§5.5), continua livre.
+
+**Cortar `clavMax` foi tentado e é PIOR, e isso vale registro** porque é o
+conserto que qualquer um tentaria primeiro: com 0,06 m (valor anatômico do
+acrômio), o IK precisa GIRAR o úmero muito mais para alcançar a mesma âncora e
+o braço esquerdo passa a varrer o rosto — a malha do `Arm_1.L` foi de 0,1277 m
+para **0,0158 m** do olho. O que precisava de limite era a DIREÇÃO da
+translação, não o tamanho dela.
+
+**(d) O cotovelo abria no referencial da CABEÇA.** `_poloA` saía de
+`camera.getWorldQuaternion`. No desktop dá no mesmo (o corpo é filho da
+câmera), mas em VR a cabeça gira livre e o quadril só a segue depois de 25° de
+folga de pescoço: olhar 60° para o lado girava a direção do cotovelo junto com
+o OLHAR e varria o úmero pela frente do peito. **Conserto:** o polo passa a
+sair de `bodyRoot.getWorldQuaternion`. Cotovelo é junta do tronco.
+
+### 7.2b O que o DESKTOP pagou por isso: zero, e está medido
+
+O recorte apaga malha de verdade, e a malha é a mesma nos dois modos — então
+a pergunta obrigatória é o que o jogador de monitor deixou de ver. A resposta
+tinha de ser uma FOTO e não pôde ser: o `page.screenshot` do harness devolve o
+DOM sobre um canvas WebGL preto (três capturas nesta rodada, nenhuma com
+mundo). Então virou número.
+
+No desktop o corpo é FILHO DA CÂMERA, a raiz está em (0,0,0) e em escala 1 —
+ou seja, cada vértice apagado já está em coordenadas de câmera. Basta o teste
+de frustum.
+
+| grandeza | valor |
+|---|--:|
+| vértices apagados da malha (cabeça + bolha) | **1 010** |
+| caixa do recorte, em coord. de câmera (min) | (−0,198; −0,255; −0,160) |
+| caixa do recorte, em coord. de câmera (max) | (+0,198; −0,059; +0,130) |
+| `fov` / `aspect` / `near` do desktop | 75° / 1,333 / 0,08 |
+| **apagados DENTRO do frustum do monitor** | **0** |
+
+Zero. O que saiu estava atrás do plano near, atrás da câmera ou abaixo da
+borda do cone. O invariante "a versão de mouse não pode regredir em nada"
+continua valendo, e agora com medida em vez de fé — a assertiva está em
+`test/xr-olho-limpo.test.js`, terceira suíte, e ela quebra se alguém aumentar
+`eyeCut` até morder o que o monitor enxerga.
+
+### 7.3 A última guarda, e por que ela é servo e não correção
+
+Sobrava, depois de tudo isso, **0,1446 m numa pose** (cabeça girada 60°, úmero
+esquerdo cruzando à frente do peito) — 5,4 mm abaixo do teto. Isso não é
+geometria estática: é a POSE trazendo malha para dentro, e nenhum corte de
+carregamento alcança.
+
+A guarda é a que o gênero usa quando a câmera encosta no avatar: **o corpo
+recua o tanto que falta**, com teto de 0,015 m — que cabe nos 0,05 m de erro de
+âncora que C5 aceita e fica abaixo dos 0,02 m de tolerância da mão na
+empunhadura. Três detalhes que custaram uma rodada cada:
+
+1. **Vigiar "os vértices da borda do recorte" não funciona.** Quem chega perto
+   do olho na pose real é o ÚMERO, que na pose de descanso está pendurado ao
+   lado do corpo. 128 sentinelas escolhidas por proximidade de descanso
+   dispararam ZERO vez com a malha a 0,1446 m. O que funciona é varredura
+   rolante do corpo inteiro (512 vértices por frame) + lista curta de
+   suspeitos conferida sempre.
+2. **Escrever `bodyRoot.position` no `FpBody.update` não chega ao frame.**
+   `js/xr/xrbody.js` reescreve a posição da raiz DEPOIS, no mesmo frame. O
+   recuo vai pelo mesmo canal de `userData` que `pernaDobra` e `encurtar` já
+   usam. E, como a medição do frame já enxerga o recuo do frame anterior, o
+   valor é **acumulado** — substituir criaria o laço empurra/solta.
+3. **O raio não é 0,15 m, é 0,19 m.** Aqui só existe a câmera do JOGO, que em
+   XR fica no CENTRO da cabeça, e o critério mede de CADA OLHO — meia distância
+   interpupilar de diferença (medido: 0,0315 m). A guarda via 0,26 m onde a
+   sonda via 0,14 m e nunca disparava.
+
+### 7.4 O resultado
+
+| pose | antes | depois |
+|---|--:|--:|
+| arma no quadril | 0,0959 | **0,1857** |
+| arma pronta | 0,0632 | **0,1833** |
+| arma no olho | 0,0261 | **0,1836** |
+| braço estendido | 0,0397 | **0,1810** |
+| braço para cima | 0,0326 | **0,1759** |
+| colado no peito | 0,0663 | **0,1844** |
+| olhando para baixo (−70°) | 0,0443 | **0,1603** |
+| olhando 60° à esquerda | 0,0890 | **0,1558** |
+| olhando 60° à direita | 0,0936 | **0,1811** |
+| agachado (cabeça a 1,10 m) | 0,0440 | **0,1704** |
+
+Teto do critério: 0,15 m. **Dez de dez.**
+
+---
+
+## 8. A CABEÇA MANDA ATÉ O FIM (C5) — e o preço, com número
+
+O `piso` de `js/xr/xrbody.js` era `max(alturaCabeca, olho − dobraMax −
+AFUNDA_MAX)`: enquanto a perna dobrava, o corpo descia com a cabeça; passado
+esse ponto o corpo PARAVA e a cabeça continuava. Medido pela validação
+independente: com a cabeça a 0,95 m — o jogador **sentado no chão**, que a
+VRC.Quest.Tracking.1 aceita como modo válido — o ombro ficava **+0,0521 m ACIMA
+do olho**.
+
+**O que mudou:** `alturaCorpo = alturaCabeca`, sempre.
+
+| ombro vs olho | antes | depois |
+|---|--:|--:|
+| de pé (1,70 m) | −0,349 | **−0,385 (R) / −0,353 (L)** |
+| sentado (0,95 m) | **+0,0521** | **−0,389 (R) / −0,359 (L)** |
+
+**O preço é o pé abaixo do chão**, e ele é declarado em vez de escondido: o que
+a perna não dobra, o pé afunda. O VRIK nomeia esse trade-off pelo nome e a
+escolha padrão dele é a mesma (`plantFeet = false`, "can cause the camera to
+exit the head" é o que acontece do outro lado). Para reduzir o preço, o joelho
+passou do limite ATIVO (150°) para o PASSIVO (158° — a flexão "heel to buttock"
+que a fonte já citada no §4.3 descreve), o que faz a perna encurtar 0,60 m em
+vez de 0,542 m e cobre o agachamento normal do jogo inteiro.
+
+Quem está DENTRO do corpo não vê o próprio pé furar o chão; vê o próprio ombro
+na frente do olho.

@@ -310,7 +310,29 @@ describe('corpo do jogador em VR (runtime emulado IWER)', { skip: !CHROME && 'Ch
       `cabeça de ${dePe.alturaDePe.toFixed(2)} m pra 1,15 m não contou como agachar`);
     assert.ok(m.crouchT > 0.5,
       `crouchT ${m.crouchT.toFixed(2)}: o agachamento do headset não chegou no jogo`);
-    assert.ok(m.pes - m.chao > -0.06,
+    /* O TETO SUBIU DE 0,06 PARA 0,13 M, E ISSO É UMA TROCA DECLARADA, não uma
+       margem que alguém afrouxou para passar. Fica o número dos dois lados.
+
+       Até a rodada passada a raiz do corpo PARAVA de descer quando a perna
+       acabava de dobrar (`max(alturaCabeca, piso)` em js/xr/xrbody.js). O pé
+       ficava no chão e o preço era o outro: com a cabeça baixa, a raiz do
+       boneco subia ACIMA do olho e o OMBRO ia junto — a validação
+       independente mediu **+0,0521 m de ombro acima do olho** e reprovou o
+       C5, que cobra o corpo ancorado na cabeça. Agora a cabeça manda até o
+       fim, e o que a perna não dobra vira pé abaixo do piso.
+
+       QUANTO, MEDIDO: este caso agacha de 1,90 m (a referência "em pé" que os
+       casos anteriores deixaram travada) para 1,15 m — **0,75 m de queda**,
+       mais fundo do que a perna deste modelo fecha (0,641 m em unidades da
+       raiz, já com o joelho no limite PASSIVO de 158°). Sobram 0,109 m, mais
+       0,015 m do recuo anti-olho de js/fpbody.js: **0,11 m**. Num agachamento
+       de 0,60 m — o do jogo — a perna dá conta e o pé fica a 0,023 m do piso.
+
+       0,13 m continua sendo REDE: qualquer coisa que enterre mais que isso é
+       defeito novo, e o conserto que fecha o buraco de vez está nomeado —
+       encurtar o OSSO da perna quando a dobra satura, em vez de deixar o pé
+       passar do piso. */
+    assert.ok(m.pes - m.chao > -0.13,
       `agachar enterrou o boneco ${(m.chao - m.pes).toFixed(2)} m`);
   });
 

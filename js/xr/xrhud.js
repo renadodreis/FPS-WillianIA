@@ -119,6 +119,64 @@ export const MAPA_OFF = [0, 0.05, 0.20];
 /* I3: nada dentro de 0,15 m do olho. 0,22 m dá margem pro painel inteiro. */
 export const PERTO_DEMAIS = 0.22;
 
+/* ================================================================
+   O PAINEL É PROJETADO NA PROFUNDIDADE DE CONFORTO, NÃO NO PULSO.
+
+   O DEFEITO, MEDIDO POR VALIDAÇÃO INDEPENDENTE (docs/vr/validacao-da3987c.md,
+   linha H2): mapa a **0,3777 m** do olho, pulso a **0,3956 m**, arma a
+   **0,5520 m**. O critério pede ≥ 0,45 m para qualquer painel e nada mais
+   perto que 0,75 m para leitura demorada. Os dois primeiros reprovam há oito
+   rodadas, e o motivo é estrutural: o painel morava NA MÃO, então a distância
+   era a que o braço do jogador escolhesse — e o braço não alcança 0,75 m.
+
+   POR QUE ISSO É DEFEITO ÓPTICO E NÃO CAPRICHO. O Oculus Best Practices dá a
+   faixa e a razão: "The optics of the Rift make it most comfortable to view
+   objects that fall within a range of 0.75 to 3.5 meters from the user's
+   eyes", e diz o que acontece quando a interface fica mais perto — "the
+   proximity necessary to prevent problems will most likely bring the
+   interface closer than the recommended minimum comfortable distance, 75 cm".
+   Abaixo disso a lente não entrega foco e a disparidade binocular briga com a
+   oclusão. A Meta viva afrouxou para "at least 0.5 meters" para o que se olha
+   por tempo, e o Android XR fixa profundidade mínima de 0,75 m.
+
+   O QUE MUDA, E O QUE NÃO MUDA. O painel continua PENDURADO na arma e no
+   pulso (H2 aceita ancoragem em pulso e proíbe head-locked): quem manda na
+   DIREÇÃO dele no campo de visão continua sendo a mão. O que passa a ser
+   fixo é só a PROFUNDIDADE: o painel desliza pelo raio olho→âncora até o
+   piso de conforto e cresce na MESMA proporção.
+
+   E é por isso que isto não custa legibilidade — que era a armadilha óbvia
+   deste conserto. Empurrar `k` vezes mais longe e crescer `k` vezes mantém a
+   altura ANGULAR do glifo IDÊNTICA: a imagem em cada olho é a mesma, muda a
+   disparidade entre elas. Medido: texto da arma 2,52°, do pulso 1,57°, contra
+   alvo de 0,7° e piso de 0,35–0,4° (docs/vr/referencia-ui.md §3.3).
+
+   OS PISOS, UM POR PAINEL, E O TETO QUE OUTRO CONTRATO IMPÔS:
+   - ARMA: munição, vida e armadura — olhada de meio segundo no meio do tiro.
+     **0,50 m**, acima dos 45 cm da diretriz de MR da Meta e do "at least 0.5
+     meters" da página viva de Display.
+   - PULSO e MAPA: inventário, feed, zona, mapa. **0,55 m.**
+
+   POR QUE 0,55 E NÃO 0,75, que seria o piso de foco confortável do BP: o mapa
+   tem OUTRO contrato escrito, num teste que não é desta posse —
+   `test/xr-mapa.test.js` cobra que o painel fique a menos de **0,25 m da
+   palma** ("acima de 0,25 m já não é 'no pulso'"). Com a palma a ~0,40 m do
+   olho, projetar a 0,75 m põe o painel 0,35 m além da mão e quebra esse
+   contrato; 0,55 m deixa 0,15 m e os dois valem.
+
+   0,55 m não é um meio-termo inventado: é o "at least 0.5 meters" que a
+   página viva da Meta dá para o que o usuário fixa por tempo, e passa com
+   folga o piso de 0,45 m que o critério cobra — que é onde os dois painéis
+   reprovavam. O que fica de fora é a cláusula de LEITURA DEMORADA (0,75 m).
+   Se o dono quiser essa cláusula fechada, é UMA linha aqui (0,55 → 0,75) e
+   uma no `xr-mapa.test.js` (o teto de 0,25 m da palma vira ~0,40 m), e a
+   decisão é dele porque muda o que "mapa de pulso" quer dizer.
+   ================================================================ */
+export const DIST_ARMA = 0.50;
+export const DIST_PULSO = 0.55;
+export const DIST_MAPA = 0.55;
+const PISO = { arma: DIST_ARMA, pulso: DIST_PULSO, mapa: DIST_MAPA };
+
 const GRAU = Math.PI / 180;
 const num = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 const pct = v => Math.max(0, Math.min(1, num(v)));
@@ -127,7 +185,7 @@ export function createXrHud({
   THREE, ler = () => ({}),
   win = typeof window === 'undefined' ? null : window,
 } = {}) {
-  const _p = new THREE.Vector3();
+  const _p = new THREE.Vector3(), _alvo = new THREE.Vector3();
 
   const paineis = {
     arma: { obj: null, ctx: null, tex: null, assin: '', pai: null },
@@ -305,12 +363,30 @@ export function createXrHud({
       if (!p.obj) continue;
       if (!ok) { p.obj.visible = false; continue; }
       p.obj.visible = true;
+      p.obj.scale.setScalar(1);
       if (olho) {
         p.obj.updateWorldMatrix(true, false);
         p.obj.getWorldPosition(_p);
-        /* nada dentro de 0,15 m do olho (I3): o painel é a única coisa que dá
-           pra tirar do caminho sem tirar a mão do jogador do lugar */
-        if (_p.distanceTo(olho) < PERTO_DEMAIS) { p.obj.visible = false; continue; }
+        const dAncora = _p.distanceTo(olho);
+        /* nada dentro de 0,15 m do olho (I3). Aqui o teste é na ÂNCORA, não
+           no painel: com a mão encostada no rosto o fator de projeção
+           explodiria e o painel encheria a vista. Some, que é o que o gênero
+           faz — o painel é a única coisa que dá pra tirar do caminho sem
+           tirar a mão do jogador do lugar. */
+        if (dAncora < PERTO_DEMAIS) { p.obj.visible = false; continue; }
+        /* PROJEÇÃO NA PROFUNDIDADE DE CONFORTO (H2, ver o cabeçalho): desliza
+           pelo raio olho→âncora até o piso do painel e cresce na mesma
+           proporção. A direção no campo de visão não muda em um grau — o que
+           muda é a disparidade entre os dois olhos, que é o defeito. */
+        const piso = PISO[chave] || 0;
+        if (dAncora < piso) {
+          const k = piso / dAncora;
+          _alvo.copy(_p).sub(olho).multiplyScalar(k).add(olho);
+          if (p.obj.parent) p.obj.parent.worldToLocal(_alvo);
+          p.obj.position.copy(_alvo);
+          p.obj.scale.setScalar(k);
+          p.obj.updateWorldMatrix(true, false);
+        }
         /* `Object3D.lookAt` num Mesh vira o +Z (a normal do plano) PARA o
            alvo, e já desconta a rotação do pai — encarar a POSIÇÃO do olho, e
            não a orientação da cabeça, é o que mantém o painel como objeto do
@@ -374,8 +450,13 @@ export function createXrHud({
             encara = Math.acos(Math.max(-1, Math.min(1, normal.dot(paraOlho.normalize())))) / GRAU;
           }
         }
-        const w = chave === 'arma' ? ARMA_W : chave === 'mapa' ? MAPA_W : PULSO_W;
-        const h = chave === 'arma' ? ARMA_H : chave === 'mapa' ? MAPA_H : PULSO_H;
+        /* A ESCALA ENTRA NA CONTA. O painel projetado (ver PISO no cabeçalho)
+           cresce junto com a distância; ler o tamanho de projeto e ignorar a
+           escala do frame devolveria um ângulo que ninguém vê — e o ângulo é
+           justamente o número que decide se dá para LER. */
+        const k = p.obj.scale.x || 1;
+        const w = (chave === 'arma' ? ARMA_W : chave === 'mapa' ? MAPA_W : PULSO_W) * k;
+        const h = (chave === 'arma' ? ARMA_H : chave === 'mapa' ? MAPA_H : PULSO_H) * k;
         const cvH = chave === 'arma' ? ARMA_CV_H : PULSO_CV_H;
         /* altura de maiúscula do glifo GRANDE de cada painel, em metros. O
            mapa não tem glifo: o que precisa ser visto ali é o BLIP, e ele mede

@@ -431,3 +431,122 @@ tradução de entrada de jogo desligada nesse intervalo (`capturando`).
 5. Munição/vida/menu de **Pavlov** e **Population: ONE**, vida e menu do
    **Alyx** e do **Onward**: **não encontrados** em fonte citável — os wikis de
    jogo estavam atrás de Cloudflare/captcha nesta rodada.
+
+---
+
+## 9. A UI COLADA NA CARA (H2) — por que a mão não pode escolher a profundidade
+
+Esta seção fecha o item que reprovou **oito rodadas seguidas** sem uma linha de
+código mudar, e a razão de ele não ter sido consertado antes é honesta: o
+conserto óbvio (afastar o painel) troca um vermelho por outro.
+
+### 9.1 O que estava medido
+
+Validação independente (`docs/vr/validacao-da3987c.md`, linha H2), re-medida em
+sessão:
+
+| painel | distância do olho | veredito |
+|---|--:|---|
+| mapa (antebraço) | **0,3777 m** | reprova (piso 0,45 m) |
+| painel do pulso | **0,3956 m** | reprova |
+| painel da arma | **0,5520 m** | passa o piso de 0,45 m, não o de leitura |
+
+A causa é estrutural, não calibração: o painel mora **na mão**, então a
+distância é a que o braço escolher — e o braço não alcança 0,75 m.
+
+### 9.2 As fontes, e um número novo desta rodada
+
+> "The optics of the Rift make it most comfortable to view objects that fall
+> within a range of **0.75 to 3.5 meters** from the user's eyes."
+> "the proximity necessary to prevent problems will most likely bring the
+> interface closer than the recommended **minimum comfortable distance, 75 cm**."
+
+— [Oculus Best Practices (PDF)](https://static.oculus.com/documentation/pdfs/intro-vr/latest/bp.pdf)
+
+> "place the window at around **45 cm** away from the user for optimal direct
+> hand interaction experience"
+
+— [Meta · Key considerations (MR design guideline)](https://developers.meta.com/horizon/design/mr-design-guideline/)
+
+**Novo nesta rodada** (não estava registrado aqui), da página de práticas de
+UI com as mãos da Meta:
+
+> "Position UI between **42cm and 46cm** from the user when you want to
+> encourage touch."
+> "Ray casting or indirect interaction is comfortable from roughly **0.46m to
+> 3m**."
+> "Avoid forcing users to tilt their head down more than **±15°** for extended
+> periods."
+
+— [Meta · Hands UI best practices](https://developers.meta.com/horizon/design/hands-ui-best-practices/)
+
+Ou seja: **42–46 cm é a faixa de quem TOCA o painel.** Nenhum dos três painéis
+do HUD é tocado — todos são LIDOS. A regra que vale para eles é a da leitura, e
+essa regra tem piso de 0,75 m nas duas fontes primárias (Oculus BP e Android
+XR).
+
+### 9.3 A armadilha: afastar encolhe o texto
+
+Altura angular e distância são inversamente proporcionais. Afastar o painel do
+pulso de 0,396 m para 0,75 m, **mantendo o tamanho em metros**, levaria o texto
+de 1,57° para 0,83° — ainda acima do piso, mas já perto —, e o mapa de 16,6°
+para 8,8°.
+
+**A saída é projetar E escalar no mesmo fator.** O painel desliza pelo raio
+`olho → âncora` até o piso e cresce `k = piso / d` vezes. A consequência é
+exata, não aproximada:
+
+- a **direção** do painel no campo de visão não muda em um grau (ele continua
+  no mesmo raio, e quem manda nesse raio continua sendo a mão);
+- a **altura angular** do glifo é idêntica (`2·atan((h·k/2)/(d·k))`);
+- o que muda é **só a disparidade binocular** — que é exatamente o defeito que
+  o BP descreve ("difficulty and/or discomfort when trying to fuse the
+  images").
+
+Em uma frase: a imagem em cada olho continua a mesma; o cérebro é que passa a
+conseguir fundir as duas.
+
+### 9.4 Os pisos escolhidos, um por regime de leitura
+
+| painel | o que mostra | regime | piso | fonte |
+|---|---|---|--:|---|
+| arma | pente, reserva, vida, armadura | relance no meio do tiro | **0,50 m** | Meta MR (45 cm) + Meta Display ("at least 0.5 meters") |
+| pulso | inventário, feed, fase, zona | consulta | **0,55 m** | Meta Display ("at least 0.5 meters") |
+| mapa | minimapa | consulta | **0,55 m** | idem |
+
+**Por que 0,55 e não os 0,75 m do BP, que é o que a cláusula de leitura
+demorada pede.** O mapa tem OUTRO contrato escrito, e ele é de outra posse:
+`test/xr-mapa.test.js` cobra que o painel fique a **menos de 0,25 m da palma**
+("acima de 0,25 m já não é 'no pulso'"). Com a palma a ~0,40 m do olho,
+projetar a 0,75 m põe o painel 0,35 m além da mão e quebra esse contrato. Os
+dois valem a 0,55 m, e 0,55 passa com folga o piso de 0,45 m que era onde os
+dois painéis reprovavam.
+
+**O que fica em aberto, e o custo de fechar:** a cláusula de leitura demorada
+(0,75 m). São DUAS linhas — `DIST_PULSO`/`DIST_MAPA` aqui e o teto de 0,25 m
+da palma no `xr-mapa.test.js` — e a decisão é do dono, porque muda o que
+"mapa de pulso" quer dizer: a 0,75 m o painel deixa de ser um objeto na mão e
+vira uma projeção que a mão aponta.
+
+O painel da arma NÃO vai a 0,75 m de propósito: ele é lido em meio segundo com
+a arma na mão, e empurrá-lo para além da arma o descolaria do objeto que ele
+descreve — que é justamente o que o Oculus BP manda evitar ("ammo count might
+be visible on the user's weapon"). 0,50 m é o número que a página viva da Meta
+dá para o que se fixa por tempo, e fica acima do piso do critério.
+
+### 9.5 O que NÃO foi resolvido, e fica declarado
+
+1. **Paralaxe entre o painel e a mão.** Projetado a 0,75 m, o painel do pulso
+   flutua além do próprio pulso; mexer a cabeça faz os dois nadarem um em
+   relação ao outro. É a troca consciente: disparidade fundível em vez de
+   objeto solidário à mão. **Não encontrado** documento da Meta que meça esse
+   incômodo.
+2. **A pose da cabeça que entra na conta é a do frame anterior.** `game.js`
+   entrega `camera.getWorldPosition()`, que em XR compõe rig(N) com pose(N−1).
+   A 1 m/s de translação de cabeça isso desloca o raio do painel em ~1°. O
+   conserto é de fiação (compor `rig.matrixWorld × cameras[i].matrix`), não
+   deste módulo.
+3. **O blip do mapa continua com 0,087° de altura angular** — muito abaixo do
+   piso de texto. Ele não é texto e o critério não o cobre, mas o número está
+   aqui para não ser descoberto de novo: quem quiser blip legível precisa
+   engordá-lo no canvas do minimapa, que é do `game.js`.
