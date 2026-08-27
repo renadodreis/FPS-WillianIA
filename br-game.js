@@ -825,8 +825,18 @@
       const acc = S.chuteOpen ? 26 : 34;
       fallVy = Math.max(fallVy - acc * dt, -maxFall);
       if (S.chuteOpen && fallVy < -8.5) fallVy += (Math.min(-8.5 - fallVy, 60 * dt)); // freia ao abrir
-      // deriva horizontal com WASD na direção da câmera
-      MP.camera.getWorldDirection(_fw); _fw.y = 0; _fw.normalize();
+      /* Deriva horizontal com WASD na direção da VISTA — pelo yaw de mundo, a
+         mesma fonte única que a nave, o minimapa e o `rotY` mandado ao servidor
+         já usam (game.js, `yawDaVista`). Medido em sessão imersiva: aqui o
+         `getWorldDirection` projetado dava o MESMO rumo que o yaw (erro 0,00°
+         a 120° de cabeça, e até além da vertical) — a troca não corrige um
+         desvio, tira o quarto leitor direto de câmera de dentro deste arquivo,
+         que é como os outros três passaram quatro rodadas despercebidos. O que
+         ela elimina de concreto é a singularidade: com a cabeça exatamente no
+         nadir (olhar o ponto de pouso é o instinto de quem cai de headset) o
+         vetor projetado pode zerar, e vetor nulo normalizado trava a deriva. */
+      const yawQueda = G.yawDaVista();
+      _fw.set(-Math.sin(yawQueda), 0, -Math.cos(yawQueda));
       _rt.set(-_fw.z, 0, _fw.x);
       _mv.set(0, 0, 0);
       const K = G.keys;
@@ -1376,7 +1386,21 @@
         return;
       }
       const cur = list[spectIdx % list.length];
-      MP.camera.getWorldDirection(_fw);
+      /* ÓRBITA DO ESPECTADOR. No monitor a "vista" é o mouse, e olhar para cima
+         e para baixo sobe e desce a câmera em torno do alvo — é o feel antigo e
+         fica exatamente como está.
+
+         Dentro do headset a vista é a CABEÇA, e isto rodava todo frame: medido
+         em sessão imersiva, olhar de −60° a +60° arrastava o jogador 4,16 m em
+         altura e 2,75 m no plano, sem ele comandar nada. É A6 puro — a posição
+         de mundo da câmera só pode mudar por passo físico ou por locomoção
+         comandada — e é o "modifying tracking" que a Meta desaconselha
+         (design/head). Em XR a órbita passa a seguir o yaw do RIG, que é o giro
+         artificial do analógico: comando do jogador, com a vinheta de conforto
+         no caminho. Girar o pescoço deixa de mover o mundo. */
+      const rigXR = G.XR && G.XR.presenting && G.XR.rig;
+      if (rigXR) _fw.set(-Math.sin(rigXR.rotation.y), 0, -Math.cos(rigXR.rotation.y));
+      else MP.camera.getWorldDirection(_fw);
       P.pos.copy(cur.group.position);
       P.pos.y += 1.1;
       P.pos.addScaledVector(_fw, -5.5);

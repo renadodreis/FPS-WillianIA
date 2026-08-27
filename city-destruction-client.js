@@ -24,6 +24,29 @@
     const ease = t => t * t * (3 - 2 * t); // smoothstep
     const clamp01 = t => Math.max(0, Math.min(1, t));
 
+    /* DENTRO DO HEADSET A CÂMERA NÃO É DESTE ARQUIVO.
+
+       Em XR o grafo é `scene > xrRig > camera`: o jogo move o RIG (nos pés) e o
+       HEADSET move a câmera — o three reescreve `camera.position/quaternion/fov`
+       todo frame dentro de `render()`. Escrever pose aqui é escrever num campo
+       que vai ser sobrescrito, e enquanto não é, contamina quem LÊ a câmera no
+       mesmo frame (o minimapa e o áudio leem `getWorldQuaternion` depois deste
+       tick). Medido em sessão imersiva no commit anterior: a cinemática impunha
+       376,33 m de deslocamento e 113,12° de rotação à câmera, e 38° de FOV.
+
+       Não é só implementação: A6 do critério AAA reprova qualquer estado que
+       empurre a vista, e a Meta escreve "Avoid disabling or modifying tracking
+       as it can cause discomfort" (design/head). Levar o RIG pela trajetória do
+       passeio também está fora — seriam 55 m de subida e 200 m de travelling em
+       12 s com o corpo parado, que é a definição de vection da própria Meta
+       (resources/mr-health-general). Ver docs/vr/referencia-locomocao.md §8.
+
+       O EVENTO NÃO É CANCELADO — ele é mecânica intencional do servidor. Os
+       mísseis, as ogivas, a explosão, a luz e a fumaça são objetos REAIS na
+       cena e continuam iguais; o que não existe em XR é o enquadramento
+       dirigido, porque em VR o enquadramento é do jogador. */
+    const emXR = () => !!(G.XR && G.XR.presenting);
+
     let cd = null;            // estado oficial do evento
     let done = null;          // eventId já concluído neste cliente
     let running = false;
@@ -152,8 +175,16 @@
       MP.state.cinematic = true;
       G.mouse.shooting = G.mouse.clicked = G.mouse.aiming = false;
       rig = { pos: MP.camera.position.clone(), quat: MP.camera.quaternion.clone(), fov: MP.camera.fov,
-        vis: MP.camera.children.map(c => c.visible) };
-      MP.camera.children.forEach(c => { c.visible = false; }); // arma/viewmodel fora da cena
+        vis: null };
+      /* Esconder o viewmodel é do MONITOR. Em XR os filhos da câmera são a
+         vinheta de conforto (`xrComfort`) e o corpo em primeira pessoa — e
+         salvar/restaurar por ÍNDICE com outros donos escrevendo `visible` todo
+         frame deixa vinheta presa ligada ou presa desligada. Em XR a arma está
+         na MÃO, não pendurada na cara: não há viewmodel para tirar. */
+      if (!emXR()) {
+        rig.vis = MP.camera.children.map(c => c.visible);
+        MP.camera.children.forEach(c => { c.visible = false; }); // arma/viewmodel fora da cena
+      }
       ev = P.buildCityEvent(cd.seed, qualityName());
       buildEventMeshes();
       MP.centerMsg('⚠ MÍSSEIS SE APROXIMANDO DA CIDADE', 3000);
@@ -172,12 +203,19 @@
       disposeBoom();
       disposeEventMeshes();
       MP.state.cinematic = false;
-      MP.camera.fov = rig ? rig.fov : 75;
-      MP.camera.updateProjectionMatrix();
+      /* A restauração da VISIBILIDADE acontece sempre que houve escondimento —
+         inclusive se o jogador entrou no headset no meio do evento, senão o
+         viewmodel ficaria sumido para sempre. A restauração de POSE e FOV é só
+         do monitor: em XR não houve pose salva que valha, e escrever aqui
+         reintroduz a imposição por um frame. */
       if (rig && rig.vis) MP.camera.children.forEach((c, i) => { c.visible = rig.vis[i] !== false; });
-      if (rig && !MP.player.dead) { // sobrevivente: câmera exatamente onde estava
-        MP.camera.position.copy(rig.pos);
-        MP.camera.quaternion.copy(rig.quat);
+      if (!emXR()) {
+        MP.camera.fov = rig ? rig.fov : 75;
+        MP.camera.updateProjectionMatrix();
+        if (rig && !MP.player.dead) { // sobrevivente: câmera exatamente onde estava
+          MP.camera.position.copy(rig.pos);
+          MP.camera.quaternion.copy(rig.quat);
+        }
       }
       // dirigindo/voando/espectador: as câmeras do jogo reassumem no próximo tick
       rig = null;
@@ -286,11 +324,17 @@
         });
       }
 
-      /* câmera cinematográfica (nunca chama controls.unlock) */
+      /* câmera cinematográfica (nunca chama controls.unlock).
+         SÓ NO MONITOR — ver o comentário de `emXR` no topo. A fase 8,5–12
+         também é dona da fumaça densa, que é do MUNDO e vale para todo mundo:
+         ela saiu daqui para o bloco logo abaixo. */
+      const xr = emXR();
+      const kFim = el >= PH.mirv[1] ? ease(clamp01((el - 9.6) / (PH.aftermath[1] - 9.6))) : -1;
       const cam = MP.camera;
       const head = _w.set(MP.player.pos.x, MP.player.pos.y + 1.62, MP.player.pos.z);
       let fov = 75;
-      if (el < PH.skyPan[1]) {                      // 0–3: sobe pro céu
+      if (xr) { /* a vista é do jogador: nenhum passeio, nenhum FOV, nenhum tremor */ }
+      else if (el < PH.skyPan[1]) {                 // 0–3: sobe pro céu
         const k = ease(clamp01((el - PH.skyPan[0]) / (PH.skyPan[1] - PH.skyPan[0])));
         _v.set(head.x, head.y + 55 * k, head.z + 8 * k);
         cam.position.lerp(_v, Math.min(1, 6 * dt + k * 0.2));
@@ -310,7 +354,7 @@
         cam.lookAt(_look);
         fov = 66;
       } else {                                      // 8,5–12: pós-impacto e retorno
-        const k = ease(clamp01((el - 9.6) / (PH.aftermath[1] - 9.6)));
+        const k = kFim;
         if (rig && !MP.player.dead && k > 0) {
           cam.position.lerpVectors(_v.set(CITY.x + 95, 120, CITY.z + 130), rig.pos, k);
           if (k > 0.85) cam.quaternion.slerp(rig.quat, (k - 0.85) / 0.15);
@@ -321,9 +365,13 @@
           _look.set(CITY.x, MP.heightAt(CITY.x, CITY.z) + 10, CITY.z);
           cam.lookAt(_look);
         }
-        // fumaça densa diminuindo
+      }
+      /* FUMAÇA DENSA DIMINUINDO — saiu de dentro do `else` da câmera porque
+         acontece no MUNDO e vale para quem está de headset também. Fica ANTES
+         do tremor: a ordem de consumo do Math.random no monitor é a mesma. */
+      if (kFim >= 0) {
         smokeAcc += dt;
-        const rate = lerp(0.05, 0.3, k);
+        const rate = lerp(0.05, 0.3, kFim);
         if (smokeAcc > rate) {
           smokeAcc = 0;
           const p2 = ev.impacts[(Math.random() * ev.impacts.length) | 0];
@@ -332,15 +380,19 @@
             0x3a3632, 1.6, 2.4, -1.2);
         }
       }
-      /* tremor pós-impacto */
+      /* tremor pós-impacto: sacudir a cabeça de quem está de headset é enjoo,
+         não impacto. O relógio do tremor corre igual nos dois (senão ele
+         ficaria preso), mas o deslocamento só chega à câmera no monitor. */
       if (shakeT > 0) {
         shakeT -= dt;
-        const a = shakeT * 0.5;
-        cam.position.x += (Math.random() - 0.5) * a;
-        cam.position.y += (Math.random() - 0.5) * a;
-        cam.position.z += (Math.random() - 0.5) * a;
+        if (!xr) {
+          const a = shakeT * 0.5;
+          cam.position.x += (Math.random() - 0.5) * a;
+          cam.position.y += (Math.random() - 0.5) * a;
+          cam.position.z += (Math.random() - 0.5) * a;
+        }
       }
-      if (cam.fov !== fov) { cam.fov = fov; cam.updateProjectionMatrix(); }
+      if (!xr && cam.fov !== fov) { cam.fov = fov; cam.updateProjectionMatrix(); }
     }
 
     /* ---------- API pública ---------- */

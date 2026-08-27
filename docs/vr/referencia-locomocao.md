@@ -636,3 +636,68 @@ o resto do número (fechar no mesmo frame) é decisão daqui, derivada da conta 
   DESTA base (raio 0,42, near 0,08, caminhada 1,44 m/s), não de fonte. O Godot
   usa um shape cast cujo tamanho não consegui ler no `.tscn` (o arquivo não
   declara as shapes).
+
+---
+
+## 8. Cinemática (cutscene) em VR — quem tira a câmera do jogador
+
+Levantamento feito antes de mexer na cinemática da destruição da cidade
+(`city-destruction-client.js`), que escrevia `camera.fov`, `camera.position` e
+`camera.quaternion` direto e não sabia que VR existe (`grep presenting` no
+arquivo devolvia **0**). A pergunta: **em VR, uma cutscene pode assumir a
+câmera?**
+
+### 8.1 O que a documentação primária diz
+
+| Fonte | Verbatim | O que decide aqui |
+|---|---|---|
+| Meta, [Head movement](https://developers.meta.com/horizon/design/head) | "**Avoid disabling or modifying tracking as it can cause discomfort.**" | Fecha a porta dos dois lados: nem congelar a vista, nem escrever pose por cima dela. Cutscene que pega a câmera é "modifying tracking". |
+| Meta, [MR health & safety, general](https://developers.meta.com/horizon/resources/mr-health-general/) | "**Vection (illusory self-movement) can arise when a user is stationary but content is moving and impact user comfort (e.g., motion sickness).**" | Refuta a alternativa "então move o RIG com a trajetória da câmera": levar o jogador a 150 m de altura a dezenas de m/s com o corpo parado é vection de livro. |
+| Meta, [Immersive Web SDK](https://github.com/facebook/immersive-web-sdk/blob/main/docs/concepts/locomotion/index.md) (o SDK WebXR da própria Meta) | "**Player rig ← LocomotionSystem copies Locomotor.position each frame**" | O SDK WebXR oficial move o **rig**. Não existe caminho na arquitetura dele para mover a câmera. |
+| Unity, [XR Origin](https://docs.unity3d.com/Packages/com.unity.xr.core-utils@2.5/manual/xr-origin.html) | "GameObjects representing tracked entities, such as the user's headset … are children of the XR Origin"; "**you can move the XR Origin with a script** to allow the user to teleport or move via controller input" | Mesma arquitetura na outra engine: o script move o Origin; a câmera é do `TrackedPoseDriver`. Escrever na câmera é erro de camada, não escolha de estilo. |
+
+### 8.2 O que ficou **não encontrado**
+
+- **Documentação da Meta especificamente sobre cutscene/cinemática em VR.** As
+  páginas de design que abrem (`design/head`, `design/display`,
+  `design/accessibility`, `design/locomotion-best-practices`,
+  `resources/locomotion-comfort-usability`) **não citam cutscene nenhuma vez**.
+- **Levantamento primário de "quem tira o controle da cabeça em cutscene"
+  entre os jogos do gênero.** Três fontes que teriam isso estão **bloqueadas
+  para busca automatizada neste ambiente**: `web.archive.org` (onde vive o
+  *Oculus Best Practices Guide* citado pelo critério A6), `www.meta.com/blog`
+  (o post da Meta sobre as cutscenes do Resident Evil 4 VR) e
+  `dev.epicgames.com` (VR Best Practices da Unreal). O orçamento de WebSearch
+  estava esgotado nesta rodada.
+- Consequência declarada: **a citação do critério A6 ao Oculus BP** ("Não use
+  nenhum head-bob…", "…mesmo em menus, com o jogo pausado, ou durante
+  cutscenes") **não foi reconfirmada na fonte por este levantamento**. Ela é
+  compatível com as quatro linhas da tabela acima, e a decisão abaixo não
+  depende dela.
+
+### 8.3 A decisão, e o que ela custa
+
+**Em XR a cinemática deixa de ser um passeio de câmera e passa a ser um evento
+que acontece no mundo.** Os mísseis, as ogivas, a bola de fogo, os anéis de
+choque, a luz e a fumaça são objetos REAIS na cena — quem está de headset vê
+tudo isso do lugar onde está, virando a cabeça à vontade. O que não existe em
+XR é o enquadramento dirigido: em VR o enquadramento é do jogador.
+
+As alternativas foram descartadas com motivo:
+
+1. **Mover o rig pela trajetória da câmera** (subir 55 m, cruzar 200 m em 12 s,
+   com tremor pós-impacto). Descartada pela linha de *vection* da Meta: é
+   fluxo óptico máximo com o corpo parado, e ainda herdaria o *screen shake*,
+   que é aceleração imposta.
+2. **Teleportar o rig para um mirante com fade e prendê-lo lá.** Continua sendo
+   movimento não iniciado pelo jogador, e o fade some com o evento; sem fonte
+   que a sustente, ficaria sendo ergonomia inventada.
+3. **Congelar a vista e mostrar a cena numa tela flutuante.** É literalmente o
+   "disabling tracking" que a fonte 1 proíbe.
+
+**Custo assumido, escrito para não virar surpresa:** quem está de headset e
+estiver de costas para a cidade pode perder o começo do espetáculo. O aviso
+sonoro (`SFX.missileIncoming`) e o `centerMsg` continuam disparando, mas o
+`centerMsg` é DOM e **não aparece dentro da sessão** — o HUD de XR
+(`js/xr/xrhud.js`) não espelha mensagem central hoje. Fica registrado como
+lacuna de HUD, não de cinemática; o conserto é de quem tem `xrhud.js` na posse.
