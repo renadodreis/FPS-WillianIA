@@ -518,15 +518,32 @@ o produto escalar entre o deslocamento e a vista: 1 é pra frente, **-1 é o bug
   sozinho; sem zona morta o jogador anda sem querer, e andar sem querer em VR é
   enjoo na veia.
 
-## Orçamento por frame (Quest 3, por olho)
+## Orçamento por frame — E A RÉGUA É POR OLHO, declarada
 
-| Item | Alvo | Teto | Medido hoje (estéreo) |
+Esta tabela dizia "por olho" no título e mostrava o medido **em estéreo** na
+coluna ao lado. Comparar as duas colunas era comparar maçã com laranja, e a
+ambiguidade sobreviveu rodadas: uma frente declarou o teto de triângulo
+alcançado medindo por olho, enquanto o documento de critérios aplicava o mesmo
+número ao valor estéreo — que é duas vezes mais duro.
+
+**A régua oficial deste projeto é POR OLHO**, e o motivo é que é assim que se
+compara com qualquer outro jogo: cena, orçamento e as diretrizes publicadas
+falam do que UMA câmera desenha. **Toda medição estéreo tem que ser dividida
+por dois antes de ser comparada com o teto.** Onde a coluna disser "estéreo",
+o número NÃO pode ser lido contra o teto sem essa conta.
+
+| Item | Alvo (por olho) | Teto (por olho) | Medição de partida (estéreo) |
 |---|--:|--:|--:|
 | Draw calls | 120 | 180 | **512** menu · **823** castelo |
 | Triângulos | 350 k | 500 k | **1,74 M** · **2,05 M** |
 | Materiais únicos | 40 | 60 | 434 (mas só **176 aparências** — 59% são cópias) |
 | Luzes com sombra | 1 | 1 | 4 (cascatas CSM) |
 | Boot até gráfico | 3 s | 4 s (loja) | 2,28 s no desktop |
+
+E a ressalva que impede o otimismo: **o three não usa multiview aqui**, então o
+segundo olho custa de verdade. Um teto "por olho" só é honesto porque é a régua
+de comparação com o gênero — o que a GPU paga é o dobro, e é por isso que o
+critério real é o tempo de frame, não a contagem. Contagem é proxy.
 
 Estéreo é ~2× a leitura mono. Medir em mono subestima pela metade.
 

@@ -62,7 +62,7 @@ coluna "onde precisa estar", que é a única parte fixa.
 | Vinheta de túnel parado (deveria sumir) | 0,082 | ≤ 0,01 |
 | Velocidade de caminhada / corrida | **5,2 / 8,6 m/s** | ~1,4 / ~2,8 m/s |
 | Draw calls em estéreo (menu → castelo) | **517 – 806** | ≤ 180 |
-| Triângulos em estéreo | **1,46 M – 2,03 M** | ≤ 500 k |
+| Triângulos **por olho** (estéreo ÷ 2) | **730 k – 1,02 M** | ≤ 500 k |
 | Objetos de HUD dentro do mundo | **0** | tudo o que é essencial |
 | Chamadas de háptico no código inteiro | **0** (2 atuadores disponíveis) | ≥ 1 por tiro |
 | `setFoveation` no código | **nunca chamado** (three usa 1.0 = MÁXIMO) | declarado e medido |
