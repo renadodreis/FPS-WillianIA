@@ -391,10 +391,17 @@ export function createXrSocial({
         x0: 12, y0: 684, x1: 12 + colL, y1: 756,
       });
     }
-    out.push({
-      id: 'sair', tipo: 'botao', txt: 'SAIR DA PARTIDA', dados: null,
-      x0: 24 + colL, y0: 684, x1: 24 + colL * 2, y1: 756,
-    });
+    /* SÓ COM PARTIDA EM ANDAMENTO. Sem isso, quem chegava ao lobby pelo MENU
+       (dois cliques da primeira tela) via "SAIR DA PARTIDA" sem haver partida:
+       o raio marcava, o gatilho acionava e NADA acontecia. Botão morto é pior
+       que botão ausente — e é a regra que o cabeçalho deste módulo já escrevia
+       para o MULTIJOGADOR, um degrau acima. */
+    if (d.jogando) {
+      out.push({
+        id: 'sair', tipo: 'botao', txt: 'SAIR DA PARTIDA', dados: null,
+        x0: 24 + colL, y0: 684, x1: 24 + colL * 2, y1: 756,
+      });
+    }
     return out;
   }
 

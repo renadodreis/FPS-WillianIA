@@ -214,6 +214,20 @@ export function createXrRig({ THREE, scene, camera }) {
     return out;
   }
 
+  /* O QUE A PAREDE REJEITOU VOLTA PRA CÁ. O jogo soma o passo em `player.pos`
+     ANTES da física; se a colisão empurra o jogador de volta, o acumulado já
+     foi reduzido e a cabeça é arrastada — medido: 3,0 m de passo físico contra
+     um sólido moviam a vista só 0,560 m, ou seja, o mundo travava enquanto o
+     jogador andava de verdade no quarto dele.
+
+     Devolver mantém a cabeça onde o corpo do jogador realmente está, com o
+     colisor parado na parede. A cabeça passa a ficar ADIANTE do colisor, que é
+     o certo: quem anda contra uma parede virtual atravessa mesmo — ela não
+     existe no quarto. O que não pode é o jogo puxar a vista de volta. */
+  function devolverPasso(dx, dz) {
+    passoX += dx; passoZ += dz;
+  }
+
   /* RECENTRAR NÃO É ANDAR. `recenter()` (ou o `reset` que o sistema dispara ao
      redefinir o piso/origem) muda o REFERENCIAL, não move ninguém no mundo. Sem
      isto, a mudança de origem chega como um passo físico gigante e o jogador é
@@ -240,7 +254,7 @@ export function createXrRig({ THREE, scene, camera }) {
   }
 
   return {
-    enter, exit, place, headWorldPosition, consumirPasso, rebasear,
+    enter, exit, place, headWorldPosition, consumirPasso, devolverPasso, rebasear,
     get rig() { return rig; },
     get entered() { return dentro; },
     get passoPendente() { return { x: passoX, z: passoZ }; },

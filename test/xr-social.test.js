@@ -744,8 +744,12 @@ describe('conversa, placar e sala dentro do headset',
         const S = window.__S, soc = window.__social;
         soc.selecionar('sala');
         await S.esperar(3);
-        const z = soc.zonas().find(q => q.id === 'sair');
-        await S.mirarZona('sair');            // fica sob o ponteiro...
+        /* Qualquer zona serve — o que se testa é o gatilho FORA do painel, não
+           esta zona. Antes era `sair`, que deixou de existir no lobby sem
+           partida em andamento (era botão morto: acionava e nada acontecia).
+           Escolher pela lista real deixa o caso imune a essa mudança. */
+        const z = soc.zonas().find(q => q.id !== undefined);
+        await S.mirarZona(z.id);              // fica sob o ponteiro...
         await S.esperar(3);
         const sobAntes = S.estadoUi().item;
         const lumRealce = S.mediaLum(z.x0 + 4, z.y0 + 6, z.x1 - 4, z.y1 - 8);
@@ -757,13 +761,14 @@ describe('conversa, placar e sala dentro do headset',
         await S.esperar(3);
         soc.selecionar('pausa');
         await S.esperar(2);
-        return { sobAntes, fora, saiu: window.__conta.sair, lumRealce, lumLimpa };
+        return { sobAntes, alvo: z.id, fora, saiu: window.__conta.sair, lumRealce, lumLimpa };
       });
-      assert.ok(r.sobAntes && r.sobAntes.id === 'sair',
-        `o teste não chegou a apontar para SAIR: ${JSON.stringify(r.sobAntes)}`);
+      assert.ok(r.sobAntes && r.sobAntes.id === r.alvo,
+        `o teste não chegou a apontar para ${r.alvo}: ${JSON.stringify(r.sobAntes)}`);
       assert.equal(r.fora, null, 'com a mão fora do painel não pode sobrar alvo nenhum');
       assert.equal(r.saiu, 0,
-        'o gatilho fora do painel acionou SAIR DA PARTIDA — o jogador atirando sairia da partida');
+        'o gatilho fora do painel acionou uma linha do painel — o jogador atirando ' +
+        'acionaria o menu sem querer');
       /* e o realce tem que SUMIR do canvas, não só do estado: o painel repinta
          por assinatura, e uma zona esquecida sob o ponteiro fica acesa na tela
          apontando para um botão que a mão não está mais mirando. */

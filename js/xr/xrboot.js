@@ -88,6 +88,7 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
     /* passo físico do jogador que o jogo ainda não absorveu (ver js/xr/xrrig.js):
        drenar isto na posição do jogador põe o colisor debaixo da CABEÇA. */
     consumirPasso: alvo => rig.consumirPasso(alvo),
+    devolverPasso: (dx, dz) => rig.devolverPasso(dx, dz),
     rebasear: () => rig.rebasear(),
     headWorldPosition: alvo => rig.headWorldPosition(alvo),
     get presenting() { return apresentando(); },

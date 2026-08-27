@@ -404,6 +404,8 @@ const XRTaxa = createXrFrameRate();   // alvo 72 Hz
 let _uiFocoAntes = '';                // borda de hover do painel, pro tique de UI
 let xrYaw = 0;              // giro artificial acumulado (js/xr/xrturn.js), em radianos
 const _passoXR = { x: 0, z: 0 };   // passo físico do cômodo, drenado do rig por frame
+// onde o passo deveria ter chegado, para saber o que a colisão comeu (ver tick)
+const _alvoPassoXR = { x: 0, z: 0, dx: 0, dz: 0, pedido: 0 };
 let aoMudarSessaoXr = () => {}; // preenchido lá embaixo, quando o botão existe
 const _xrCabeca = new THREE.Vector3();
 const XR = createXrBoot({ THREE, renderer, scene, camera,
@@ -2898,6 +2900,9 @@ XRUI.conectarSocial({
     const mm = String(Math.floor(t / 60)).padStart(2, '0'), ss = String(t % 60).padStart(2, '0');
     return {
       eu: { id: (window.__MP_init && window.__MP_init.id) || '' },
+      // sem partida em andamento não existe "sair da partida": botão morto é
+      // pior que botão ausente, e chegava-se nele em dois cliques do menu
+      jogando: state.started,
       partida: (D && D.S && D.S.matchNum) || '',
       tempo: (D && D.S && D.S.phase === 'PLAY') ? `${mm}:${ss}` : '',
     };
@@ -3342,7 +3347,15 @@ function tick(forceDt) {
       XR.consumirPasso(_passoXR);
       player.pos.x += _passoXR.x;
       player.pos.z += _passoXR.z;
-    }
+      /* ONDE O PASSO DEVERIA TER CHEGADO. A rejeição só é conhecida DEPOIS da
+         física do frame — a colisão do jogo não é uma função só: paredes,
+         obstáculos e veículos empurram `player.pos` em pontos diferentes do
+         `playerUpdate`. Chamar só `Structures.collide` aqui não bastava: o
+         carro, que foi o caso medido, colide noutro trecho. */
+      _alvoPassoXR.pedido = Math.hypot(_passoXR.x, _passoXR.z);
+      _alvoPassoXR.x = player.pos.x; _alvoPassoXR.z = player.pos.z;
+      _alvoPassoXR.dx = _passoXR.x; _alvoPassoXR.dz = _passoXR.z;
+    } else _alvoPassoXR.pedido = 0;
 
     /* GIRO: contínuo por padrão, em passos por opção do jogador
        (js/xr/xrturn.js explica por que o padrão diverge do "default to snap"
@@ -3470,6 +3483,27 @@ function tick(forceDt) {
      continuava andando, pulando e olhando com "VOCÊ MORREU" na tela. O corpo
      para onde caiu (o tombo da câmera é do applyFpsCamera, que segue rodando). */
   if (!player.dead && !state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
+  /* O QUE A PAREDE COMEU VOLTA PRO RIG. Sem isto o passo físico saía do
+     acumulado, a colisão empurrava `player.pos` de volta, e a CABEÇA era
+     arrastada junto — medido: 3 m de caminhada real contra um sólido moviam a
+     vista 0,82 m e depois nada. O mundo travava enquanto o jogador andava de
+     verdade no quarto dele.
+
+     Só a componente NA DIREÇÃO do passo é devolvida: o jogador também se move
+     pelo analógico no mesmo frame, e projetar separa o que a parede recusou do
+     que ele escolheu não andar. Devolvido, o colisor para na parede e a cabeça
+     segue onde o corpo está — adiante do colisor, que é o certo: quem anda
+     contra uma parede virtual atravessa, porque ela não existe no quarto. */
+  if (_alvoPassoXR.pedido > 1e-6) {
+    const perdaX = _alvoPassoXR.x - player.pos.x, perdaZ = _alvoPassoXR.z - player.pos.z;
+    const k = _alvoPassoXR.pedido;
+    const proj = (perdaX * _alvoPassoXR.dx + perdaZ * _alvoPassoXR.dz) / (k * k);
+    if (proj > 0) {
+      const f = Math.min(1, proj);
+      XR.devolverPasso(_alvoPassoXR.dx * f, _alvoPassoXR.dz * f);
+    }
+    _alvoPassoXR.pedido = 0;
+  }
   shootUpdate(dt, t);
   stepPhysics(dt, intendedDt);
   Car.update(dt, t);

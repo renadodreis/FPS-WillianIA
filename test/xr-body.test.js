@@ -455,3 +455,56 @@ describe('RECENTRAR não move o jogador no mundo', { skip: !CHROME && 'Chrome n�
       `a VISTA saltou ${r.saltoDaVista.toFixed(4)} m num frame ao recentrar`);
   });
 });
+
+describe('parede não come o rastreio: a vista acompanha o corpo', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* CAUSA (c) DO A6, viva desde a terceira rodada. O jogo soma o passo físico
+     em `player.pos` ANTES da física; quando a colisão empurrava o jogador de
+     volta, o acumulado do rig já tinha sido reduzido e a CABEÇA era arrastada
+     junto. Medido antes: 3,0 m de passo físico contra um sólido moviam a vista
+     0,560 m — o mundo travava enquanto o jogador andava de verdade no quarto.
+
+     O certo é o colisor parar na parede e a cabeça continuar onde o corpo do
+     jogador está. Ela fica ADIANTE do colisor, e isso não é defeito: quem anda
+     contra uma parede virtual atravessa, porque ela não existe no quarto dele.
+     O que não pode é o jogo puxar a vista de volta. */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: 3428 }); });
+  after(async () => { if (h) await h.close(); });
+
+  it('andar contra um sólido move a VISTA o tanto que o corpo andou', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game, MP = window.__MP, dev = window.__xrEmulado;
+      A.solta(); dev.position.set(0, 1.7, 0); await A.espera(500);
+
+      /* Planta o jogador colado num sólido: o carro é o mais simples de achar
+         e é exatamente o caso que a validação mediu. */
+      const carro = G.Car.vehicles[0];
+      const vp = carro.group.position;
+      MP.player.pos.set(vp.x, MP.groundAt(vp.x, vp.z + 2.4, 999), vp.z + 2.4);
+      MP.player.vel.set(0, 0, 0);
+      await A.espera(500);
+
+      const olho = new MP.THREE.Vector3();
+      const lerOlho = () => { G.XR.rig.updateMatrixWorld(true); G.camera.getWorldPosition(olho); return [olho.x, olho.z]; };
+      const o0 = lerOlho();
+      const p0 = [MP.player.pos.x, MP.player.pos.z];
+
+      // caminha 1,2 m NA DIREÇÃO do carro, em etapas de gente
+      const passos = 24;
+      for (let i = 1; i <= passos; i++) {
+        dev.position.set(0, 1.7, -1.2 * i / passos);
+        await A.espera(40);
+      }
+      await A.espera(700);
+      const o1 = lerOlho();
+      return {
+        vista: Math.hypot(o1[0] - o0[0], o1[1] - o0[1]),
+        colisor: Math.hypot(MP.player.pos.x - p0[0], MP.player.pos.z - p0[1]),
+        fisico: 1.2,
+      };
+    });
+    assert.ok(r.vista > r.fisico * 0.85,
+      `o jogador andou ${r.fisico} m de verdade e a vista moveu ${r.vista.toFixed(3)} m: ` +
+      'o mundo travou enquanto ele andava no quarto — é a parede comendo o rastreio');
+  });
+});

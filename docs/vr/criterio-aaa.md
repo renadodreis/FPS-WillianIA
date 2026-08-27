@@ -158,8 +158,33 @@ As três leituras que explicam três queixas do dono, sem interpretação:
 - **Fonte:** Oculus BP: *"acelerações instantâneas são mais confortáveis que
   acelerações graduais, com o desconforto crescendo em função da frequência,
   tamanho e duração da aceleração."*
+- **EXCEÇÃO DECLARADA — o perfil `paridade` (linha `IGUAL AO PC` do painel).**
+  Este perfil responde por A3 e A5 como qualquer outro, e **não** responde pelo
+  teto de rampa de A4. Motivo, que não é de conforto e sim de projeto: aqui
+  headset e monitor jogam a **mesma partida**, e o invariante do jogo é que
+  quem está de headset não fique **nem mais rápido nem mais lento** que quem
+  está no monitor. Dar rampa instantânea (50 ms) junto com a velocidade do PC
+  (5,2 / 8,6 m/s) deixaria o jogador de headset **estritamente melhor** que o
+  de monitor: nos ~273 ms em que o PC ainda sobe, o headset já está a 95 %, e
+  duelo de canto é ganho por quem chega ao topo primeiro. Vantagem de headset
+  não é conforto, é defeito de projeto. A exceção tem três amarras: (1) só
+  alcança perfil **opt-in**, nunca o padrão; (2) só vale enquanto o perfil for
+  paridade **inteira** — escala 1 e os quatro números do PC bit por bit; um
+  perfil "rápido mas diferente do PC" não tem este argumento e volta a
+  responder por A4; (3) está escrita em código, com motivo e custo, em
+  `EXCECOES` de `js/xr/xrcomfort.js`, e `test/xr-conforto.test.js` reprova
+  qualquer perfil que passe do teto sem exceção declarada. **Custo assumido:**
+  t95 ≈ 273 ms neste perfil, contra 150 do teto; os outros dois, inclusive o
+  padrão, ficam em ~50 ms. É a mesma cláusula de padrão que A3 já tem — A4 não
+  a tinha, e essa assimetria é o que fez o critério reprovar em `c070737` uma
+  decisão que já estava tomada e não estava escrita. *(Cláusula proposta na
+  rodada seguinte a `c070737` pela frente de conforto; o dono do projeto e o
+  validador riscam esta lista em uma linha se discordarem.)*
 - **Por que a suíte não pega:** não existe teste nenhum de perfil de
-  velocidade em VR.
+  velocidade em VR. *(Passou a existir: `test/xr-locomotion.test.js` mede a
+  rampa por frame de sessão, e `test/xr-conforto.test.js` audita **todo**
+  perfil de `ORDEM` contra este teto — perfil novo que estoure a rampa sem
+  exceção declarada nasce vermelho.)*
 
 ### A5 · Vinheta de túnel some quando o jogador para
 - **Mede:** `XR.conforto.tunel` em regime, parado e andando.
@@ -171,8 +196,17 @@ As três leituras que explicam três queixas do dono, sem interpretação:
   SAP) mostra que vinheta aplicada fora de hora chega a **aumentar** o enjoo.
   Pavlov expõe a força da vinheta como slider de 0–100 %; Contractors a deixa
   ligada por padrão e desligável.
+- **Sem exceção, para nenhum perfil.** O jogador não escolheu ficar com a
+  periferia fechada — ele só parou de andar. A5 é o único teto deste bloco que
+  vale igual para todo mundo, e é por isso que ele foi fechado pela raiz e não
+  pelo pico: a abertura da vinheta TERMINA (chega a zero exato em ≤ 1 s do
+  túnel cheio, seja qual for o pico), então a velocidade do perfil deixou de
+  poder reabrir este critério. Ver `passoTunel` em `js/xr/xrcomfort.js`.
 - **Por que a suíte não pega:** o teste de conforto existente afere que a
-  vinheta ABRE e FECHA, não que ela chega a zero.
+  vinheta ABRE e FECHA, não que ela chega a zero. *(Passou a pegar:
+  `test/xr-conforto.test.js` cobra `=== 0` — na receita literal deste §, em
+  todo perfil de `ORDEM`, e também ao parar de GIRAR, que a receita não cobre
+  e que no ajuste de fábrica deixava 0,01805 de resíduo.)*
 
 ### A6 · Nada além do pescoço do jogador move a vista — em TODOS os estados
 - **Mede:** para cada estado do jogo, a diferença entre a rotação de mundo da
