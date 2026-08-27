@@ -110,6 +110,15 @@ mexer no repositório de outra pessoa — só com pedido explícito.
 - **Cuidado com o que mede o harness em vez do produto.** `startBRMatch` pula a
   fase da nave DE PROPÓSITO; uma sonda que lê a fase logo depois "prova" que o
   jogo não começa da nave — e não prova nada.
+- **`git add -A` com agente trabalhando na árvore commita o trabalho dele pela
+  metade — inclusive MUTANTE de teste.** Aconteceu: um agente estava numa rodada
+  de reinjeção de defeito (para provar que os testes pegam), e um `git add -A`
+  de outra frente varreu o arquivo no meio disso. Foi commitado, e DEPLOYADO,
+  `loBlade.scale(0.35, 1, 1)` — lâmina de grama 35% mais estreita, ou seja,
+  **wallhack contra quem está deitado no mato**, no desktop e no celular. O
+  guarda de wallhack não pegou porque o teste dele estava sendo mutado no mesmo
+  instante. Com agente ativo: `git add` só dos arquivos que são SEUS, conferidos
+  um a um com `git diff --cached`.
 - **Suíte interrompida deixa servidor órfão segurando porta fixa, e isso lê
   como regressão.** Testes de browser sobem `server.js` numa porta fixa por
   arquivo; matar a suíte no meio (Ctrl+C, task cancelada) deixa esse processo
