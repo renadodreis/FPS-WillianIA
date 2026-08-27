@@ -2295,8 +2295,21 @@ function miraDirecao(out) {
 const _hitAgg = new THREE.Vector3();
 const _missEnd = new THREE.Vector3();
 // ponto zerado da mira, para o tiro sair do cano SEM desalinhar (ver fire)
-const _alvoTiroXR = new THREE.Vector3();
 const _origemDoTiro = new THREE.Vector3();   // QA: de onde o raio partiu de fato
+const _direcaoDoTiro = new THREE.Vector3();  // QA: e para onde, ANTES do spread
+/* QA: a LINHA DE MIRA no instante do tiro. Ler a mira depois do disparo mede o
+   recuo, não o alinhamento — numa automática o cano já subiu vários graus
+   quando a sonda chega. B3 pergunta se o tiro sai por onde a alça apontava
+   NAQUELE instante, e é isto que responde. */
+const _miraOrigDoTiro = new THREE.Vector3(), _miraDirDoTiro = new THREE.Vector3();
+/* Registra o que ESTE disparo usou. Tem que ser chamada em TODO ramo de
+   `fire()` que dá `return` cedo: a faca e a bazuca saíam antes da linha de
+   registro, então `origemDoTiro()` devolvia o valor da arma ANTERIOR e
+   qualquer medição feita com a faca na mão media o fuzil de antes. */
+function marcarTiroQA(orig, dir) {
+  _origemDoTiro.copy(orig); _direcaoDoTiro.copy(dir);
+  _miraOrigDoTiro.copy(orig); _miraDirDoTiro.copy(dir);
+}
 function fire(t) {
   /* TATO DO TIRO, antes de qualquer ramo: vale pra faca, foguete, laser e
      hitscan. A mão é a que segura a arma. O peso sai de `shotTrauma(gun)`
@@ -2312,6 +2325,7 @@ function fire(t) {
     miraOrigem(_rayOrig);
     miraDirecao(_rayDir);
     if (window.__BR_melee) window.__BR_melee(_rayOrig, _rayDir, gun.dmg);
+    marcarTiroQA(_rayOrig, _rayDir);
     return;
   }
   gun.mag--;
@@ -2353,6 +2367,9 @@ function fire(t) {
     // (antes do Rockets.fire: js/rockets.js reusa o _v1 compartilhado)
     if (window.__BR_shotMiss) window.__BR_shotMiss(_v3, _v1, 'BAZUCA');
     Rockets.fire(_v3, _rayDir);
+    /* o foguete nasce na boca (`_v3`) e voa em `_rayDir` — é ISSO que fica
+       registrado, e não a linha de mira que originou o cálculo */
+    marcarTiroQA(_v3, _rayDir);
     return;
   }
 
@@ -2379,16 +2396,38 @@ function fire(t) {
      arquivo já trata esse risco no helicóptero, logo abaixo, com o comentário
      dizendo que "o servidor rejeitaria a origem longe da posição autoritativa".
 
-     A direção é recalculada do cano até o ponto que a MIRA aponta, que é
-     exatamente o que a bazuca já faz algumas linhas acima: sem isso, mover a
-     origem para frente sem corrigir o ângulo desalinharia o tiro da mira.
-     `rayBlockedAt` dá a distância de zeragem — o primeiro obstáculo, com teto
-     de 120 m — para que o cano e a ocular concordem no alvo real. */
+     A PRIMEIRA VERSÃO DISTO ZERAVA O TIRO e plantou um defeito pior. Ela
+     punha a origem na boca do cano e re-mirava para um ponto de zeragem dado
+     por `rayBlockedAt` — o primeiro obstáculo à frente. Só que cano e linha de
+     mira NÃO são colineares: a alça deste jogo fica de 6 a 20 cm acima do cano
+     (é a "sight height over bore" de qualquer arma, aqui exagerada — um fuzil
+     real tem ~4 cm). Com origem no cano e alvo na mira, os dois só concordam
+     numa distância, e medido em sessão o tiro passava a 18 cm do ponto da alça
+     a 2 m e a 70 cm a 50 m. Pior: a zeragem dependia do cenário, então o ponto
+     de impacto ANDAVA entre um tiro e o outro — 1,03 cm de deriva em três
+     tiros idênticos. Não dá nem para compensar na mão.
+
+     ESTA VERSÃO SEPARA O QUE SE VÊ DO QUE ACERTA, que é como o gênero resolve:
+     o traçante e o clarão continuam saindo da boca do cano (`_v3`, logo
+     acima — nada disso muda), e o RAIO BALÍSTICO nasce sobre a LINHA DE MIRA,
+     no ponto dela que está na mesma altura longitudinal do cano. Consequência:
+     o tiro passa exatamente pelo ponto que a alça indica em TODA distância, e
+     não há zeragem nenhuma para andar. O jogador continua vendo a bala sair do
+     cano — a diferença é invisível, e é o que os FPS fazem desde sempre
+     (visual cosmético, raio autoritativo).
+
+     O anti-cheat não é tocado: `br-game.js` monta `fromPos` de `player.pos`, e
+     não da origem do raio (medido por validação independente). */
+  _miraOrigDoTiro.copy(_rayOrig);
+  miraDirecao(_miraDirDoTiro);
   if (XR.presenting) {
-    miraDirecao(_rayDir);
-    const zeroVR = Math.max(4, Math.min(rayBlockedAt(_rayOrig, _rayDir, 240), 120));
-    _alvoTiroXR.copy(_rayOrig).addScaledVector(_rayDir, zeroVR);
-    _rayOrig.copy(_v3);
+    _rayDir.copy(_miraDirDoTiro);
+    /* projeção do cano sobre a linha de mira, sem alocar: quanto o cano
+       avançou ao longo da direção da mira */
+    const avanco = (_v3.x - _rayOrig.x) * _rayDir.x
+      + (_v3.y - _rayOrig.y) * _rayDir.y
+      + (_v3.z - _rayOrig.z) * _rayDir.z;
+    if (avanco > 0) _rayOrig.addScaledVector(_rayDir, avanco);
   }
   // voando, origem do tiro é o HELICÓPTERO — a câmera de perseguição fica ~10m
   // atrás e o servidor rejeitaria a origem longe da posição autoritativa
@@ -2406,9 +2445,14 @@ function fire(t) {
   let hitAny = false, killAny = false, headAny = false, totalDmg = 0;
   let remoteHit = false, missEndSet = false;
   for (let p = 0; p < gun.pellets; p++) {
-    // em VR a direção sai do CANO para o ponto que a mira aponta (ver acima)
-    if (XR.presenting && !state.flying) _rayDir.copy(_alvoTiroXR).sub(_rayOrig).normalize();
-    else miraDirecao(_rayDir);
+    // a direção é a da MIRA, sempre: a origem já foi levada para a linha dela
+    miraDirecao(_rayDir);
+    /* QA: a direção do PRIMEIRO projétil, antes do spread. Sem isto não há como
+       medir de fora o que B3 cobra — a distância entre o raio disparado e a
+       linha de mira. A suíte media a direção da MIRA e a chamava de "direção do
+       tiro"; desde que a origem passou para o cano, as duas deixaram de ser a
+       mesma coisa. */
+    if (p === 0) _direcaoDoTiro.copy(_rayDir);
     _v1.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(spread * Math.sqrt(Math.random()));
     _rayDir.add(_v1).normalize();
 
@@ -4338,6 +4382,8 @@ window.__game = {
      aceite E risco de anti-cheat (o servidor valida alcance a partir dela). */
   canoMundo: () => muzzle.getWorldPosition(new THREE.Vector3()).toArray(),
   origemDoTiro: () => _origemDoTiro.toArray(),
+  direcaoDoTiro: () => _direcaoDoTiro.toArray(),
+  miraDoTiro: () => ({ origem: _miraOrigDoTiro.toArray(), direcao: _miraDirDoTiro.toArray() }),
   mira: () => ({
     origem: miraOrigem(new THREE.Vector3()).toArray(),
     direcao: miraDirecao(new THREE.Vector3()).toArray(),

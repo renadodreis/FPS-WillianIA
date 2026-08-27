@@ -466,30 +466,64 @@ describe('B7 — o tiro sai do CANO, não da ocular', { skip: !CHROME && 'Chrome
       };
     });
     assert.equal(r.saiu, true, 'o gatilho não disparou — o caso não mediu tiro nenhum');
-    assert.ok(r.d <= 0.05,
-      `o raio partiu a ${r.d.toFixed(3)} m da boca do cano (teto 0,05 m): a bala nasce fora ` +
-      'da arma e o servidor valida alcance a partir daí');
+    /* O TETO MUDOU DE 0,05 PARA 0,25 m, E ISSO É UMA TROCA DECLARADA, não um
+       afrouxamento de conveniência.
+       O defeito que este caso nasceu para pegar era a origem a 44–91 cm da
+       arma (a bala nascendo do nada). Pôr a origem NA boca do cano fechou esse
+       número e abriu outro: alça e cano não são colineares — a alça deste jogo
+       fica de 6 a 20 cm acima do cano —, então tiro saindo do cano e mirado
+       pela alça só concordam numa distância. Medido em sessão: 18 cm de erro a
+       2 m na escopeta, 70 cm a 50 m no fuzil, e o ponto de impacto ANDANDO
+       entre tiros porque a zeragem dependia do cenário (test/xr-mira.test.js).
+       Hoje o raio balístico nasce SOBRE a linha de mira, na altura longitudinal
+       do cano: o erro é zero em toda distância, e a distância até a boca passa
+       a ser exatamente a altura da alça. O que se VÊ não mudou — traçante e
+       clarão sempre saíram de `muzzle`, não da origem balística.
+       O que este caso continua guardando é o defeito original: 25 cm de teto
+       aceita altura de alça e reprova qualquer volta dos 44–91 cm.
+       PENDENTE DO DONO: o texto do B7 em docs/vr/criterio-aaa.md ainda cobra
+       0,05 m. Não editei a régua — quem decide o critério é ele. */
+    assert.ok(r.d <= 0.25,
+      `o raio partiu a ${r.d.toFixed(3)} m da boca do cano (teto 0,25 m = altura de alça): ` +
+      'acima disso a bala volta a nascer fora da arma');
   });
 
-  it('e a direção continua alinhada com a mira depois de mover a origem', async () => {
-    /* Mover a origem para frente SEM corrigir o ângulo manda a bala para o
-       lado — seria trocar um defeito por outro pior. A direção passa a sair do
-       cano para o ponto que a mira aponta, o mesmo desenho da bazuca. */
+  /* ESTE CASO ERA O EXEMPLO PERFEITO DE TESTE QUE PASSA POR ACIDENTE, e foi
+     apontado por validação independente. Ele se chamava "a direção continua
+     alinhada com a mira", o comentário nomeava o risco com precisão ("manda a
+     bala para o lado") — e então assertava `|dir| ≈ 1`, que é PROPRIEDADE DE
+     `.normalize()` e não pode falhar, e `(cano − ocular) · dir > 0`, que é a
+     componente AO LONGO do cano. A grandeza que decide o desalinhamento é a
+     PERPENDICULAR. Uma arma com o cano cinco metros para o lado passava.
+     Ele guardava exatamente o eixo em que o defeito não aparece — e o defeito
+     apareceu no outro. Agora mede a perpendicular, que é o que B3 cobra: a
+     distância entre o raio DISPARADO e o ponto que a alça indica. */
+  it('a direção do tiro é a da mira — medida na PERPENDICULAR, que é onde o erro mora', async () => {
     const r = await h.play(async () => {
       const A = window.__A, G = window.__game;
       A.solta(); await A.espera(300);
-      const m = G.mira();
-      const mod = Math.hypot(m.direcao[0], m.direcao[1], m.direcao[2]);
+      const g = G.arsenal[G.gunIndex];
+      if (g) { g.spread = 0; g.pellets = 1; g.mag = Math.max(g.mag, 5); g.reloading = false; }
+      A.botao('right', 'trigger', 1); await A.espera(200);
+      A.botao('right', 'trigger', 0); await A.espera(260);
+      const O = G.origemDoTiro(), D = G.direcaoDoTiro(), m = G.miraDoTiro();
+      const nd = Math.hypot(D[0], D[1], D[2]) || 1;
+      const u = [D[0] / nd, D[1] / nd, D[2] / nd];
+      const nm = Math.hypot(m.direcao[0], m.direcao[1], m.direcao[2]) || 1;
+      const md = [m.direcao[0] / nm, m.direcao[1] / nm, m.direcao[2] / nm];
+      /* ponto da linha de mira a 10 m, e a distância dele ao raio disparado */
+      const P = [m.origem[0] + md[0] * 10, m.origem[1] + md[1] * 10, m.origem[2] + md[2] * 10];
+      const w = [P[0] - O[0], P[1] - O[1], P[2] - O[2]];
+      const t = w[0] * u[0] + w[1] * u[1] + w[2] * u[2];
+      const perp = Math.hypot(w[0] - u[0] * t, w[1] - u[1] * t, w[2] - u[2] * t);
       const cano = G.canoMundo(), org = m.origem;
-      // o cano tem que estar À FRENTE da ocular, na direção que a mira aponta
-      const frente = (cano[0] - org[0]) * m.direcao[0]
-                   + (cano[1] - org[1]) * m.direcao[1]
-                   + (cano[2] - org[2]) * m.direcao[2];
-      return { mod, frente };
+      const frente = (cano[0] - org[0]) * md[0] + (cano[1] - org[1]) * md[1] + (cano[2] - org[2]) * md[2];
+      return { perp, frente };
     });
-    assert.ok(Math.abs(r.mod - 1) < 0.01, `a direção da mira não é unitária: ${r.mod}`);
     assert.ok(r.frente > 0,
-      `o cano está ${r.frente.toFixed(3)} m ATRÁS da ocular na direção da mira — ` +
-      'a geometria da arma está invertida e mover a origem para lá apontaria pra trás');
+      `o cano está ${r.frente.toFixed(3)} m ATRÁS da ocular na direção da mira — a geometria da arma está invertida`);
+    assert.ok(r.perp < 0.02,
+      `a 10 m o tiro passa a ${(r.perp * 100).toFixed(2)} cm do ponto que a alça indica (teto 2 cm) — ` +
+      'é a diferença entre acertar e errar uma cabeça de 16 cm');
   });
 });
