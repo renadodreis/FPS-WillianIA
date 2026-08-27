@@ -184,6 +184,37 @@ Um caso que cobrava "a sessão nasce a 90 Hz" passa a cobrar que a correção N�
 exista. Reler os testes do agente depois de aplicar o wiring é parte de aplicar
 o wiring.
 
+## Teste que passa POR ACIDENTE — o irmão silencioso do teste que não falha
+
+Pior que o teste que não pode falhar é o que passa por um motivo diferente do
+que está escrito nele. Dois casos medidos nesta frente:
+
+- `xr-bootstrap` exigia `rig.position == player.pos` — o desenho de ANTES de o
+  giro pivotar na cabeça. Depois do pivô o rig fica em `pés − cabeça` de
+  propósito, para a CABEÇA cair sobre os pés. Ele continuou verde porque a
+  sentinela do teste saltava a câmera 8 m num tick, e esse salto virava "passo
+  físico" que somava de volta exatamente o que a compensação subtraía. Duas
+  mudanças erradas se cancelando.
+- `xr-quality` tinha `sombras: G.csmDebug ? null : null` e asseverava a mesma
+  coisa duas vezes: o título prometia cascata de sombra e nada media cascata.
+
+**Como pegar:** quando um caso continuar verde depois de uma mudança que
+deveria tê-lo afetado, desconfie ANTES de comemorar. E quando um teste
+sobreviver a um refactor de desenho, releia o que ele assere — não o nome.
+
+## A ordem em que o runtime entrega as coisas NÃO é garantida
+
+Escrevi no código, como se fosse fato, que o evento `reset` do espaço de
+referência chega ANTES da pose nova. É o contrário: o runtime escreve a pose de
+forma **síncrona** e só **enfileira** o evento. A correção que dependia dessa
+ordem (carência de frames) defendia o lado errado, e o defeito continuou.
+
+**A lição maior:** quando a correção depende de ordem de entrega entre dois
+sinais do navegador, ela é frágil por construção. Prefira um critério que não
+precise saber a ordem. Aqui virou um limiar do que é **fisicamente possível**:
+35 cm num frame seriam 25 m/s, então não é caminhada — é recentrar, piso
+redefinido ou rastreio perdido, e nos três casos a resposta é a mesma.
+
 ## Teste que não pode falhar não é teste
 
 Aconteceu aqui, e passou despercebido até uma auditoria independente: um caso
