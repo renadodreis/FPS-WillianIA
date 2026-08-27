@@ -532,13 +532,24 @@ falam do que UMA câmera desenha. **Toda medição estéreo tem que ser dividida
 por dois antes de ser comparada com o teto.** Onde a coluna disser "estéreo",
 o número NÃO pode ser lido contra o teto sem essa conta.
 
-| Item | Alvo (por olho) | Teto (por olho) | Medição de partida (estéreo) |
-|---|--:|--:|--:|
-| Draw calls | 120 | 180 | **512** menu · **823** castelo |
-| Triângulos | 350 k | 500 k | **1,74 M** · **2,05 M** |
-| Materiais únicos | 40 | 60 | 434 (mas só **176 aparências** — 59% são cópias) |
-| Luzes com sombra | 1 | 1 | 4 (cascatas CSM) |
-| Boot até gráfico | 3 s | 4 s (loja) | 2,28 s no desktop |
+| Item | Alvo (por olho) | Teto (por olho) | Partida (estéreo) | Hoje (por olho, castelo) |
+|---|--:|--:|--:|--:|
+| Draw calls | 120 | 180 | **823** castelo | **173** ✔ (sem sombra) · 190 com as 2 cascatas |
+| Triângulos | 350 k | 500 k | **2,05 M** | **457 k** ✔ |
+| Materiais únicos | 40 | 60 | 434 (**176 aparências**) | — |
+| Luzes com sombra | 1 | 1 | 4 (cascatas CSM) | 2 no preset de sessão |
+| Boot até gráfico | 3 s | 4 s (loja) | 2,28 s no desktop | — |
+
+**Os dois tetos de contagem foram alcançados** — draw call com 7 de folga (e
+estourando se a sombra entrar na conta), triângulo com 43 k. Sete frentes
+levaram o castelo de 823 para 173 por olho: culling dos inimigos, fusão de GLB
+cru, feixes de findability em duas malhas, `far` na distância da névoa, terceiro
+degrau de LOD da grama, pulo dos chunks que o shader já apaga, e atlas de
+textura nos esqueletos.
+
+**Nenhum desses números é fps.** O critério real é tempo de frame, e tempo só o
+aparelho mede (`adb logcat -s VrApi`). Contagem é proxy — um proxy que agora
+passa, o que autoriza medir tempo, não substitui a medida.
 
 E a ressalva que impede o otimismo: **o three não usa multiview aqui**, então o
 segundo olho custa de verdade. Um teto "por olho" só é honesto porque é a régua
