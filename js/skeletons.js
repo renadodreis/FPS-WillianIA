@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import { meleeBlocked } from './aihelpers.js';
+import { fundirPorAtlas } from './meshutils.js';
 
 /* Mapa de eixos do rig (Sketchfab exporta em T-pose; tudo abaixo foi
    validado EMPIRICAMENTE com capturas por eixo — não confiar em intuição):
@@ -305,12 +306,30 @@ export function createSkeletons(deps) {
     const box = new THREE.Box3().setFromObject(proto);
     const size = box.getSize(new THREE.Vector3());
     const s = 2.25 / size.y; // esqueleto de 2,25m — maior que o player: dá medo
+    /* PERF: as QUATRO submalhas do GLB (corpo, crânio, pélvis, cimitarra)
+       têm materiais IDÊNTICOS — `MeshPhysicalMaterial` branco, rugosidade 1,
+       metalicidade 0, sem nenhum outro mapa — e o que as separa é só a
+       textura de 256×256 de cada uma. Quatro malhas por esqueleto vezes sete
+       esqueletos são 28 draw calls POR OLHO com todos na tela; medido em
+       sessão immersive-vr, 8 estéreo por esqueleto visível. `fundirPorAtlas`
+       junta as quatro texturas num atlas 2×2 e as quatro geometrias numa
+       SkinnedMesh só — 4 calls viram 1 (ver js/meshutils.js, inclusive a
+       correção de espaço de bind: este GLB traz uma skin por submalha, com
+       `inverseBindMatrices` diferentes apesar da MESMA lista de 37 ossos).
+
+       DEPOIS do `box` acima de propósito: `Box3.setFromObject` lê a posição
+       CRUA dos vértices (não a skinada), e a correção de bind reescreve
+       essa posição crua. Fundir antes mudaria `size.y` e, com ele, a escala
+       e a altura de todo esqueleto do mapa. */
+    const fundido = fundirPorAtlas(proto, { boundsFactor: 2.1 });
+    if (!fundido) console.warn('[esqueletos] atlas recusado: as submalhas voltaram a custar uma draw call cada');
     /* PERF: o rig vinha com frustumCulled=false e seus 4 meshes eram enviados
        às 4 cascatas mesmo fora delas. Calcula o skin UMA vez no protótipo; os
        clones copiam a esfera. 2,1× cobre o extremo medido da cimitarra no
-       strike (mínimo 1,968×) e ainda deixa 11 cm de margem em escala real. */
+       strike (mínimo 1,968×) e ainda deixa 11 cm de margem em escala real.
+       (A malha fundida já sai com a esfera inflada — o laço pula ela.) */
     proto.traverse(o => {
-      if (!o.isSkinnedMesh) return;
+      if (!o.isSkinnedMesh || (fundido && o === fundido.malha)) return;
       o.computeBoundingSphere();
       if (o.boundingSphere) o.boundingSphere.radius *= 2.1;
     });

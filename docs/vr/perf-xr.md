@@ -895,3 +895,279 @@ alpha test (que reabre a discussão de ocultamento — alpha test com `alphaMap`
 tem borda dura e MUDA quanto se enxerga através), e o ganho só existe onde já
 está a lâmina de 1 segmento. **Não recomendada enquanto houver 7,6 % de folga
 na pior pose.**
+
+---
+
+## O censo de DRAW CALL refeito no estado atual (2026-08-26, sobre `4c4810b`)
+
+Quatro frentes mudaram o quadro desde a última atribuição (culling dos
+inimigos, fusão dos GLB crus, feixes 6→2, `far` na névoa, LOD de lâmina e
+corte do fade da grama). Este censo refaz a conta por subtração, do zero, e o
+primeiro resultado é que **o número que abria esta rodada não se reproduz**.
+
+### Condição (sem ela nada abaixo é medida)
+
+Sessão `immersive-vr` real (IWER, preset Quest 3, dois olhos), entrada pelo
+MENU, **mundo congelado com `MP.setTimeScale(0)`**, **GLB do Guardião
+carregado** (`hasModel >= 10`, 20 confirmados) e esqueletos prontos, seed
+424242, `tier=baixo`, mediana de 7-11 amostras com **spread 0** em todas.
+Medido num **worktree limpo de `4c4810b`** — havia outro agente com a árvore
+de trabalho suja, e comparar contra ela seria comparar contra o trabalho dele.
+
+### O frame, e o que ele NÃO é
+
+| pose | frame estéreo (sombra desligada) | **por olho** | com as 2 cascatas do preset |
+|---|--:|--:|--:|
+| spawn | 336 | **168** | 350 |
+| cidade | 304 | **152** | 352 |
+| **castelo** | **358** | **179** | 380 |
+
+Os três números da coluna do meio saíram **idênticos em duas execuções
+independentes** (censo por nó e sonda de esqueleto), com spread 0.
+
+**A pose de castelo está em 179 draw calls por olho contra teto de 180 — e
+não em ~215.** A diferença para o número que abria a rodada tem três
+candidatos, todos declaráveis: (a) a sombra, que vale +14 a +40 estéreo e faz
+o frame com sombra chegar a 380; (b) o que esta bancada NÃO tem — o harness
+desliga os animais, não há outro jogador na sala e a fase de noite está fora;
+(c) o absoluto oscila entre execuções (uma terceira sonda, que liga e desliga
+sombra dezenas de vezes, deu 336/312/350). O que **não** oscila é a
+composição, e é ela que decide o que cortar.
+
+### De quem é cada draw call na pose de CASTELO (358 estéreo)
+
+Tudo de UMA execução só — misturar runs é o erro que já produziu o "não
+atribuído −1144" registrado acima. A soma fecha exata com o frame:
+`não atribuído = 0` nas três poses.
+
+| dono | estéreo | por olho | o que é |
+|---|--:|--:|---|
+| grama | 116 | 58 | 58 chunks no frustum, 1 call por chunk por olho |
+| **veículos** | **50** | **25** | 2 de 6 no frustum: buggy (17 malhas, 36) + caminhão (7 malhas, 14) |
+| 22 malhas soltas do mundo | 44 | 22 | terreno, água, céu, cidade, ruínas, interior da Torre, acampamento, barras do xilofone — 1 call por olho CADA, já mescladas |
+| **baús** | **32** | **16** | 2 de 4 no frustum, 8 malhas cada |
+| arma FP + mãos + HUD (`xrRig`) | 24 | 12 | |
+| castelo do boss + fundação | 18 | 9 | 10 malhas, 10 materiais, ZERO texturas |
+| esqueletos (2 no frustum) | 16 | 8 | 4 submalhas cada |
+| inimigos de GLB (7 no frustum) | 14 | 7 | culling já resolvido na rodada passada |
+| 5 `InstancedMesh` de mundo | 10 | 5 | árvores, pedras, flores, cactos |
+| drops, segredos, pássaros, borboletas, faróis, estrelas | 34 | 17 | |
+
+**A grama continua sendo o maior bloco isolado e continua fora** pelos motivos
+já medidos. O maior bloco ENDEREÇÁVEL é o de veículos, seguido dos baús.
+
+> **O que oscila entre boots, e por quê.** Numa segunda execução da mesma pose
+> a linha dos esqueletos deu 8 em vez de 16 e a dos inimigos 18 em vez de 14:
+> a POSIÇÃO dos sete esqueletos sai de `drySpot()` dentro do callback do GLB, e
+> a posição do fluxo seedado naquele instante depende da ordem de chegada dos
+> assets. Duas execuções de HEAD, mesma seed, largam os sete em coordenadas
+> completamente diferentes. **É por isso que o corte é medido por SUBTRAÇÃO com
+> os sete plantados na frente da câmera, e não pelo absoluto do frame.**
+
+E o que a bancada NÃO estava contando **não muda nada**: religando os 13
+animais (o harness os desliga para não estragar teste de mira) e medindo por
+subtração, eles custam **0 draw calls nas três poses** — 13 bichos espalhados
+num mapa de 900 m raramente caem no frustum.
+
+---
+
+## ATLAS DE TEXTURA — a técnica que faltava, medida nos esqueletos
+
+O censo acima aponta o mesmo padrão em três donos diferentes: **N malhas cujos
+materiais só diferem no MAPA**. Compartilhar material não resolve isso e já
+está registrado por quê (o three não faz batching por material: N malhas são N
+calls). O único caminho é fundir a GEOMETRIA, e para isso o mapa precisa ser
+um só — que é o que um atlas faz.
+
+O caso mais limpo do jogo é o esqueleto: `skeleton.v1.glb` traz quatro
+`SkinnedMesh` com materiais **idênticos** (`MeshPhysicalMaterial` branco,
+rugosidade 1, metalicidade 0, `DoubleSide`, nenhum outro mapa) e quatro
+texturas webp de **256×256** — uma por submalha. Quatro draw calls por olho,
+por esqueleto, e são sete esqueletos que caçam o jogador sem parar (em solo e
+na fase PLAY do BR).
+
+`js/meshutils.js` ganhou `fundirPorAtlas(root)`: monta as N texturas numa
+grade, reescreve o `uv` de cada peça para a célula dela, funde as geometrias e
+devolve UMA malha. Ele **recusa** (devolve `null`, e o chamador segue com as N
+malhas) sempre que qualquer premissa não se sustenta — materiais que diferem
+em algo além do mapa, texturas de tamanhos diferentes, `uv` fora de [0,1],
+bandeiras de render divergentes, transform local não-identidade.
+
+### O que ele paga
+
+Sessão `immersive-vr` (IWER Quest 3), mundo congelado, sombra desligada na
+atribuição, GLB do Guardião carregado, seed 424242, spread 0, medido por
+subtração DENTRO de cada execução, worktrees limpos de `4c4810b` com e sem o
+patch:
+
+| pose | esqueletos no frustum | antes (estéreo) | depois | por olho, por esqueleto |
+|---|--:|--:|--:|---|
+| spawn | 1 | 8 | **2** | 4,00 → **1,00** |
+| cidade | 1 | 8 | **2** | 4,00 → **1,00** |
+| castelo | 2 | 16 | **4** | 4,00 → **1,00** |
+| **controlada: os 7 plantados na frente da câmera** | 7 | **56** | **14** | **−75 %** |
+| idem, com as 2 cascatas do preset | 7 | 84 | **21** | |
+
+**1,00 draw call por olho por esqueleto é o piso** — não existe menos que uma
+malha. E o frame inteiro, mesma bancada:
+
+| pose | antes | depois |
+|---|--:|--:|
+| spawn | 336 | **330** |
+| cidade | 304 | **298** |
+| castelo | **358** | **346** (179 → **173 por olho**) |
+
+**Triângulos não se movem**: 11 696 / 23 392 / 81 872 estéreo, o MESMO número
+nos dois lados. Fusão de geometria não é redução de geometria.
+
+E o desktop **ganha junto** — isto não é preset de sessão: o mesmo corte de 28
+para 7 draw calls vale no monitor, com os mesmos pixels medidos abaixo. O
+preço é **11,5 ms de CPU** (mediana de 5, máx. 19) uma única vez, dentro do
+callback do GLB, que chega bem depois do primeiro quadro.
+
+### O que muda na tela, dito em pixel
+
+Framebuffer a framebuffer, mono 800×600, câmera fixa, mundo congelado, meio-dia
+fixo, comparando só os pixels em que (a) o esqueleto aparece nos DOIS lados e
+(b) o fundo é idêntico nos dois — sem esse recorte a comparação mede o céu
+mudando entre execuções, não a malha:
+
+| distância | pixels do esqueleto | Δ=0 | Δ=1 | Δ 2-3 | Δ 4-7 | Δ 8-15 | Δ≥16 | **silhueta** |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2,2 m | 77 830 | 71 712 | 5 949 | 91 | 32 | 26 | 20 | **0 px** |
+| 8 m | 5 904 | 3 499 | 2 305 | 50 | 23 | 21 | 6 | **0 px** |
+| 25 m | 665 | 224 | 363 | 40 | 20 | 12 | 6 | **0 px** |
+
+**A silhueta é idêntica em zero pixels de diferença nas três distâncias**, e a
+esmagadora maioria do resto é arredondamento de 8 bits. O que sobra são os
+texels de costura entre células (o GLB pede `RepeatWrapping`, o atlas usa
+`ClampToEdge`) e a diferença residual de filtro de mip.
+
+### As quatro armadilhas, e o preço de cada uma
+
+1. **Escorrimento entre células no mip.** Deixar a GPU gerar a cadeia mistura
+   texel de uma textura com o da vizinha nos níveis baixos. A cadeia é montada
+   à mão, célula a célula.
+
+2. **Média de mip em BYTE em vez de em LUZ.** Textura sRGB reduzida somando
+   bytes escurece a cada nível. Medido, com o esqueleto a 25 m: média em byte
+   deixa 82 % dos pixels diferentes de HEAD (desvio médio 3,49); média em luz,
+   66 % (desvio médio 1,24). E o filtro do `drawImage` do Chrome — que parece a
+   escolha óbvia — é ainda pior: **87 %, com desvio de até 37 em 255**. Só a
+   média 2×2 explícita, em espaço linear, reproduz o `generateMipmap` do driver.
+
+3. **Espaço de bind diferente por submalha.** Este GLB traz UMA SKIN POR
+   SUBMALHA, com `inverseBindMatrices` diferentes apesar da mesma lista de 37
+   ossos (a escala de dequantização de cada malha foi parar ali). Fundir sem
+   corrigir deforma o corpo. A correção é uma matriz só — `IBM_base⁻¹ · IBM_p`
+   — e só vale porque ela é a MESMA em todos os 37 ossos, o que é conferido
+   osso a osso; se não fosse, a fusão seria recusada.
+
+4. **`KHR_mesh_quantization` — a que custou a rodada.** O GLB é otimizado:
+   posição e normal são inteiro NORMALIZADO, isto é, moram em [-1,1] com a
+   escala real na matriz de bind. `BufferAttribute.setXYZ` renormaliza ao
+   escrever, então a correção do item 3 era **cortada em ±1** e um punhado de
+   vértices voava: a caixa de duas submalhas errava 13,6 e 6,6 unidades
+   enquanto as outras duas batiam na quinta casa decimal. O sintoma é
+   traiçoeiro justamente por ser parcial — a malha inteira parece certa.
+   Posição, normal e uv são desquantizados para float antes de qualquer escrita.
+
+### Rede
+
+`test/world-drawcalls.test.js` (6 casos novos), com **7 mutantes provados**,
+cada um matando exatamente o caso que devia:
+
+| mutante | caso que morre |
+|---|---|
+| ninguém funde | os 6 |
+| `generateMipmaps = true` (cadeia da GPU) | a cadeia de mip |
+| média de mip em byte | a cadeia de mip |
+| mip pelo filtro do canvas | a cadeia de mip |
+| sem desquantizar | os vértices skinados |
+| sem correção de espaço de bind | os vértices skinados |
+| `uv` sem o deslocamento do atlas | os pixels do atlas |
+
+O caso dos pixels compara o **hash FNV-1a dos 262 144 bytes RGBA** de cada
+célula contra a textura que ela substituiu — e ainda cobra que o `uv` de cada
+peça caia DENTRO da célula dela, porque só o hash deixaria passar quatro peças
+lendo todas o mesmo canto.
+
+Verde no worktree isolado: `world-drawcalls` (19), `skeletons`,
+`carregamento-determinismo`, `enemy-drawcalls`, `animal-drawcalls` (81),
+`render-quality`, `security-regression`, `level-design`, `xr-quality`,
+`asset-models` (67).
+
+### O `Math.random` seedado
+
+A fusão roda dentro de `noSeed` (o mesmo canal de `fuseBody`), então nenhum dos
+UUID que ela cria consome o fluxo seedado. E o retrato do mundo continua byte a
+byte igual: `test/carregamento-determinismo.test.js` passa. Registre-se, de
+passagem, um fato que já era verdade e não muda: **a POSIÇÃO dos sete
+esqueletos já não é reprodutível entre boots** — ela sai de `drySpot()` dentro
+do callback do GLB, e a posição do fluxo naquele instante depende da ordem de
+chegada dos assets. Duas execuções de HEAD, mesma seed, dão sete pares de
+coordenadas completamente diferentes. Isso é de antes, não é do atlas, e é por
+isso que os dourados deste bloco fixam o grupo na origem antes de medir.
+
+---
+
+## O que sobra, por tamanho — e o que cada corte custaria
+
+Depois do atlas dos esqueletos, na pose de castelo (346 estéreo = **173 por
+olho**, teto 180):
+
+| bloco | por olho | técnica | risco |
+|---|--:|---|---|
+| grama (58 chunks) | 58 | — | **fora**: `GRASS_CHUNKS` alimenta o PRNG seedado, super-chunk engrossa culling e SOBE triângulo |
+| **veículos** | **25** | atlas, como o dos esqueletos | **alto**: ver abaixo |
+| **baús** | **16** | cor por vértice + mapa ORM minúsculo | **médio**, e paga pouco: ver abaixo |
+| arma FP + mãos + HUD | 12 | — | mora em `xrRig`/`game.js` |
+| castelo do boss | 9 | cor por vértice (10 materiais, ZERO texturas) | **alto**: `validateCastleModel` cobra 10 materiais por NOME e por cor, e há 4 arquivos de teste em cima do castelo |
+| inimigos (28) | 9 | — | já resolvido pelo culling da rodada passada |
+| esqueletos | 4 | **feito** | |
+| resto (22 malhas soltas + 5 InstancedMesh + drops + segredos) | 46 | — | é 1 call/olho cada; nada isolado paga |
+
+### Veículos: por que o atlas ali NÃO é o mesmo atlas
+
+O inventário, medido no runtime (`fuseParts` de `js/carwheels.js` já fundiu o
+que dava por cor):
+
+- **Buggy `gumball` — 17 malhas, 36 estéreo (18 por olho), o objeto mais caro
+  do frame depois da grama.** Corpo com 9 malhas e **7 texturas de CINCO
+  tamanhos diferentes** (256², 128², 256×128, 256×4 de paleta), rugosidade
+  variando de 0,806 a 1, metalicidade 0 ou 1, **duas com `roughnessMap` e
+  `metalnessMap`** e uma TRANSPARENTE. Cada roda são 2 malhas com texturas de
+  tamanhos diferentes entre si.
+- **Caminhão `truck-drifter` — 7 malhas, 14 estéreo.** As sete usam a MESMA
+  textura de 64×4; o que as separa é rugosidade (1 e 0) — não é caso de atlas,
+  é caso de mapa de parâmetro.
+- **Esportivos `mazda-rx7` — já em 6 malhas**, com cor por vértice: 15
+  primitivas viraram 2 + 4 rodas. A fusão por cor que já existe funciona.
+
+Teto do atlas no buggy: 17 → ~6 malhas, **−10 a −11 por olho** nas poses em
+que ele aparece. O preço, e é ele que muda a recomendação: exige **normalizar
+tamanho de textura** (subir 128² para 256² muda a filtragem e dobra a memória
+daquelas), exige um **segundo atlas para o par rugosidade/metalicidade** (ORM),
+e a peça transparente tem que ficar de fora por ordem de mistura. Ou seja: três
+mecanismos novos, contra zero do caso do esqueleto. **Medir antes de fazer, e
+medir em pixel — é a primeira aplicação em que o atlas MUDA a textura, não só
+a realoca.**
+
+### Baús: medido, e não paga
+
+8 malhas por baú, 32 estéreo (16 por olho) com 2 dos 4 no frustum. Os 4
+materiais não têm textura nenhuma — o que os separa é cor, rugosidade e
+metalicidade —, então o caminho seria cor por vértice + um mapa ORM de 3×1.
+Mas a tampa GIRA e a pilha de tesouro SOME, o `glow` é escrito em runtime por
+`markOpened`, e `castShadow` é **true** só no corpo e no domo da tampa: fundir
+só o que compartilha bandeira leva de 8 para 6 malhas. **−2 por olho por baú**,
+ao preço de um mecanismo novo (mapa de parâmetro) num objeto que o jogador
+abre de perto. Não recomendado.
+
+### O número que falta, se o teto for o de 180 com sombra
+
+Sem sombra o castelo já cabe: **173 contra 180**. Com as duas cascatas do
+preset o frame vai a 376 estéreo; se o teto for lido como "tudo que o frame
+submete", faltam **~16 draw calls**. A fonte mais barata deles, medida, é o
+buggy (−10 a −11 por olho) — e a segunda é a cascata: os inimigos sozinhos
+pagam **+18 estéreo de sombra** na pose de cidade, contra +0 nas outras duas.

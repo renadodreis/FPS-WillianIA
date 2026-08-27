@@ -644,3 +644,301 @@ describe('o céu noturno cabe no campo de visão', { skip: !CHROME && 'Chrome n�
       'tudo entre os dois é desenhado 100% da cor da névoa — pixel que não muda nada e custa draw call');
   });
 });
+
+/* ================================================================
+   ESQUELETOS — QUATRO SUBMALHAS VIRAM UMA, COM ATLAS DE TEXTURA
+
+   `skeleton.v1.glb` traz o esqueleto em quatro `SkinnedMesh` cujos
+   materiais são IDÊNTICOS (MeshPhysicalMaterial branco, rugosidade 1,
+   metalicidade 0, DoubleSide, sem nenhum outro mapa): o que as separa é
+   só a textura de 256×256 de cada uma. Compartilhar material não
+   resolveria — o three não faz batching por material, então quatro
+   malhas continuam sendo quatro draw calls. O único caminho é fundir a
+   GEOMETRIA, e para isso o mapa tem que ser um só: atlas.
+
+   Medido em sessão immersive-vr (IWER Quest 3), mundo congelado com
+   `MP.setTimeScale(0)`, sombra desligada na atribuição, GLB do Guardião
+   carregado, seed 424242, spread 0 em todas as amostras, com os SETE
+   esqueletos plantados na frente da câmera para a contagem ser
+   comparável entre execuções:
+
+     antes  56 draw calls estéreo (4,00 por olho por esqueleto)
+     depois 14 draw calls estéreo (1,00 por olho por esqueleto)   −75 %
+     com sombra: 84 → 21 estéreo
+     triângulos: 81 872 estéreo nos DOIS — a fusão não move um triângulo
+
+   Este bloco é a rede das quatro coisas que não podem mudar junto:
+
+     1. a contagem de malhas cai de verdade (é o que vira draw call);
+     2. o atlas carrega os MESMOS pixels das quatro texturas;
+     3. a cadeia de mip é montada célula a célula E em luz (linear), que
+        é como o driver reduz textura sRGB — com o filtro do canvas o
+        esqueleto a 25 m ficava com 87 % dos pixels diferentes;
+     4. os vértices SKINADOS caem exatamente onde caíam. Isto é o que
+        pega as duas armadilhas caras: a correção de espaço de bind
+        (cada submalha vem com uma skin de `inverseBindMatrices`
+        diferente) e a DESQUANTIZAÇÃO (o GLB usa KHR_mesh_quantization,
+        posição é inteiro normalizado, e escrever por cima corta em ±1).
+
+   Dourados colhidos no worktree limpo de 4c4810b, WORLD_SEED=424242.
+   ================================================================ */
+const OURO_ESQ = [
+  { nome: 'Circle_0', verts: 2240, tris: 3724, hash: 930731516,
+    caixa: [[-8.90625, -2.20887, -0.47301], [8.90625, 2.68417, 9.50471]] },
+  { nome: 'Circle_1', verts: 823, tris: 1420, hash: 2228075012,
+    caixa: [[-1.78626, -1.74905, 8.4219], [1.78626, 2.18452, 14.3625]] },
+  { nome: 'Circle_2', verts: 260, tris: 448, hash: 3541268468,
+    caixa: [[-1.64138, -0.99477, 11.30124], [1.64143, 0.52146, 12.90082]] },
+  { nome: 'Circle_3', verts: 175, tris: 256, hash: 1889804764,
+    caixa: [[-8.52662, -9.34667, 7.80512], [-6.73524, 1.89713, 9.15921]] },
+];
+
+describe('esqueletos: as quatro submalhas viram uma malha só', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  let h, r;
+
+  /* Roda NA PÁGINA. Normaliza o palco (grupo na origem, sem rotação) porque
+     `getVertexPosition` de SkinnedMesh sai no espaço em que os OSSOS estão —
+     sem fixar o grupo, o dourado dependeria de onde o mundo largou o
+     esqueleto, e o mundo larga cada um num ponto diferente a cada boot (o
+     sorteio acontece na chegada assíncrona do GLB). */
+  function sondaEsqueleto(ordem) {
+    const G = window.__game, THREE = window.__MP.THREE;
+    const sk = G.Skeletons.list[0];
+    const out = { modelos: [], atlas: null, partes: [], material: null };
+    for (const s of G.Skeletons.list) {
+      let malhas = 0, skinned = 0;
+      if (s.model) s.model.traverse(o => {
+        if (o.isMesh || o.isSkinnedMesh) malhas++;
+        if (o.isSkinnedMesh) skinned++;
+      });
+      out.modelos.push({ malhas, skinned });
+    }
+    if (!sk || !sk.model) return out;
+    sk.group.position.set(0, 0, 0);
+    sk.group.rotation.set(0, 0, 0);
+    sk.group.scale.set(1, 1, 1);
+    sk.group.updateMatrixWorld(true);
+    sk.model.updateMatrixWorld(true);
+
+    let malha = null;
+    sk.model.traverse(o => { if (o.isSkinnedMesh && !malha) malha = o; });
+    if (!malha) return out;
+    malha.skeleton.update();
+
+    const m = malha.material, tex = m.map, img = tex.image;
+    out.material = {
+      tipo: m.type, cor: m.color.getHexString(), rough: m.roughness, metal: m.metalness,
+      side: m.side, transparent: m.transparent, flatShading: m.flatShading,
+      vertexColors: m.vertexColors,
+      outrosMapas: ['normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap',
+        'alphaMap', 'bumpMap', 'displacementMap', 'lightMap'].filter(k => m[k]),
+    };
+    out.atlas = {
+      w: img.width, h: img.height,
+      niveis: (tex.mipmaps || []).map(x => `${x.width}x${x.height}`),
+      generateMipmaps: tex.generateMipmaps, flipY: tex.flipY, colorSpace: tex.colorSpace,
+      minFilter: tex.minFilter, magFilter: tex.magFilter,
+    };
+
+    /* pixels: hash de cada quadrante do nível 0, e o texel do nível 2×2 */
+    const lePixels = (fonte, x, y, w2, h2) => {
+      const c = document.createElement('canvas');
+      c.width = fonte.width; c.height = fonte.height;
+      c.getContext('2d', { willReadFrequently: true }).drawImage(fonte, 0, 0);
+      return c.getContext('2d', { willReadFrequently: true }).getImageData(x, y, w2, h2).data;
+    };
+    const grade = 2, cw = img.width / grade, ch = img.height / grade;
+    const paraLinear = v => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+    const paraSrgb = v => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
+    const nivel8 = (tex.mipmaps || []).find(x => x.width === 2 && x.height === 2);
+    const px8 = nivel8 ? lePixels(nivel8, 0, 0, 2, 2) : null;
+
+    /* Faixa de vértice de cada peça: a fusão concatena na ordem, e uv
+       exatamente na borda cairia no quadrante vizinho se a classificação
+       fosse por uv. */
+    const g = malha.geometry, pos = g.attributes.position;
+    const v = new THREE.Vector3();
+    const round = x => Math.round(x * 1e5) / 1e5;
+    let ini = 0;
+    for (let q = 0; q < grade * grade; q++) {
+      const gx = q % grade, gy = Math.floor(q / grade);
+      const d = lePixels(img, gx * cw, gy * ch, cw, ch);
+      let hsh = 2166136261 >>> 0;
+      let lr = 0, lg = 0, lb = 0, br = 0, bg = 0, bb = 0;
+      for (let i = 0; i < d.length; i++) hsh = ((hsh ^ d[i]) * 16777619) >>> 0;
+      for (let i = 0; i < d.length; i += 4) {
+        lr += paraLinear(d[i] / 255); lg += paraLinear(d[i + 1] / 255); lb += paraLinear(d[i + 2] / 255);
+        br += d[i]; bg += d[i + 1]; bb += d[i + 2];
+      }
+      const n = d.length / 4;
+      const fim = ini + (ordem[q] || 0);
+      const b = [[1e9, 1e9, 1e9], [-1e9, -1e9, -1e9]];
+      const uvAttr = g.attributes.uv;
+      const cel = [1e9, -1e9, 1e9, -1e9];
+      for (let i = ini; i < fim && i < pos.count; i++) {
+        malha.getVertexPosition(i, v);
+        for (let j = 0; j < 3; j++) {
+          const x = v.getComponent(j);
+          if (x < b[0][j]) b[0][j] = x;
+          if (x > b[1][j]) b[1][j] = x;
+        }
+        const uu = uvAttr.getX(i), vv = uvAttr.getY(i);
+        if (uu < cel[0]) cel[0] = uu; if (uu > cel[1]) cel[1] = uu;
+        if (vv < cel[2]) cel[2] = vv; if (vv > cel[3]) cel[3] = vv;
+      }
+      ini = fim;
+      out.partes.push({
+        q, hash: hsh, bytes: d.length, caixa: b.map(a => a.map(round)),
+        uv: cel.map(round), celula: [gx / grade, (gx + 1) / grade, gy / grade, (gy + 1) / grade],
+        mediaLinear: [lr, lg, lb].map(x => Math.round(paraSrgb(x / n) * 255)),
+        mediaByte: [br, bg, bb].map(x => Math.round(x / n)),
+        nivel2x2: px8 ? [px8[q * 4], px8[q * 4 + 1], px8[q * 4 + 2]] : null,
+      });
+    }
+    out.verts = pos.count;
+    out.tris = (g.index ? g.index.count : pos.count) / 3;
+    out.esfera = malha.boundingSphere
+      ? { c: malha.boundingSphere.center.toArray().map(round), r: round(malha.boundingSphere.radius) }
+      : null;
+    return out;
+  }
+
+  before(async () => {
+    h = await bootGame({ port: 3494, worldSeed: '424242' });
+    await h.page.waitForFunction('window.__game.Skeletons && window.__game.Skeletons.modelReady',
+      { timeout: 180000, polling: 250 });
+    r = await h.play(sondaEsqueleto, OURO_ESQ.map(p => p.verts));
+  });
+
+  after(async () => { if (h) await h.close(); });
+
+  it('cada esqueleto tem UMA malha, e ela é skinada', () => {
+    assert.equal(r.modelos.length, 7, 'os 7 esqueletos continuam no mapa');
+    for (const [i, m] of r.modelos.entries()) {
+      assert.equal(m.malhas, 1,
+        `esqueleto ${i}: ${m.malhas} malhas (o GLB traz 4, e cada uma é uma draw call por olho)`);
+      assert.equal(m.skinned, 1, `esqueleto ${i}: a malha fundida tem que continuar skinada`);
+    }
+    assert.equal(r.verts, OURO_ESQ.reduce((s, p) => s + p.verts, 0),
+      'a fusão não pode perder nem inventar vértice');
+    assert.equal(r.tris, OURO_ESQ.reduce((s, p) => s + p.tris, 0),
+      'a fusão não pode mover um triângulo');
+  });
+
+  it('o material continua o mesmo — só o mapa virou atlas', () => {
+    assert.equal(r.material.tipo, 'MeshPhysicalMaterial');
+    assert.equal(r.material.cor, 'ffffff');
+    assert.equal(r.material.rough, 1);
+    assert.equal(r.material.metal, 0);
+    assert.equal(r.material.transparent, false);
+    assert.equal(r.material.flatShading, false);
+    assert.equal(r.material.vertexColors, false);
+    assert.deepEqual(r.material.outrosMapas, [],
+      'o atlas só vale porque o mapa de cor é o ÚNICO que difere entre as peças');
+    assert.equal(r.atlas.w, 512, 'atlas 2×2 de células de 256');
+    assert.equal(r.atlas.h, 512);
+    assert.equal(r.atlas.flipY, false, 'GLB nasce com flipY=false; o atlas tem que herdar');
+    assert.equal(r.atlas.colorSpace, 'srgb');
+  });
+
+  it('cada quadrante do atlas tem os MESMOS pixels da textura que substituiu', () => {
+    assert.equal(r.partes.length, 4);
+    const hashes = r.partes.map(p => p.hash);
+    assert.deepEqual(hashes, OURO_ESQ.map(p => p.hash),
+      'os bytes das quatro texturas de 256×256 têm que chegar intactos ao atlas ' +
+      '(hash FNV-1a dos 262 144 bytes RGBA de cada célula)');
+    /* Pixel certo no lugar certo não basta: o uv de cada peça tem que APONTAR
+       pra célula dela. Sem esta cerca, esquecer o deslocamento do atlas deixa
+       as quatro peças lendo a textura do canto de baixo à esquerda — e os
+       hashes acima continuariam todos verdes. */
+    for (const p of r.partes) {
+      const [u0, u1, v0, v1] = p.uv, [cu0, cu1, cv0, cv1] = p.celula;
+      assert.ok(u0 >= cu0 - 1e-4 && u1 <= cu1 + 1e-4 && v0 >= cv0 - 1e-4 && v1 <= cv1 + 1e-4,
+        `peça ${p.q}: uv ${JSON.stringify(p.uv)} sai da célula ${JSON.stringify(p.celula)} — ` +
+        'ela leria a textura da vizinha');
+      assert.ok(u1 - u0 > 0.2 && v1 - v0 > 0.05,
+        `peça ${p.q}: uv ${JSON.stringify(p.uv)} não ocupa a célula — o deslocamento comeu a escala`);
+    }
+  });
+
+  it('a cadeia de mip é MONTADA, célula a célula e em luz', () => {
+    assert.equal(r.atlas.generateMipmaps, false,
+      'deixar a GPU gerar o mip mistura texel de uma textura com o da vizinha nos níveis baixos');
+    assert.deepEqual(r.atlas.niveis,
+      ['512x512', '256x256', '128x128', '64x64', '32x32', '16x16', '8x8', '4x4', '2x2', '1x1'],
+      'a cadeia tem que ser COMPLETA: nível faltando deixa a textura incompleta pro filtro trilinear');
+    /* O nível 2×2 é o último em que cada célula ainda é só dela: cada texel
+       tem que ser a média da SUA textura, e em LUZ. Média em byte dá outro
+       número — e com ela o esqueleto a 25 m tinha 82 % dos pixels diferentes
+       de HEAD contra 66 % da média em luz (média de desvio 3,49 contra 1,24). */
+    for (const p of r.partes) {
+      assert.ok(p.nivel2x2, 'o nível 2×2 tem que existir');
+      const dLinear = Math.max(...p.nivel2x2.map((v, i) => Math.abs(v - p.mediaLinear[i])));
+      const dByte = Math.max(...p.nivel2x2.map((v, i) => Math.abs(v - p.mediaByte[i])));
+      assert.ok(dLinear <= 2,
+        `célula ${p.q}: o texel 2×2 ${JSON.stringify(p.nivel2x2)} não é a média em luz ` +
+        `${JSON.stringify(p.mediaLinear)} (desvio ${dLinear}) — ou o mip cruzou a borda da célula, ` +
+        'ou o filtro do canvas voltou');
+      assert.ok(dLinear < dByte,
+        `célula ${p.q}: o texel 2×2 está mais perto da média em BYTE ${JSON.stringify(p.mediaByte)} ` +
+        `que da média em luz ${JSON.stringify(p.mediaLinear)} — reduzir textura sRGB em byte escurece`);
+    }
+  });
+
+  it('os vértices SKINADOS caem exatamente onde caíam com quatro malhas', () => {
+    /* Mata os dois defeitos que custaram esta rodada:
+       - sem a correção de espaço de bind (cada submalha do GLB vem com uma
+         skin de `inverseBindMatrices` própria), o corpo se deforma;
+       - sem desquantizar (KHR_mesh_quantization: posição é inteiro
+         NORMALIZADO, ou seja, mora em [-1,1]), escrever a correção por cima
+         corta em ±1 e um punhado de vértices voa. Medido: as caixas de duas
+         peças erravam 13,6 e 6,6 enquanto as outras batiam na quinta casa. */
+    for (const [i, ouro] of OURO_ESQ.entries()) {
+      perto(r.partes[i].caixa, ouro.caixa, `esqueleto/${ouro.nome}`);
+    }
+    assert.ok(r.esfera && r.esfera.r > 0 && Number.isFinite(r.esfera.r),
+      'a malha fundida precisa de esfera de bounds: sem ela o frustum culling some');
+  });
+
+  it('sete esqueletos na frente da câmera custam SETE draw calls', async () => {
+    const medido = await h.play(() => {
+      const G = window.__game, MP = window.__MP, R = MP.renderer;
+      const P = MP.player.pos;
+      const dir = new MP.THREE.Vector3();
+      MP.camera.getWorldDirection(dir);
+      dir.y = 0; dir.normalize();
+      const lado = new MP.THREE.Vector3(-dir.z, 0, dir.x);
+      G.Skeletons.list.forEach((s, i) => {
+        const d = 6 + i * 1.1, l = (i - 3) * 1.6;
+        const x = P.x + dir.x * d + lado.x * l, z = P.z + dir.z * d + lado.z * l;
+        s.group.position.set(x, MP.heightAt(x, z), z);
+        s.group.visible = true;
+        s.group.updateMatrixWorld(true);
+      });
+      const autoSalvo = R.info.autoReset, sombraSalva = R.shadowMap.enabled;
+      R.info.autoReset = false;
+      R.shadowMap.enabled = false;
+      const frame = () => {
+        G.tick(0);
+        R.info.reset();
+        R.render(MP.scene, MP.camera);
+        return { calls: R.info.render.calls, tris: R.info.render.triangles };
+      };
+      for (let i = 0; i < 20; i++) frame();
+      const com = frame();
+      const vis = G.Skeletons.list.map(s => s.group.visible);
+      for (const s of G.Skeletons.list) s.group.visible = false;
+      for (let i = 0; i < 3; i++) frame();
+      const sem = frame();
+      G.Skeletons.list.forEach((s, i) => { s.group.visible = vis[i]; });
+      R.info.autoReset = autoSalvo;
+      R.shadowMap.enabled = sombraSalva;
+      return { custo: com.calls - sem.calls, tris: com.tris - sem.tris, com: com.calls };
+    });
+    assert.equal(medido.custo, 7,
+      `os 7 esqueletos custaram ${medido.custo} draw calls MONO (o alvo é 7, uma por esqueleto; ` +
+      'com as quatro submalhas do GLB eram 28)');
+    assert.ok(medido.tris > 40000,
+      `pré-condição vazia: só ${medido.tris} triângulos de esqueleto no quadro`);
+  });
+});
