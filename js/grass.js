@@ -56,14 +56,37 @@ export function createGrass(deps) {
      O que sustenta o ocultamento a essa distância é a DENSIDADE, não a
      curvatura de cada lâmina, e isso está medido em pixel (contra um alvo do
      tamanho de um corpo deitado) em test/xr-quality.test.js. */
-  const loBlade = bladeGeometry(2); loBlade.scale(0.35, 1, 1);
-  const minBlade = bladeGeometry(1);
+  const loBlade = bladeGeometry(2);
+  /* A LÂMINA MÍNIMA NASCE PREGUIÇOSA, e isto não é economia de memória: é o
+     invariante mais caro do repo. Todo `BufferGeometry` do three gasta 4
+     números do `Math.random` no UUID, e durante o worldgen o `Math.random` É
+     o fluxo SEEDADO — criá-la junto das outras duas deslocaria o layout do
+     mundo de TODOS os jogadores da mesma seed. Não é teoria: o
+     test/grass-decor.test.js conta os 22 UUIDs que a criação da grama gera e
+     reprovou na primeira tentativa deste degrau.
+
+     É a mesma regra que faz o rig de XR nascer preguiçoso (CLAUDE.md), e ela
+     morde exatamente igual aqui.
+
+     E quando ela finalmente nasce — dentro da sessão, que é o único lugar que
+     pede o degrau mínimo — nasce sob um RNG LOCAL, para não gastar nem um
+     sorteio do fluxo compartilhado nem naquele instante. */
+  let minBlade = null;
+  function laminaMinima() {
+    if (minBlade) return minBlade;
+    const originalRandom = Math.random;
+    let s = 0x9E3779B9 >>> 0;
+    Math.random = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+    try { minBlade = bladeGeometry(1); } finally { Math.random = originalRandom; }
+    return minBlade;
+  }
   /* esfera da LÂMINA (não do chunk). Ela vai junto no clone de cada chunk e é
      o que `InstancedMesh.computeBoundingSphere` usaria como unidade se algum
      dia precisasse recalcular. As três lâminas têm a MESMA extensão (o LOD só
      tira subdivisão), então a do baseBlade serve para todas. */
   baseBlade.computeBoundingSphere();
-  const NIVEIS = [baseBlade, loBlade, minBlade];   // 0 completa · 1 reduzida · 2 mínima
+  // 0 completa · 1 reduzida · 2 mínima (esta última criada na primeira vez)
+  const NIVEIS = [() => baseBlade, () => loBlade, laminaMinima];
   /* OS DOIS ANÉIS SÃO LIDOS POR FRAME, NÃO CONGELADOS NO BOOT — e é isso que
      permite ao preset da sessão XR (js/xr/xrquality.js) trocá-los ao entrar no
      headset e devolvê-los ao sair, pelo MESMO canal por onde ele já mexe no
@@ -444,7 +467,7 @@ export function createGrass(deps) {
      nem muda um byte do conteúdo determinístico. */
   function aplicarLod(chunk, nivel) {
     if (chunk.nivel === nivel) return;
-    const src = NIVEIS[nivel] || baseBlade;
+    const src = (NIVEIS[nivel] || NIVEIS[0])();
     const g = chunk.mesh.geometry;
     g.setIndex(src.index);
     g.setAttribute('position', src.attributes.position);
@@ -603,7 +626,7 @@ export function createGrass(deps) {
       return { segmentos: geo.parameters.heightSegments, alturaMax, larguraBase, larguraTopo,
         triangulos: bladeTriangles(geo) };
     };
-    return { completa: medir(baseBlade), reduzida: medir(loBlade), minima: medir(minBlade) };
+    return { completa: medir(baseBlade), reduzida: medir(loBlade), minima: medir(laminaMinima()) };
   }
 
   return { update, material, PATCH_RADIUS, refreshAll, debugSample, debugChunkBytes, stampTrack,

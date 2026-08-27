@@ -627,6 +627,14 @@ agressivo. Todos morreram, e cada um matou o caso que devia matar.
 
 ### O veredito honesto: 500 k continua fora de alcance
 
+> **SUPERADO em 2026-08-26, na mesma rodada.** Esta seção estava certa no
+> número e errada na conclusão: ela devolveu a decisão ao dono em vez de
+> resolver. A saída (1) logo abaixo — o terceiro degrau de LOD — foi
+> implementada, mais o corte do que não pinta pixel, e **as três poses agora
+> cabem**. Ver "[A grama cabe em 500 k](#a-grama-cabe-em-500-k-medido-em-2026-08-26)".
+> O raciocínio abaixo fica porque é ele que explica POR QUE dois degraus não
+> bastavam.
+
 Pose de castelo, nesta execução, por olho:
 
 ```
@@ -720,3 +728,170 @@ ela é a primeira coisa que o jogador vê —, a alternativa é um `far` maior
 chão. Custa uma linha por transição de fase e devolve a paisagem justamente
 onde ela aparece. **Não foi feito**: é mudança de comportamento por fase, e
 merece a medição própria antes de entrar.
+
+---
+
+## A grama cabe em 500 k (medido em 2026-08-26)
+
+A seção anterior media que dois degraus de LOD de lâmina não bastavam e parava
+aí. Não bastava mesmo — e a resposta certa não era escolher entre estourar o
+teto e mexer no desenho do mundo, era **descer mais um degrau de geometria** e
+**parar de desenhar o que já não pinta pixel**. As duas coisas entraram, e o
+resultado é o teto cumprido nas três poses.
+
+### 1. Terceiro degrau: a lâmina de 1 segmento
+
+`js/grass.js` passou a ter três lâminas compartilhadas, todas da MESMA fórmula:
+
+| degrau | segmentos | triângulos | onde |
+|---|--:|--:|---|
+| completa | 4 | 8 | anel 0 (o chunk sob os pés) |
+| reduzida | 2 | 4 | anéis 1-2 (~10 a 25 m) |
+| **mínima** | **1** | **2** | anel 3+ (além de ~25 m) |
+
+Dois é o **piso geométrico de um quad**: não existe degrau abaixo dele sem
+deixar de ser um quad.
+
+**Por que continua não sendo wallhack**, e não é opinião: o afunilamento da
+lâmina é **linear em y** (`x *= 1 - y*0,82`), então a largura em qualquer
+altura é idêntica com 4, 2 ou 1 segmento — o rasterizador interpola a mesma
+reta. Raiz e ponta caem no mesmo ponto nos três. O único que muda é a curvinha
+`z = y²·0,18`, que vira uma poligonal com menos vértices; a flecha dela é
+4,5 cm no meio da lâmina, e a 25 m isso é fração de pixel. Medido:
+`alturaMax`, `larguraBase` e `larguraTopo` **idênticos** nos três degraus.
+
+### 2. O corte do que não pinta pixel (vale para o desktop também)
+
+O lead registrado na seção anterior e não seguido virou código. O vertex shader
+já apaga a grama longe: `edgeFade` vai a ZERO quando a raiz da lâmina passa de
+`0,97 · PATCH_RADIUS` = **63,05 m da CÂMERA**, e ali ele multiplica x E y por
+zero. A lâmina vira uma linha, as duas colunas do quad viram o mesmo ponto,
+todo triângulo fica degenerado — **nenhum pixel**. Vento e dobra não salvam: os
+vértices coincidentes têm o mesmo `wpos.xz` e sofrem o mesmo deslocamento.
+
+Os chunks das quinas externas da grade eram desenhados INTEIROS para pintar
+nada. Agora `mesh.count = 0` os pula, e o three sai antes da chamada de GL
+(`renderInstances` tem `if (primcount === 0) return`), então **some o triângulo
+E a draw call**. `onAfterRender` devolve a contagem, para que `mesh.count`
+continue sendo 1005 para todo mundo que lê contagem de lâmina — inclusive o
+vigia anti-trapaça do `scripts/soak.js`.
+
+**Onde o teste mora, e por que ali:** `onBeforeRender` do MESH, não no
+`update()`. O fade é função da posição da CÂMERA, e `update()` só recebe a do
+jogador/carro — que na câmera de perseguição fica **7,4 m atrás** (helicóptero:
+10,5 m) e no passeio do menu, centenas de metros. Cortar por ali exigiria uma
+margem de ~12 m que comeria o ganho inteiro, e erraria para o lado ERRADO:
+grama sumindo na tela. `onBeforeRender` recebe a câmera EXATA que vai desenhar
+— em XR, a sub-câmera de CADA OLHO — imediatamente antes do `renderBufferDirect`
+(three r185, `renderObject`). Sem margem e certo nos dois olhos.
+
+Prova de que não muda a tela: A/B de framebuffer com e sem o corte, mono,
+800×600, mesma câmera. **0 pixels diferentes de 480 000**, com 10 chunks
+pulados, −40 200 triângulos e −10 draw calls no mesmo quadro. O caso cobra as
+duas metades: se o corte não pular nada, ele falha por não ter medido nada.
+
+> **O defeito que essa medição pegou, e ele só existia em XR.** A primeira
+> versão lia a câmera com `camera.getWorldPosition()`. Esse método chama
+> `updateWorldMatrix`, que **recalcula** a `matrixWorld` a partir do transform
+> local — e a sub-câmera de olho do XR tem a `matrixWorld` escrita direto pelo
+> `WebXRManager`, sem local correspondente. A câmera ia parar na origem, todo
+> chunk virava "longe" e **o corte comia a grama INTEIRA dentro do headset**:
+> 196 980 → 0 triângulos por olho na pose de castelo. O A/B de pixel no monitor
+> ficou verde o tempo todo, porque em mono o recálculo dá o mesmo resultado.
+> É literalmente a linha do CLAUDE.md sobre a câmera em XR não ser coordenada
+> de mundo, e ela mordeu de novo. O certo é
+> `setFromMatrixPosition(camera.matrixWorld)` — que é exatamente o vetor com
+> que o three preenche o uniform `cameraPosition` do shader. Hoje há caso
+> medindo o corte DENTRO da sessão, em estéreo, com as duas cercas: ele tem que
+> tirar alguma coisa, e tem que tirar uma minoria.
+
+### 3. O número: cabe
+
+Sessão `immersive-vr` (IWER), mundo congelado, sombra desligada, GLB do
+Guardião carregado, seed 424242, spread 0, A/B dentro da mesma sessão.
+Triângulos **por olho**:
+
+| pose | grama desktop | frame desktop | grama headset | **frame headset** | teto 500 k |
+|---|--:|--:|--:|--:|---|
+| spawn | 426 120 | 719 409 | 168 840 | **462 129** | cabe, folga 37 871 (7,6 %) |
+| cidade | 225 120 | 499 048 | 76 380 | **350 308** | cabe, folga 149 692 (29,9 %) |
+| castelo | 385 920 | 694 229 | 148 740 | **457 049** | cabe, folga 42 951 (8,6 %) |
+
+Contra o HEAD desta rodada (desktop, antes do corte do fade): spawn
+775 689 → 462 129 (**−40,4 %**), cidade 553 136 → 350 308 (−36,7 %), castelo
+736 621 → 457 049 (**−38,0 %**). Só a grama, por olho: 482 400 → 168 840
+(−65 %), 273 360 → 76 380 (−72 %), 434 160 → 148 740 (−65,7 %).
+
+Dentro do preset, o corte do fade responde por 28 140 (spawn) e 24 120 (cidade
+e castelo) triângulos por olho, e por **24 a 28 draw calls estéreo**.
+
+**E o desktop ganha de graça**, porque o corte do fade vale para os dois e não
+muda um pixel: spawn 775 689 → 719 409 por olho (−7,3 %), cidade
+553 136 → 499 048 (−9,8 %), castelo 736 621 → 694 229 (−5,8 %); em draw call de
+grama, 156/100/140 → 128/76/116 estéreo. **O LOD de lâmina, esse, não muda uma
+lâmina no monitor** — continua sendo preset de sessão, desfeito ao sair.
+
+### 4. O anel completo teve que descer de 1 para 0, e o motivo importa
+
+A distribuição proposta a partir da pose de CASTELO era anéis 0-1 completos,
+anel 2 reduzido, anel 3+ mínimo. Medida a pose de **SPAWN** ela estourava:
+78 chunks no frustum contra 70, e o dobro de chunks no primeiro anel.
+
+| tentativa | spawn | castelo |
+|---|--:|--:|
+| anéis 1/2, sem corte de fade | 522 429 ✗ (faltam 22 429) | 499 441 ✓ (folga 559) |
+| anéis 1/2, com corte de fade | 511 833 ✗ (faltam 11 833) | 479 045 ✓ |
+| **anéis 0/2, com corte de fade** | **462 129 ✓** | **457 049 ✓** |
+
+Note a folga de **559 triângulos** do castelo na primeira linha: cabia por
+0,1 %, o que não é caber. Só a pose pior obrigou o número honesto.
+
+Ceder o limiar 4→2 é o degrau CERTO para ceder: a lâmina de 2 segmentos guarda
+base, MEIO e ponta exatamente sobre a curva (desvio máximo de 1,1 cm, em
+y=0,25 e y=0,75), enquanto a de 1 segmento perde o meio. O limiar 2→1 — o que
+se quis proteger — ficou onde estava, no anel 3 (~25 m).
+
+### 5. O guarda de wallhack, refeito com o degrau novo
+
+Mesmo instrumento da rodada anterior, agora medindo a configuração REAL do
+headset (os dois anéis, com a lâmina mínima presente — há um caso cobrando que
+os três níveis apareçam, senão o guarda cobriria o degrau errado). Alvo opaco
+do tamanho de um corpo deitado a 18/25/32 m, olho em pé a 1,6 m olhando para
+baixo:
+
+| configuração | pixels de alvo visíveis (de 1 847) |
+|---|--:|
+| desktop, anel 4, sem degrau mínimo | 94 |
+| **headset, anéis 0/2, com lâmina de 1 segmento** | **92** |
+
+**O degrau mais agressivo até agora esconde MAIS, não menos.** É o mesmo
+resultado da rodada anterior e pela mesma razão: sem os pontos intermediários a
+lâmina interpola em linha reta entre raiz e ponta em vez de acompanhar a curva,
+e fica um pouco mais ereta. O que esconde alguém deitado a 25 m é a DENSIDADE
+de lâminas — que não muda —, não a curvatura de cada uma.
+
+E as provas estruturais seguem valendo, agora com três degraus: 169 chunks e
+1005 lâminas em cada nos dois estados, `PATCH_RADIUS` idêntico, bytes de matriz
+de instância / fase de vento / tint iguais byte a byte, `GRASS_LOD_RING_FAR`
+apagado do `CFG` ao sair da sessão (a chave não existe no `js/config.js`: é a
+ausência dela que faz o desktop não ter degrau mínimo) e nenhum chunk em nível
+mínimo no monitor depois do `XR.exit()`.
+
+### 6. O que ainda não é preciso fazer
+
+O corte do `far` para `CFG.VIEW_DIST` (decisão do dono, registrada duas seções
+acima) valia ~76 k por olho na pose de castelo. **Ela deixou de ser necessária
+para o teto de triângulo** — as três poses cabem sem ela. Continua valendo para
+draw call, que é o outro critério.
+
+E a técnica seguinte, se um dia o orçamento apertar de novo, é **grass cards**:
+trocar N lâminas por um quad texturizado com atlas (uma "touceira" por quad).
+Estimativa de ganho: um card de 2 triângulos cobrindo 6-8 lâminas divide o
+triângulo da grama distante por 3 a 4 — a grama do headset cairia de ~149 k
+para ~40-50 k por olho na pose de castelo. Risco: é a primeira mudança da
+lista que **muda de verdade a aparência** (silhueta de touceira em vez de
+lâminas soltas), precisa de atlas novo (rebuild de asset, sRGB/linear), de
+alpha test (que reabre a discussão de ocultamento — alpha test com `alphaMap`
+tem borda dura e MUDA quanto se enxerga através), e o ganho só existe onde já
+está a lâmina de 1 segmento. **Não recomendada enquanto houver 7,6 % de folga
+na pior pose.**

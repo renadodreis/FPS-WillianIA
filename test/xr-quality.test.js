@@ -337,6 +337,60 @@ describe('LOD de lâmina não abre wallhack (pixels, Chrome headless)',
       `${vr} px no headset (anéis ${anelPreset.ring}/${anelPreset.far}), de ${teto} px sem grama`);
   });
 
+  it('criar a lâmina MÍNIMA não gasta UM sorteio do fluxo seedado', async () => {
+    /* A lâmina de 1 segmento é um `BufferGeometry` novo, e todo
+       `BufferGeometry` do three gasta 4 números do `Math.random` no UUID —
+       que durante o worldgen É o fluxo SEEDADO. A primeira versão criava as
+       três lâminas juntas e reprovou na hora o "CONTRATO DO PRNG" do
+       test/grass-decor.test.js, que conta os 22 UUIDs da criação da grama.
+
+       Hoje ela nasce preguiçosa (não existe no boot) E sob um RNG local.
+       Aqui as duas metades são medidas numa instância PRÓPRIA de grama, com
+       CFG de mentira: criar a grama sem o segundo anel não pode produzir a
+       lâmina mínima, e ligá-lo depois não pode gastar um sorteio.
+
+       A primeira versão deste caso comparava duas janelas de `QA.tick` e
+       falhou por ruído (13 sorteios numa, 4 na outra): o quadro do jogo
+       consome `Math.random` em quantidade variável. Medir a chamada exata,
+       sem tick, é a diferença entre uma medida e um palpite. */
+    const r = await h.play(async () => {
+      const { createGrass } = await import('/js/grass.js');
+      const THREE = window.QA.MP.THREE;
+      const scene = new THREE.Scene();
+      const CFG = { GRASS_CHUNKS: 3, GRASS_TOTAL: 45, GRASS_CHUNK_SIZE: 10,
+        GRASS_HEIGHT: 0.95, WIND_STRENGTH: 0.55 };   // sem GRASS_LOD_RING_FAR
+      const g = createGrass({
+        CFG, rand: (a, b) => (b === undefined ? a * 0.5 : a + (b - a) * 0.5),
+        TAU: Math.PI * 2, heightAt: () => 2, biomeAt: () => 0.1, WATER_LEVEL: -5,
+        simplex: { noise: () => 0 }, scene, sunDir: new THREE.Vector3(0, 1, 0),
+        CITY: null, VOLCANO: null, clearings: [], cityGrassFactor: null, worldSeed: 424242,
+      });
+      const zero = new THREE.Vector3(0, 0, 0);
+      g.update(zero, zero, 0);
+      const semMinima = g.debugLod().every(l => l.nivel !== 2);
+
+      CFG.GRASS_LOD_RING = 0;
+      CFG.GRASS_LOD_RING_FAR = 0;          // liga o degrau mínimo AGORA
+      let n = 0;
+      const orig = Math.random;
+      Math.random = function () { n++; return orig.apply(this, arguments); };
+      try { g.update(zero, zero, 0); } finally { Math.random = orig; }
+      const comMinima = g.debugLod().filter(l => l.nivel === 2).length;
+      const tris = g.debugBladeShapes();
+
+      scene.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+      g.material.dispose();
+      return { semMinima, comMinima, sorteios: n, trisMinima: tris.minima.triangulos };
+    });
+    assert.equal(r.semMinima, true,
+      'a grama nasceu já com chunk no degrau mínimo — a lâmina não é preguiçosa e o worldgen andou');
+    assert.ok(r.comMinima > 0, 'ligar o segundo anel não pôs chunk nenhum no degrau mínimo');
+    assert.equal(r.trisMinima, 2, `a lâmina mínima custa ${r.trisMinima} triângulos`);
+    assert.equal(r.sorteios, 0,
+      `criar a lâmina mínima gastou ${r.sorteios} sorteios do Math.random compartilhado ` +
+      '(4 deles seriam o UUID do BufferGeometry) — isso desloca o mundo da seed');
+  });
+
   it('a sonda devolveu o anel do desktop ao terminar', () => {
     assert.equal(medido.anelFinal, ANEL_DESKTOP);
     assert.equal(medido.farFinal, false, 'a sonda deixou o degrau mínimo ligado no CFG');
@@ -587,15 +641,33 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
 
     const comPreset = await trisDaGrama();
     const retratoDentro = retrato();
-    /* O corte do `edgeFade` medido DENTRO da sessão, em estéreo. Sem isto o
-       único guarda dele era um A/B de pixel no monitor — e ele passou verde
-       enquanto, no headset, o corte comia a grama INTEIRA (a sub-câmera de
-       olho não sobrevive a `getWorldPosition`). */
+
+    /* ---- O CORTE DO `edgeFade`, MEDIDO LONGE DA ORIGEM ------------------
+       E o "longe da origem" é a parte que importa. A primeira versão deste
+       guarda media aqui mesmo, no spawn — e o mutante que devolve
+       `camera.getWorldPosition()` SOBREVIVEU a ele. Motivo: com
+       `getWorldPosition` a sub-câmera de olho do XR colapsa para a ORIGEM, e o
+       spawn É a origem, então a distância dava quase certo por coincidência.
+       Na pose de castelo o mesmo defeito apaga a grama inteira
+       (196 980 -> 0 triângulos por olho). Guarda que só mede onde o defeito
+       não aparece é guarda de enfeite. */
+    const voltar = { x: G.player.pos.x, y: G.player.pos.y, z: G.player.pos.z };
+    const P = G.Structures.FORT_POS;
+    G.player.pos.set(P.x, G.groundAt(P.x, P.z, 999) + 1, P.z);
+    G.player.vel.set(0, 0, 0);
+    await esperaFrames(90);                       // deixa o stream de grama assentar
+    const longeDaOrigem = Math.hypot(G.player.pos.x, G.player.pos.z);
+    G.Grass.debugCorteDeFade(true);
+    await esperaFrames(10);
+    const comCorte = await trisDaGrama();
     G.Grass.debugCorteDeFade(false);
-    await esperaFrames(20);
+    await esperaFrames(10);
     const semCorte = await trisDaGrama();
     G.Grass.debugCorteDeFade(true);
-    await esperaFrames(20);
+    await esperaFrames(10);
+    G.player.pos.set(voltar.x, voltar.y, voltar.z);
+    G.player.vel.set(0, 0, 0);
+    await esperaFrames(90);
 
     const randSemTroca = await contarNumaJanela(null);
     const randComTroca = await contarNumaJanela(() => G.XR.qualidade.restaurar());
@@ -627,7 +699,8 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
     mostrar();
 
     return {
-      comPreset, semPreset, semCorte, retratoDentro, retratoSem, retratoDeVolta, retratoAgressivo,
+      comPreset, semPreset, comCorte, semCorte, longeDaOrigem,
+      retratoDentro, retratoSem, retratoDeVolta, retratoAgressivo,
       randSemTroca, randComTroca,
       formas: G.Grass.debugBladeShapes(),
       chunksMedidos: gramaMeshes.length,
@@ -658,15 +731,18 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
 
        As duas cercas: o corte tem que tirar ALGUMA coisa (senão não paga) e
        tem que tirar uma MINORIA (senão está comendo grama visível). */
-    assert.ok(grama.comPreset.tris > 0,
-      'com o corte ligado a grama sumiu inteira dentro da sessão');
-    const tirado = grama.semCorte.tris - grama.comPreset.tris;
+    assert.ok(grama.longeDaOrigem > 200,
+      `a medição ficou a ${grama.longeDaOrigem.toFixed(0)} m da origem — perto demais para o defeito aparecer`);
+    assert.ok(grama.comCorte.tris > 0,
+      'com o corte ligado a grama sumiu inteira dentro da sessão, longe da origem');
+    const tirado = grama.semCorte.tris - grama.comCorte.tris;
     assert.ok(tirado > 0,
-      `o corte do fade não tirou triângulo nenhum em XR (${grama.comPreset.tris} contra ${grama.semCorte.tris})`);
-    assert.ok(grama.comPreset.tris >= grama.semCorte.tris * 0.7,
+      `o corte do fade não tirou triângulo nenhum em XR (${grama.comCorte.tris} contra ${grama.semCorte.tris})`);
+    assert.ok(grama.comCorte.tris >= grama.semCorte.tris * 0.7,
       `o corte tirou ${tirado} de ${grama.semCorte.tris} triângulos de grama (${(100 * tirado / grama.semCorte.tris).toFixed(0)}%) — ` +
       'ele só pode pular as quinas da grade, que ficam além do fade; isso é a grama visível indo embora');
-    console.log(`      corte do fade em XR: ${grama.semCorte.tris} -> ${grama.comPreset.tris} triângulos estéreo de grama`);
+    console.log(`      corte do fade em XR, a ${grama.longeDaOrigem.toFixed(0)} m da origem: ` +
+      `${grama.semCorte.tris} -> ${grama.comCorte.tris} triângulos estéreo de grama`);
   });
 
   it('ANTI-TRAPAÇA: mesma quantidade de lâmina, mesma altura, mesmo alcance', () => {
