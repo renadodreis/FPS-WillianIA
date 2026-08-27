@@ -7,7 +7,7 @@
    ================================================================ */
 'use strict';
 const fs = require('node:fs');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 function adb(args, { quiet = false } = {}) {
   try {
@@ -77,6 +77,11 @@ const mediana = a => (a.length ? a.slice().sort((x, y) => x - y)[a.length >> 1] 
    resumido sem o log bruto ao lado não é auditável — e o resumo é feito por
    este arquivo, que é exatamente quem estaria errado. */
 function coletorVrApi({ arquivo = null } = {}) {
+  /* LIMPA O BUFFER ANTES DE OUVIR. Sem isto o `logcat` despeja o que já estava
+     no anel — minutos ou horas de VrApi de uma sessão ANTERIOR — e as primeiras
+     janelas do roteiro somam amostras que não são desta corrida. É a diferença
+     entre medir a sessão e medir o histórico do aparelho. */
+  spawnSync('adb', ['logcat', '-c'], { stdio: 'ignore' });
   const proc = spawn('adb', ['logcat', '-s', 'VrApi:V', '-v', 'brief'], {
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -144,6 +149,11 @@ function resumirVrApi(amostras, de, ate) {
     gpuPct: mediana(janela.map(a => a.gpu)),
     cpuPct: mediana(janela.map(a => a.cpu)),
     stale: mediana(janela.map(a => a.stale)),
+    /* O CRITÉRIO PEDE ZERO, E MEDIANA ESCONDE ZERO. Com 300 amostras e um
+       único frame repetido, a mediana é 0 e o veredito sai VERDE sobre um
+       dado reprovante. Quem decide E1 é o PIOR e o TOTAL. */
+    staleMax: Math.max(0, ...janela.map(a => (typeof a.stale === 'number' ? a.stale : 0))),
+    staleSoma: janela.reduce((n, a) => n + (typeof a.stale === 'number' ? a.stale : 0), 0),
     tear: janela.reduce((n, a) => n + (a.tear || 0), 0),
     tempC: mediana(janela.map(a => a.tempC)),
     piorTempC: Math.max(...janela.map(a => a.tempC ?? 0)),

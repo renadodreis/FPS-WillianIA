@@ -94,12 +94,19 @@ for (const a of process.argv.slice(2)) {
    ================================================================ */
 const ROTEIRO = [
   {
-    cod: 'BOOT', i1: 1, crit: ['I1#1', 'F1'], s: 40,
-    faca: 'Já de headset, toque em ENTRAR EM VR e comece a contar.',
-    observe: 'quanto tempo passa até o mundo se mexer junto com a sua cabeça.',
-    aprova: 'o mundo aparece e acompanha a cabeça em até 4 s, OU aparece um indicador de carregamento DENTRO do VR desde o primeiro segundo.',
+    /* ESTE ITEM PERGUNTA SOBRE O QUE JÁ ACONTECEU, e isso é de propósito.
+       Ele roda DEPOIS do portão que exige `XR.presenting === true` — ou seja,
+       depois de a pessoa já ter entrado em VR. Escrito como "toque em entrar
+       agora" ele era INEXECUTÁVEL: mandava fazer uma coisa que já tinha sido
+       feita, e a resposta viria de memória sem ninguém avisar. Por isso o
+       portão agora ANUNCIA o que observar antes de pedir o toque, e este item
+       só colhe a resposta. */
+    cod: 'BOOT', i1: 1, crit: ['I1#1', 'F1'], s: 10,
+    faca: 'Responda sobre a entrada em VR que você acabou de fazer (o aviso veio antes do toque).',
+    observe: 'quanto tempo passou até o mundo se mexer junto com a sua cabeça.',
+    aprova: 'o mundo apareceu e acompanhou a cabeça em até 4 s, OU apareceu um indicador de carregamento DENTRO do VR desde o primeiro segundo.',
     reprova: 'tela preta, splash 2D, ou mais de 4 s sem nada em VR.',
-    fala: 'Item um. Toque em entrar em vê érre e conte os segundos até o mundo acompanhar sua cabeça.',
+    fala: 'Item um. Sobre a entrada que você acabou de fazer: o mundo acompanhou sua cabeça em até quatro segundos?',
   },
   {
     cod: 'DE PÉ', i1: 2, crit: ['I1#2', 'C3', 'C5'], s: 30,
@@ -614,17 +621,34 @@ const AGUARDA_HUMANO = '`aguardando humano`';
 const AGUARDA_APARELHO = '`aguardando aparelho`';
 const n2 = v => (typeof v === 'number' && isFinite(v) ? (Math.round(v * 100) / 100).toString() : '—');
 
+/* E1, e por que cada linha desta função existe.
+   Validação independente encontrou este veredito imprimindo VERDE sobre dado
+   reprovante, em três frentes ao mesmo tempo: `abaixoDaTaxa` era calculado e
+   nunca lido, `stale` era comparado pela MEDIANA (que esconde zero: com 300
+   amostras e um frame repetido a mediana é 0), e o intervalo de swap nunca era
+   colhido. Kit que mente é pior que kit nenhum — ele fecha um critério que
+   ninguém mediu. */
 function vereditoE1(vrapi, taxaDeclarada) {
   if (!vrapi || !vrapi.amostras) return { txt: AGUARDA_APARELHO, verde: null };
   const falhas = [];
   if (taxaDeclarada !== 72) falhas.push(`taxa declarada = ${taxaDeclarada ?? '—'} (critério: 72)`);
   if (vrapi.fps !== 72) falhas.push(`mediana ${vrapi.fps} (critério: 72)`);
   if (vrapi.abaixoDe60 > 0) falhas.push(`${vrapi.abaixoDe60} amostra(s) abaixo de 60`);
-  if (vrapi.stale) falhas.push(`stale ${vrapi.stale} (critério: 0)`);
+  /* abaixo da taxa DECLARADA pelo modo de tela daquele instante: 71 fps num
+     modo de 72 não cai abaixo de 60 e mesmo assim é frame perdido */
+  if (vrapi.abaixoDaTaxa > 0) falhas.push(`${vrapi.abaixoDaTaxa} amostra(s) abaixo da taxa do modo de tela`);
+  if (vrapi.staleMax > 0) falhas.push(`stale: pior ${vrapi.staleMax}, total ${vrapi.staleSoma} (critério: 0)`);
+  const naoMedido = ' Não medido por este kit: intervalo de swap (a linha do VrApi deste runtime não o traz).';
   return falhas.length
-    ? { txt: `**VERMELHO** — ${falhas.join(' · ')}`, verde: false }
-    : { txt: `**VERDE** — mediana ${vrapi.fps}, pior ${vrapi.piorFps}, stale ${vrapi.stale}`, verde: true };
+    ? { txt: `**VERMELHO** — ${falhas.join(' · ')}.` + naoMedido, verde: false }
+    : { txt: `**VERDE** — mediana ${vrapi.fps}, pior ${vrapi.piorFps}, stale total ${vrapi.staleSoma}, ` +
+        `abaixo da taxa ${vrapi.abaixoDaTaxa}.` + naoMedido, verde: true };
 }
+
+/* O VrApi publica `GPU%=0.81` — FRAÇÃO, não porcentagem. O veredito de E5
+   comparava esse número com 90 e por isso NUNCA disparava: 0,81 > 90 é falso
+   mesmo com a GPU a 81 %. Aceita as duas convenções por segurança. */
+const gpuEmPct = v => (typeof v === 'number' && isFinite(v) ? (v <= 1.5 ? v * 100 : v) : null);
 
 function relatorio(est) {
   const L = [];
@@ -682,14 +706,24 @@ function relatorio(est) {
   p('naquele item. Recorte importa: média de sessão inteira mistura o menu com o castelo e');
   p('descreve um jogo que ninguém jogou.');
   p('');
-  p('| item | fps (med/pior) | modo | app ms | cpu+gpu | gpu% | °C | livre MB | <60 |');
-  p('|---|---|--:|--:|--:|--:|--:|--:|--:|');
+  /* A COLUNA `em sessão` EXISTE PORQUE ELA É O QUE VALIDA A LINHA INTEIRA.
+     Este projeto já afirmou cinco vezes, com confiança, uma coisa falsa por ter
+     lido a página FORA de sessão imersiva. O kit contava `presenting` por item
+     e não imprimia em lugar nenhum: quem lesse o relatório não tinha como
+     saber se aqueles fps foram medidos dentro do headset ou no painel 2D (que
+     é travado em 30 Hz e mediria o navegador, não o jogo). */
+  p('| item | em sessão | fps (med/pior) | modo | app ms | cpu+gpu | gpu% | °C | livre MB | <60 |');
+  p('|---|---|---|--:|--:|--:|--:|--:|--:|--:|');
   for (const it of est.itens) {
     const v = it.vrapi || {};
-    if (!v.amostras) { p(`| ${it.cod} | ${AGUARDA_APARELHO} | — | — | — | — | — | — | — |`); continue; }
-    p(`| ${it.cod} | ${v.fps}/${v.piorFps} | ${v.modoTela} | ${n2(v.appMs)} | ${n2(v.cpuGpuMs)} | ${n2(v.gpuPct)} | ${n2(v.tempC)} | ${v.livreMB} | ${v.abaixoDe60} |`);
+    if (!v.amostras) { p(`| ${it.cod} | — | ${AGUARDA_APARELHO} | — | — | — | — | — | — | — |`); continue; }
+    const pg = it.pagina;
+    const emSessao = !pg || !pg.amostras ? '—'
+      : pg.presenting === pg.amostras ? `sim (${pg.amostras}/${pg.amostras})`
+        : `**${pg.presenting}/${pg.amostras}**`;
+    p(`| ${it.cod} | ${emSessao} | ${v.fps}/${v.piorFps} | ${v.modoTela} | ${n2(v.appMs)} | ${n2(v.cpuGpuMs)} | ${n2(gpuEmPct(v.gpuPct))} | ${n2(v.tempC)} | ${v.livreMB} | ${v.abaixoDe60} |`);
   }
-  if (!est.itens.length) p(`| — | ${AGUARDA_APARELHO} — nenhum item do roteiro chegou a ser executado | — | — | — | — | — | — | — |`);
+  if (!est.itens.length) p(`| — | — | ${AGUARDA_APARELHO} — nenhum item do roteiro chegou a ser executado | — | — | — | — | — | — | — |`);
   p('');
 
   p('## 3. Os cinco critérios que só o aparelho fecha');
@@ -704,17 +738,22 @@ function relatorio(est) {
       'Só o OVR Metrics Tool (overlay dentro do headset) publica esse campo — ele não é derivável do que está aqui, e este kit não inventa.'));
   p('- **E4 · lógica de app ≤ 2 ms** — ' + (est.vrapiTudo.amostras
     ? `\`App=\` mediana **${n2(est.vrapiTudo.appMs)} ms**, pior ${n2(est.vrapiTudo.piorAppMs)} ms. ` +
-      (est.vrapiTudo.appMs <= 2
+      /* `null <= 2` é TRUE em JavaScript, e sem amostra de `App=` o veredito
+         saía VERDE por comparação com nada. */
+      (typeof est.vrapiTudo.appMs === 'number' && isFinite(est.vrapiTudo.appMs) && est.vrapiTudo.appMs <= 2
         ? '**VERDE por inferência sólida:** `App` é o frame de CPU do aplicativo INTEIRO (JS + three + submissão), ' +
           'logo a lógica de app é necessariamente menor que ele. Abaixo do teto, o teto está fechado.'
-        : '**NÃO conclui.** `App` é um superconjunto da lógica de app: acima do teto ele não prova que a LÓGICA passou de 2 ms. ' +
-          'Fechar E4 exige o recorte só-JS, que este kit não mede.')
+        : (typeof est.vrapiTudo.appMs === 'number' && isFinite(est.vrapiTudo.appMs)
+          ? '**NÃO conclui.** `App` é um superconjunto da lógica de app: acima do teto ele não prova que a LÓGICA passou de 2 ms. ' +
+            'Fechar E4 exige o recorte só-JS, que este kit não mede.'
+          : `${AGUARDA_APARELHO}: houve amostra de VrApi, mas nenhuma trouxe o campo \`App=\`.`))
     : AGUARDA_APARELHO));
   const caiu = est.terco.length === 3 && est.terco[2].fps < est.terco[0].fps;
-  const gpuAlta = est.vrapiTudo.amostras && est.vrapiTudo.gpuPct > 90;
+  const gpuMedPct = gpuEmPct(est.vrapiTudo.gpuPct);
+  const gpuAlta = est.vrapiTudo.amostras && gpuMedPct !== null && gpuMedPct > 90;
   p('- **E5 · 30 min sem degradar** — ' + (est.terco.length === 3
     ? `curva por terços: fps ${est.terco.map(t => t.fps).join(' → ')} · °C ${est.terco.map(t => n2(t.tempC)).join(' → ')} · ` +
-      `gpu% ${est.terco.map(t => n2(t.gpuPct)).join(' → ')} (mediana ${n2(est.vrapiTudo.gpuPct)}, teto 90). ` +
+      `gpu% ${est.terco.map(t => n2(gpuEmPct(t.gpuPct))).join(' → ')} (mediana ${n2(gpuMedPct)}, teto 90). ` +
       (dur >= 30
         ? (caiu || gpuAlta
           ? `**VERMELHO** — ${[caiu && 'o fps do último terço é menor que o do primeiro', gpuAlta && 'GPU% mediano acima de 90'].filter(Boolean).join(' e ')}.`
@@ -1036,8 +1075,13 @@ async function main() {
        com confiança, uma coisa falsa. */
     console.log('\n' + risca('─'));
     console.log('  PONHA O HEADSET AGORA e toque em ENTRAR EM VR.');
+    /* O item 1 do roteiro (I1 #1) mede a ENTRADA, e a entrada acontece aqui —
+       não lá embaixo, onde o roteiro roda. Sem este aviso a pessoa entrava sem
+       saber o que observar e respondia de memória. */
+    console.log('  ANTES DE TOCAR: conte os segundos até o mundo acompanhar a sua cabeça.');
+    console.log('  (é o item 1 do roteiro; a pergunta vem depois, a resposta é sobre AGORA)');
     console.log(risca('─'));
-    falar('Ponha o headset e toque em entrar em vê érre.');
+    falar('Antes de tocar, prepare-se para contar os segundos até o mundo acompanhar sua cabeça. Agora ponha o headset e toque em entrar em vê érre.');
     if (cfg.entrar) {
       await page.waitForFunction("!!document.getElementById('btnVR')", { timeout: 120000, polling: 250 });
       await page.click('#btnVR');
@@ -1199,7 +1243,12 @@ function escrever(est) {
    os campos que ela lê existirem de verdade no jogo, e sonda que devolve
    `null` calado gastaria vinte minutos do dono do projeto para produzir um
    relatório vazio. Uma sessão emulada (IWER) prova a leitura sem headset. */
-module.exports = { ROTEIRO, CAIXAS_I1, instalarSonda, resumirPagina, docRoteiro };
+/* `vereditoE1` e `gpuEmPct` saem daqui para PODEREM SER TESTADOS. Validação
+   independente encontrou quatro vereditos deste arquivo imprimindo VERDE sobre
+   dado reprovante, e nenhum teste existia porque nada era exportado. Julgador
+   que não dá para testar é julgador em que não dá para confiar — e este decide
+   os únicos critérios que dependem do aparelho. */
+module.exports = { ROTEIRO, CAIXAS_I1, instalarSonda, resumirPagina, docRoteiro, vereditoE1, gpuEmPct };
 
 if (require.main === module) {
   main().catch(e => {
