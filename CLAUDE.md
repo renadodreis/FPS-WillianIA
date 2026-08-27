@@ -110,6 +110,12 @@ mexer no repositório de outra pessoa — só com pedido explícito.
 - **Cuidado com o que mede o harness em vez do produto.** `startBRMatch` pula a
   fase da nave DE PROPÓSITO; uma sonda que lê a fase logo depois "prova" que o
   jogo não começa da nave — e não prova nada.
+- **Não dispare agente enquanto `npm test` roda.** A suíte usa portas fixas por
+  arquivo, e o agente roda os testes DELE nas mesmas portas: a suíte lê um
+  arquivo pela metade ou não consegue subir o servidor, e o resultado vira
+  "regressão real" que não existe. Aconteceu duas vezes: `xr-haptics` (carga) e
+  `xr-body` (porta 3422 tomada pelo agente que tinha aquele arquivo). Ordem
+  certa: agentes terminam, árvore fica limpa, ENTÃO a suíte roda.
 - **Triagem de flake feita sob carga NÃO é triagem.** O runner re-roda o arquivo
   isolado até 3× e chama de REGRESSÃO REAL o que não passar duas vezes
   seguidas. Isso pressupõe máquina ociosa — e com agentes rodando testes em
