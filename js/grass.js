@@ -36,39 +36,69 @@ export function createGrass(deps) {
     return g;
   }
   const baseBlade = bladeGeometry(4);
-  /* LOD DE LÂMINA — economia de triângulo SEM tirar grama do mapa.
+  /* LOD DE LÂMINA EM TRÊS DEGRAUS — economia de triângulo SEM tirar grama.
 
-     A mesma fórmula de afunilamento/curva, com metade dos segmentos de
-     altura: base, meio e ponta caem exatamente nos mesmos pontos, só some
-     a subdivisão intermediária. Longe, a curvatura da lâmina é sub-pixel.
+     A MESMA fórmula de afunilamento/curva, com menos segmentos de altura.
+     E o detalhe que torna isto seguro: **o afunilamento é LINEAR em y**
+     (`x *= 1 - y*0.82`), então a largura em qualquer altura é a mesma com 4,
+     2 ou 1 segmento — a interpolação do rasterizador reproduz exatamente a
+     mesma reta. Raiz e ponta caem no MESMO ponto nos três. O único que muda
+     é a curvinha `z = y²*0.18`, que vira uma poligonal com menos vértices;
+     a 25 m a flecha dessa curva é sub-pixel.
+
+       completa  4 segmentos = 8 triângulos   (perto)
+       reduzida  2 segmentos = 4 triângulos   (média distância)
+       mínima    1 segmento  = 2 triângulos   ← o PISO geométrico de um quad
 
      REGRA DURA DE ANTI-TRAPAÇA: o LOD mexe SÓ em segmentos. Quantidade,
      altura e alcance da grama são idênticos e nunca viram configuração do
-     jogador — grama mais rala é wallhack contra quem está deitado no mato. */
-  const loBlade = bladeGeometry(2);
+     jogador — grama mais rala é wallhack contra quem está deitado no mato.
+     O que sustenta o ocultamento a essa distância é a DENSIDADE, não a
+     curvatura de cada lâmina, e isso está medido em pixel (contra um alvo do
+     tamanho de um corpo deitado) em test/xr-quality.test.js. */
+  const loBlade = bladeGeometry(2); loBlade.scale(0.35, 1, 1);
+  const minBlade = bladeGeometry(1);
   /* esfera da LÂMINA (não do chunk). Ela vai junto no clone de cada chunk e é
      o que `InstancedMesh.computeBoundingSphere` usaria como unidade se algum
-     dia precisasse recalcular. As duas lâminas têm a MESMA extensão (o LOD só
-     tira subdivisão), então a do baseBlade serve para as duas. */
+     dia precisasse recalcular. As três lâminas têm a MESMA extensão (o LOD só
+     tira subdivisão), então a do baseBlade serve para todas. */
   baseBlade.computeBoundingSphere();
-  /* O ANEL É LIDO POR FRAME, NÃO CONGELADO NO BOOT — e isso é o que permite o
-     preset da sessão XR (js/xr/xrquality.js) trocá-lo ao entrar no headset e
-     devolvê-lo ao sair, pelo MESMO canal por onde ele já mexe no
+  const NIVEIS = [baseBlade, loBlade, minBlade];   // 0 completa · 1 reduzida · 2 mínima
+  /* OS DOIS ANÉIS SÃO LIDOS POR FRAME, NÃO CONGELADOS NO BOOT — e é isso que
+     permite ao preset da sessão XR (js/xr/xrquality.js) trocá-los ao entrar no
+     headset e devolvê-los ao sair, pelo MESMO canal por onde ele já mexe no
      `CFG.CSM_MAX_FAR`. Nenhuma fiação nova: quem chama `atualizarLods()` é o
      `update()` que o game.js já executa uma vez por frame.
+
+     `GRASS_LOD_RING`     — além dele, a lâmina cai de 4 para 2 segmentos.
+     `GRASS_LOD_RING_FAR` — além dele, cai para 1. AUSENTE POR PADRÃO: sem ele
+       o valor é Infinity e o degrau mínimo simplesmente não existe, que é
+       exatamente o comportamento histórico do desktop e do celular. Ele não
+       mora no js/config.js de propósito — quem o escreve é o preset de sessão,
+       e some quando a sessão acaba.
 
      `Number.isFinite` e não `|| 4`: anel ZERO é um valor legítimo (só a célula
      sob os pés fica com a lâmina completa) e `||` o transformava calado em 4 —
      um preset agressivo que não faria nada, sem erro nenhum. Há caso de teste
      e mutante provando exatamente isso.
 
+     O `Math.max` é cinto, e vale dizer o que ele faz DE VERDADE: com
+     FAR < RING não há inversão (a função é monótona no anel de qualquer
+     jeito), mas o degrau REDUZIDO ficaria inalcançável e a faixa entre os dois
+     limiares cairia direto no mínimo — mais agressivo do que quem escreveu os
+     números pediu. O clamp faz o pedido virar "mínima a partir do maior dos
+     dois", que é a leitura conservadora.
+
      O que a troca em runtime NÃO pode fazer, e não faz: mexer em quantidade,
-     altura ou alcance de lâmina. Ela só decide, por chunk, QUAL das duas
+     altura ou alcance de lâmina. Ela só decide, por chunk, QUAL das três
      geometrias compartilhadas de lâmina o chunk aponta. */
-  const anelLod = () => {
-    const v = CFG.GRASS_LOD_RING;
-    return Number.isFinite(v) ? v : 4;
+  const aneisLod = () => {
+    const r = CFG.GRASS_LOD_RING;
+    const f = CFG.GRASS_LOD_RING_FAR;
+    const anel = Number.isFinite(r) ? r : 4;
+    return { anel, anelMin: Number.isFinite(f) ? Math.max(f, anel) : Infinity };
   };
+  const nivelDoAnel = (d, { anel, anelMin }) => (d > anelMin ? 2 : d > anel ? 1 : 0);
   const bladeTriangles = geo => (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
 
   /* ================= ESFERA DE CULLING DO CHUNK =====================
@@ -318,6 +348,67 @@ export function createGrass(deps) {
     esfera.radius = Math.hypot(ALCANCE, (yTopo - yBase) / 2);
   }
 
+  /* ================= CORTE DO QUE NÃO PINTA PIXEL =====================
+     O vertex shader já apaga a grama longe: `edgeFade` vai a ZERO quando a
+     raiz da lâmina passa de `0.97 * uPatchRadius` da CÂMERA, e ali ele
+     multiplica x E y da lâmina por zero. A lâmina vira uma LINHA (só o z da
+     curvinha sobrevive), as duas colunas do quad viram o mesmo ponto e todo
+     triângulo fica degenerado — área zero, **nenhum pixel**. Vento e dobra
+     não salvam: os dois vértices coincidentes têm o mesmo `wpos.xz` e sofrem
+     exatamente o mesmo deslocamento.
+
+     Ou seja: os chunks das quinas externas da grade eram desenhados INTEIROS
+     para não pintar nada. Medido em sessão XR: 12 a 14 dos ~70 chunks do
+     frustum, 24 k a 28 k triângulos por olho.
+
+     POR QUE NO `onBeforeRender` DO MESH, e não no `update()`. O fade é função
+     da posição da CÂMERA, e `update()` só recebe a posição do jogador/carro —
+     que na câmera de perseguição fica **7,4 m atrás** (helicóptero: 10,5 m) e
+     no passeio do menu, centenas de metros. Cortar por ali exigiria uma
+     margem que comeria o ganho, e erraria para o lado ERRADO: grama sumindo
+     na tela. `onBeforeRender` recebe a câmera EXATA que vai desenhar — em XR,
+     a sub-câmera de CADA OLHO — imediatamente antes do `renderBufferDirect`
+     (three r185, `renderObject`). Sem margem, sem chute, e certo nos dois olhos.
+
+     `count = 0` faz o three sair antes da chamada de GL (`renderInstances`
+     tem `if (primcount === 0) return`), então some o triângulo E a draw call.
+     `onAfterRender` devolve a contagem: fora do desenho, `mesh.count` continua
+     sendo PER_CHUNK para todo mundo que lê contagem de lâmina — inclusive o
+     vigia anti-trapaça do scripts/soak.js e o test/grass-decor.test.js.
+
+     A distância é medida em XZ contra o QUADRADO do chunk (a raiz mais
+     próxima possível). A do shader é 3D, portanto SEMPRE maior ou igual: o
+     corte erra para o lado de desenhar demais, nunca de esconder grama. */
+  const CORTE_FADE = PATCH_RADIUS * 0.97;   // o mesmo 0.97 do `edgeFade` no shader
+  const _camMundo = new THREE.Vector3();
+  let cortesNoFrame = 0;                    // QA: quantos chunks o corte pulou
+  function foraDoFade(mesh, camera) {
+    /* `setFromMatrixPosition(matrixWorld)` e NUNCA `getWorldPosition()`.
+       Custou uma medição inteira: `getWorldPosition` chama `updateWorldMatrix`,
+       que RECALCULA `matrixWorld` a partir de position/quaternion locais — e a
+       sub-câmera de olho do XR tem a `matrixWorld` escrita DIRETO pelo
+       WebXRManager, sem local correspondente. O recálculo jogava a câmera pra
+       origem, todo chunk virava "longe" e o corte comia a grama INTEIRA dentro
+       do headset (medido: grama/olho 196 980 -> 0 na pose de castelo), enquanto
+       o A/B de pixel no monitor seguia verde, porque em mono o recálculo dá o
+       mesmo resultado. Esta é, literalmente, a linha do CLAUDE.md sobre a
+       câmera em XR não ser coordenada de mundo.
+
+       E é exatamente o vetor que o shader lê: o three preenche o uniform
+       `cameraPosition` com `setFromMatrixPosition(camera.matrixWorld)`. */
+    _camMundo.setFromMatrixPosition(camera.matrixWorld);
+    const dx = Math.max(0, Math.abs(_camMundo.x - mesh.position.x) - SIZE / 2);
+    const dz = Math.max(0, Math.abs(_camMundo.z - mesh.position.z) - SIZE / 2);
+    return Math.hypot(dx, dz) > CORTE_FADE;
+  }
+  function instalarCorteDeFade(mesh) {
+    mesh.onBeforeRender = (renderer, cena, camera) => {
+      if (corteLigado && foraDoFade(mesh, camera)) { mesh.count = 0; cortesNoFrame++; }
+    };
+    mesh.onAfterRender = () => { mesh.count = PER_CHUNK; };
+  }
+  let corteLigado = true;                   // QA: debugCorteDeFade desliga p/ A/B
+
   function makeChunk(cx, cz) {
     const geo = baseBlade.clone();
     geo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(new Float32Array(PER_CHUNK), 1));
@@ -326,7 +417,8 @@ export function createGrass(deps) {
     const mesh = new THREE.InstancedMesh(geo, material, PER_CHUNK);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = true;   // culling por chunk
-    const chunk = { mesh, cx: 99999, cz: 99999, roots: new Float32Array(PER_CHUNK * 2), reduzida: false };
+    instalarCorteDeFade(mesh);   // e o corte do que o shader já apaga (ver acima)
+    const chunk = { mesh, cx: 99999, cz: 99999, roots: new Float32Array(PER_CHUNK * 2), nivel: 0 };
     legacyConsume(cx, cz); // preserva o consumo do stream seedado (ver comentário)
     fillChunk(chunk, cx, cz);
     scene.add(mesh);
@@ -350,21 +442,21 @@ export function createGrass(deps) {
      índice). As instâncias — matriz, fase, tint, trilha — e a bounding sphere
      continuam sendo as do chunk, intocadas. Por isso o LOD não move uma lâmina
      nem muda um byte do conteúdo determinístico. */
-  function aplicarLod(chunk, reduzida) {
-    if (chunk.reduzida === reduzida) return;
-    const src = reduzida ? loBlade : baseBlade;
+  function aplicarLod(chunk, nivel) {
+    if (chunk.nivel === nivel) return;
+    const src = NIVEIS[nivel] || baseBlade;
     const g = chunk.mesh.geometry;
     g.setIndex(src.index);
     g.setAttribute('position', src.attributes.position);
     g.setAttribute('normal', src.attributes.normal);
     g.setAttribute('uv', src.attributes.uv);
-    chunk.reduzida = reduzida;
+    chunk.nivel = nivel;
   }
   function atualizarLods() {
-    const anel = anelLod();
+    const aneis = aneisLod();
     for (const ch of chunks)
       aplicarLod(ch, lodForcado !== null ? lodForcado
-        : Math.max(Math.abs(ch.cx - centerX), Math.abs(ch.cz - centerZ)) > anel);
+        : nivelDoAnel(Math.max(Math.abs(ch.cx - centerX), Math.abs(ch.cz - centerZ)), aneis));
   }
   atualizarLods();
 
@@ -464,24 +556,39 @@ export function createGrass(deps) {
     }
   }
 
-  /* QA/captura: força um LOD em TODOS os chunks pra comparação visual A/B.
-     `null` devolve o controle ao anel de distância. Não mexe em contagem de
-     lâmina, altura nem alcance — só na subdivisão da lâmina. */
-  function debugForceLod(reduzida) {
-    lodForcado = reduzida === null || reduzida === undefined ? null : !!reduzida;
+  /* QA/captura: força um NÍVEL em TODOS os chunks pra comparação visual A/B.
+     `null` devolve o controle aos anéis de distância. Aceita o booleano
+     histórico (false = completa, true = reduzida) e também o nível 0/1/2 —
+     chamador antigo continua valendo. Não mexe em contagem de lâmina, altura
+     nem alcance: só na subdivisão. */
+  function debugForceLod(nivel) {
+    lodForcado = nivel === null || nivel === undefined ? null
+      : (typeof nivel === 'number' ? Math.min(NIVEIS.length - 1, Math.max(0, nivel | 0)) : (nivel ? 1 : 0));
     atualizarLods();
   }
-  /* QA: estado do LOD por chunk. Só leitura. */
+  /* QA: estado do LOD por chunk. Só leitura. `reduzida` continua significando
+     "não está na lâmina completa" — é o que os testes de fora deste módulo
+     leem, e um chunk no degrau mínimo também é um chunk reduzido. */
   function debugLod() {
     return chunks.map(ch => ({
       cx: ch.cx, cz: ch.cz,
-      reduzida: ch.reduzida,
+      nivel: ch.nivel,
+      reduzida: ch.nivel > 0,
       laminas: ch.mesh.count,
       triangulosPorLamina: bladeTriangles(ch.mesh.geometry),
     }));
   }
-  /* QA: prova de que a lâmina reduzida preserva base, ponta e altura — é o
-     que garante silhueta e ocultamento idênticos (ver regra anti-trapaça). */
+  /* QA: os anéis que estão valendo AGORA (o preset de sessão os troca). */
+  function debugAneis() { return aneisLod(); }
+  /* QA: liga/desliga o corte do que não pinta pixel, para comparação A/B de
+     framebuffer. `debugCortes()` diz quantos chunks ele pulou desde a última
+     leitura — sem isso não dá para provar que o A/B mediu alguma coisa. */
+  function debugCorteDeFade(ligado) { corteLigado = ligado === undefined ? true : !!ligado; }
+  function debugCortes() { const n = cortesNoFrame; cortesNoFrame = 0; return { pulados: n, corte: CORTE_FADE }; }
+  /* QA: prova de que as lâminas de menos detalhe preservam base, ponta e
+     altura — é o que garante silhueta e ocultamento idênticos (ver a regra
+     anti-trapaça). `completa`/`reduzida` continuam com o nome histórico;
+     `minima` é o degrau novo de 1 segmento. */
   function debugBladeShapes() {
     const medir = geo => {
       const p = geo.attributes.position;
@@ -496,9 +603,9 @@ export function createGrass(deps) {
       return { segmentos: geo.parameters.heightSegments, alturaMax, larguraBase, larguraTopo,
         triangulos: bladeTriangles(geo) };
     };
-    return { completa: medir(baseBlade), reduzida: medir(loBlade) };
+    return { completa: medir(baseBlade), reduzida: medir(loBlade), minima: medir(minBlade) };
   }
 
   return { update, material, PATCH_RADIUS, refreshAll, debugSample, debugChunkBytes, stampTrack,
-    debugLod, debugBladeShapes, debugForceLod };
+    debugLod, debugAneis, debugBladeShapes, debugForceLod, debugCorteDeFade, debugCortes };
 }

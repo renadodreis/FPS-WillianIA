@@ -160,15 +160,23 @@ describe('painel de sessão em VR (IWER, sessão imersiva real)', { skip: !CHROM
   });
   after(async () => { if (h) await h.close(); });
 
-  it('nada nasce antes de o jogador abrir (o worldgen depende da ordem do rand)', async () => {
+  it('o painel não abre sozinho por cima do jogo', async () => {
     const r = await h.play(() => ({
       naCena: window.__U.painelNaCena(),
       frames: window.__drv.frames,
       estado: window.__U.estado(),
     }));
     assert.ok(r.frames > 5, `o condutor não rodou (${r.frames} frames) — sem frame não há medida`);
-    assert.equal(r.naCena, false, 'o painel foi criado sem o jogador pedir');
-    assert.equal(r.estado.montado, false, 'a malha do painel nasceu no boot');
+    /* A MALHA PODE JÁ EXISTIR, E ISSO NÃO É DEFEITO: o MENU PRINCIPAL
+       (js/xr/xrmenu.js) é este mesmo painel, e entrar na sessão abre o menu
+       antes de a partida começar. Se ela existe ou não quando o harness já
+       entrou em jogo depende de quantos frames correram no meio — asserção em
+       cima disso seria corrida, não medida. O contrato do rand continua
+       coberto onde ele mora: nada é criado no BOOT (test/xr-rig.test.js conta
+       o consumo de `Math.random`), e a montagem acontece dentro da sessão,
+       muito depois do worldgen. O que não pode é o painel abrir sozinho. */
+    assert.equal(r.estado.aberto, false, 'o painel abriu sem o jogador pedir');
+    console.log(`      malha do painel na cena ao entrar em jogo: ${r.naCena}`);
   });
 
   it('o clique do analógico direito abre o painel — e é o único botão livre do mapa', async () => {
@@ -422,12 +430,13 @@ describe('painel de sessão em VR (IWER, sessão imersiva real)', { skip: !CHROM
       `no solo a tela de morte não ofereceu jogar de novo: ${r.join(', ')}`);
   });
 
-  it('SAIR DA PARTIDA existe, é acionável e encerra a sessão', async () => {
-    /* ÚLTIMO da bateria de propósito: a ação é a do jogo e encerra a partida E
-       a sessão imersiva — `voltarAoMenu()` aterrissa no menu principal, que
-       ainda é DOM, e ficar de pé no mundo sem menu seria o beco que esta
-       rodada veio fechar. Medir com contador em dublê provaria só que a função
-       foi chamada; o que importa é que o jogador realmente SAI. */
+  it('SAIR DA PARTIDA acaba a partida e devolve o MENU dentro do mundo', async () => {
+    /* ÚLTIMO da bateria de propósito: a ação é a do jogo e acaba a partida.
+       Ela encerrava a SESSÃO junto (`XR.exit()`), porque o menu principal só
+       existia no DOM e ficar de pé no mundo sem menu era o beco do I4. Com o
+       menu dentro do mundo (js/xr/xrmenu.js) a saída da partida é o MENU: quem
+       sai do VR é a linha SAIR DO VR de lá (test/xr-menu.test.js). Medir com
+       contador provaria só que a função foi chamada. */
     const r = await h.play(async () => {
       // o caso anterior deixa o painel em modo morte: volta pra pausa antes
       window.__UI.fechar();
@@ -438,12 +447,19 @@ describe('painel de sessão em VR (IWER, sessão imersiva real)', { skip: !CHROM
       window.__U.apontar('right', window.__U.linha('sair').centro);
       await window.__A.espera(220);
       await window.__U.clique('right');
-      await window.__A.espera(600);
-      return { tinhaLinha, presenting: window.__game.XR.presenting };
+      await window.__A.espera(700);
+      const e = window.__U.estado();
+      return {
+        tinhaLinha, presenting: window.__game.XR.presenting,
+        started: window.__game.state.started, modo: e.modo, aberto: e.aberto,
+      };
     });
     assert.equal(r.tinhaLinha, true, 'o painel de pausa não oferece saída da partida');
-    assert.equal(r.presenting, false,
-      'acionar SAIR não encerrou a sessão: o jogador ficaria de pé no mundo, sem menu');
+    assert.equal(r.started, false, 'acionar SAIR não acabou a partida');
+    assert.equal(r.presenting, true,
+      'SAIR DA PARTIDA encerrou a sessão imersiva — a saída da partida é o menu no mundo, não o desktop');
+    assert.equal(r.aberto, true, 'saiu da partida e ficou sem tela nenhuma — o beco do I4');
+    assert.equal(r.modo, 'menu', `saiu da partida e o painel ficou em "${r.modo}"`);
   });
 
   it('a tela de MORTE é o mesmo painel, com as saídas da morte', async () => {

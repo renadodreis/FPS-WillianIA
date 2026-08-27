@@ -101,6 +101,25 @@ describe('política de qualidade (unidade, sem three)', () => {
     assert.ok(planoDeQualidade({ cascatas: 4, agressivo: true }).anelGrama <=
       planoDeQualidade({ cascatas: 4 }).anelGrama);
   });
+
+  it('o degrau MÍNIMO entra DEPOIS do reduzido, nunca antes', () => {
+    /* Se o anel da lâmina mínima fosse <= o da reduzida, um chunk PERTO sairia
+       com menos detalhe que um chunk LONGE: o LOD deixaria de ser por
+       distância. O js/grass.js ainda tem um Math.max de cinto, mas a política
+       não pode depender do cinto. */
+    for (const ag of [false, true]) {
+      const p = planoDeQualidade({ cascatas: 4, agressivo: ag });
+      assert.ok(Number.isInteger(p.anelGramaMinima),
+        `anelGramaMinima veio ${p.anelGramaMinima}`);
+      assert.ok(p.anelGramaMinima > p.anelGrama,
+        `agressivo=${ag}: mínima no anel ${p.anelGramaMinima} contra reduzida no ${p.anelGrama}`);
+    }
+  });
+
+  it('o modo agressivo também adianta o degrau mínimo', () => {
+    assert.ok(planoDeQualidade({ cascatas: 4, agressivo: true }).anelGramaMinima <=
+      planoDeQualidade({ cascatas: 4 }).anelGramaMinima);
+  });
 });
 
 /* ================================================================
@@ -134,6 +153,29 @@ describe('preset e o CFG (unidade, renderer de mentira)', () => {
     assert.ok(q.restaurar());
     assert.equal(CFG.GRASS_LOD_RING, ANEL_DESKTOP,
       'saiu do XR e o desktop herdou o anel do headset');
+  });
+
+  it('o segundo anel NASCE com a sessão e MORRE com ela (some do CFG)', () => {
+    /* `GRASS_LOD_RING_FAR` não existe no js/config.js: é a AUSÊNCIA dele que
+       faz o desktop não ter degrau mínimo. Restaurar tem que APAGAR a chave,
+       não reescrevê-la com undefined — campo fantasma no CFG é o tipo de
+       resíduo que ninguém encontra depois. */
+    const CFG = { CSM_MAX_FAR: 160, GRASS_LOD_RING: ANEL_DESKTOP };
+    const q = createXrQuality({ renderer: rendererFalso(), CFG });
+    const p = q.aplicar();
+    assert.equal(CFG.GRASS_LOD_RING_FAR, p.anelGramaMinima,
+      'entrou em XR e o degrau mínimo da grama não foi ligado');
+    q.restaurar();
+    assert.equal(Object.prototype.hasOwnProperty.call(CFG, 'GRASS_LOD_RING_FAR'), false,
+      `saiu do XR e sobrou GRASS_LOD_RING_FAR = ${CFG.GRASS_LOD_RING_FAR} no CFG do desktop`);
+  });
+
+  it('se o segundo anel JÁ existia, restaurar devolve o valor de antes', () => {
+    const CFG = { CSM_MAX_FAR: 160, GRASS_LOD_RING: 2, GRASS_LOD_RING_FAR: 5 };
+    const q = createXrQuality({ renderer: rendererFalso(), CFG });
+    q.aplicar();
+    q.restaurar();
+    assert.equal(CFG.GRASS_LOD_RING_FAR, 5);
   });
 
   it('devolve o anel do CELULAR quando foi ele que estava valendo', () => {
@@ -200,9 +242,13 @@ describe('LOD de lâmina não abre wallhack (pixels, Chrome headless)',
   let h, medido = null, anelPreset = null;
   before(async () => {
     const { planoDeQualidade } = await import('../js/xr/xrquality.js');
-    anelPreset = planoDeQualidade({ cascatas: 4 }).anelGrama;   // o valor QUE VAI PRO HEADSET
+    const plano = planoDeQualidade({ cascatas: 4 });
+    /* A CONFIGURAÇÃO QUE VAI PRO HEADSET, não uma aproximação dela: os DOIS
+       anéis do plano. Medir só o primeiro deixaria o degrau mais agressivo —
+       a lâmina de 1 segmento — fora justamente do guarda de wallhack. */
+    anelPreset = { ring: plano.anelGrama, far: plano.anelGramaMinima };
     h = await bootGame({ port: PORT + 1 });
-    medido = await h.play(async (aneis) => {
+    medido = await h.play(async (configs) => {
       const G = window.__game, MP = window.__MP, R = MP.renderer, THREE = MP.THREE;
       window.QA.reset(0, 0);
       window.QA.tick(300);                       // drena a fila de refill da grama
@@ -215,6 +261,7 @@ describe('LOD de lâmina não abre wallhack (pixels, Chrome headless)',
       const alvoMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, fog: false, toneMapped: false });
 
       const casos = [];
+      let niveisNoPreset = null;
       for (const d of [18, 25, 32]) for (const yc of [0.3, 0.5]) {
         const alvo = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 0.55), alvoMat);
         alvo.position.set(d, G.groundAt(d, 0, 999) + yc, 0);
@@ -238,19 +285,27 @@ describe('LOD de lâmina não abre wallhack (pixels, Chrome headless)',
         const semGrama = conta();                // teto: o alvo sem nada na frente
         for (const g of grama) g.visible = true;
         const visivel = {};
-        for (const anel of aneis) {
-          MP.CFG.GRASS_LOD_RING = anel;
-          window.QA.tick(3);                     // Grass.update propaga o anel novo
-          visivel[anel] = conta();
+        for (const cfg of configs) {
+          MP.CFG.GRASS_LOD_RING = cfg.ring;
+          if (cfg.far === null) delete MP.CFG.GRASS_LOD_RING_FAR;
+          else MP.CFG.GRASS_LOD_RING_FAR = cfg.far;
+          window.QA.tick(3);                     // Grass.update propaga os anéis novos
+          visivel[cfg.nome] = conta();
+          if (cfg.nome === 'headset')
+            niveisNoPreset = [...new Set(G.Grass.debugLod().map(l => l.nivel))].sort();
         }
-        MP.CFG.GRASS_LOD_RING = aneis[0];
+        MP.CFG.GRASS_LOD_RING = configs[0].ring;
+        delete MP.CFG.GRASS_LOD_RING_FAR;
         window.QA.tick(3);
         MP.scene.remove(alvo);
         casos.push({ chave: `${d} m @ ${yc} m`, semGrama, visivel });
       }
       R.shadowMap.enabled = sombraSalva;
-      return { casos, anelFinal: MP.CFG.GRASS_LOD_RING };
-    }, [ANEL_DESKTOP, anelPreset]);
+      return { casos, anelFinal: MP.CFG.GRASS_LOD_RING,
+        farFinal: Object.prototype.hasOwnProperty.call(MP.CFG, 'GRASS_LOD_RING_FAR'),
+        niveisNoPreset };
+    }, [{ nome: 'desktop', ring: ANEL_DESKTOP, far: null },
+      { nome: 'headset', ring: anelPreset.ring, far: anelPreset.far }]);
   });
   after(async () => { if (h) await h.close(); });
 
@@ -259,7 +314,7 @@ describe('LOD de lâmina não abre wallhack (pixels, Chrome headless)',
       assert.ok(c.semGrama > 40,
         `${c.chave}: o alvo ocupa só ${c.semGrama} pixels sem grama — a sonda perdeu o alvo`);
     const teto = medido.casos.reduce((s, c) => s + c.semGrama, 0);
-    const comGrama = medido.casos.reduce((s, c) => s + c.visivel[ANEL_DESKTOP], 0);
+    const comGrama = medido.casos.reduce((s, c) => s + c.visivel.desktop, 0);
     assert.ok(comGrama < teto * 0.5,
       `a grama do desktop escondeu só ${teto - comGrama} de ${teto} pixels — ` +
       'a sonda está olhando pra um lugar sem grama e não mede ocultamento nenhum');
@@ -269,21 +324,93 @@ describe('LOD de lâmina não abre wallhack (pixels, Chrome headless)',
 
   it('com a lâmina reduzida o adversário deitado NÃO fica mais visível', () => {
     const teto = medido.casos.reduce((s, c) => s + c.semGrama, 0);
-    const desk = medido.casos.reduce((s, c) => s + c.visivel[ANEL_DESKTOP], 0);
-    const vr = medido.casos.reduce((s, c) => s + c.visivel[anelPreset], 0);
+    const desk = medido.casos.reduce((s, c) => s + c.visivel.desktop, 0);
+    const vr = medido.casos.reduce((s, c) => s + c.visivel.headset, 0);
     const detalhe = medido.casos
-      .map(c => `${c.chave}: ${c.visivel[ANEL_DESKTOP]} -> ${c.visivel[anelPreset]} de ${c.semGrama}`)
+      .map(c => `${c.chave}: ${c.visivel.desktop} -> ${c.visivel.headset} de ${c.semGrama}`)
       .join(' | ');
     assert.ok(vr <= desk * 1.5 + 10,
       `a lâmina reduzida abriu visão: ${vr} pixels de alvo contra ${desk} no desktop. ${detalhe}`);
     assert.ok(1 - vr / teto > 0.9,
       `a grama com o preset esconde só ${(100 * (1 - vr / teto)).toFixed(1)}% do alvo. ${detalhe}`);
-    console.log(`      alvo visível através da grama: ${desk} px no anel ${ANEL_DESKTOP} (desktop), ` +
-      `${vr} px no anel ${anelPreset} (headset), de ${teto} px sem grama`);
+    console.log(`      alvo visível através da grama: ${desk} px no desktop (anel ${ANEL_DESKTOP}), ` +
+      `${vr} px no headset (anéis ${anelPreset.ring}/${anelPreset.far}), de ${teto} px sem grama`);
   });
 
   it('a sonda devolveu o anel do desktop ao terminar', () => {
     assert.equal(medido.anelFinal, ANEL_DESKTOP);
+    assert.equal(medido.farFinal, false, 'a sonda deixou o degrau mínimo ligado no CFG');
+  });
+
+  it('o corte do que não pinta pixel não muda UM pixel — e pula chunk de verdade', async () => {
+    /* O vertex shader zera `edgeFade` além de 0,97·PATCH_RADIUS da CÂMERA: a
+       lâmina colapsa numa linha e o triângulo fica degenerado. Os chunks das
+       quinas da grade eram desenhados inteiros para pintar NADA.
+
+       Este caso é o guarda desse corte, e ele tem duas metades porque uma
+       sozinha mentiria: comparar framebuffer prova que nada mudou na tela, mas
+       passaria trivialmente se o corte nunca tivesse pulado nada. Por isso a
+       sonda também cobra `pulados > 0` e a queda de triângulo. */
+    const r = await h.play(() => {
+      const G = window.__game, MP = window.__MP, R = MP.renderer, THREE = MP.THREE;
+      window.QA.reset(0, 0);
+      window.QA.tick(300);
+      const cam = new THREE.PerspectiveCamera(75,
+        R.domElement.width / R.domElement.height, 0.08, MP.CFG.VIEW_DIST + 600);
+      cam.position.set(0, G.groundAt(0, 0, 999) + 1.6, 0);
+      cam.lookAt(300, G.groundAt(0, 0, 999) + 1.6, 0);   // horizonte: pega as quinas da grade
+      cam.updateMatrixWorld(true);
+      const gl = R.getContext(), w = R.domElement.width, hh = R.domElement.height;
+      const sombraSalva = R.shadowMap.enabled, autoSalvo = R.info.autoReset;
+      R.shadowMap.enabled = false;
+      R.info.autoReset = false;
+      const quadro = () => {
+        R.info.reset();
+        R.render(MP.scene, cam);
+        const buf = new Uint8Array(w * hh * 4);
+        gl.readPixels(0, 0, w, hh, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        return { buf, calls: R.info.render.calls, tris: R.info.render.triangles };
+      };
+      G.Grass.debugCorteDeFade(true);
+      G.Grass.debugCortes();          // zera o contador: o número tem que ser de UM quadro
+      const com = quadro();
+      const cortes = G.Grass.debugCortes();
+      G.Grass.debugCorteDeFade(false);
+      const sem = quadro();
+      G.Grass.debugCorteDeFade(true);
+      R.shadowMap.enabled = sombraSalva;
+      R.info.autoReset = autoSalvo;
+      let difs = 0, maxD = 0;
+      for (let i = 0; i < com.buf.length; i += 4) {
+        const d = Math.max(Math.abs(com.buf[i] - sem.buf[i]), Math.abs(com.buf[i + 1] - sem.buf[i + 1]),
+          Math.abs(com.buf[i + 2] - sem.buf[i + 2]));
+        if (d > 0) difs++;
+        if (d > maxD) maxD = d;
+      }
+      return { difs, maxD, pixels: w * hh, pulados: cortes.pulados, corte: cortes.corte,
+        comCalls: com.calls, semCalls: sem.calls, comTris: com.tris, semTris: sem.tris,
+        laminas: [...new Set(G.Grass.debugLod().map(l => l.laminas))] };
+    });
+    assert.ok(r.pulados > 0,
+      'o corte não pulou nenhum chunk nesta pose — o A/B comparou duas coisas iguais e não provou nada');
+    assert.ok(r.semTris - r.comTris > 0,
+      `o corte não tirou triângulo nenhum (${r.comTris} contra ${r.semTris})`);
+    assert.equal(r.difs, 0,
+      `o corte mudou ${r.difs} pixels de ${r.pixels} (maxΔ ${r.maxD}) — ele está comendo grama VISÍVEL`);
+    assert.deepEqual(r.laminas, [1005],
+      `fora do desenho os chunks têm ${r.laminas.join('/')} lâminas — o corte vazou pra contagem, ` +
+      'e é ela que o vigia anti-trapaça do soak lê');
+    console.log(`      corte do fade (${r.corte.toFixed(2)} m): ${r.pulados} chunks pulados, ` +
+      `${r.semTris - r.comTris} triângulos e ${r.semCalls - r.comCalls} draw calls a menos, ` +
+      `${r.difs} pixels diferentes de ${r.pixels}`);
+  });
+
+  it('a sonda mediu MESMO o degrau mínimo — senão ela cobre o degrau errado', () => {
+    /* Sem isto, o caso de pixel poderia estar medindo uma configuração em que
+       a lâmina de 1 segmento nem aparece, e o guarda de wallhack passaria por
+       cima justamente do degrau mais agressivo. */
+    assert.deepEqual(medido.niveisNoPreset, [0, 1, 2],
+      `com os anéis do headset os níveis presentes foram ${JSON.stringify(medido.niveisNoPreset)}`);
   });
 });
 
@@ -435,10 +562,16 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
       });
       return {
         anel: MP.CFG.GRASS_LOD_RING,
+        aneis: (() => { const a = G.Grass.debugAneis();
+          return { anel: a.anel, anelMin: a.anelMin, temMinima: Number.isFinite(a.anelMin) }; })(),
+        temFar: Object.prototype.hasOwnProperty.call(MP.CFG, 'GRASS_LOD_RING_FAR'),
+        niveis: [...new Set(lods.map(l => l.nivel))].sort(),
+        trisPorNivel: Object.fromEntries(lods.map(l => [l.nivel, l.triangulosPorLamina])),
         chunks: lods.length,
         laminasPorChunk: [...new Set(lods.map(l => l.laminas))],
         laminasTotal: lods.reduce((s, l) => s + l.laminas, 0),
         reduzidos: lods.filter(l => l.reduzida).length,
+        noMinimo: lods.filter(l => l.nivel === 2).length,
         alcance: G.Grass.PATCH_RADIUS,
         /* o mapa (anel de Chebyshev -> reduzida?) é o que prova que a grama
            OBEDECE o número novo, e não que alguém só trocou um campo */
@@ -446,6 +579,7 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
           anel: Math.max(Math.abs(l.cx - Math.round(G.player.pos.x / MP.CFG.GRASS_CHUNK_SIZE)),
             Math.abs(l.cz - Math.round(G.player.pos.z / MP.CFG.GRASS_CHUNK_SIZE))),
           reduzida: l.reduzida,
+          nivel: l.nivel,
         })),
         bytes,
       };
@@ -453,6 +587,15 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
 
     const comPreset = await trisDaGrama();
     const retratoDentro = retrato();
+    /* O corte do `edgeFade` medido DENTRO da sessão, em estéreo. Sem isto o
+       único guarda dele era um A/B de pixel no monitor — e ele passou verde
+       enquanto, no headset, o corte comia a grama INTEIRA (a sub-câmera de
+       olho não sobrevive a `getWorldPosition`). */
+    G.Grass.debugCorteDeFade(false);
+    await esperaFrames(20);
+    const semCorte = await trisDaGrama();
+    G.Grass.debugCorteDeFade(true);
+    await esperaFrames(20);
 
     const randSemTroca = await contarNumaJanela(null);
     const randComTroca = await contarNumaJanela(() => G.XR.qualidade.restaurar());
@@ -484,7 +627,7 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
     mostrar();
 
     return {
-      comPreset, semPreset, retratoDentro, retratoSem, retratoDeVolta, retratoAgressivo,
+      comPreset, semPreset, semCorte, retratoDentro, retratoSem, retratoDeVolta, retratoAgressivo,
       randSemTroca, randComTroca,
       formas: G.Grass.debugBladeShapes(),
       chunksMedidos: gramaMeshes.length,
@@ -501,6 +644,29 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
     assert.ok(grama.comPreset.tris <= grama.semPreset.tris * 0.85,
       `o preset mal mexeu na grama: ${grama.comPreset.tris} triângulos estéreo contra ` +
       `${grama.semPreset.tris} sem ele (esperado ao menos −15%)`);
+  });
+
+  it('o corte do fade DENTRO do headset pula as quinas — e não a grama inteira', () => {
+    /* ESTE CASO NASCEU DE UM DEFEITO REAL, e ele só aparecia em XR. O corte
+       lia a câmera com `getWorldPosition()`, que RECALCULA a `matrixWorld` a
+       partir do transform local — e a sub-câmera de olho do XR tem a
+       `matrixWorld` escrita direto pelo WebXRManager. A câmera ia parar na
+       origem, todo chunk virava "longe" e a grama sumia inteira dentro do
+       headset: 196 980 -> 0 triângulos por olho na pose de castelo. O A/B de
+       pixel no monitor continuou verde o tempo todo, porque em mono o
+       recálculo dá o mesmo resultado.
+
+       As duas cercas: o corte tem que tirar ALGUMA coisa (senão não paga) e
+       tem que tirar uma MINORIA (senão está comendo grama visível). */
+    assert.ok(grama.comPreset.tris > 0,
+      'com o corte ligado a grama sumiu inteira dentro da sessão');
+    const tirado = grama.semCorte.tris - grama.comPreset.tris;
+    assert.ok(tirado > 0,
+      `o corte do fade não tirou triângulo nenhum em XR (${grama.comPreset.tris} contra ${grama.semCorte.tris})`);
+    assert.ok(grama.comPreset.tris >= grama.semCorte.tris * 0.7,
+      `o corte tirou ${tirado} de ${grama.semCorte.tris} triângulos de grama (${(100 * tirado / grama.semCorte.tris).toFixed(0)}%) — ` +
+      'ele só pode pular as quinas da grade, que ficam além do fade; isso é a grama visível indo embora');
+    console.log(`      corte do fade em XR: ${grama.semCorte.tris} -> ${grama.comPreset.tris} triângulos estéreo de grama`);
   });
 
   it('ANTI-TRAPAÇA: mesma quantidade de lâmina, mesma altura, mesmo alcance', () => {
@@ -531,7 +697,16 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
   });
 
   it('a grama OBEDECE o anel novo — e volta ao anel do desktop quando ele sai', () => {
-    const conforme = r => r.mapa.every(c => c.reduzida === (c.anel > r.anel));
+    /* Agora são DOIS limiares, então conformidade é o nível inteiro, não um
+       booleano: 0 até `anel`, 1 até `anelMin`, 2 depois.
+
+       `temMinima` e não `anelMin` direto: fora da sessão o anel mínimo é
+       `Infinity`, e `Infinity` vira `null` ao atravessar o JSON do
+       `page.evaluate` — comparar contra ele daria `anel > 0`, ou seja, o teste
+       exigiria a lâmina mínima no desktop inteiro. Custou uma execução. */
+    const conforme = r => r.mapa.every(c =>
+      c.nivel === (r.aneis.temMinima && c.anel > r.aneis.anelMin ? 2
+        : c.anel > r.aneis.anel ? 1 : 0));
     assert.ok(conforme(grama.retratoDentro),
       'com o preset, os chunks não seguem o anel que está no CFG: alguém trocou o número e ninguém leu');
     assert.ok(conforme(grama.retratoSem), 'sem o preset, os chunks não seguem o anel do desktop');
@@ -545,9 +720,41 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
     assert.equal(ag.anel, 0, `o modo agressivo pediu anel ${ag.anel}, não 0`);
     assert.ok(conforme(ag),
       'com anel 0 a grama não obedeceu: o chunk sob os pés é o único que fica com a lâmina completa');
-    assert.ok(ag.reduzidos > grama.retratoDentro.reduzidos,
-      `o modo agressivo reduziu ${ag.reduzidos} chunks, o normal ${grama.retratoDentro.reduzidos} ` +
-      '— o 0 virou 4 no caminho');
+    assert.ok(ag.noMinimo > grama.retratoDentro.noMinimo,
+      `o modo agressivo pôs ${ag.noMinimo} chunks na lâmina mínima e o normal ${grama.retratoDentro.noMinimo} ` +
+      '— o anel do agressivo não chegou na grama');
+  });
+
+  it('o TERCEIRO DEGRAU existe na sessão e some no desktop', () => {
+    const d = grama.retratoDentro, s2 = grama.retratoSem;
+    /* Dentro da sessão os três níveis convivem: é o que faz a distribuição
+       0-1 completa / 2 reduzida / 3+ mínima ser real e não um enum morto. */
+    assert.deepEqual(d.niveis, [0, 1, 2],
+      `dentro da sessão os níveis de lâmina presentes são ${JSON.stringify(d.niveis)} — ` +
+      'sem os três degraus a distribuição que cabe em 500 k não existe');
+    assert.deepEqual(d.trisPorNivel, { 0: 8, 1: 4, 2: 2 },
+      `triângulos por lâmina em cada degrau: ${JSON.stringify(d.trisPorNivel)} (esperado 8/4/2)`);
+    assert.equal(d.temFar, true, 'a sessão não escreveu GRASS_LOD_RING_FAR no CFG');
+    /* No desktop o degrau mínimo NÃO EXISTE: a chave some e o anel vira
+       Infinity. Um chunk em nível 2 fora da sessão é regressão de PC. */
+    assert.equal(s2.temFar, false,
+      'GRASS_LOD_RING_FAR sobrou no CFG com o preset desfeito');
+    assert.equal(d.aneis.temMinima, true, 'dentro da sessão o anel da lâmina mínima é inalcançável');
+    assert.equal(s2.aneis.temMinima, false,
+      `sem preset o anel da lâmina mínima é ${s2.aneis.anelMin}, e devia ser inalcançável`);
+    assert.ok(!s2.niveis.includes(2),
+      `sem o preset ainda há chunk na lâmina mínima: níveis ${JSON.stringify(s2.niveis)}`);
+  });
+
+  it('ANTI-TRAPAÇA: a lâmina MÍNIMA tem a mesma altura, base e ponta', () => {
+    const f = grama.formas;
+    assert.equal(f.minima.segmentos, 1, `a lâmina mínima tem ${f.minima.segmentos} segmentos`);
+    assert.equal(f.minima.triangulos, 2,
+      `a lâmina mínima custa ${f.minima.triangulos} triângulos (o piso de um quad é 2)`);
+    assert.equal(f.completa.alturaMax, f.minima.alturaMax,
+      `a lâmina mínima ficou com ${f.minima.alturaMax} de altura contra ${f.completa.alturaMax}`);
+    assert.equal(f.completa.larguraBase, f.minima.larguraBase, 'a base da lâmina mínima mudou');
+    assert.equal(f.completa.larguraTopo, f.minima.larguraTopo, 'a ponta da lâmina mínima mudou');
   });
 
   it('trocar o anel não consome UM sorteio do Math.random', () => {
@@ -585,6 +792,8 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
           maxFar: G.csmDebug.maxFar,
           cfgFar: G.csmDebug.cfgMaxFar,
           anelGrama: MP.CFG.GRASS_LOD_RING,
+          temFarGrama: Object.prototype.hasOwnProperty.call(MP.CFG, 'GRASS_LOD_RING_FAR'),
+          noMinimo: lods.filter(l => l.nivel === 2).length,
           // chunks do 2º ao 4º anel: cheios no desktop, reduzidos no preset
           reduzidosNoMeio: lods.filter(l => {
             const a = Math.max(Math.abs(l.cx - cx0), Math.abs(l.cz - cz0));
@@ -612,6 +821,12 @@ describe('preset aplicado na sessão de verdade', { skip: !CHROME && 'Chrome nã
       `CFG.CSM_MAX_FAR ficou em ${r.fora.cfgFar} fora da sessão — o desktop herdou o corte do headset`);
     assert.equal(r.fora.anelGrama, ANEL_DESKTOP,
       `CFG.GRASS_LOD_RING ficou em ${r.fora.anelGrama} fora da sessão — o desktop herdou o LOD do headset`);
+    assert.equal(r.fora.temFarGrama, false,
+      'GRASS_LOD_RING_FAR sobrou no CFG depois de sair do VR — o desktop herdou o degrau mínimo');
+    assert.ok(r.dentro.noMinimo > 0,
+      'dentro da sessão nenhum chunk estava na lâmina mínima: não havia o que vazar');
+    assert.equal(r.fora.noMinimo, 0,
+      `${r.fora.noMinimo} chunks continuaram na lâmina MÍNIMA no monitor depois de sair do VR`);
     assert.ok(r.dentro.reduzidosNoMeio > 0,
       'dentro da sessão nenhum chunk do 2º ao 4º anel estava reduzido: não havia o que vazar');
     assert.equal(r.fora.reduzidosNoMeio, 0,

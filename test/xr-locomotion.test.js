@@ -566,25 +566,61 @@ describe('a velocidade é ESCOLHÍVEL pelo painel — senão não existe', { ski
     assert.ok(r.linha.val && r.linha.val.length > 0, 'a linha não mostra o perfil em vigor');
   });
 
-  it('acionar a linha CICLA o perfil e a velocidade muda de verdade', async () => {
+  it('acionar a linha pelo RAIO E GATILHO cicla o perfil de verdade', async () => {
+    /* A versão anterior deste caso escrevia
+         `G.XRUI.acionarPorId ? G.XRUI.acionarPorId('andarPerfil') : G.XRAndar.proximo()`
+       e `acionarPorId` NÃO EXISTE no repo — o ramo que rodava era sempre o
+       `else`, chamando a política direto. Ou seja: o caso provava que o módulo
+       cicla, e não que o PAINEL aciona. Apagar a fiação do `xrui.js` deixava a
+       suíte verde e o jogador sem como trocar de velocidade — que é exatamente
+       o defeito que este caso nasceu para impedir.
+
+       Agora vai pelo caminho do jogador: aponta o controle para a linha e puxa
+       o gatilho. */
     const r = await h.play(async () => {
-      const G = window.__game;
+      const A = window.__A, G = window.__game, MP = window.__MP, T = MP.THREE;
+      const dev = window.__xrEmulado;
       G.XRUI.abrir('pausa');
-      await new Promise(res => setTimeout(res, 350));
+      await A.espera(400);
+
+      const apontarPara = alvo => {
+        const rig = G.XR.rig;
+        rig.updateWorldMatrix(true, false);
+        MP.camera.updateWorldMatrix(true, false);
+        const cab = MP.camera.getWorldPosition(new T.Vector3());
+        const mao = new T.Vector3(cab.x + 0.22, cab.y - 0.35, cab.z);
+        const m = new T.Matrix4().lookAt(mao, new T.Vector3(alvo[0], alvo[1], alvo[2]), new T.Vector3(0, 1, 0));
+        const q = new T.Quaternion().setFromRotationMatrix(m);
+        const p = mao.clone(); rig.worldToLocal(p);
+        q.premultiply(rig.getWorldQuaternion(new T.Quaternion()).invert());
+        dev.controllers.right.position.set(p.x, p.y, p.z);
+        dev.controllers.right.quaternion.set(q.x, q.y, q.z, q.w);
+      };
+
       const vistos = [];
       for (let i = 0; i < 4; i++) {
-        vistos.push({ perfil: G.XRAndar.plano.perfil, correr: +G.XRAndar.correr.toFixed(2) });
-        G.XRUI.acionarPorId ? G.XRUI.acionarPorId('andarPerfil') : G.XRAndar.proximo();
-        await new Promise(res => setTimeout(res, 250));
+        const l = (G.XRUI.estado().linhas || []).find(x => x.id === 'andarPerfil');
+        if (!l) return { erro: 'o painel não tem linha de velocidade' };
+        vistos.push({ perfil: G.XRAndar.plano.perfil, correr: +G.XRAndar.correr.toFixed(2), rotulo: l.val });
+        apontarPara(l.centro);
+        await A.espera(250);
+        A.botao('right', 'trigger', 1);
+        await A.espera(160);
+        A.botao('right', 'trigger', 0);
+        await A.espera(300);
       }
       G.XRAndar.preferir({ velocidade: 'conforto' });
-      return vistos;
+      A.solta();
+      return { vistos };
     });
-    const perfis = new Set(r.map(v => v.perfil));
-    assert.ok(perfis.size >= 3, `o ciclo só alcançou ${[...perfis].join(', ')}`);
-    const corridas = r.map(v => v.correr);
+    assert.ok(!r.erro, r.erro);
+    const perfis = new Set(r.vistos.map(v => v.perfil));
+    assert.ok(perfis.size >= 3,
+      `apontar e acionar a linha só alcançou ${[...perfis].join(', ')} — ` +
+      'se ficou num perfil só, o painel não está ligado à política');
+    const corridas = r.vistos.map(v => v.correr);
     assert.ok(Math.max(...corridas) >= 6.0,
-      `a corrida mais rápida oferecida é ${Math.max(...corridas)} m/s — o gás fecha a 5,50 m/s ` +
-      'nas primeiras fases, então o jogador de headset ficaria sem como fugir');
+      `a corrida mais rápida alcançada pelo painel é ${Math.max(...corridas)} m/s — ` +
+      'o gás fecha a 5,50 m/s nas primeiras fases, então o jogador ficaria sem como fugir');
   });
 });

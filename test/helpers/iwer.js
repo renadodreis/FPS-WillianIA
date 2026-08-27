@@ -64,7 +64,7 @@ function runtimeEmulado() {
 /* Sobe o jogo com o runtime emulado e entra em sessão imersiva de verdade.
    O botão de VR só nasce depois que `isSessionSupported` resolve — por isso a
    espera por condição em vez de timeout. */
-async function bootEmVR(bootGame, { port, autoStart = false, initScripts = [] } = {}) {
+async function bootEmVR(bootGame, { port, autoStart = false, emJogo = true, initScripts = [] } = {}) {
   const h = await bootGame({
     // o runtime PRIMEIRO: scripts extras podem depender de já haver navigator.xr
     port, autoStart, initScripts: [runtimeEmulado(), ...initScripts], protocolTimeout: 300000,
@@ -76,6 +76,14 @@ async function bootEmVR(bootGame, { port, autoStart = false, initScripts = [] } 
   await h.page.click('#btnVR');
   await h.page.waitForFunction('window.__game.XR.presenting === true',
     { timeout: 60000, polling: 100 });
+  /* ENTRAR EM VR DEIXOU DE COMEÇAR A PARTIDA. O game.js chamava
+     `startGame(false)` ao entrar na sessão porque não havia menu no mundo;
+     agora quem abre é o menu (js/xr/xrmenu.js), e a partida só começa quando o
+     jogador escolhe. Os arquivos que medem ARMA, CORPO, LOCOMOÇÃO, HUD, TATO e
+     INTERAÇÃO precisam do jogo RODANDO e ganhavam isso de graça daquela linha:
+     é ela que este `emJogo` substitui, no MESMO ponto do tempo (dentro da
+     sessão, depois do rig pronto). Quem quer medir o MENU passa `emJogo: false`. */
+  if (emJogo) await h.page.evaluate(() => { window.__game.forceStart(); });
   return h;
 }
 

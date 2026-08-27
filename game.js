@@ -2870,8 +2870,13 @@ const XRUI = createXrUi({
     /* SAIR encerra a sessão junto, e é deliberado: `voltarAoMenu()` aterrissa
        no menu principal, que ainda é DOM. Sair da partida sem sair do VR
        deixaria o jogador de pé no mundo sem menu — o beco que esta rodada veio
-       fechar. Menu principal dentro do mundo é a próxima rodada. */
-    sair: () => { voltarAoMenu(); XR.exit(); },
+       fechar. */
+    /* SAIR DA PARTIDA aterrissa no MENU DENTRO DO MUNDO: `voltarAoMenu()`
+       derruba `started`, e no frame seguinte o `tick` reabre este painel em
+       modo `menu`. Encerrar a sessão junto (o `XR.exit()` que estava aqui) era
+       o remendo de quando o menu principal só existia no DOM — quem sai do VR
+       agora é a linha SAIR DO VR do próprio menu. */
+    sair: () => { voltarAoMenu(); },
     reaparecer: () => restartMatch(),
     // em partida online o morto fica morto até a rodada acabar
     podeReaparecer: () => !window.__BR_active,
@@ -2903,7 +2908,8 @@ XRUI.conectarSocial({
        anfitrião, e o painel só oferece o botão a quem é. FECHA porque quem
        manda começar quer jogar — painel aberto mantém o jogo pausado. */
     comecar: () => { if (__mpSocket) __mpSocket.emit('requestStart'); XRUI.fechar(); },
-    sair: () => { voltarAoMenu(); XR.exit(); },
+    // ...e daqui também se sai para o menu DENTRO do mundo, não para o desktop
+    sair: () => { voltarAoMenu(); },
   },
 });
 /* OS DOIS ALIMENTADORES — ouvintes ADITIVOS no mesmo socket. O br-game.js
@@ -2912,6 +2918,32 @@ if (__mpSocket) {
   __mpSocket.on('roster', d => XRUI.social.roster(d));
   __mpSocket.on('chat', d => XRUI.social.receber(d));
 }
+/* O MENU PRINCIPAL DENTRO DO MUNDO — o que vem ANTES da partida. Entrar em VR
+   começava a partida à força porque o menu é DOM: sem tela no headset,
+   "jogando" era o único estado alcançável e o jogador não escolhia nada.
+   As linhas de conforto NÃO são repetidas aqui: o painel entrega as dele
+   prontas ao módulo (js/xr/xrmenu.js), e o lobby é a aba SALA que já existe. */
+XRUI.conectarMenu({
+  ler: () => ({
+    pronto: MenuGate.wired,
+    jogando: state.started,
+    sala: temSala(),
+    caiu: MenuGate.dropped,
+    solo: emSolo(),
+    voltando: MenuGate.voltando,
+    quebrado: brQuebrado(),
+  }),
+  acoes: {
+    /* o MESMO caminho do #btnNew: sai da sala, fecha o painel de DOM e começa.
+       `trusted` falso porque não há gesto de mouse aqui — e no headset não há
+       pointer lock a pedir (startGame já trata isso). */
+    solo: () => { entrarEmSolo(); MENU.close(); startGame(false); },
+    /* o MESMO caminho do #btnMulti: vindo do solo, reconecta. Quem mostra a
+       sala é a aba SALA do painel, e quem troca de aba é o js/xr/xrui.js. */
+    multi: () => { if (emSolo()) voltarParaSala(); },
+    sairVR: () => { XR.exit(); },
+  },
+});
 const XRHud = createXrHud({
   THREE,
   ler: () => ({
@@ -3225,13 +3257,15 @@ function tick(forceDt) {
      não um espelho local. */
   const xrOn = XR.sync();
 
-  /* ENTROU EM VR = ESTÁ JOGANDO. O menu é DOM, e DOM não é renderizado dentro
-     de uma sessão imersiva: quem entrasse pelo botão ficava de pé no mundo com
-     `started` falso e `paused` verdadeiro — o analógico não movia ninguém e não
-     havia como apertar "JOGAR", porque o botão não existe no headset. Beco sem
-     saída que, de fora, parecia "controle de VR não funciona".
-     Sai quando existir menu dentro do mundo (Fase 5). */
-  if (xrOn && !state.started && !XRUI.aberto) startGame(false);
+  /* ENTROU EM VR = ESTÁ NO MENU. Isto era `startGame(false)`: o menu é DOM,
+     DOM não é desenhado dentro da sessão imersiva, e começar à força era o
+     único estado alcançável — ao preço de o jogador não escolher NADA (nem
+     solo, nem multijogador, nem lobby, nem conforto). Agora o menu existe
+     dentro do mundo (js/xr/xrmenu.js) e é ele que abre.
+     Quem FECHA é a partida começando: pelo SOLO do próprio menu, ou pelo
+     `matchStart` do servidor, que chama `forceStart` (br-game.js). */
+  if (xrOn && !state.started && !XRUI.aberto) XRUI.abrir('menu');
+  if (xrOn && state.started && XRUI.aberto && XRUI.modo === 'menu') XRUI.fechar();
   // saiu da sessão com botão apertado: sem isto a tecla fica presa pra sempre
   if (!xrOn && _teclasXR.size) soltarTeclasXR();
   /* Sessão acabou (headset tirado, botão do sistema, bateria): solta o ouvinte

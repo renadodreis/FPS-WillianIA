@@ -152,13 +152,25 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
   /* E o passo FÍSICO não pode sumir na conta do pivô: se a cabeça é fixada no
      ponto pedido todo frame, andar pelo cômodo deixa de mover o jogador — o
      jogo passaria a arrastar a cabeça de volta, que é a coisa proibida. */
+  /* CAMINHAR, não teleportar. O rig ignora delta maior que 35 cm num frame,
+     porque isso não é passo humano — é recentrar, redefinição de piso ou falha
+     de rastreio. Os casos abaixo andam em etapas de gente. */
+  function andar(cam, place, x, z, etapa = 0.05) {
+    const x0 = cam.position.x, z0 = cam.position.z;
+    const n = Math.max(1, Math.ceil(Math.hypot(x - x0, z - z0) / etapa));
+    for (let i = 1; i <= n; i++) {
+      cam.position.x = x0 + (x - x0) * (i / n);
+      cam.position.z = z0 + (z - z0) * (i / n);
+      place();
+    }
+  }
+
   it('andar pelo cômodo move a cabeça, e o passo fica disponível pro jogo', () => {
     xr.enter();
     camera.position.set(0, 1.7, 0);
     xr.place(50, 0, -20, 0);
     const antes = xr.headWorldPosition(new THREE.Vector3());
-    camera.position.set(0.8, 1.7, -0.6);   // passo físico de 1 m
-    xr.place(50, 0, -20, 0);
+    andar(camera, () => xr.place(50, 0, -20, 0), 0.8, -0.6);   // passo físico de 1 m, caminhado
     const agora = xr.headWorldPosition(new THREE.Vector3());
     assert.equal(+(agora.x - antes.x).toFixed(3), 0.8, 'o passo físico sumiu');
     assert.equal(+(agora.z - antes.z).toFixed(3), -0.6);
@@ -192,8 +204,7 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     xr.enter();
     camera.position.set(0, 1.7, 0);
     xr.place(0, 0, 0, 0);
-    camera.position.set(3, 1.7, 0);          // salto de 3 m: tracking, não caminhada
-    xr.place(0, 0, 0, 0);
+    andar(camera, () => xr.place(0, 0, 0, 0), 3, 0);   // 3 m caminhados
     const p = xr.consumirPasso();
     assert.ok(Math.hypot(p.x, p.z) <= 0.1501,
       `um salto de 3 m entregou ${Math.hypot(p.x, p.z).toFixed(3)} m ao jogo num frame: o colisor teleporta`);
@@ -220,8 +231,7 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     camera.position.set(0, 1.7, 0);
     xr.place(0, 0, 0, 0);
     const cabeca0 = xr.headWorldPosition(new THREE.Vector3());
-    camera.position.set(5, 1.7, 0);          // 5 m: erro de rastreio absurdo
-    xr.place(0, 0, 0, 0);
+    andar(camera, () => xr.place(0, 0, 0, 0), 5, 0);   // 5 m caminhados
     const cabeca1 = xr.headWorldPosition(new THREE.Vector3());
     assert.equal(+(cabeca1.x - cabeca0.x).toFixed(3), 5,
       'a cabeça não acompanhou o movimento físico');
@@ -237,8 +247,7 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     xr.enter();
     camera.position.set(0, 1.7, 0);
     xr.place(0, 0, 0, 0);
-    camera.position.set(5, 1.7, 0);
-    xr.place(0, 0, 0, 0);
+    andar(camera, () => xr.place(0, 0, 0, 0), 5, 0);
     let total = 0, voltas = 0;
     for (; voltas < 200; voltas++) {
       const p = xr.consumirPasso();
@@ -249,6 +258,45 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     }
     assert.ok(Math.abs(total - 5) < 0.01,
       `escoaram ${total.toFixed(2)} m de 5: o excedente foi jogado fora em vez de entregue`);
+  });
+
+  it('salto grande demais para ser humano NÃO vira passo', () => {
+    /* A 72 Hz, andar depressa cobre ~2 cm por frame; 35 cm seriam 25 m/s.
+       Delta assim é recentrar, piso redefinido ou rastreio perdido — nos três
+       casos a resposta é aceitar a pose e não mover ninguém. Este limiar existe
+       porque a ORDEM em que o runtime entrega a pose nova e o evento `reset`
+       não é garantida, e a versão anterior apostou na ordem errada: a pose
+       chega primeiro, o passo espúrio nasce, e a carência de frames chega
+       tarde. Um limiar físico não precisa saber a ordem. */
+    xr.enter();
+    camera.position.set(0, 1.7, 0);
+    xr.place(0, 0, 0, 0);
+    xr.consumirPasso();
+    camera.position.set(0.78, 1.7, 0);       // recentrar: a origem pulou
+    xr.place(0, 0, 0, 0);
+    const p = xr.consumirPasso();
+    assert.equal(+Math.hypot(p.x, p.z).toFixed(4), 0,
+      `um salto de 0,78 m num frame virou ${Math.hypot(p.x, p.z).toFixed(3)} m de passo — ` +
+      'é assim que recentrar teleportava o jogador pela própria distância ao centro');
+  });
+
+  it('e a caminhada logo depois do salto continua funcionando', () => {
+    xr.enter();
+    camera.position.set(0, 1.7, 0);
+    xr.place(0, 0, 0, 0);
+    camera.position.set(2, 1.7, 0);          // salto ignorado
+    xr.place(0, 0, 0, 0);
+    xr.consumirPasso();
+    andar(camera, () => xr.place(0, 0, 0, 0), 2.3, 0);   // 30 cm caminhados a partir dali
+    let total = 0;
+    for (let i = 0; i < 40; i++) {
+      const q = xr.consumirPasso();
+      const m = Math.hypot(q.x, q.z);
+      if (m < 1e-6) break;
+      total += m;
+    }
+    assert.ok(Math.abs(total - 0.3) < 0.01,
+      `depois de um salto ignorado, 30 cm caminhados renderam ${total.toFixed(3)} m`);
   });
 
   it('REBASEAR (recentrar) não gera passo nenhum', () => {
@@ -272,8 +320,7 @@ describe('o jogo move o rig, o headset move a cabeça', () => {
     xr.enter();
     camera.position.set(0, 1.7, 0);
     xr.place(0, 0, 0, 0);
-    camera.position.set(0, 1.7, -2);         // salto reto pra frente
-    xr.place(0, 0, 0, 0);
+    andar(camera, () => xr.place(0, 0, 0, 0), 0, -2);   // 2 m caminhados reto pra frente
     const p = xr.consumirPasso();
     assert.equal(+p.x.toFixed(3), 0, 'o corte torceu o passo pro lado');
     assert.ok(p.z < 0, 'o corte inverteu o sentido do passo');

@@ -93,10 +93,39 @@ export function planoDeQualidade({ cascatas = 4, agressivo = false } = {}) {
          cidade       546 720            402 000       −144 720  (−26,5%)
          castelo      868 320            619 080       −249 240  (−28,7%)
 
-       0 no modo agressivo: só a célula sob os pés fica com a lâmina completa.
+       ZERO, e o número veio da MEDIÇÃO, não do gosto. A distribuição que
+       fechava a pose de CASTELO era 0-1 completa / 2 reduzida / 3+ mínima;
+       medida a pose de SPAWN — que é pior, com 78 chunks no frustum contra 70
+       e o dobro de chunks no primeiro anel — ela estourava o teto em 11 833
+       triângulos por olho. O anel completo teve que descer de 1 para 0.
+
+       É o degrau CERTO para ceder, e por isso: a lâmina de 2 segmentos guarda
+       base, MEIO e ponta exatamente sobre a curva (desvio máximo de 1,1 cm em
+       y=0,25 e y=0,75), enquanto a de 1 segmento perde o meio. Ceder o limiar
+       4→2 custa quase nada; ceder o 2→1 é o que se quis proteger, e ele fica
+       onde estava, no anel 3 (~25 m).
+
        Negativo nunca — aí deixaria de ser LOD por distância e a grama que o
        jogador encosta a mão perderia detalhe. */
-    anelGrama: agressivo ? 0 : 1,
+    anelGrama: 0,
+    /* ---- SEGUNDO ANEL: onde entra a lâmina MÍNIMA (1 segmento, 2 tris) ----
+       Um anel só não bastava. Com dois degraus (4 e 2 segmentos) o PISO da
+       grama na pose de castelo é 281 400 triângulos por olho, e o orçamento
+       que sobra depois do resto do mundo é 197 547: não existia distribuição
+       que coubesse — a conta dava 2,8 triângulos por lâmina e o degrau mais
+       barato custava 4.
+
+       Com o terceiro degrau a distribuição existe: anel 0 completo, anéis 1-2
+       reduzidos, do anel 3 (~25 m) para fora no mínimo. Este 2 é o maior
+       (isto é, o mais conservador) que ainda cabe em 500 k na PIOR pose
+       medida — spawn, 78 chunks no frustum. Com 3 a pior pose estoura.
+
+       Por que 25 m é seguro para a lâmina reta: a flecha da curvinha
+       `z = y²·0,18` é 4,5 cm no meio da lâmina; a 25 m, com o frustum do
+       Quest 3, isso é fração de pixel. E o que esconde alguém deitado àquela
+       distância é a DENSIDADE de lâminas, não a curvatura de cada uma — está
+       medido em pixel contra um alvo do tamanho de um corpo deitado. */
+    anelGramaMinima: agressivo ? 1 : 2,
   };
 }
 
@@ -126,6 +155,12 @@ export function createXrQuality({ renderer, getCsm = () => null, CFG = null }) {
          `applyMobileCfg` já deixou 1 aqui antes de a grama nascer, e devolver
          4 na saída PIORARIA o quadro de quem ficou no celular. */
       grassLodRingCfg: CFG ? CFG.GRASS_LOD_RING : null,
+      /* O segundo anel NÃO MORA no js/config.js: fora da sessão ele não
+         existe, e é a AUSÊNCIA dele que faz o desktop não ter degrau mínimo.
+         Por isso restaurar precisa saber se a chave existia — reescrevê-la
+         com `undefined` deixaria um campo fantasma no CFG para sempre. */
+      grassLodFarTinha: CFG ? Object.prototype.hasOwnProperty.call(CFG, 'GRASS_LOD_RING_FAR') : false,
+      grassLodFarCfg: CFG ? CFG.GRASS_LOD_RING_FAR : undefined,
     };
     const p = planoDeQualidade({ cascatas: luzes.length, ...opts });
     for (let i = 0; i < luzes.length; i++) luzes[i].castShadow = i < p.cascatasLigadas;
@@ -136,7 +171,10 @@ export function createXrQuality({ renderer, getCsm = () => null, CFG = null }) {
        chama uma vez por frame — o mesmo canal do CSM_MAX_FAR logo acima.
        Preset de sessão que precisa de condutor novo é como nasce o
        andaime-que-vira-produto; aqui não há condutor nenhum a inventar. */
-    if (CFG) CFG.GRASS_LOD_RING = p.anelGrama;
+    if (CFG) {
+      CFG.GRASS_LOD_RING = p.anelGrama;
+      CFG.GRASS_LOD_RING_FAR = p.anelGramaMinima;
+    }
     if (renderer.xr.setFramebufferScaleFactor) {
       renderer.xr.setFramebufferScaleFactor(p.framebuffer);
       fbAplicado = p.framebuffer;
@@ -161,6 +199,10 @@ export function createXrQuality({ renderer, getCsm = () => null, CFG = null }) {
        console diria nada. Há caso saindo da sessão de verdade (`XR.exit()`)
        e lendo o LOD de cada chunk depois. */
     if (CFG && salvo.grassLodRingCfg !== null) CFG.GRASS_LOD_RING = salvo.grassLodRingCfg;
+    if (CFG) {
+      if (salvo.grassLodFarTinha) CFG.GRASS_LOD_RING_FAR = salvo.grassLodFarCfg;
+      else delete CFG.GRASS_LOD_RING_FAR;   // volta a NÃO EXISTIR, que é o desktop
+    }
     if (renderer.xr.setFramebufferScaleFactor) {
       renderer.xr.setFramebufferScaleFactor(salvo.framebuffer);
       fbAplicado = salvo.framebuffer;

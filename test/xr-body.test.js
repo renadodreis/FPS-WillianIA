@@ -396,13 +396,43 @@ describe('RECENTRAR não move o jogador no mundo', { skip: !CHROME && 'Chrome n�
     }
     await A.espera(600);                       // deixa o passo escoar pro colisor
     const antes = [MP.player.pos.x, MP.player.pos.z];
+    // amostra a posição de MUNDO da câmera a cada frame durante o recentrar
+    /* MEDIR O QUE VAI PARA A TELA, e não o que se vê espiando entre frames.
+       Ler de fora pega rig já movido com câmera ainda velha (ou o contrário) e
+       inventa um salto que ninguém enxerga: o three escreve a pose da cabeça,
+       depois o jogo posiciona o rig, e só então desenha. A amostra tem que
+       cair DEPOIS do rig ser posto no lugar — que é exatamente o instante em
+       que o quadro é composto.
+
+       Isto OBSERVA: envolve `place` para ler o efeito dele, sem chamar nada e
+       sem mudar o que o jogo faz. */
+    const olho = new MP.THREE.Vector3();
+    const placeOrig = G.XR.place.bind(G.XR);
+    let ant = null, maxSalto = 0;
+    G.XR.place = (...args) => {
+      const r = placeOrig(...args);
+      G.XR.rig.updateMatrixWorld(true);
+      G.camera.getWorldPosition(olho);
+      const agora = [olho.x, olho.z];
+      if (ant) maxSalto = Math.max(maxSalto, Math.hypot(agora[0] - ant[0], agora[1] - ant[1]));
+      ant = agora;
+      return r;
+    };
+    await A.espera(200);
+    maxSalto = 0;                       // ignora o aquecimento da amostragem
     dev.recenter();
-    await A.espera(700);
+    await A.espera(800);
+    G.XR.place = placeOrig;
     const depois = [MP.player.pos.x, MP.player.pos.z];
     return {
       andou: Math.hypot(depois[0] - antes[0], depois[1] - antes[1]),
       distancia: Math.hypot(x, z),
       yaw: G.XR.giro.yaw,
+      /* A VISTA, e não só o colisor. Os dois casos deste bloco liam apenas
+         `player.pos` — e o defeito que sobrou depois da primeira correção era
+         justamente um salto da CÂMERA por um frame, com o colisor parado. Ler
+         só o colisor é ficar cego para metade do problema. */
+      saltoDaVista: maxSalto,
     };
   };
 
@@ -411,6 +441,9 @@ describe('RECENTRAR não move o jogador no mundo', { skip: !CHROME && 'Chrome n�
     assert.ok(r.andou < 0.02,
       `recentrar de ${r.distancia.toFixed(2)} m deslocou o jogador ${r.andou.toFixed(4)} m — ` +
       'mudar a origem não é andar');
+    assert.ok(r.saltoDaVista < 0.10,
+      `a VISTA saltou ${r.saltoDaVista.toFixed(4)} m num frame ao recentrar: o colisor ficou ` +
+      'parado e a câmera pulou, que é a metade do defeito que ler só o colisor não enxerga');
   });
 
   it('recentrar a 1,41 m também não desloca — e o erro crescia com a distância', async () => {
@@ -418,5 +451,7 @@ describe('RECENTRAR não move o jogador no mundo', { skip: !CHROME && 'Chrome n�
     assert.ok(r.andou < 0.02,
       `recentrar de ${r.distancia.toFixed(2)} m deslocou ${r.andou.toFixed(4)} m: ` +
       'o deslocamento acompanhava a distância ao centro, que é a assinatura do defeito');
+    assert.ok(r.saltoDaVista < 0.10,
+      `a VISTA saltou ${r.saltoDaVista.toFixed(4)} m num frame ao recentrar`);
   });
 });

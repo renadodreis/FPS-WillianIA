@@ -110,9 +110,20 @@
 
    Sem `social`, este arquivo se comporta byte por byte como antes: o jogo sem
    a fiação não ganha aba nenhuma.
+
+   O MENU PRINCIPAL (modo `menu`). Mesma história das abas, um degrau acima: o
+   menu de ANTES da partida era DOM, e entrar em VR chamava `startGame(false)`
+   porque não havia outro estado alcançável — o jogador não escolhia solo nem
+   multijogador, não via o lobby e não configurava nada (critério F5/I4). Em
+   vez de um segundo painel flutuante (mais 2 draw calls POR OLHO), o menu é um
+   MODO deste painel: js/xr/xrmenu.js entrega a lista de linhas de antes da
+   partida e recebe de volta, prontas, as MESMAS linhas de conforto que a pausa
+   monta (`opcoes()`). Sem `menu`, `abrir('menu')` cai em `pausa` e este
+   arquivo se comporta byte por byte como antes.
    ================================================================ */
 import { CHAVE } from './xrturn.js';
 import { createXrSocial } from './xrsocial.js';
+import { createXrMenu } from './xrmenu.js';
 
 /* Distância e tamanho: ver o cabeçalho (Meta MR design guidelines + Oculus BP).
    ALT sai de LARG pelo aspecto do canvas — esticar textura é borrão de graça. */
@@ -194,6 +205,9 @@ export function createXrUi({
      o painel de antes. Pode chegar depois por `conectarSocial` — a sala do BR
      só existe quando o socket responde, e o painel nasce junto com o jogo. */
   social = null,
+  /* `{ ler, acoes }` do menu principal (js/xr/xrmenu.js). `null` = sem modo
+     `menu`, que é o painel de antes. Pode chegar depois por `conectarMenu`. */
+  menu = null,
 } = {}) {
   const _olho = new THREE.Vector3(), _fwd = new THREE.Vector3(), _v = new THREE.Vector3();
   const _q = new THREE.Quaternion(), _alvo = new THREE.Vector3();
@@ -227,7 +241,20 @@ export function createXrUi({
     return soc;
   }
   if (social) conectarSocial(social);
-  const tituloAba = () => (modo === 'morte' ? 'MORTE' : 'PAUSA');
+
+  /* O MENU PRINCIPAL entra pela mesma porta e pela mesma razão: UMA instância,
+     reconfigurada em vez de duplicada. Ele também não cria `Object3D` nenhum —
+     só devolve linhas para este painel pintar. */
+  let men = null;
+  function conectarMenu(cfg) {
+    if (!men) men = createXrMenu({ ...(cfg || {}) });
+    else if (cfg) men.conectar(cfg);
+    pintado = '';
+    return men;
+  }
+  if (menu) conectarMenu(menu);
+
+  const tituloAba = () => (modo === 'morte' ? 'MORTE' : modo === 'menu' ? 'MENU' : 'PAUSA');
 
   /* ---------------------------------------------------------------- */
   /* LINHAS. Montadas a cada leitura porque o slider que aparece depende do
@@ -235,23 +262,13 @@ export function createXrUi({
      controle que não faz nada. */
   const prefsGiro = () => (giro && giro.prefs) || { modo: 'suave', velocidade: 180, passo: 45 };
 
-  function linhas() {
-    if (modo === 'morte') {
-      /* "JOGAR DE NOVO" só existe no SOLO. Em partida online o jogador morto
-         fica morto até a rodada acabar: o menu de DOM esconde o botão, e
-         oferecê-lo aqui dava um botão MORTO — a ação recusava com um aviso no
-         console e o painel se reabria sozinho. Botão que não faz nada é pior
-         que botão ausente. */
-      const l = [];
-      if (!acoes.podeReaparecer || acoes.podeReaparecer()) {
-        l.push({ id: 'reaparecer', tipo: 'botao', txt: 'JOGAR DE NOVO' });
-      }
-      l.push({ id: 'sair', tipo: 'botao', txt: 'VOLTAR AO MENU' });
-      return l;
-    }
+  /* AS OPÇÕES DE CONFORTO, UMA LISTA SÓ. Extraídas porque o menu principal
+     precisa das MESMAS: duas listas divergem no primeiro ajuste, e a ordem
+     aqui é exatamente a que a pausa tinha antes (giro, ajuste do giro,
+     velocidade, vinheta, recentrar). */
+  function opcoes() {
     const p = prefsGiro();
     const l = [
-      { id: 'retomar', tipo: 'botao', txt: 'RETOMAR' },
       { id: 'giroModo', tipo: 'escolha', txt: 'GIRO', val: p.modo === 'passos' ? 'EM PASSOS' : 'SUAVE' },
     ];
     if (p.modo === 'passos') {
@@ -272,8 +289,31 @@ export function createXrUi({
     }
     l.push({ id: 'vinheta', tipo: 'escolha', txt: 'VINHETA DE CONFORTO', val: extra.vinheta ? 'LIGADA' : 'DESLIGADA' });
     l.push({ id: 'recentrar', tipo: 'botao', txt: 'RECENTRAR A VISTA' });
-    l.push({ id: 'sair', tipo: 'botao', txt: 'SAIR DA PARTIDA' });
     return l;
+  }
+
+  function linhas() {
+    /* O MENU PRINCIPAL monta a ordem, e as opções vão prontas para ele: quem
+       decide onde SOLO e MULTIJOGADOR ficam em relação ao conforto é o menu. */
+    if (modo === 'menu' && men) return men.linhas({ opcoes: opcoes() });
+    if (modo === 'morte') {
+      /* "JOGAR DE NOVO" só existe no SOLO. Em partida online o jogador morto
+         fica morto até a rodada acabar: o menu de DOM esconde o botão, e
+         oferecê-lo aqui dava um botão MORTO — a ação recusava com um aviso no
+         console e o painel se reabria sozinho. Botão que não faz nada é pior
+         que botão ausente. */
+      const l = [];
+      if (!acoes.podeReaparecer || acoes.podeReaparecer()) {
+        l.push({ id: 'reaparecer', tipo: 'botao', txt: 'JOGAR DE NOVO' });
+      }
+      l.push({ id: 'sair', tipo: 'botao', txt: 'VOLTAR AO MENU' });
+      return l;
+    }
+    return [
+      { id: 'retomar', tipo: 'botao', txt: 'RETOMAR' },
+      ...opcoes(),
+      { id: 'sair', tipo: 'botao', txt: 'SAIR DA PARTIDA' },
+    ];
   }
 
   /* ---------------------------------------------------------------- */
@@ -321,8 +361,11 @@ export function createXrUi({
   function pintar() {
     if (!ctx) return;
     const ls = linhas();
+    /* o TEXTO entra na assinatura, e não só o id: a linha do multijogador
+       troca de rótulo sem trocar de id ("MULTIJOGADOR" ↔ "VOLTAR PRA SALA"), e
+       sem isto a tela ficaria mentindo até alguma outra coisa mudar */
     const assin = modo + '|' + hoverLinha + '|' + hoverZona + '|' +
-      ls.map(l => l.id + ':' + (l.val || '')).join(',') +
+      ls.map(l => l.id + ':' + l.txt + ':' + (l.val || '')).join(',') +
       (soc ? '|' + soc.assinatura() : '');
     if (assin === pintado) return;
     pintado = assin;
@@ -363,6 +406,17 @@ export function createXrUi({
       if (i === hoverLinha) {
         ctx.fillStyle = 'rgba(92,226,122,0.16)';
         ctx.fillRect(16, y + 6, CANVAS_W - 32, alturaLinha - 12);
+      }
+      /* NOTA DE ESTADO: explica por que a opção não está aqui (sala fora do
+         ar, mundo carregando). Pintada apagada e menor, de propósito — o raio
+         nem a marca, e o jogador não perde tempo clicando nela. Botão que
+         recusa é pior que botão ausente. */
+      if (l.tipo === 'nota') {
+        ctx.font = '42px system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#8fa3b8';
+        ctx.fillText(l.txt, 44, meio, CANVAS_W - 88);
+        continue;
       }
       ctx.font = 'bold 52px system-ui, sans-serif';
       ctx.textAlign = 'left';
@@ -476,6 +530,18 @@ export function createXrUi({
 
   function acionar(l, zona) {
     ultimoAcionado = l.id;
+    /* AS LINHAS DO MENU PRINCIPAL são do js/xr/xrmenu.js — e só elas se
+       declaram (`dono: 'menu'`). As opções de conforto vêm daqui e continuam
+       sendo tratadas embaixo, com um dono só; repetir os ids do outro módulo
+       aqui seria a mesma lista escrita duas vezes. `aba` leva ao lobby que já
+       existe; `fecha` é da linha que entrega o jogador a outra tela (começar a
+       partida, sair do VR). */
+    if (modo === 'menu' && men && l.dono === 'menu') {
+      if (!men.acionar(l.id)) return false;
+      if (l.aba && soc) soc.selecionar(l.aba);
+      if (l.fecha) fechar();
+      return true;
+    }
     if (l.id === 'andarPerfil') { if (andar && andar.proximo) andar.proximo(); return true; }
     if (l.id === 'retomar') { fechar(); return true; }
     if (l.id === 'sair') { fechar(); return chamar('sair'); }
@@ -504,13 +570,21 @@ export function createXrUi({
 
   /* ---------------------------------------------------------------- */
   function abrir(qual = 'pausa') {
-    modo = qual === 'morte' ? 'morte' : 'pausa';
+    /* `menu` sem fiação cai em `pausa` de propósito: um painel de menu sem
+       linhas de menu seria uma tela morta, e a pausa é o comportamento que
+       este arquivo sempre teve. */
+    modo = qual === 'morte' ? 'morte' : (qual === 'menu' && men) ? 'menu' : 'pausa';
     /* MORRER NUNCA PODE ESCONDER A SAÍDA. Quem morre com o PLACAR aberto
        receberia a tela de morte por baixo da tabela: as opções de morte moram
        no corpo da primeira aba, e ninguém adivinha que precisa clicar numa aba
        para achar como sair. É o mesmo critério I4 ("nenhum estado sem saída")
        que fez este painel existir. */
     if (modo === 'morte' && soc) soc.selecionar('pausa');
+    /* mesma razão, na entrada do menu principal: abrir com o PLACAR na frente
+       esconderia SOLO e MULTIJOGADOR atrás de uma aba que ninguém adivinha.
+       Só na ABERTURA — depois de aberto, a escolha de aba é do jogador (é
+       assim que MULTIJOGADOR consegue levar até o lobby). */
+    else if (modo === 'menu' && !aberto && soc) soc.selecionar('pausa');
     montar();
     if (!aberto) {
       aberto = true;
@@ -552,7 +626,11 @@ export function createXrUi({
     const bordaMenu = menuAgora && !menuAntes;
     menuAntes = menuAgora;
     if (bordaMenu) {
-      if (aberto) fechar();
+      /* NO MENU PRINCIPAL O BOTÃO NÃO FECHA. Antes da partida não há jogo para
+         onde voltar: fechar deixaria o jogador de pé no mundo sem tela nenhuma
+         e sem nada para apertar — exatamente o beco (critério I4) que este
+         painel veio fechar. */
+      if (aberto) { if (modo !== 'menu') fechar(); }
       else if (permitirAbrir) abrir('pausa');
     }
 
@@ -609,7 +687,11 @@ export function createXrUi({
       const iy = (0.5 - alvo.y / ALT) * CANVAS_H;
       if (iy >= TITULO_PX) {
         const idx = Math.floor((iy - TITULO_PX) / ((CANVAS_H - TITULO_PX) / ls.length));
-        if (idx >= 0 && idx < ls.length) { novaLinha = idx; novaZona = zonaDe(ls[idx], alvo.u); }
+        /* nota de estado não vira alvo: ela existe para ser lida, e marcá-la
+           daria ao jogador um botão que não responde */
+        if (idx >= 0 && idx < ls.length && ls[idx].tipo !== 'nota') {
+          novaLinha = idx; novaZona = zonaDe(ls[idx], alvo.u);
+        }
       }
     }
     hoverLinha = novaLinha; hoverZona = novaZona;
@@ -664,7 +746,10 @@ export function createXrUi({
     /* A FIAÇÃO SOCIAL ENTRA POR AQUI, e é sempre a MESMA instância (ver o
        cabeçalho): chamar de novo reconfigura, nunca duplica. */
     conectarSocial,
+    /* ...e a do MENU PRINCIPAL, com a mesma regra: reconfigura, nunca duplica */
+    conectarMenu,
     get social() { return soc; },
+    get menu() { return men; },
     get aberto() { return aberto; },
     get modo() { return modo; },
     get painel() { return painel; },
@@ -696,6 +781,9 @@ export function createXrUi({
         grausTexto: 2 * Math.atan((ALT * (52 * 0.72 / CANVAS_H) / 2) / Math.max(1e-6, d)) / GRAU,
         grausLinha: 2 * Math.atan((ALT * (alturaLinha / CANVAS_H) / 2) / Math.max(1e-6, d)) / GRAU,
         reposicionando,
+        /* o menu principal, para QA: o que ele LEU do portão do menu do jogo.
+           Nada aqui aciona nada. */
+        menu: men ? men.estado() : null,
         linhas: ls.map((l, i) => {
           const y = ALT / 2 - (TITULO_PX + (i + 0.5) * alturaLinha) / CANVAS_H * ALT;
           const centro = new THREE.Vector3(0, y, 0).applyMatrix4(painel.matrixWorld);

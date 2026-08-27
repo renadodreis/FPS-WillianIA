@@ -117,13 +117,23 @@ export function createXrRig({ THREE, scene, camera }) {
        precisar adivinhar a ordem em que o navegador entrega as duas coisas.
        O custo é ignorar até ~4 cm de caminhada real durante a carência, e só
        quando o jogador recentra — que é justamente quando ele está parado. */
-    if (pedidoRebase > 0) { pedidoRebase--; temBase = false; passoX = 0; passoZ = 0; }
+    /* Rebasear NÃO zera o acumulado. Zerar era a versão "descartar"
+       ressuscitada num lugar novo: com 3 m de passo pendente, morto, a vista
+       ficava 2,9981 m fora do lugar PARA SEMPRE. O acumulado é onde a cabeça
+       está; o que o rebase apaga é a MEMÓRIA DA POSE ANTERIOR, para o próximo
+       delta não medir contra um referencial que já não existe. */
+    if (pedidoRebase > 0) { pedidoRebase--; temBase = false; }
     if (!temBase) { cabecaX = hx; cabecaZ = hz; temBase = true; }
     // passo do cômodo desde o frame anterior, levado do espaço do rig pro mundo
     const dx = hx - cabecaX, dz = hz - cabecaZ;
     cabecaX = hx; cabecaZ = hz;
-    passoX += dx * c + dz * s;
-    passoZ += -dx * s + dz * c;
+    /* Salto grande demais para ser passo: aceita a pose e segue sem acumular.
+       É o que cobre recentrar, redefinição de piso e falha de rastreio, sem
+       depender da ordem em que o runtime entrega pose e evento. */
+    if (Math.hypot(dx, dz) <= PASSO_HUMANO_MAX) {
+      passoX += dx * c + dz * s;
+      passoZ += -dx * s + dz * c;
+    }
     rig.rotation.y = yaw;
     // rig = alvo da cabeça menos a posição da cabeça já girada pelo yaw
     rig.position.set(
@@ -159,6 +169,21 @@ export function createXrRig({ THREE, scene, camera }) {
   const PASSO_MAX = 0.15;
   /* Frames de carência depois de um reset de referencial. Três cobrem a
      latência medida entre o evento e a pose nova chegar na câmera. */
+  /* SALTO QUE NENHUM HUMANO DÁ. A 72 Hz, andar depressa cobre ~2 cm por frame;
+     35 cm seriam 25 m/s. Um delta desse tamanho não é caminhada: é recentrar,
+     é o piso sendo redefinido, ou é o rastreio perdendo e reencontrando a
+     cabeça. Nos três casos a resposta certa é a mesma — aceitar a pose nova
+     como referência e NÃO gerar passo.
+
+     Por que isto e não o evento `reset`: a ordem em que o runtime entrega a
+     pose nova e o evento NÃO é garantida, e a versão anterior deste arquivo
+     apostou na ordem errada. O comentário afirmava que o evento vinha antes;
+     medido no runtime, a pose é escrita de forma SÍNCRONA e o evento é só
+     enfileirado — a pose chega primeiro, o passo espúrio nasce, e a carência
+     de frames chegava tarde. Um limiar físico não precisa saber a ordem.
+
+     O evento continua sendo escutado, como sinal extra e barato. */
+  const PASSO_HUMANO_MAX = 0.35;
   const REBASE_FRAMES = 3;
   function consumirPasso(alvo, limite = PASSO_MAX) {
     const out = alvo || { x: 0, z: 0 };

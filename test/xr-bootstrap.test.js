@@ -173,11 +173,21 @@ describe('bootstrap XR — em jogo', () => {
     assert.equal(out.aposResize, 0, 'redimensionar a janela não pode tocar no framebuffer da sessão');
   });
 
-  it('em XR o rig segue os PÉS do jogador e o jogo não escreve na câmera', async () => {
-    /* Sem isto o rig fica na origem do mundo e o jogador aparece no meio do
-       mapa, olhando pro lugar errado, enquanto o jogo acha que ele está em
-       `player.pos`. Quem escreve a câmera em XR é o three, com a pose da
-       cabeça relativa ao PAI — o jogo move o pai, nunca a câmera. */
+  it('em XR a CABEÇA fica sobre os pés do jogador, e o jogo não escreve na câmera', async () => {
+    /* O QUE ESTE CASO COBRAVA ANTES, e por que mudou. Ele exigia
+       `rig.position == player.pos` — o desenho de antes de o giro passar a
+       pivotar na CABEÇA. Depois do pivô, o rig fica em `pés − cabeça` de
+       propósito, justamente para a CABEÇA cair sobre os pés; o contrato é
+       sobre onde o JOGADOR está, não sobre onde o rig está.
+
+       Ele continuou verde por acidente: a sentinela salta a câmera 8 m num
+       tick, e esse salto virava "passo físico" que somava de volta exatamente
+       o que a compensação subtraía. Quando o rig passou a ignorar delta maior
+       que 35 cm — porque 8 m num frame não é caminhada, é falha de rastreio —
+       a máscara caiu e o caso apareceu.
+
+       Vale notar que o comportamento MELHOROU: antes, um salto de rastreio de
+       8 m teleportava o jogador 8 m no mundo. */
     const out = await h.play(() => {
       const G = window.__game, MP = window.__MP, R = MP.renderer;
       R.setAnimationLoop(null);
@@ -190,8 +200,11 @@ describe('bootstrap XR — em jogo', () => {
       const P = MP.player.pos;
       P.set(120, MP.groundAt(120, -60, 999), -60);
       G.tick(1 / 60);
+      G.XR.rig.updateMatrixWorld(true);
+      const cab = MP.camera.getWorldPosition(new MP.THREE.Vector3());
       const r = {
         rig: G.XR.rig.position.toArray().map(v => +v.toFixed(2)),
+        cabeca: [cab.x, P.y, cab.z].map(v => +v.toFixed(2)),   // y da cabeça vem do headset
         pes: [P.x, P.y, P.z].map(v => +v.toFixed(2)),
         cam: MP.camera.position.toArray().map(v => +v.toFixed(2)),
         yaw: +G.XR.rig.rotation.y.toFixed(6),
@@ -201,7 +214,9 @@ describe('bootstrap XR — em jogo', () => {
       R.setAnimationLoop(() => G.tick());
       return r;
     });
-    assert.deepEqual(out.rig, out.pes, 'o rig tem que ficar nos pés do jogador');
+    assert.deepEqual(out.cabeca, out.pes,
+      'a cabeça do jogador tem que cair sobre os pés dele: o rig compensa a pose ' +
+      `da cabeça (rig ${JSON.stringify(out.rig)}, cabeça ${JSON.stringify(out.cabeca)})`);
     assert.deepEqual(out.cam, [4.25, 5.5, 6.75], 'em VR a câmera é do headset, não do jogo');
     assert.equal(out.yaw, 0, 'girar o mundo sob o jogador é enjoo — giro é da Fase 3');
   });

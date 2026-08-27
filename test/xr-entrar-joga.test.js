@@ -39,23 +39,29 @@ describe('entrar em VR começa o jogo', { skip: !CHROME && 'Chrome não encontra
     assert.equal(r.started, false, 'o desktop não pode começar sozinho ao abrir o menu');
   });
 
-  it('entrar em sessão imersiva tira o jogador do menu', async () => {
+  it('entrar em sessão imersiva abre o MENU dentro do mundo, e não uma partida', async () => {
     const r = await h.play(() => {
       const G = window.__game, R = window.__MP.renderer;
       R.setAnimationLoop(null);
       const antes = { started: G.state.started, paused: G.state.paused };
       R.xr.isPresenting = true;
       G.tick(1 / 60);
-      const depois = { started: G.state.started, paused: G.state.paused };
+      const depois = {
+        started: G.state.started, paused: G.state.paused,
+        aberto: G.XRUI.aberto, modo: G.XRUI.modo,
+      };
       R.xr.isPresenting = false;
       G.tick(1 / 60);
       R.setAnimationLoop(() => G.tick());
       return { antes, depois };
     });
     assert.equal(r.antes.started, false);
-    assert.equal(r.depois.started, true,
-      'entrou em VR e continuou no menu: sem menu dentro do mundo, isso é beco sem saída');
-    assert.equal(r.depois.paused, false, 'entrou em jogo pausado — o analógico não moveria ninguém');
+    assert.equal(r.depois.started, false,
+      'entrar em VR começou a partida à força — o jogador não escolhe modo, lobby nem conforto');
+    assert.equal(r.depois.aberto, true,
+      'entrou em VR e não apareceu tela nenhuma: de pé no mundo sem menu é o beco do critério I4');
+    assert.equal(r.depois.modo, 'menu',
+      `o painel abriu em modo "${r.depois.modo}" — antes da partida o modo é o menu principal`);
   });
 
   it('sair e voltar pra VR não reinicia a partida em andamento', async () => {
