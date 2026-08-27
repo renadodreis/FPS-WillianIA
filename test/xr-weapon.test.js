@@ -408,3 +408,88 @@ describe('arma e mira em VR (IWER, sessão imersiva real)', { skip: !CHROME && '
       `a pose de desktop não voltou: weaponRoot.position.z = ${r.pos[2].toFixed(3)}`);
   });
 });
+
+describe('B7 — o tiro sai do CANO, não da ocular', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  /* Critério intocado por cinco rodadas, e o mais longe do aceite: a origem do
+     raio era a linha de mira (a ocular do perfil, onde o jogador põe o olho), e
+     o cano fica 44 a 91 cm à frente. Isso é visível — a bala nasce do nada — e
+     é risco de SEGURANÇA: o servidor valida ALCANCE a partir da origem que o
+     cliente manda. O próprio `game.js` já tratava esse risco no helicóptero,
+     com o comentário dizendo que "o servidor rejeitaria a origem longe da
+     posição autoritativa"; faltava fazer o mesmo em VR.
+
+     Mover a origem para frente sem corrigir o ângulo desalinharia o tiro da
+     mira, então a direção passa a sair do cano para o ponto que a mira aponta —
+     o mesmo desenho que a bazuca já usava. Por isso os dois casos: o de origem
+     e o de alinhamento. */
+  let h;
+  before(async () => { h = await bootEmVR(bootGame, { port: 3436 }); });
+  after(async () => { if (h) await h.close(); });
+
+  it('a origem do tiro fica na boca do cano (≤ 5 cm)', async () => {
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game;
+      A.solta(); await A.espera(400);
+      const cano = G.canoMundo();
+      const m = G.mira();
+      return {
+        d: Math.hypot(m.origem[0] - cano[0], m.origem[1] - cano[1], m.origem[2] - cano[2]),
+        naMao: m.naMao,
+      };
+    });
+    assert.equal(r.naMao, true, 'a mira não está saindo da mão — o caso mede outra coisa');
+    /* A `mira()` continua sendo a LINHA DE MIRA, que é o que o jogador olha;
+       quem tem que sair do cano é o RAIO do tiro. Este caso mede a distância
+       entre as duas, que é o tamanho do erro que o servidor veria. */
+    assert.ok(r.d < 1.0, `ocular e cano a ${r.d.toFixed(3)} m — geometria da arma inesperada`);
+  });
+
+  it('a origem REAL do raio fica a ≤ 5 cm da boca do cano', async () => {
+    /* ESTE é o critério B7, e é o caso que faltava: a suíte media a DIREÇÃO da
+       mira e nunca a ORIGEM contra a geometria da arma. Não basta a mira estar
+       certa — o servidor valida ALCANCE a partir da origem que o cliente manda,
+       e uma origem meio metro adiantada é divergência de anti-cheat, não só
+       bala nascendo do nada. */
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game;
+      A.solta(); await A.espera(400);
+      const arma = G.arsenal[G.gunIndex];
+      arma.mag = 30; arma.reloading = false; arma.lastShot = -99;
+      A.botao('right', 'trigger', 1);
+      await A.espera(260);
+      A.solta();
+      await A.espera(200);
+      const cano = G.canoMundo(), org = G.origemDoTiro();
+      return {
+        saiu: arma.mag < 30,
+        d: Math.hypot(org[0] - cano[0], org[1] - cano[1], org[2] - cano[2]),
+      };
+    });
+    assert.equal(r.saiu, true, 'o gatilho não disparou — o caso não mediu tiro nenhum');
+    assert.ok(r.d <= 0.05,
+      `o raio partiu a ${r.d.toFixed(3)} m da boca do cano (teto 0,05 m): a bala nasce fora ` +
+      'da arma e o servidor valida alcance a partir daí');
+  });
+
+  it('e a direção continua alinhada com a mira depois de mover a origem', async () => {
+    /* Mover a origem para frente SEM corrigir o ângulo manda a bala para o
+       lado — seria trocar um defeito por outro pior. A direção passa a sair do
+       cano para o ponto que a mira aponta, o mesmo desenho da bazuca. */
+    const r = await h.play(async () => {
+      const A = window.__A, G = window.__game;
+      A.solta(); await A.espera(300);
+      const m = G.mira();
+      const mod = Math.hypot(m.direcao[0], m.direcao[1], m.direcao[2]);
+      const cano = G.canoMundo(), org = m.origem;
+      // o cano tem que estar À FRENTE da ocular, na direção que a mira aponta
+      const frente = (cano[0] - org[0]) * m.direcao[0]
+                   + (cano[1] - org[1]) * m.direcao[1]
+                   + (cano[2] - org[2]) * m.direcao[2];
+      return { mod, frente };
+    });
+    assert.ok(Math.abs(r.mod - 1) < 0.01, `a direção da mira não é unitária: ${r.mod}`);
+    assert.ok(r.frente > 0,
+      `o cano está ${r.frente.toFixed(3)} m ATRÁS da ocular na direção da mira — ` +
+      'a geometria da arma está invertida e mover a origem para lá apontaria pra trás');
+  });
+});

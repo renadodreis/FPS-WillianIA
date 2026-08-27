@@ -2294,6 +2294,9 @@ function miraDirecao(out) {
 }
 const _hitAgg = new THREE.Vector3();
 const _missEnd = new THREE.Vector3();
+// ponto zerado da mira, para o tiro sair do cano SEM desalinhar (ver fire)
+const _alvoTiroXR = new THREE.Vector3();
+const _origemDoTiro = new THREE.Vector3();   // QA: de onde o raio partiu de fato
 function fire(t) {
   /* TATO DO TIRO, antes de qualquer ramo: vale pra faca, foguete, laser e
      hitscan. A mão é a que segura a arma. O peso sai de `shotTrauma(gun)`
@@ -2369,6 +2372,24 @@ function fire(t) {
   const spread = lerp(gun.spreadHip, gun.spreadAds, adsT) + spd * 0.0006 + (player.onGround ? 0 : 0.012);
   miraOrigem(_rayOrig);
   muzzle.getWorldPosition(_v3);
+  /* EM VR O TIRO SAI DO CANO. A origem do raio era a linha de mira — a ocular
+     do perfil, onde o jogador põe o olho — e o cano fica 44 a 91 cm à frente
+     dela. Isso é visível (a bala nasce do nada) e é risco de SEGURANÇA: o
+     servidor valida ALCANCE a partir da origem que o cliente manda, e o mesmo
+     arquivo já trata esse risco no helicóptero, logo abaixo, com o comentário
+     dizendo que "o servidor rejeitaria a origem longe da posição autoritativa".
+
+     A direção é recalculada do cano até o ponto que a MIRA aponta, que é
+     exatamente o que a bazuca já faz algumas linhas acima: sem isso, mover a
+     origem para frente sem corrigir o ângulo desalinharia o tiro da mira.
+     `rayBlockedAt` dá a distância de zeragem — o primeiro obstáculo, com teto
+     de 120 m — para que o cano e a ocular concordem no alvo real. */
+  if (XR.presenting) {
+    miraDirecao(_rayDir);
+    const zeroVR = Math.max(4, Math.min(rayBlockedAt(_rayOrig, _rayDir, 240), 120));
+    _alvoTiroXR.copy(_rayOrig).addScaledVector(_rayDir, zeroVR);
+    _rayOrig.copy(_v3);
+  }
   // voando, origem do tiro é o HELICÓPTERO — a câmera de perseguição fica ~10m
   // atrás e o servidor rejeitaria a origem longe da posição autoritativa
   if (state.flying) {
@@ -2376,10 +2397,18 @@ function fire(t) {
     _rayOrig.copy(_v3);
   }
 
+  /* QA: a origem REAL do raio, já decidida (cano em VR, olho no desktop,
+     helicóptero voando). O critério B7 cobra a distância dela até a boca do
+     cano, e a razão de existir esta linha é que a suíte media a DIREÇÃO da
+     mira e nunca a origem contra a geometria da arma. */
+  _origemDoTiro.copy(_rayOrig);
+
   let hitAny = false, killAny = false, headAny = false, totalDmg = 0;
   let remoteHit = false, missEndSet = false;
   for (let p = 0; p < gun.pellets; p++) {
-    miraDirecao(_rayDir);
+    // em VR a direção sai do CANO para o ponto que a mira aponta (ver acima)
+    if (XR.presenting && !state.flying) _rayDir.copy(_alvoTiroXR).sub(_rayOrig).normalize();
+    else miraDirecao(_rayDir);
     _v1.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(spread * Math.sqrt(Math.random()));
     _rayDir.add(_v1).normalize();
 
@@ -4249,6 +4278,11 @@ window.__game = {
   yawDaVista() { _eulerVista.setFromQuaternion(vistaMundo(), 'YXZ'); return _eulerVista.y; },
   /* QA: a mira REAL do jogo (a mesma que `fire()` usa). Sem isto não há como
      verificar de fora que o tiro sai da mão e não da cabeça. */
+  /* QA: a boca do cano no mundo. Sem isto não há como medir de fora que o tiro
+     sai do cano — e a distância entre origem do raio e cano é critério de
+     aceite E risco de anti-cheat (o servidor valida alcance a partir dela). */
+  canoMundo: () => muzzle.getWorldPosition(new THREE.Vector3()).toArray(),
+  origemDoTiro: () => _origemDoTiro.toArray(),
   mira: () => ({
     origem: miraOrigem(new THREE.Vector3()).toArray(),
     direcao: miraDirecao(new THREE.Vector3()).toArray(),
