@@ -21,12 +21,20 @@
      mira, e a menos de 20 cm dela;
    · custo em draw calls.
 
-   COMO ESTE ARQUIVO EVITA MEDIR A SI MESMO. O módulo ainda não está fiado no
-   game.js (o wiring vai no relatório), então o teste instala UM condutor: uma
+   O CONDUTOR PRÓPRIO, E O BURACO QUE ELE ABRIU. Quando este arquivo nasceu o
+   módulo ainda NÃO estava fiado no game.js, então ele instala um condutor: uma
    cadeia de `session.requestAnimationFrame` que chama `update()` uma vez por
-   frame, igual ao wiring. Depois disso o teste só OBSERVA — aperta botão de
-   verdade, espera tempo de verdade e lê. E o `ler()` do condutor é o mesmo do
-   wiring: lê `player`, `gun` e `inventory` do jogo, sem inventar dado.
+   frame. Hoje o game.js fia de verdade (`XRHud.update` no loop), e o condutor
+   virou um problema: MEDIDO POR MUTAÇÃO — arrancando a chamada do game.js
+   (`if (false && xrOn) XRHud.update(...)`), os NOVE testes deste arquivo
+   continuaram VERDES. Ou seja, ele provava que o módulo funciona quando o
+   próprio teste o dirige, e não que o jogo o dirige. É a quarta ocorrência do
+   "teste que passa por acidente" nesta base.
+
+   O condutor fica (ele é o que permite parar o HUD para medir custo e para
+   observar o `exit()`), mas agora existe o caso `a fiação do jogo está viva`,
+   que lê a instância DO JOGO (`window.__game.XRHud`) e reprova se o game.js
+   parar de atualizá-la. Esse caso é o que morre com o mutante acima.
    ================================================================ */
 'use strict';
 const { describe, it, before, after } = require('node:test');
@@ -195,6 +203,31 @@ describe('HUD dentro do mundo em VR (IWER, sessão imersiva real)', { skip: !CHR
     assert.equal(r.arma, true, 'o painel de munição não está no grafo da cena');
     assert.equal(r.pulso, true, 'o painel do pulso não está no grafo da cena');
     assert.equal(r.e.visivel.arma, true, 'o painel da arma nasceu invisível');
+  });
+
+  /* O CASO QUE MORRE COM O MUTANTE. Tudo o mais neste arquivo passa pelo
+     condutor do teste; este aqui olha SÓ para a instância que o game.js cria e
+     atualiza. Se a fiação do jogo sumir, `G.XRHud.arma` nunca é criado —
+     porque os painéis nascem dentro do primeiro `update()`, e sem o loop do
+     jogo esse update nunca acontece. */
+  it('a fiação do jogo está viva: o HUD que o game.js atualiza existe e está pendurado', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, MP = window.__MP;
+      const hud = G.XRHud;
+      const q = o => (o ? { temPai: !!o.parent, paiNome: o.parent ? o.parent.name : null, visivel: !!o.visible } : null);
+      return {
+        temHud: !!hud,
+        arma: q(hud && hud.arma),
+        pulso: q(hud && hud.pulso),
+        armaNoWeaponRoot: !!(hud && hud.arma && hud.arma.parent === MP.weaponRoot),
+      };
+    });
+    assert.equal(r.temHud, true, 'o jogo não expõe o XRHud');
+    assert.ok(r.arma, 'o game.js nunca criou o painel da arma — ou seja, não está chamando XRHud.update() no loop');
+    assert.ok(r.pulso, 'o game.js nunca criou o painel do pulso — a fiação do HUD no loop do jogo está morta');
+    assert.equal(r.arma.temPai, true, 'o painel da arma do JOGO não está pendurado em nada');
+    assert.equal(r.armaNoWeaponRoot, true,
+      `o painel da arma do JOGO está pendurado em "${r.arma.paiNome}" em vez do weaponRoot`);
   });
 
   it('a munição está NA ARMA, e o painel do pulso na PALMA (gripSpace, não no raio de mira)', async () => {

@@ -105,6 +105,17 @@ export const PULSO_CV_W = 512, PULSO_CV_H = 384;
 export const ARMA_OFF = [-0.085, 0.105, 0.02];
 export const PULSO_OFF = [0, 0.05, 0.085];
 
+/* O MAPA. Item 17 de 17 da lista fechada do H1, e o único que não é texto: um
+   quad texturizado com o MESMO canvas que o minimapa 2D do monitor desenha —
+   nada é redesenhado aqui, o jogo pinta uma vez e os dois consomem.
+   Fica no antebraço, logo depois do painel do pulso (que ocupa até
+   z = 0,085 + 0,105/2 ≈ 0,138), porque é assim que o gênero resolve mapa em
+   VR — Fallout 4 VR (Pip-Boy), Into the Radius (dispositivo de pulso): olhar
+   o mapa é um GESTO, levantar o braço, e não uma tecla que cobre a tela.
+   Quadrado porque o minimapa é quadrado; esticar deformaria a bússola. */
+export const MAPA_W = 0.11, MAPA_H = 0.11;
+export const MAPA_OFF = [0, 0.05, 0.20];
+
 /* I3: nada dentro de 0,15 m do olho. 0,22 m dá margem pro painel inteiro. */
 export const PERTO_DEMAIS = 0.22;
 
@@ -121,16 +132,21 @@ export function createXrHud({
   const paineis = {
     arma: { obj: null, ctx: null, tex: null, assin: '', pai: null },
     pulso: { obj: null, ctx: null, tex: null, assin: '', pai: null },
+    mapa: { obj: null, ctx: null, tex: null, assin: '', pai: null },
   };
-  let visto = { arma: false, pulso: false };
+  const CHAVES = ['arma', 'pulso', 'mapa'];
+  let visto = { arma: false, pulso: false, mapa: false };
   let ultima = {};
 
-  function criar(chave, w, h, cvW, cvH, nome) {
+  /* `cvExterno` é o caso do mapa: o canvas já existe e já é pintado por quem
+     sabe jogar (o `MiniMap` do game.js). Aqui ele vira textura e mais nada —
+     este módulo não desenha um único blip. */
+  function criar(chave, w, h, cvW, cvH, nome, cvExterno = null) {
     const p = paineis[chave];
     if (p.obj) return p;
     const doc = win && win.document;
-    const cv = doc ? doc.createElement('canvas') : null;
-    if (cv) { cv.width = cvW; cv.height = cvH; p.ctx = cv.getContext('2d'); }
+    const cv = cvExterno || (doc ? doc.createElement('canvas') : null);
+    if (cv && !cvExterno) { cv.width = cvW; cv.height = cvH; p.ctx = cv.getContext('2d'); }
     p.tex = cv ? new THREE.CanvasTexture(cv) : null;
     if (p.tex) p.tex.colorSpace = THREE.SRGBColorSpace;
     p.obj = new THREE.Mesh(
@@ -267,15 +283,24 @@ export function createXrHud({
 
     criar('arma', ARMA_W, ARMA_H, ARMA_CV_W, ARMA_CV_H, 'xrHudArma');
     criar('pulso', PULSO_W, PULSO_H, PULSO_CV_W, PULSO_CV_H, 'xrHudPulso');
+    /* o mapa só nasce quando o jogo entrega o canvas — antes disso não há
+       textura, e um quad sem textura seria um retângulo preto no antebraço */
+    const cvMapa = d.mapa && d.mapa.canvas ? d.mapa.canvas : null;
+    if (cvMapa) criar('mapa', MAPA_W, MAPA_H, 0, 0, 'xrHudMapa', cvMapa);
 
     /* ADS: a arma vem ao rosto e o painel entraria dentro do olho (I3). A
        mira de ferro é o HUD naquele momento — é o que o gênero faz. */
     const armaOk = pendurar('arma', arma, ARMA_OFF) &&
       !d.oculto && !d.ads && (!arma || arma.visible !== false);
     const pulsoOk = pendurar('pulso', pulso, PULSO_OFF) && !d.oculto;
+    /* o mapa acompanha o painel do pulso: mesma mão, mesma regra de sumiço.
+       `oculto` cobre dirigir e voar — no carro o mapa some junto com o resto,
+       que é o que o critério H1 pede (a informação existe onde o jogador
+       está), não "um mapa flutuando dentro do painel do carro". */
+    const mapaOk = paineis.mapa.obj ? (pendurar('mapa', pulso, MAPA_OFF) && !d.oculto) : false;
 
-    visto = { arma: false, pulso: false };
-    for (const [chave, ok] of [['arma', armaOk], ['pulso', pulsoOk]]) {
+    visto = { arma: false, pulso: false, mapa: false };
+    for (const [chave, ok] of [['arma', armaOk], ['pulso', pulsoOk], ['mapa', mapaOk]]) {
       const p = paineis[chave];
       if (!p.obj) continue;
       if (!ok) { p.obj.visible = false; continue; }
@@ -297,18 +322,26 @@ export function createXrHud({
 
     if (visto.arma) pintarArma(d);
     if (visto.pulso) pintarPulso(d);
-    return { arma: visto.arma, pulso: visto.pulso };
+    /* O MAPA NÃO É PINTADO AQUI. O jogo já o desenhou uma vez, para o monitor
+       e para o headset. O que sobe à GPU é a versão: sem isto a textura
+       congelaria no primeiro frame, e um mapa congelado é pior que mapa
+       nenhum — mente sobre onde estão os inimigos. */
+    if (visto.mapa && paineis.mapa.tex && d.mapa) {
+      const v = String(d.mapa.versao);
+      if (v !== paineis.mapa.assin) { paineis.mapa.assin = v; paineis.mapa.tex.needsUpdate = true; }
+    }
+    return { arma: visto.arma, pulso: visto.pulso, mapa: visto.mapa };
   }
 
   function exit() {
-    for (const chave of ['arma', 'pulso']) {
+    for (const chave of CHAVES) {
       const p = paineis[chave];
       if (!p.obj) continue;
       p.obj.visible = false;
       if (p.obj.parent) p.obj.parent.remove(p.obj);
       p.pai = null; p.assin = '';
     }
-    visto = { arma: false, pulso: false };
+    visto = { arma: false, pulso: false, mapa: false };
   }
 
   /* Altura angular do glifo, em graus, a partir da distância medida: é o
@@ -321,10 +354,12 @@ export function createXrHud({
     update, exit,
     get arma() { return paineis.arma.obj; },
     get pulso() { return paineis.pulso.obj; },
+    get mapa() { return paineis.mapa.obj; },
+    MAPA_W, MAPA_H,
     /* leitura pura para QA — nada aqui ACIONA nada */
     estado(cabeca = null) {
       const out = { dados: ultima, visivel: { ...visto } };
-      for (const chave of ['arma', 'pulso']) {
+      for (const chave of CHAVES) {
         const p = paineis[chave];
         if (!p.obj) { out[chave] = null; continue; }
         p.obj.updateWorldMatrix(true, false);
@@ -339,11 +374,13 @@ export function createXrHud({
             encara = Math.acos(Math.max(-1, Math.min(1, normal.dot(paraOlho.normalize())))) / GRAU;
           }
         }
-        const w = chave === 'arma' ? ARMA_W : PULSO_W;
-        const h = chave === 'arma' ? ARMA_H : PULSO_H;
+        const w = chave === 'arma' ? ARMA_W : chave === 'mapa' ? MAPA_W : PULSO_W;
+        const h = chave === 'arma' ? ARMA_H : chave === 'mapa' ? MAPA_H : PULSO_H;
         const cvH = chave === 'arma' ? ARMA_CV_H : PULSO_CV_H;
-        // altura de maiúscula do glifo GRANDE de cada painel, em metros
-        const glifoPx = chave === 'arma' ? 108 * 0.72 : 44 * 0.72;
+        /* altura de maiúscula do glifo GRANDE de cada painel, em metros. O
+           mapa não tem glifo: o que precisa ser visto ali é o BLIP, e ele mede
+           3 px num canvas de 256 — por isso a conta usa esse tamanho. */
+        const glifoPx = chave === 'arma' ? 108 * 0.72 : chave === 'mapa' ? 3 * (256 / cvH) : 44 * 0.72;
         out[chave] = {
           nome: p.obj.name,
           visivel: !!p.obj.visible,

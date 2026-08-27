@@ -3007,14 +3007,35 @@ const XRHud = createXrHud({
     })() : null,
     // o DOM continua sendo o MODELO do feed; o painel do pulso é só a vista
     feed: ui.killfeed ? Array.prototype.slice.call(ui.killfeed.children, -3).map(e => e.textContent) : [],
+    /* H1, item 17: o minimapa. O canvas é o do próprio jogo — o painel do
+       pulso é uma VISTA dele, não um segundo radar. `versao` diz ao HUD
+       quando vale subir a textura à GPU. */
+    mapa: { canvas: MiniMap.canvasXR(), versao: MiniMap.versao },
   }),
 });
 
 /* ================== minimapa / radar (canvas 2D) ================== */
+const _eulerMapa = new THREE.Euler(0, 0, 0, 'YXZ');
 const MiniMap = (() => {
   const S = 168, C = S / 2, RANGE = 95;
+  const S_XR = 256;   // o mapa do pulso é lido a ~35 cm; 168 px ficaria serrilhado
   const cv = ui.minimap;
   let worker = null, legacyCtx = null;
+  /* Canvas SÓ do headset. Dentro de uma sessão imersiva o `<canvas>` do DOM
+     não chega ao compositor, então o mapa do pulso (js/xr/xrhud.js) precisa de
+     uma superfície própria — a mesma cena, desenhada pela mesma função, num
+     canvas que vira textura. Nasce preguiçoso: quem nunca entra em VR não
+     paga um byte. Canvas de DOM não é `Object3D` e não consome o
+     `Math.random` seedado, mas a preguiça vale pela memória. */
+  let cvXR = null, ctxXRv = null, versao = 0, ultimoYaw = 0;
+  function ctxXR() {
+    if (!ctxXRv) {
+      cvXR = document.createElement('canvas');
+      cvXR.width = S_XR; cvXR.height = S_XR;
+      ctxXRv = cvXR.getContext('2d');
+    }
+    return ctxXRv;
+  }
   /* PARALELISMO: o radar é desenhado num Web Worker via OffscreenCanvas —
      o jogo só posta um Float32Array compacto de posições (15x/s). Sem suporte
      do navegador, cai no desenho clássico na thread principal. */
@@ -3035,8 +3056,7 @@ const MiniMap = (() => {
     const bs = Bosses.filter(b => b.alive);
     const buf = new Float32Array(6 + picks.length * 2 + 1 + ens.length * 3 + 1 + bs.length * 3);
     let i = 0;
-    _euler.setFromQuaternion(camera.quaternion);
-    buf[i++] = _euler.y; buf[i++] = player.pos.x; buf[i++] = player.pos.z;
+    buf[i++] = ultimoYaw; buf[i++] = player.pos.x; buf[i++] = player.pos.z;
     buf[i++] = Car.group.position.x; buf[i++] = Car.group.position.z;
     buf[i++] = picks.length;
     for (const p of picks) { buf[i++] = p.root.position.x; buf[i++] = p.root.position.z; }
@@ -3049,16 +3069,33 @@ const MiniMap = (() => {
     for (const b of bs) { buf[i++] = b.pos().x; buf[i++] = b.pos().z; buf[i++] = b.name === 'VISITANTE' ? 1 : 0; }
     return buf;
   }
+  /* O YAW DO MAPA VEM DA VISTA NO MUNDO, e isto é o defeito que este bloco
+     conserta. Em XR `camera.quaternion` é a pose da cabeça RELATIVA AO RIG, e
+     o giro artificial (analógico) mora no RIG: lendo a câmera direto, o
+     minimapa ignorava TODO giro de analógico — girar 180° com o polegar
+     deixava o mapa apontando para o lado oposto do que o jogador via. É o
+     mesmo defeito que já custou o movimento invertido e o `rotY` errado
+     mandado ao servidor; a fonte única certa é `vistaMundo()`. Fora de XR o
+     resultado é idêntico ao de antes (a câmera é filha da cena). A ordem
+     'YXZ' também importa: com 'XYZ' e a cabeça inclinada, `_euler.y` não é o
+     yaw. */
   function draw() {
-    if (worker) { const b = pack(); worker.postMessage({ type: 'draw', b }, [b.buffer]); return; }
-    drawLegacy();
+    _eulerMapa.setFromQuaternion(vistaMundo(), 'YXZ');
+    ultimoYaw = _eulerMapa.y;
+    if (worker) { const b = pack(); worker.postMessage({ type: 'draw', b }, [b.buffer]); }
+    else drawLegacy(legacyCtx, S);
+    /* o mapa do pulso: mesma função, mesmo frame, outra superfície */
+    if (XR.presenting) { drawLegacy(ctxXR(), S_XR); versao++; }
   }
-  function drawLegacy() {
-    const ctx = legacyCtx;
-    ctx.clearRect(0, 0, S, S);
-    _euler.setFromQuaternion(camera.quaternion);
-    const yaw = _euler.y;
+  function drawLegacy(ctx, Spx) {
+    /* TUDO abaixo desta linha desenha em coordenadas de 168 px — que é como o
+       radar foi desenhado, com espessuras e raios escolhidos nessa escala. O
+       canvas do pulso é maior só para não serrilhar; o `scale` faz a conta. */
+    const k = Spx / 168;
+    ctx.clearRect(0, 0, Spx, Spx);
+    const yaw = ultimoYaw;
     ctx.save();
+    ctx.scale(k, k);
     ctx.translate(C, C);
     ctx.strokeStyle = 'rgba(255,255,255,0.14)';
     ctx.lineWidth = 1;
@@ -3105,12 +3142,23 @@ const MiniMap = (() => {
     }
     ctx.restore();
     ctx.save();
+    ctx.scale(k, k);
     ctx.translate(C, C);
     ctx.fillStyle = '#fff';
     ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(5, 6); ctx.lineTo(0, 3); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
     ctx.restore();
   }
-  return { draw };
+  return {
+    draw,
+    /* leitura pura para o HUD do headset e para QA. `versao` é o que diz à
+       textura que vale subir à GPU; `ultimoYaw` é o que prova, de fora, que o
+       mapa segue o giro artificial e não só a cabeça. */
+    canvasXR: () => (XR.presenting ? (ctxXR(), cvXR) : null),
+    ctxXR,
+    S_XR,
+    get versao() { return versao; },
+    get ultimoYaw() { return ultimoYaw; },
+  };
 })();
 
 /* radar das ATRAÇÕES: overlay 2D por cima do minimapa. Ícones coloridos na
@@ -3124,11 +3172,18 @@ const ToysRadar = (() => {
   const wrap = document.getElementById('minimapWrap');
   if (wrap) wrap.appendChild(cv);
   const ctx = cv.getContext('2d');
+  /* Duas superfícies, um desenho: o overlay do monitor (que limpa a própria
+     camada) e o mapa do pulso em VR (que NÃO limpa — o minimapa acabou de
+     pintar a base ali). Mesmo yaw de mundo do MiniMap, pela mesma razão. */
   function draw() {
-    ctx.clearRect(0, 0, S, S);
+    pinta(ctx, S, true);
+    if (XR.presenting) pinta(MiniMap.ctxXR(), MiniMap.S_XR, false);
+  }
+  function pinta(ctx, Spx, limpar) {
+    const k = Spx / 168;
+    if (limpar) ctx.clearRect(0, 0, Spx, Spx);
     if (!MapToys) return;
-    _euler.setFromQuaternion(camera.quaternion);
-    ctx.save(); ctx.translate(C, C); ctx.rotate(_euler.y);
+    ctx.save(); ctx.scale(k, k); ctx.translate(C, C); ctx.rotate(MiniMap.ultimoYaw);
     const maxR = C * 0.8;
     // atrações + POIs do mundo (entradas dos térreos ocos, segredos): mesma
     // regra de clamp na borda, senão POI fora do alcance de 95 m some
@@ -4288,6 +4343,9 @@ window.__game = {
     direcao: miraDirecao(new THREE.Vector3()).toArray(),
     naMao: !!(XR.presenting && XR.mao('right')),
   }),
+  /* QA: o minimapa. `ultimoYaw` é a única forma de medir, de fora, que ele
+     gira com o giro artificial e não só com a cabeça. */
+  get MiniMap() { return MiniMap; },
   get Cannon() { return Cannon; },
   get MapToys() { return MapToys; },
   get Secrets() { return Secrets; },
