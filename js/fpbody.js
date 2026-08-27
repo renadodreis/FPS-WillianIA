@@ -33,6 +33,42 @@ export function createFpBody(deps) {
     elbowDown: 0.5,
     reachBend: 0.95,       // fração do alcance onde a mão chega: sobra dobra de cotovelo
     clavMax: 0.45,         // extensão máxima da clavícula rumo à âncora (m)
+    /* AGACHAR ENCURTA A PERNA. O jogo baixa o olho de 1,62 m para 1,04 m
+       (game.js, `eyeH`): 0,58 m é o tanto que a perna tem de encurtar para o
+       pé continuar no chão quando o corpo desce junto com a câmera. Em VR
+       quem manda é a queda MEDIDA da cabeça, que js/xr/xrbody.js escreve em
+       `bodyRoot.userData.encurtar` (metros de mundo). */
+    crouchDrop: 0.58,
+    /* Flexão máxima de joelho humano ≈ 150°, ou seja 30° de ângulo INTERNO
+       entre coxa e canela. É esse limite que define quanto a perna consegue
+       encurtar (`pernaDobra`); passar dele deixa a canela deitada em cima da
+       coxa e o boneco vira uma cadeira dobrável. */
+    kneeMin: 30 * Math.PI / 180,
+    /* NO AGACHAMENTO O QUADRIL VAI PARA TRÁS — e como aqui o quadril está
+       preso debaixo da cabeça (que é quem manda), quem anda é o PÉ, para a
+       frente. Não é enfeite: na pose de descanso o tornozelo já fica 0,107 m
+       ATRÁS do quadril, e com o pé atrás não existe solução de IK com o joelho
+       para a frente E para cima — o joelho mergulha. Medido com este valor em
+       zero: joelho a 0,047 m do chão e a malha da perna 0,373 m ENTERRADA,
+       com o tornozelo certinho no lugar. É o `moveBodyBackWhenCrouching` do
+       VRIK visto do outro lado do mesmo osso. */
+    footFwd: 0.22,
+    stepLen: 0.75,         // passada: fração do balanço que vira avanço do pé (m/rad)
+    stepLift: 0.30,        // e quanto o pé sobe na perna que vai à frente
+    airTuck: 0.30,         // no ar os dois pés encolhem em direção ao corpo
+    /* A CAPA VAI ATÉ O TORNOZELO (bainha a 0,089 m do chão em pé) e pendura no
+       PEITO: com o corpo ancorado na cabeça, agachar levava a bainha 0,373 m
+       PARA DENTRO DO CHÃO — o pé no lugar certo e o casaco atravessando o
+       piso. São 3 tiras de 4 ossos, então o ângulo se acumula ao longo da
+       tira; 0,38 rad por osso recolhe ~0,46 m de bainha no agachamento cheio,
+       que é o casaco se juntando no chão em vez de furá-lo.
+
+       O ângulo entra por RAIZ QUADRADA da dobra porque a bainha sobe com o
+       cosseno do ângulo (quadrático perto de zero) enquanto o corpo desce
+       LINEAR: com o ângulo proporcional, o meio do agachamento ficava com a
+       bainha 0,045 m dentro do chão. */
+    cloakLift: 0.38,
+    kneeOut: 0.25,         // joelhos abrem um pouco para fora ao dobrar
   };
 
   const B = {};            // ossos por apelido
@@ -51,7 +87,14 @@ export function createFpBody(deps) {
   const _camPos = new THREE.Vector3();
   const _rp = new THREE.Vector3(), _lp = new THREE.Vector3();
   const _dirR = new THREE.Vector3(), _dirL = new THREE.Vector3();
+  /* buffers da perna (não podem dividir com o braço: o alvo do pé é montado
+     antes do solver e lido depois de aimBone mexer nos registradores) */
+  const _alvo = new THREE.Vector3(), _poloP = new THREE.Vector3(), _poloA = new THREE.Vector3();
+  const _qf = new THREE.Quaternion(), _qf2 = new THREE.Quaternion();
+  const _lenP = { a: 0, b: 0 };   // coxa/canela já na ESCALA DO MUNDO deste frame
   let legPairs = null; // montado uma vez, quando o rig fica pronto
+  let legLen = null;   // { r: {a, b}, l: {a, b} } coxa/canela
+  let pernaDobra = 0;  // quanto a perna encurta até o joelho chegar no limite (m)
 
   /* dedos: [curl base, curl ponta] por estado; indicador direito no gatilho */
   const GRIP = {
@@ -108,8 +151,8 @@ export function createFpBody(deps) {
       B.torso = find('Torso');
       B.shR = find('Sholder.R'); B.upR = find('Arm_1.R'); B.foR = find('Arm_2.R'); B.haR = find('Hand.R');
       B.shL = find('Sholder.L'); B.upL = find('Arm_1.L'); B.foL = find('Arm_2.L'); B.haL = find('Hand.L');
-      B.pelR = find('Pelvis.R'); B.leg1R = find('Leg_1.R'); B.leg2R = find('Leg_2.R');
-      B.pelL = find('Pelvis.L'); B.leg1L = find('Leg_1.L'); B.leg2L = find('Leg_2.L');
+      B.pelR = find('Pelvis.R'); B.leg1R = find('Leg_1.R'); B.leg2R = find('Leg_2.R'); B.footR = find('Boot.R');
+      B.pelL = find('Pelvis.L'); B.leg1L = find('Leg_1.L'); B.leg2L = find('Leg_2.L'); B.footL = find('Boot.L');
       B.cloak = [];
       model.traverse(o => { if (o.isBone && norm(o.name).startsWith('Cloak')) B.cloak.push(o); });
       B.fingersR = []; B.fingersL = [];
@@ -127,7 +170,8 @@ export function createFpBody(deps) {
 
       // guarda a pose de descanso de tudo que vamos mexer
       const track = [B.chest, B.torso, B.shR, B.upR, B.foR, B.haR, B.shL, B.upL, B.foL, B.haL,
-        B.pelR, B.leg1R, B.leg2R, B.pelL, B.leg1L, B.leg2L, ...B.cloak, ...B.fingersR, ...B.fingersL];
+        B.pelR, B.leg1R, B.leg2R, B.footR, B.pelL, B.leg1L, B.leg2L, B.footL,
+        ...B.cloak, ...B.fingersR, ...B.fingersL];
       for (const b of track) if (b) bind.set(b, { p: b.position.clone(), q: b.quaternion.clone() });
 
       // comprimentos dos segmentos em unidades de MUNDO (com escala aplicada)
@@ -138,6 +182,7 @@ export function createFpBody(deps) {
         r: { a: dist(B.upR, B.foR), b: dist(B.foR, B.haR) },
         l: { a: dist(B.upL, B.foL), b: dist(B.foL, B.haL) },
       };
+      medirPernas();
       // eixo real dos dedos no espaço LOCAL da mão (média das falanges base):
       // é ele que a gente alinha com a direção da empunhadura da arma
       for (const [key, hand, fingers] of [['r', B.haR, B.fingersR], ['l', B.haL, B.fingersL]]) {
@@ -201,34 +246,180 @@ export function createFpBody(deps) {
         sh.position.add(_v);
       }
     }
+    // pole: cotovelo pra fora/baixo em relação à câmera
+    camera.getWorldQuaternion(_tq);
+    _poloA.set(sideSign * TUNE.elbowOut, -TUNE.elbowDown, 0.05).applyQuaternion(_tq);
+    dobrar2Ossos(up, fore, hand, len, targetPos, _poloA);
+    // (o punho é alinhado depois por alignHand — eixo dos dedos + rolagem)
+  }
+
+  /* IK ANALÍTICO DE 2 OSSOS (lei dos cossenos), compartilhado por braço e
+     perna: gira `up` e `fore` até `end` alcançar o alvo, com a junta do meio
+     dobrando na direção de `poloDir`. Sem iteração — uma passada, resultado
+     determinístico, mesmo número em todo frame com a mesma entrada. */
+  function dobrar2Ossos(up, fore, end, len, targetPos, poloDir) {
     const sPos = up.getWorldPosition(_sPos);
     _tp.copy(targetPos).sub(sPos);
     const reach = len.a + len.b;
     let d = _tp.length();
-    if (d > reach * 0.999) { _tp.multiplyScalar((reach * 0.999) / d); d = reach * 0.999; }
     if (d < 1e-4) return;
+    if (d > reach * 0.999) { _tp.multiplyScalar((reach * 0.999) / d); d = reach * 0.999; }
+    else {
+      /* ALVO DENTRO DO BURACO INTERNO. Com d < |a−b| não existe triângulo: o
+         cosseno passa de 1 e a junta desanda. Perna dobrada ao máximo é o mais
+         perto que a ponta chega — empurra o alvo até lá em vez de estourar. */
+      const minR = Math.abs(len.a - len.b) * 1.001 + 1e-4;
+      if (d < minR) { _tp.multiplyScalar(minR / d); d = minR; }
+    }
     _n.copy(_tp).normalize();
-
-    // pole: cotovelo pra fora/baixo em relação à câmera
-    camera.getWorldQuaternion(_tq);
-    _pole.set(sideSign * TUNE.elbowOut, -TUNE.elbowDown, 0.05).applyQuaternion(_tq);
-    _pole.addScaledVector(_n, -_pole.dot(_n)); // perpendicular à linha ombro→alvo
+    _pole.copy(poloDir);
+    _pole.addScaledVector(_n, -_pole.dot(_n)); // perpendicular à linha raiz→alvo
     if (_pole.lengthSq() < 1e-6) _pole.set(0, -1, 0).addScaledVector(_n, _n.y);
     _pole.normalize();
 
     const cosA = Math.min(1, Math.max(-1, (len.a * len.a + d * d - len.b * len.b) / (2 * len.a * d)));
     const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
-    // posição desejada do cotovelo
+    // posição desejada da junta do meio
     _v.copy(sPos).addScaledVector(_n, len.a * cosA).addScaledVector(_pole, len.a * sinA);
 
-    // 1) ombro mira o cotovelo desejado
+    // 1) osso de cima mira a junta desejada
     fore.getWorldPosition(_v2).sub(sPos);
     aimBone(up, _v2, _v3.copy(_v).sub(sPos));
-    // 2) cotovelo mira o alvo
+    // 2) junta mira o alvo
     const ePos = fore.getWorldPosition(_ePos);
-    hand.getWorldPosition(_v3).sub(ePos);
+    end.getWorldPosition(_v3).sub(ePos);
     aimBone(fore, _v3, _v.copy(targetPos).sub(ePos));
-    // (o punho é alinhado depois por alignHand — eixo dos dedos + rolagem)
+  }
+
+  /* ================================================================
+     A PERNA QUE ENCURTA — a causa raiz do corpo "enterrado" em VR.
+
+     O QUE HAVIA AQUI, E POR QUE NÃO FUNCIONAVA. O agachamento girava a
+     bacia num sentido e o joelho no outro; a perna mudava de FORMA e o pé
+     ficava no mesmo lugar. Medido: `crouchT` de 0 a 1 movia o osso do pé
+     0,0559 m, com a perna encurtando 0,0884 m de 0,58 m necessários. No
+     desktop ninguém via, porque a câmera desce junto e ninguém olha para
+     o próprio pé. Em VR isso é o defeito inteiro: com a perna rígida,
+     ancorar o corpo na CABEÇA (o que o critério C5 pede) enterra o pé
+     exatamente o tanto que o jogador agachou, e ancorar nos PÉS põe o
+     peito do boneco na altura dos olhos — medido, ombro 0,190 m ACIMA do
+     olho e topo do boneco 0,709 m acima. É o mesmo cobertor curto: o
+     VRIK, que a Oculus Studios criou para "Dead and Buried" e que virou
+     o padrão do gênero, nomeia o trade-off pelo nome (`plantFeet` "can
+     cause the camera to exit the head").
+
+     O QUE ESTÁ AQUI AGORA. IK ANALÍTICO DE 2 OSSOS (coxa + canela), a
+     mesma lei dos cossenos do braço, com o PÉ como alvo e o joelho
+     dobrando na direção de um polo. O alvo do pé é a posição de descanso
+     dele SUBIDA de `encurtar` metros: como a raiz do corpo desce esse
+     mesmo tanto (a cabeça é quem manda), o pé fica parado no MUNDO.
+
+     De onde vem `encurtar`:
+       - em VR, de `bodyRoot.userData.encurtar` (metros de MUNDO), que
+         js/xr/xrbody.js escreve com a queda MEDIDA da cabeça do jogador;
+       - no desktop, do agachamento do teclado — o jogo baixa o olho
+         0,58 m e a perna encurta esse tanto.
+
+     O TETO É ANATÔMICO, não arbitrário: `pernaDobra` é o quanto a perna
+     encurta até o joelho chegar em 30° de ângulo interno (150° de flexão,
+     o máximo humano). Pedir mais que isso não dobra mais — o corpo é que
+     para de descer, e quem agacha fundo demais vê o ombro subir alguns
+     centímetros em vez de ver o próprio pé furar o chão.
+     ================================================================ */
+  const pernaRepouso = { r: null, l: null };  // pé, polo e orientação, no espaço da RAIZ
+
+  function medirPernas() {
+    const pares = [['r', B.leg1R, B.leg2R, B.footR], ['l', B.leg1L, B.leg2L, B.footL]];
+    if (pares.some(([, q, j, p]) => !q || !j || !p)) return;
+    bodyRoot.updateWorldMatrix(true, true);
+    const dist = (x, y) => x.getWorldPosition(_v).distanceTo(y.getWorldPosition(_v2));
+    legLen = {
+      r: { a: dist(B.leg1R, B.leg2R), b: dist(B.leg2R, B.footR) },
+      l: { a: dist(B.leg1L, B.leg2L), b: dist(B.leg2L, B.footL) },
+    };
+    /* Uma vez só, no carregamento: alocar Vector3/Quaternion aqui não mexe no
+       `Math.random` seedado (só Object3D e BufferGeometry gastam número no
+       UUID), e nada disso roda por frame. */
+    const inv = new THREE.Matrix4().copy(bodyRoot.matrixWorld).invert();
+    const qRaiz = bodyRoot.getWorldQuaternion(new THREE.Quaternion()).invert();
+    let dobra = Infinity;
+    for (const [k, quadril, joelho, pe] of pares) {
+      const hip = quadril.getWorldPosition(new THREE.Vector3());
+      const joe = joelho.getWorldPosition(new THREE.Vector3());
+      const tor = pe.getWorldPosition(new THREE.Vector3());
+      const eixo = tor.clone().sub(hip);
+      const L0 = eixo.length();
+      if (L0 < 1e-4) return;
+      eixo.multiplyScalar(1 / L0);
+      /* POLO DO JOELHO LIDO DO PRÓPRIO RIG: é a componente de (joelho −
+         quadril) perpendicular à linha quadril→pé, ou seja, o lado para onde
+         esta perna já dobra na pose de descanso. Ler do modelo em vez de
+         cravar "para frente" mantém o solver honesto se o rig mudar. */
+      const polo = joe.clone().sub(hip);
+      polo.addScaledVector(eixo, -polo.dot(eixo));
+      if (polo.lengthSq() < 1e-8) polo.set(0, 0, -1);   // rig reto: joelho pra frente
+      polo.normalize();
+      const peRaiz = tor.clone().applyMatrix4(inv);
+      pernaRepouso[k] = {
+        pe: peRaiz,
+        polo: polo.clone().transformDirection(inv),
+        quat: qRaiz.clone().multiply(pe.getWorldQuaternion(new THREE.Quaternion())),
+        lado: Math.sign(peRaiz.x) || 1,
+        L0,
+      };
+      const { a, b } = legLen[k];
+      const dMin = Math.sqrt(Math.max(0, a * a + b * b - 2 * a * b * Math.cos(TUNE.kneeMin)));
+      dobra = Math.min(dobra, Math.max(0, L0 - dMin));
+    }
+    pernaDobra = Number.isFinite(dobra) ? dobra : 0;
+    /* CONTRATO COM O MÓDULO DE VR, sem passar pelo game.js: quem ancora o
+       corpo precisa saber até onde a perna dobra antes de mandar descer. */
+    bodyRoot.userData.pernaDobra = pernaDobra;
+  }
+
+  function resolverPernas(stride, air) {
+    if (!legLen || !pernaRepouso.r || !pernaRepouso.l) return 0;
+    /* A RAIZ CARREGA A ESCALA DO AVATAR em VR (o boneco é dimensionado pelo
+       jogador). `userData.encurtar` chega em metros de MUNDO; tudo aqui é no
+       espaço da raiz, então divide. */
+    const escala = bodyRoot.scale.x || 1;
+    const pedido = Number.isFinite(bodyRoot.userData.encurtar)
+      ? bodyRoot.userData.encurtar / escala
+      : TUNE.crouchDrop * player.crouchT;
+    const enc = Math.min(Math.max(pedido, 0), pernaDobra);
+    const k = pernaDobra > 1e-4 ? enc / pernaDobra : 0;
+    if (!legPairs) {
+      legPairs = [['l', B.leg1L, B.leg2L, B.footL, 1], ['r', B.leg1R, B.leg2R, B.footR, -1]];
+    }
+    for (const [lado, quadril, joelho, pe, s] of legPairs) {
+      const rep = pernaRepouso[lado];
+      const sw = Math.sin(walkPh) * s * stride;
+      _alvo.copy(rep.pe);
+      _alvo.y += enc;                                     // encurta: o pé sobe NA RAIZ
+      _alvo.z -= TUNE.footFwd * k;                        // agachou: o pé vai à frente do quadril
+      _alvo.z -= sw * TUNE.stepLen;                       // passada (−Z é a frente do corpo)
+      _alvo.y += Math.max(0, sw) * TUNE.stepLift + air * TUNE.airTuck;
+      bodyRoot.localToWorld(_alvo);
+      _poloP.copy(rep.polo);
+      _poloP.x += rep.lado * TUNE.kneeOut * k;            // joelhos abrem ao dobrar
+      _poloP.transformDirection(bodyRoot.matrixWorld);
+      /* O SOLVER TRABALHA EM MUNDO, e em VR o boneco é dimensionado pelo
+         jogador: `legLen` foi medido com a raiz em escala 1, então a coxa e a
+         canela precisam entrar na escala DESTE frame. Sem isto o IK pede uma
+         perna 12 % mais longa do que existe e dobra o joelho parado em pé —
+         medido: joelho a 130,9° e pé 0,0618 m no ar, com o jogador de pé. */
+      _lenP.a = legLen[lado].a * escala;
+      _lenP.b = legLen[lado].b * escala;
+      dobrar2Ossos(quadril, joelho, pe, _lenP, _alvo, _poloP);
+      /* PÉ CHAPADO. Sem isto a canela deitada do agachamento fundo gira a bota
+         junto e a ponta fura o piso. A bota volta à MESMA orientação que tem
+         em pé, que é onde ela já estava certa. */
+      bodyRoot.getWorldQuaternion(_qf).multiply(rep.quat);
+      pe.parent.getWorldQuaternion(_qf2).invert();
+      pe.quaternion.copy(_qf2.multiply(_qf));
+      pe.updateWorldMatrix(false, true);
+    }
+    return k;
   }
 
   /* curl dos dedos: cada dedo tem 2 falanges (Finger_1..10 = 5 dedos × 2) */
@@ -268,30 +459,25 @@ export function createFpBody(deps) {
     for (const [b, bd] of bind) { b.position.copy(bd.p); b.quaternion.copy(bd.q); }
     bodyRoot.updateWorldMatrix(true, true);
 
-    /* pernas: passada proporcional à velocidade; no ar, encolhe */
+    /* pernas: o PÉ é que tem alvo — passada proporcional à velocidade, no ar
+       encolhe, e agachar ENCURTA a perna (IK de 2 ossos, ver resolverPernas) */
     const spd = Math.hypot(player.vel.x, player.vel.z);
     walkPh += dt * Math.min(spd, 9) * 1.35;
     const stride = Math.min(spd / 5.2, 1) * (player.onGround ? 0.55 : 0.1);
     const air = player.onGround ? 0 : 1;
-    // os ossos não trocam depois que o rig carrega: montar o par a cada
-    // frame era 2 arrays internos + 1 externo de lixo por frame
-    if (!legPairs) legPairs = [[B.pelL, B.leg1L, B.leg2L, 1], [B.pelR, B.leg1R, B.leg2R, -1]];
-    for (const [pel, l1, l2, s] of legPairs) {
-      if (!pel || !l1 || !l2) continue;
-      const sw = Math.sin(walkPh) * s * stride;
-      _q.setFromAxisAngle(_v.set(1, 0, 0), sw - air * 0.5 - player.crouchT * 0.7);
-      pel.quaternion.multiply(_q);
-      _q.setFromAxisAngle(_v.set(1, 0, 0), Math.max(0, -sw) * 0.9 + air * 0.8 + player.crouchT * 1.0);
-      l2.quaternion.multiply(_q);
-    }
-    /* respiração + capa balançando */
+    const agacharK = resolverPernas(stride, air);
+    /* respiração + capa balançando. O tronco inclina com a DOBRA REAL da perna
+       e não com a tecla: em VR quem agacha é a cabeça do jogador, e usar
+       `crouchT` deixaria o tronco fora de fase com a perna. */
     if (B.chest) {
-      _q.setFromAxisAngle(_v.set(1, 0, 0), Math.sin(t * 1.6) * 0.014 + player.crouchT * 0.25);
+      _q.setFromAxisAngle(_v.set(1, 0, 0), Math.sin(t * 1.6) * 0.014 + agacharK * 0.25);
       B.chest.quaternion.multiply(_q);
     }
     for (let i = 0; i < B.cloak.length; i++) {
       const c = B.cloak[i];
-      _q.setFromAxisAngle(_v.set(1, 0, 0), Math.sin(t * 1.9 + i) * 0.05 + Math.min(spd / 8, 1) * 0.3);
+      _q.setFromAxisAngle(_v.set(1, 0, 0),
+        Math.sin(t * 1.9 + i) * 0.05 + Math.min(spd / 8, 1) * 0.3
+        + Math.sqrt(agacharK) * TUNE.cloakLift);
       c.quaternion.multiply(_q);
     }
 
@@ -340,6 +526,9 @@ export function createFpBody(deps) {
     update,
     get ready() { return readyFlag; },
     get failed() { return failed; },
+    /* quanto a perna consegue encurtar antes de o joelho passar do limite
+       humano (metros, no espaço da raiz — em VR multiplique pela escala) */
+    get pernaDobra() { return pernaDobra; },
     bones: B, TUNE, bodyRoot,
     /* inspeção: solta o corpo no mundo pra fotografar de fora (calibração) */
     debugDetach(x, y, z) {

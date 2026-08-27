@@ -82,7 +82,8 @@
    de consumo é contrato do worldgen.
    ================================================================ */
 
-import { criarRadialXR } from './xrinput.js';
+import { criarRadialXR, RADIAL_FATIAS } from './xrinput.js';
+import { pontoDeAlcance } from '../interact.js';
 
 /* Alcance da MÃO (não do jogo): dentro disto o alvo é "pegável" e a escolha é
    por distância; fora, a escolha é por ÂNGULO, como o distance grab da Meta
@@ -120,6 +121,76 @@ export const HOLD_LONGE = 0.30;
 const COR_PODE = 0x5ce27a;     // dá pra usar daqui
 const COR_LONGE = 0xffb347;    // é isso, mas você precisa chegar mais perto
 
+/* ================================================================
+   O RADIAL QUE SE VÊ (critério D4).
+
+   A máquina de estado dos quatro verbos já existia, testada, em
+   js/xr/xrinput.js — e não havia NADA visível. O jogador apertava o gatilho e
+   não via menu nenhum: não sabia que fatias existem, qual estava selecionada,
+   nem que soltar no centro cancela. Dentro de uma sessão `immersive-vr` sem
+   `dom-overlay` o DOM não chega ao compositor, então qualquer `<div>`
+   continuaria correta e continuaria invisível.
+
+   ONDE O DISCO FICA — e o palpite óbvio está ERRADO. "Prende no pulso da mão
+   que abriu" é desaconselhado pela própria Meta, com as duas metades ditas na
+   mesma página: *"Avoid anchoring menus to an active, moving wrist"* … *"Spawning
+   a menu from the wrist … is fine, as long as the menu is static once it
+   appears and is positioned in world space rather than following the wrist."*
+   E o outro lado já estava na régua: *"Avoid locking HUD style content to the
+   user's head movements."*
+
+   Então são três coisas, e o disco tem de fazer as três:
+
+   · **NASCE NA DIREÇÃO DA MÃO** que abriu — quem abriu o menu está dito pela
+     geometria, sem seta nem legenda;
+   · **CONGELA** ao aparecer: tremor de pulso não sacode o texto, e o polegar
+     empurra o analógico sem arrastar o alvo de leitura junto;
+   · **NÃO SEGUE A CABEÇA**: virar o pescoço não move o disco.
+
+   E congela contra o CORPO (`player.pos`), não contra o mundo absoluto: num
+   veículo, ou com o jogador andando fisicamente durante a escolha, o disco
+   viaja junto em vez de ficar plantado no chão. É o *"loosely follow the
+   user"* que a mesma página da Meta oferece como alternativa ao head-lock.
+
+   A QUE DISTÂNCIA. A Meta dá números diferentes para coisas diferentes:
+   *"Position UI between 42cm and 46cm from the user when you want to encourage
+   touch"*, e *"at least 0.5 meters"* para o que o olho vai FIXAR por muito
+   tempo. O radial é ação rápida (*"Use hand menu for quick action"*), então
+   vale o de perto: nasce entre 0,42 m e 0,55 m do olho, na direção da mão. O
+   teto existe para o braço esticado não empurrar o texto para longe demais —
+   abaixo de 0,7° de maiúscula o glifo deixa de ser legível.
+
+   NADA ENTRA NO OLHO (I3). Congelado, o disco não persegue ninguém — mas o
+   jogador pode avançar a cabeça para cima dele. Chegando a menos de 0,30 m,
+   ele é empurrado de volta ao longo do eixo olho→disco. É guarda de segurança,
+   não comportamento normal: nascendo a 0,42 m, só age se o jogador avançar
+   12 cm com o menu aberto.
+
+   CUSTO: **uma draw call por olho** — um sprite, uma textura de canvas,
+   repintada só quando a fatia MUDA (mesma disciplina do rótulo do marcador:
+   repintar canvas a 90 Hz num Snapdragon é queimar o frame por nada).
+
+   NADA É CRIADO NO BOOT, nem no primeiro frame da sessão: o disco nasce no
+   PRIMEIRO APERTO. Todo `Object3D` gasta 4 números do `Math.random` seedado no
+   UUID, e a ordem de consumo é contrato do worldgen.
+
+   Fontes, com link, em docs/vr/referencia-interacao.md §7.
+   ================================================================ */
+export const RADIAL_W = 0.18;          // lado do disco, em metros
+export const RADIAL_CV = 512;          // lado do canvas, em pixels
+export const RADIAL_R_PX = 236;        // raio do disco no canvas
+export const RADIAL_MIOLO_PX = 96;     // raio do miolo (cancelar)
+export const RADIAL_FONTE_PX = 40;     // rótulo da fatia
+export const RADIAL_FONTE_MIOLO_PX = 30;
+export const RADIAL_CAP = 0.72;        // altura de maiúscula / tamanho de fonte
+/* Onde o disco NASCE, medido do olho na direção da mão (Meta: 42–46 cm para UI
+   de perto). O teto não é conforto, é legibilidade: a 0,55 m a maiúscula do
+   miolo mede 0,79°, e o alvo desta base é 0,7°. */
+export const RADIAL_PERTO_MIN = 0.42;
+export const RADIAL_PERTO_MAX = 0.55;
+/* I3 proíbe geometria a menos de 0,15 m do olho; 0,30 m dá o dobro de margem. */
+export const RADIAL_MIN_OLHO = 0.30;
+
 const hipot = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 
 export function createXrInteract({
@@ -127,6 +198,10 @@ export function createXrInteract({
   getCannon = () => null, getMapToys = () => null, getSecrets = () => null,
   win = typeof window === 'undefined' ? null : window,
   despachar = true,
+  /* A MESMA RÉGUA DE js/interact.js, pelos mesmos parâmetros. Não é conforto:
+     o marcador diz ao jogador "dá pra usar daqui", e a tecla que o gesto emite
+     é resolvida lá. Duas réguas seria o jogador ver verde e o jogo recusar. */
+  cabecaXR = null, foraXR = null,
 } = {}) {
   const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
   const _maoPos = new THREE.Vector3(), _maoDir = new THREE.Vector3(), _q = new THREE.Quaternion();
@@ -134,6 +209,10 @@ export function createXrInteract({
      `Vector3` não é `Object3D` nem `BufferGeometry`, então não gasta número do
      `Math.random` seedado — criar aqui é seguro para o worldgen. */
   const _maoAnt = new THREE.Vector3(), _vel = new THREE.Vector3();
+  /* a régua compartilhada com js/interact.js (ver o parâmetro `cabecaXR`) */
+  const _ref = new THREE.Vector3(), _cabRef = new THREE.Vector3();
+  const alcanceDe = () => pontoDeAlcance(
+    _ref, player.pos, cabecaXR ? cabecaXR(_cabRef) : null, foraXR ? foraXR() : undefined);
 
   let grupo = null, anel = null, rotulo = null, ctx = null, textura = null;
   let textoNoRotulo = null;
@@ -143,6 +222,12 @@ export function createXrInteract({
   let gripSeguraT = 0, agarrouNesteAperto = false, temAnterior = false;
   let radialLocal = null;
   let pulso = 0;
+  /* o disco do radial e o que ele precisa lembrar entre frames */
+  let radial = null, radialCtx = null, radialTex = null;
+  let radialNasceu = false, radialFatiaPintada = null;
+  let _rigDaMao = null, _camDoRig = null;
+  const _radialPos = new THREE.Vector3(), _radialOff = new THREE.Vector3();
+  const _cabRadial = new THREE.Vector3();
 
   /* ---------------------------------------------------------------- */
   /* CANDIDATOS — a mesma ORDEM DE PRIORIDADE de js/interact.js `current()`,
@@ -150,7 +235,7 @@ export function createXrInteract({
      jogador veria uma coisa e o jogo faria outra. Cada classe é uma lista, e é
      DENTRO da classe que a mão escolhe (dois baús ao alcance, por exemplo). */
   function classes() {
-    const P = player.pos;
+    const P = alcanceDe();
     const noBR = !!(win && win.__BR_active);
     const fora = [];
 
@@ -274,11 +359,11 @@ export function createXrInteract({
     if (melhorLonge) { melhorLonge.porMao = true; return melhorLonge; }
     /* Mão apontando para o outro lado: em vez de apagar o aviso (o jogador
        ficaria sem saber que há algo ali), cai no mais perto do JOGADOR — que é
-       exatamente o critério que js/interact.js já usa. */
+       exatamente o critério que js/interact.js já usa, e pela MESMA régua. */
     let melhor = null, dj = Infinity;
     for (const c of lista) {
       if (!c.pos) continue;
-      const d = hipot(player.pos.x, player.pos.z, c.pos.x, c.pos.z);
+      const d = hipot(_ref.x, _ref.z, c.pos.x, c.pos.z);
       if (d < dj) { dj = d; melhor = c; }
     }
     return melhor || lista[0] || null;
@@ -348,6 +433,159 @@ export function createXrInteract({
   }
 
   /* ---------------------------------------------------------------- */
+  /* O RADIAL, DESENHADO. Ver o bloco de constantes lá em cima para o porquê de
+     cada número. */
+
+  /* A CABEÇA, sem depender de quem fia. O grafo em XR é contrato desta base:
+     `scene > xrRig > camera` (js/xr/xrrig.js `enter()` faz `rig.add(camera)`) e
+     os controles são pendurados no MESMO rig (js/xr/xrhands.js `anexar()`).
+     Então a cabeça é a câmera irmã da mão. Sem mão não há radial, e sem radial
+     não se pergunta pela cabeça — por isso a busca sai daqui e não da cena. */
+  function cabecaDaMao(mao, out) {
+    const rig = mao && mao.parent;
+    if (!rig) return null;
+    if (rig !== _rigDaMao) { _rigDaMao = rig; _camDoRig = null; }
+    if (!_camDoRig || _camDoRig.parent !== rig) {
+      _camDoRig = null;
+      for (const o of rig.children) if (o.isCamera) { _camDoRig = o; break; }
+      if (!_camDoRig) return null;
+    }
+    _camDoRig.updateWorldMatrix(true, false);
+    return out.setFromMatrixPosition(_camDoRig.matrixWorld);
+  }
+
+  function montarRadial() {
+    if (radial) return;
+    const cv = win && win.document ? win.document.createElement('canvas') : null;
+    if (!cv) return;
+    cv.width = RADIAL_CV; cv.height = RADIAL_CV;
+    radialCtx = cv.getContext('2d');
+    radialTex = new THREE.CanvasTexture(cv);
+    radialTex.colorSpace = THREE.SRGBColorSpace;
+    radial = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: radialTex, transparent: true, depthWrite: false, depthTest: false, fog: false,
+    }));
+    radial.name = 'xrRadialMenu';
+    radial.scale.set(RADIAL_W, RADIAL_W, 1);
+    radial.renderOrder = 1200;   // é menu: nada do mundo passa na frente
+    radial.visible = false;
+    scene.add(radial);
+  }
+
+  /* Ângulo do CENTRO de cada fatia no canvas. A fatia 0 é CIMA, e em canvas o
+     zero de `arc` é +X e o Y cresce para baixo: cima é −90°. A ordem
+     (cima, direita, baixo, esquerda) é o contrato de `RADIAL_FATIAS`. */
+  const anguloDaFatia = i => (-90 + i * 90) * Math.PI / 180;
+
+  function pintarRadial(fatia) {
+    const c = radialCtx;
+    if (!c) return;
+    const M = RADIAL_CV / 2, R = RADIAL_R_PX, Q = RADIAL_MIOLO_PX;
+    c.clearRect(0, 0, RADIAL_CV, RADIAL_CV);
+    /* Fundo em 0,90 de alfa e não menos: com 0,78 sobre um céu claro o texto
+       branco caía para 3,7:1, e a WCAG 2.1 que a Meta adota pede 4,5:1. */
+    c.beginPath(); c.arc(M, M, R, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(10,14,20,0.90)'; c.fill();
+    c.lineWidth = 3; c.strokeStyle = 'rgba(255,255,255,0.30)'; c.stroke();
+
+    // a fatia escolhida é a ÚNICA acesa — é ela que sai se o jogador soltar
+    if (fatia >= 0) {
+      const a = anguloDaFatia(fatia), meia = Math.PI / 4;
+      c.beginPath();
+      c.arc(M, M, R, a - meia, a + meia);
+      c.arc(M, M, Q, a + meia, a - meia, true);
+      c.closePath();
+      c.fillStyle = 'rgba(92,226,122,0.92)'; c.fill();
+    }
+    // divisórias: dizem que são QUATRO direções, mesmo com nenhuma escolhida
+    c.lineWidth = 2; c.strokeStyle = 'rgba(255,255,255,0.22)';
+    for (let i = 0; i < 4; i++) {
+      const a = anguloDaFatia(i) + Math.PI / 4;
+      c.beginPath();
+      c.moveTo(M + Math.cos(a) * Q, M + Math.sin(a) * Q);
+      c.lineTo(M + Math.cos(a) * R, M + Math.sin(a) * R);
+      c.stroke();
+    }
+
+    // MIOLO: aceso quando soltar ali CANCELA, que é o estado de polegar parado
+    c.beginPath(); c.arc(M, M, Q, 0, Math.PI * 2);
+    c.fillStyle = fatia < 0 ? 'rgba(255,138,110,0.92)' : 'rgba(10,14,20,0.95)';
+    c.fill();
+    c.lineWidth = 2; c.strokeStyle = 'rgba(255,255,255,0.28)'; c.stroke();
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.font = `bold ${RADIAL_FONTE_MIOLO_PX}px system-ui, sans-serif`;
+    c.fillStyle = fatia < 0 ? '#2a0f08' : '#ffd0c0';
+    c.fillText('CANCELA', M, M, Q * 1.7);
+
+    /* Rótulos no meio da faixa. Quebra no espaço em vez de espremer a letra: as
+       fatias da esquerda e da direita têm metade da largura do canvas, e
+       "KIT MÉDICO" numa linha só sairia condensada a 72%. */
+    c.font = `bold ${RADIAL_FONTE_PX}px system-ui, sans-serif`;
+    const raio = (R + Q) / 2;
+    for (let i = 0; i < 4; i++) {
+      const a = anguloDaFatia(i);
+      const x = M + Math.cos(a) * raio, y = M + Math.sin(a) * raio;
+      const linhas = (RADIAL_FATIAS[i].rotulo || '').split(' ');
+      const largura = (i === 1 || i === 3) ? RADIAL_CV / 2 - 24 : RADIAL_CV - 24;
+      c.fillStyle = i === fatia ? '#0b1420' : '#e8f2ff';
+      const alt = RADIAL_FONTE_PX * 1.1;
+      const y0 = y - (linhas.length - 1) * alt / 2;
+      for (let k = 0; k < linhas.length; k++) c.fillText(linhas[k], x, y0 + k * alt, largura);
+    }
+    if (radialTex) radialTex.needsUpdate = true;
+  }
+
+  /* Onde o disco NASCE: na direção olho→mão, a uma distância confortável de
+     leitura. Guardado como deslocamento até `player.pos` — o disco fica parado
+     em relação ao CORPO, não ao pulso e não à cabeça. */
+  function nascerRadial(mao) {
+    const cab = cabecaDaMao(mao, _cabRadial);
+    if (!cab) return false;
+    mao.updateWorldMatrix(true, false);
+    _v.setFromMatrixPosition(mao.matrixWorld).sub(cab);
+    let d = _v.length();
+    if (!(d > 1e-4)) { _v.set(0, 0, -1); d = 1; }
+    _v.divideScalar(d);
+    const dist = Math.min(RADIAL_PERTO_MAX, Math.max(RADIAL_PERTO_MIN, d));
+    _radialPos.copy(cab).addScaledVector(_v, dist);
+    _radialOff.copy(_radialPos).sub(player.pos);
+    return true;
+  }
+
+  function desenharRadial(est, mao, cabPassada) {
+    const aberto = !!(est && est.aberto);
+    if (!aberto) {
+      if (radial) radial.visible = false;
+      radialNasceu = false;
+      return;
+    }
+    if (!radialNasceu) {
+      montarRadial();
+      if (!radial || !nascerRadial(mao)) { if (radial) radial.visible = false; return; }
+      radialNasceu = true;
+      radialFatiaPintada = null;
+    }
+    _radialPos.copy(player.pos).add(_radialOff);
+    /* I3: nada a menos de 0,15 m do olho. O disco não persegue ninguém — mas se
+       a cabeça avançar para cima dele, ele sai do caminho pelo eixo olho→disco.
+       É correção, e não o comportamento normal: nascendo a 0,42 m, só age se o
+       jogador avançar 12 cm com o menu aberto. */
+    const cab = cabPassada || cabecaDaMao(mao, _cabRadial);
+    if (cab) {
+      _v.copy(_radialPos).sub(cab);
+      const d = _v.length();
+      if (d < RADIAL_MIN_OLHO) {
+        if (d > 1e-4) _v.divideScalar(d); else _v.set(0, 0, -1);
+        _radialPos.copy(cab).addScaledVector(_v, RADIAL_MIN_OLHO);
+      }
+    }
+    radial.position.copy(_radialPos);
+    radial.visible = true;
+    const f = est.fatia >= 0 ? est.fatia : -1;
+    if (f !== radialFatiaPintada) { radialFatiaPintada = f; pintarRadial(f); }
+  }
+
+  /* ---------------------------------------------------------------- */
   /* GESTO. Lê a EMPUNHADURA da mão de apoio (botão 1 do xr-standard) direto da
      fonte de entrada. `inputSources` NÃO é Array no navegador nativo, e o
      emulador faz `class XRInputSourceArray extends Array` — `Array.isArray`
@@ -403,7 +641,7 @@ export function createXrInteract({
   }
 
   /* ---------------------------------------------------------------- */
-  function update({ maoRaio, maoPunho, fontes, usar = false, dt = 0, radial } = {}) {
+  function update({ maoRaio, maoPunho, fontes, usar = false, dt = 0, radial: radialEst } = {}) {
     const mao = maoPunho || maoRaio;
     if (mao) {
       mao.updateWorldMatrix(true, false);
@@ -480,20 +718,33 @@ export function createXrInteract({
          por `shootUpdate` — foi medido, não suposto. As quatro teclas do radial
          são lidas exatamente ali, então elas PRECISAM ser escritas cedo, pela
          ponte, com `teclaXR`. Emitir nos dois lugares dispararia o evento duas
-         vezes para quem escuta `keydown`. */
+         vezes para quem escuta `keydown`.
+
+       E O DESENHO RODA SEMPRE. A máquina local existia só no caso sem ponte;
+       agora ela roda todo frame porque é ela que alimenta o DISCO (D4). As duas
+       instâncias são alimentadas pelas MESMAS fontes no MESMO frame, então
+       dizem a mesma coisa — o que continua valendo é a divisão de quem
+       DESPACHA, que é o parágrafo acima. */
+    if (!radialLocal) radialLocal = criarRadialXR();
+    const radialLido = radialLocal.ler(fontes);
     let verbo;
-    if (radial !== undefined) verbo = null;   // a ponte é a dona do despacho
-    else {
-      if (!radialLocal) radialLocal = criarRadialXR();
-      verbo = radialLocal.ler(fontes).confirmou;
-    }
+    if (radialEst !== undefined) verbo = null;   // a ponte é a dona do despacho
+    else verbo = radialLido.confirmou;
     if (verbo && despachar) acionar(verbo);
+    /* O disco lê o estado da PONTE quando ela existe (é o que despacha), e o
+       local quando não existe. Um só desenho, uma só verdade. */
+    desenharRadial(radialEst && typeof radialEst === 'object' ? radialEst : radialLido, mao);
 
     return { alvo: alvoAtual, gesto, acionou, modo, verbo };
   }
 
   function exit() {
     if (grupo) { grupo.visible = false; if (grupo.parent) grupo.parent.remove(grupo); }
+    /* O disco também sai da cena: sem isto ele fica flutuando no mundo do
+       monitor depois que o jogador tira o headset. */
+    if (radial) { radial.visible = false; if (radial.parent) radial.parent.remove(radial); }
+    radialNasceu = false; radialFatiaPintada = null;
+    _rigDaMao = null; _camDoRig = null;
     montado = false;
     alvoAtual = null;
     gripAntes = false; usarAntes = false;
@@ -503,6 +754,7 @@ export function createXrInteract({
   return {
     update, exit, acionar,
     get montado() { return montado; },
+    get radial() { return radial; },
     estado: () => ({
       alvo: alvoAtual ? {
         id: alvoAtual.id, txt: alvoAtual.txt, raio: alvoAtual.raio,
@@ -514,6 +766,19 @@ export function createXrInteract({
       marcadorVisivel: !!(grupo && grupo.visible),
       mao: [_maoPos.x, _maoPos.y, _maoPos.z],
       direcao: [_maoDir.x, _maoDir.y, _maoDir.z],
+      /* DE ONDE ESTE MÓDULO MEDIU o alcance neste frame — a mesma régua de
+         js/interact.js. Divergir dela é o marcador mentir sobre a ação. */
+      alcance: [_ref.x, _ref.y, _ref.z],
+      /* O DISCO. Só POSIÇÃO e estado: quem calcula distância e ângulo é quem
+         mede, com a própria leitura da cabeça — números que se conferem
+         sozinhos não conferem nada. */
+      radial: {
+        existe: !!radial,
+        visivel: !!(radial && radial.visible),
+        aberto: radialNasceu,
+        fatia: radialFatiaPintada === null ? -1 : radialFatiaPintada,
+        pos: radial && radial.visible ? radial.position.toArray() : null,
+      },
     }),
   };
 }

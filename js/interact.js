@@ -1,8 +1,79 @@
 /* interação (tecla E): baús, bazuca, veículos — extraído de game.js; deps explícitas */
 import { buildChest } from './chestmodel.js';
 
+/* ================================================================
+   DE ONDE SE MEDE O ALCANCE — a régua, e por que ela tem desconto.
+
+   Fora de VR isto não é pergunta: a câmera está em cima do jogador e medir do
+   corpo é medir da cabeça. Em VR passou a ser, e por uma mudança de física que
+   não se discute: a parede AGORA SEGURA O COLISOR (js/xr/xrrig.js). Antes o
+   passo recusado voltava para o colisor e ele atravessava 10,9623 m num pedido
+   de 10 m — vetor de trapaça, não desconforto. Com a parede segurando, o corpo
+   para e a cabeça segue, porque nada pode arrastar a vista de quem está de
+   headset.
+
+   A IDENTIDADE QUE DECIDE TUDO. Lendo `place()` do rig, a pose de mundo da
+   cabeça é, literalmente:
+
+       cabeça = player.pos + passoPendente + fora
+
+   `passoPendente` é o passo físico que o jogo ainda não absorveu (drenado todo
+   frame ANTES da física, com teto de 0,15 m — a 72 Hz uma caminhada rápida
+   gasta ~2 cm por frame). E `fora` é EXATAMENTE o que o mundo recusou: ele só
+   cresce em `devolverPasso()`, que só é chamado com a componente do passo que
+   a colisão do jogo desfez.
+
+   Ou seja: a diferença entre "medir da cabeça" e "medir do corpo" É, ponto por
+   ponto, o que a parede negou ao corpo do jogador. Medido em sessão real:
+   caminhada livre de 1,2 m separa **0,0000 m**; 1,8 m contra uma estrutura
+   separam **1,1200 m**. Medir da cabeça crua devolveria 1,12 m de alcance
+   sobre um raio de baú de 2,4 m — e o servidor NÃO valida distância de baú
+   (`openChest` valida vivo, fase, repetição e 300 ms entre baús; distância,
+   nenhuma). A régua daqui é a única trava desse caminho.
+
+   ENTÃO A RÉGUA É A CABEÇA, DESCONTADO O QUE O MUNDO RECUSOU. Em jogo normal
+   o desconto é zero e a régua É a cabeça, que é o que o critério D2 cobra. Na
+   parede o desconto é tudo, e a régua volta a ser o corpo — que é onde o
+   jogador realmente está.
+
+   TRÊS DETALHES QUE SÃO CONTRATO:
+
+   · **Só X/Z.** `fora` só existe no plano horizontal (o rig só recusa passo
+     horizontal). Levar o Y da cabeça para a conta mudaria em ~1,6 m a esfera
+     de 5 m do helicóptero e a banda de 3,5 m da bazuca — retoque de gameplay
+     disfarçado de correção de VR.
+   · **Teto absoluto.** Fica acima do pico de encosto de parede medido
+     (0,133 m) e abaixo do ponto em que a tela já está preta (`FORA_MAX = 0,50`
+     em js/xr/xrcomfort.js). É a trava que sobrevive se um dia aparecer
+     separação que o `fora` não explique.
+   · **Sem saber a recusa, assume que foi TUDO.** Quem não fia `foraXR` fica
+     com a régua no corpo, que é o comportamento de sempre. Errar para o lado
+     permissivo aqui seria abrir alcance por parede em silêncio.
+
+   Fontes e a conta do custo em docs/vr/referencia-interacao.md §8.
+   ================================================================ */
+export const TETO_FORA = 0.35;
+
+export function pontoDeAlcance(out, corpo, cabeca, foraM) {
+  out.copy(corpo);
+  if (!cabeca) return out;
+  const dx = cabeca.x - corpo.x, dz = cabeca.z - corpo.z;
+  const m = Math.hypot(dx, dz);
+  if (!(m > 1e-9)) return out;
+  /* `foraM` não numérico = "não sei quanto o mundo recusou" → assume tudo */
+  const f = Number.isFinite(foraM) ? Math.max(0, foraM) : m;
+  const usa = Math.min(Math.max(0, m - f), TETO_FORA);
+  out.x = corpo.x + (dx / m) * usa;
+  out.z = corpo.z + (dz / m) * usa;
+  return out;   // `out.y` continua sendo o do corpo, de propósito
+}
+
 export function createInteract(deps) {
-  const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon, getMapToys, getSecrets, isMobile } = deps;
+  const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon, getMapToys, getSecrets, isMobile,
+    /* Pose de MUNDO da cabeça (preenche e devolve o alvo), ou null fora de XR;
+       e quanto o mundo recusou, em metros. Sem os dois a régua é `player.pos`,
+       que é o que sempre foi. */
+    cabecaXR = null, foraXR = null } = deps;
   /* COMO O HUD CHAMA CADA AÇÃO. No celular não existe tecla nenhuma: anunciar
      "[F] comer" num aparelho sem teclado é prometer ação inalcançável — era
      literalmente o caso da carne, que entrava no inventário e nunca saía. Aqui
@@ -47,27 +118,40 @@ export function createInteract(deps) {
     SFX.pickup();
     updateInvHUD();
   }
+  /* `Vector3` não é `Object3D` nem `BufferGeometry`: clonar aqui não gasta
+     número do `Math.random` seedado, e a ordem de consumo do worldgen fica
+     intacta. */
+  const _ref = player.pos.clone(), _cab = player.pos.clone();
+  function alcanceDe() {
+    const c = cabecaXR ? cabecaXR(_cab) : null;
+    return pontoDeAlcance(_ref, player.pos, c, foraXR ? foraXR() : undefined);
+  }
+
   function current() {
     if (state.flying) return { txt: 'SAIR DO HELICÓPTERO', fn: () => Heli.exit() };
     if (state.driving) return { txt: 'SAIR DO VEÍCULO', fn: tryToggleCar };
+    /* UMA leitura da régua por frame, e ela vale para TODOS os alvos: dois
+       pontos de medida diferentes fariam o aviso citar um alvo e a ação
+       resolver outro. */
+    const P = alcanceDe();
     // Canhão de Circo: vale no solo E no BR (a pé, longe de veículo/baú)
     const cannon = getCannon && getCannon();
-    if (cannon) { const cp = cannon.prompt(player.pos); if (cp) return cp; }
+    if (cannon) { const cp = cannon.prompt(P); if (cp) return cp; }
     const toys = getMapToys && getMapToys();
-    if (toys) { const tp = toys.prompt(player.pos); if (tp) return tp; }
+    if (toys) { const tp = toys.prompt(P); if (tp) return tp; }
     // Segredos (estojo do ninho, cofre lacrado): o próprio módulo já se
     // fecha no BR — desbloqueio de arma é SOLO, igual à bazuca abaixo.
     const secrets = getSecrets && getSecrets();
-    if (secrets) { const sp = secrets.prompt(player.pos); if (sp) return sp; }
+    if (secrets) { const sp = secrets.prompt(P); if (sp) return sp; }
     if (!window.__BR_active) { // BR: sem baú de guardar, sem bazuca grátis (loot vem dos baús BR)
       const bz = Structures.bazookaSpot;
-      if (arsenal[3].locked && Math.hypot(player.pos.x - bz.x, player.pos.z - bz.z) < 2.8 && Math.abs(player.pos.y - bz.y) < 3.5)
+      if (arsenal[3].locked && Math.hypot(P.x - bz.x, P.z - bz.z) < 2.8 && Math.abs(P.y - bz.y) < 3.5)
         return { txt: 'PEGAR BAZUCA', fn: () => unlockWeapon(3, 'tecla 4 para equipar') };
       for (const s of Structures.chestSpots)
-        if (Math.hypot(player.pos.x - s.x, player.pos.z - s.z) < 2.4) return { txt: 'USAR BAÚ', fn: chestSwap };
+        if (Math.hypot(P.x - s.x, P.z - s.z) < 2.4) return { txt: 'USAR BAÚ', fn: chestSwap };
     }
-    if (player.pos.distanceTo(Heli.group.position) < 5) return { txt: 'PILOTAR HELICÓPTERO', fn: tryToggleCar };
-    const near = Car.nearest(player.pos);
+    if (P.distanceTo(Heli.group.position) < 5) return { txt: 'PILOTAR HELICÓPTERO', fn: tryToggleCar };
+    const near = Car.nearest(P);
     if (near.d < 4.5) return { txt: 'ENTRAR — ' + near.v.cfg.name, fn: tryToggleCar };
     return null;
   }
@@ -98,5 +182,10 @@ export function createInteract(deps) {
        <div class="invRow"><span>Arsenal ${arsenal.filter(w => !w.locked).length}/5</span><span class="k">${NAMES.sight}</span></div>
        <div class="invRow"><span>Baú: ${chest.medkits}✚ ${chest.nades}● ${chest.meat}🍖</span><span class="k">guarde em baús</span></div>`;
   }
-  return { update, renderInv, chest };
+  /* leitura pura para QA: DE ONDE este módulo mediu neste instante. Sem isto
+     não há como verificar de fora que a fiação de VR chegou — e "o teste mede
+     o dublê" foi o defeito mais caro desta base. */
+  const alcance = () => alcanceDe().toArray();
+
+  return { update, renderInv, chest, alcance };
 }

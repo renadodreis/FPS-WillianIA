@@ -2970,13 +2970,27 @@ await bootFase('criaturas e missões');
 let Cannon = null; // Canhão de Circo — criado no FIM do init (pós-worldgen); Interact lê via getter
 let MapToys = null; // 5 atrações do mapa — idem; Interact e playerUpdate leem via referência
 let Secrets = null; // 3 segredos (armas trancadas) — depende de MapToys, vem por último
-const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets, isMobile: __mobile });
+const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets, isMobile: __mobile,
+  /* D2 — DE ONDE SE MEDE O ALCANCE. Em VR o colisor para na parede e a cabeça
+     segue (js/xr/xrrig.js); a régua passa a ser a CABEÇA, descontado o que o
+     mundo RECUSOU. Fora de XR os dois são `null`/0 e nada muda.
+     A GUARDA `XR.presenting` NÃO É ENFEITE: `headWorldPosition` devolve a
+     câmera de DESKTOP quando não há sessão, e aí o alcance passaria a medir da
+     altura do olho com bob — mudança de gameplay no monitor. */
+  cabecaXR: alvo => (XR.presenting ? XR.headWorldPosition(alvo) : null),
+  foraXR: () => (XR.presenting ? XR.foraDoCorpo : 0),
+});
 /* A arma na mão e o alvo de interação marcado no MUNDO: em VR não existe centro
    de tela onde pendurar retículo nem dica de "aperte E". */
 const XRArma = createXrWeapon({ THREE, WeaponRig, arsenal });
 const XRInterage = createXrInteract({
   THREE, scene, player, state, heightAt, Structures, Car, Heli, arsenal,
   getCannon: () => Cannon, getMapToys: () => MapToys, getSecrets: () => Secrets,
+  /* A MESMA RÉGUA do js/interact.js, e isso é contrato: o marcador diz "dá pra
+     usar daqui" e quem resolve a tecla é o outro módulo. Duas réguas = o
+     jogador vê verde e o jogo recusa. */
+  cabecaXR: alvo => (XR.presenting ? XR.headWorldPosition(alvo) : null),
+  foraXR: () => (XR.presenting ? XR.foraDoCorpo : 0),
 });
 /* PAINEL E HUD DENTRO DO MUNDO. O menu, as opções e o HUD são DOM, e DOM não
    existe dentro de uma sessão imersiva: com o aparelho na cara não havia como

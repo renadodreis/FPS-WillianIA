@@ -139,6 +139,15 @@ async function medir() {
   const G = window.__game, MP = window.__MP, THREE = MP.THREE, XR = G.XR;
   const raiz = G.FpBody.bodyRoot;
   raiz.updateWorldMatrix(true, true);
+  /* CAIXA VIVA. `Box3.setFromObject` num SkinnedMesh NÃO reflete a pose do
+     esqueleto: o three calcula a caixa deformada UMA vez e guarda em
+     `mesh.boundingBox` ("If the skinned mesh is animated, the bounding box
+     should be recomputed per frame in order to reflect the current animation
+     state" — doc do three). Sem este recálculo, "o pé do boneco" era a pose do
+     PRIMEIRO frame arrastada pela raiz: a medida seguia a RAIZ, e uma perna que
+     não dobra passava verde. Foi assim que o `pes` deste arquivo ficou
+     aprovando um pé que não se move. */
+  raiz.traverse(o => { if (o.isSkinnedMesh) o.computeBoundingBox(); });
   const caixa = new THREE.Box3().setFromObject(raiz);
   const q = new THREE.Quaternion(); raiz.getWorldQuaternion(q);
   const cima = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
@@ -149,11 +158,15 @@ async function medir() {
   const fc = new THREE.Vector3(0, 0, -1).applyQuaternion(qc);
   const perna = G.FpBody.bones.leg2L
     ? G.FpBody.bones.leg2L.getWorldPosition(new THREE.Vector3()).y : null;
+  /* o OSSO do pé, ao lado da caixa: a caixa dá a sola (o vértice mais baixo da
+     bota), o osso dá o tornozelo — os dois têm de descer juntos */
+  const peOsso = G.FpBody.bones.footL
+    ? G.FpBody.bones.footL.getWorldPosition(new THREE.Vector3()).y : null;
   const C = window.__CORPOQA && window.__CORPOQA.corpo;
   return {
     chao: XR.rig ? XR.rig.position.y : MP.player.pos.y,
     pes: caixa.min.y, topo: caixa.max.y,
-    perna,
+    perna, peOsso,
     corpoX: centro.x, corpoZ: centro.z, corpoY: centro.y,
     cabecaX: cabeca.x, cabecaY: cabeca.y, cabecaZ: cabeca.z,
     cimaDoTronco: cima.y,

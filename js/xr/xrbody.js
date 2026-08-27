@@ -148,6 +148,10 @@ export function criarCorpoXR({ THREE, camera }) {
 
   function soltar() {
     if (!corpo || !salvo) return;
+    /* SAI DA SESSÃO, SAI A ORDEM. `encurtar` deixado para trás faria o boneco
+       do desktop andar agachado pelo resto da partida: js/fpbody.js só cai no
+       agachamento do teclado quando este campo NÃO existe. */
+    delete corpo.userData.encurtar;
     if (salvo.pai) salvo.pai.add(corpo);
     else if (corpo.parent) corpo.parent.remove(corpo);
     corpo.position.copy(salvo.position);
@@ -230,30 +234,46 @@ export function criarCorpoXR({ THREE, camera }) {
       yawCorpo += Math.sign(d) * excesso * k;
     }
 
-    /* Origem do corpo: debaixo da cabeça, recuada para o CENTRO da cabeça, e
-       nunca tão baixa que o pé fure o piso. Agachando, a origem para de
-       descer — quem desce é o joelho (js/fpbody.js dobra a perna por
-       `player.crouchT`, que este agachamento alimenta).
+    /* ORIGEM DO CORPO: A CABEÇA MANDA, E A PERNA SE VIRA.
 
-       O PREÇO DESSA ORDEM ESTÁ MEDIDO, e ele é conhecido: com os PÉS tendo
-       prioridade, o jogador que agacha 0,55 m fica com o ombro do boneco
-       0,185 m ACIMA do próprio olho e o topo do boneco 0,709 m acima — a
-       vista saindo do meio do tórax. O VRIK nomeia esse trade-off (`plantFeet`
-       "can cause the camera to exit the head") e o critério C5 pede o
-       contrário ("corpo ancorado na cabeça com erro ≤ 0,05 m").
+       Era o contrário, e o preço estava medido: com os PÉS tendo prioridade
+       (`max(alturaCabeca, olho − AFUNDA_MAX)`), o jogador que agachava 0,55 m
+       ficava com o ombro do boneco 0,190 m ACIMA do próprio olho e o topo do
+       boneco 0,709 m acima — a vista saindo do meio do tórax. O VRIK nomeia
+       esse trade-off pelo nome (`plantFeet` "can cause the camera to exit the
+       head") e o critério C5 cobra o outro lado ("corpo ancorado na cabeça
+       com erro ≤ 0,05 m").
 
-       Ancorar na cabeça foi TENTADO e MEDIDO nesta rodada: resolve o tórax e
-       enterra o pé em 0,31 a 0,47 m, porque o modelo do js/fpbody.js NÃO
-       encurta ao agachar — a dobra de `crouchT` gira coxa e canela em sentidos
-       que mantêm o pé no mesmo lugar em relação à raiz (medido: o osso mais
-       baixo não se move com `crouchT` indo de 0 para 1). Sem um solver que
-       encurte a perna de verdade, os dois defeitos são o mesmo cobertor curto,
-       e a saída certa mora no rig do corpo, não aqui. Fica registrado em
-       docs/vr/referencia-corpo.md §4 com número. */
+       A troca só ficou possível quando js/fpbody.js passou a ENCURTAR A PERNA
+       de verdade (IK analítico de 2 ossos com o pé como alvo). Antes disso,
+       ancorar na cabeça enterrava o pé exatamente o tanto que o jogador
+       agachava — o mesmo cobertor curto visto do outro lado.
+
+       A CONTA, e é uma só:
+
+         piso     = olho − dobra da perna − tolerância
+         corpo.y  = max(alturaCabeca, piso)
+         encurtar = olho − corpo.y
+
+       O pé fica no chão POR CONSTRUÇÃO: ele mora `olho − encurtar` abaixo da
+       origem, e a origem está em `olho − encurtar` acima do piso. Enquanto a
+       perna dá conta, o corpo desce com a cabeça e o ombro fica onde tem de
+       ficar; quem agacha mais fundo do que um joelho humano dobra (150° de
+       flexão, o teto de `pernaDobra`) vê o corpo parar de descer alguns
+       centímetros — e não vê o próprio pé furar o chão, que é o que não dá
+       para consertar depois.
+
+       `pernaDobra` chega em unidades da RAIZ do corpo (js/fpbody.js), por
+       `userData` no mesmo objeto que este módulo já recebe: não passa pelo
+       game.js e não cria objeto nenhum. */
+    const dobraMax = (corpo.userData.pernaDobra || 0) * escala;
+    const piso = olho - dobraMax - AFUNDA_MAX;
+    const alturaCorpo = Math.max(alturaCabeca, piso);
+    corpo.userData.encurtar = Math.max(0, olho - alturaCorpo);
     const recuo = RECUO + RECUO_AGACHADO * agacharFrac;
     corpo.position.set(
       camera.position.x + Math.sin(yawCorpo) * recuo,
-      Math.max(alturaCabeca, olho - AFUNDA_MAX),
+      alturaCorpo,
       camera.position.z + Math.cos(yawCorpo) * recuo,
     );
     corpo.rotation.set(0, yawCorpo, 0);   // EM PÉ: nada de pitch nem roll da cabeça

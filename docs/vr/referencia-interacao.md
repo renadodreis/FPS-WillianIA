@@ -314,3 +314,317 @@ exatamente onde estavam. Foi condição de projeto, não coincidência.
   centímetro a mais. Ampliar seria abrir vetor de trapaça
   (`test/security-regression.test.js`), e o critério D2 cobra a mesma coisa do
   outro lado.
+
+---
+
+# Parte II — o radial que se VÊ, e de onde se mede o alcance
+
+Data desta parte: 2026-08-27 · base `dev` @ `2d55610`.
+
+A Parte I decidiu **qual botão** e **quais verbos**. Ela deixou dois buracos, e
+os dois viraram defeito medido:
+
+1. **O radial não tem nada visível.** A máquina de estado ficou pronta e testada
+   (`criarRadialXR`, `js/xr/xrinput.js`), e o jogador aperta o gatilho e não vê
+   menu nenhum: não sabe quais fatias existem, qual está selecionada, nem que
+   soltar no centro cancela. O critério **D4** cobra affordance DENTRO do
+   mundo — dentro de uma sessão `immersive-vr` sem `dom-overlay` o DOM não
+   chega ao compositor.
+2. **O alcance é medido do CORPO, e o corpo agora para na parede.** Até
+   `2d55610` o colisor seguia a cabeça sempre; agora ele PARA quando o jogador
+   anda fisicamente contra um sólido, e a separação cabeça↔corpo deixou de ser
+   transitória.
+
+---
+
+## 7. Onde o radial aparece — e por que NÃO é no pulso
+
+### 7.1 A fonte que mudou o desenho
+
+O palpite natural — "prende o menu no pulso da mão que abriu" — é
+**desaconselhado pela própria Meta**, com as duas metades ditas na mesma
+página:
+
+> *"**Avoid anchoring menus to an active, moving wrist**"* — o motivo dado é
+> *"missed inputs and accidental triggers"*.
+>
+> *"**Spawning a menu from the wrist … is fine, as long as the menu is static
+> once it appears and is positioned in world space rather than following the
+> wrist.**"*
+
+Fonte: [Meta Horizon Design — Hands UI best
+practices](https://developers.meta.com/horizon/design/hands-ui-best-practices/)
+
+Ou seja, a regra não é "cabeça ou pulso". São TRÊS coisas separadas:
+
+| | segue a cabeça? | segue o pulso? | fica parado? |
+|---|---|---|---|
+| HUD preso na cara | sim | — | não |
+| menu preso no pulso | — | sim | não |
+| **o que a Meta pede** | **não** | **não** | **sim, depois de nascer** |
+
+E o outro lado da mesma regra, que já estava na régua:
+
+> *"**Avoid locking HUD style content to the user's head movements.**"* — e a
+> alternativa oferecida na mesma página é *"Anchor information and digital
+> content to a space, or loosely follow the user using smoothing animation."*
+
+Fonte: [Meta Horizon Design — MR design
+guidelines](https://developers.meta.com/horizon/design/mr-design-guideline)
+
+### 7.2 A que distância
+
+A Meta dá três números, e eles não são o mesmo número:
+
+> *"Position UI **between 42cm and 46cm** from the user when you want to
+> encourage touch."* · *"Ray casting or indirect interaction is comfortable
+> from roughly **0.46m to 3m**."*
+> — [Hands UI best practices](https://developers.meta.com/horizon/design/hands-ui-best-practices/)
+
+> *"objects that the user will be fixating their eyes on for an extended period
+> of time should be rendered **at least 0.5 meters** away"* · *"Many have found
+> that **1 meter** is a comfortable distance for menus and GUIs that users may
+> focus on for extended periods of time."*
+> — [Meta Horizon Design — Display](https://developers.meta.com/horizon/design/display)
+
+A causa raiz do desconforto de proximidade está dita na mesma página do
+display: *"Fully immersive experiences create an unusual situation that
+decouples accommodative and vergence demands, where accommodative demand is
+fixed but vergence demand can change."*
+
+**O radial não é leitura prolongada — é ação rápida** (§4.3: *"Use hand menu for
+quick action"*). Então o número que vale é o de perto, **0,42 m**, e não o de
+menu de leitura (0,5–1 m): mais longe que isso e o disco deixa de estar onde a
+mão está, que é o que anuncia de quem ele é.
+
+### 7.3 O desenho, item por item
+
+**O disco nasce na DIREÇÃO da mão que abriu, a 0,42 m do olho no mínimo, e
+congela ali enquanto o radial estiver aberto.**
+
+- **Nasce da mão** — é o *"spawning a menu from the wrist"* que a Meta permite.
+  A direção é a do olho para a mão; quem abriu o menu está dito pela geometria,
+  sem seta nem legenda.
+- **Congela** — é o *"static once it appears"*. Tremor de pulso não sacode o
+  texto, e o polegar pode empurrar o analógico sem arrastar o alvo de leitura
+  junto.
+- **Não segue a cabeça** — virar o pescoço não move o disco. É o
+  *"avoid locking HUD style content to the user's head movements"*.
+- **Congela contra o CORPO, não contra o mundo absoluto.** O ponto guardado é o
+  deslocamento até `player.pos`. Num veículo, ou num jogador que anda
+  fisicamente durante a escolha, o disco viaja junto em vez de ficar plantado no
+  chão — é o *"loosely follow the user"* da mesma página da Meta, e é o mínimo
+  para um menu que existe por menos de um segundo.
+- **Piso duro de 0,15 m do olho (I3).** Congelado, o disco não persegue o
+  jogador — mas o jogador pode avançar a cabeça para cima dele. Quando a cabeça
+  chega a menos de **0,30 m**, o disco é empurrado de volta para 0,30 m ao
+  longo do eixo olho→disco. É guarda de segurança, não comportamento normal: a
+  distância de nascimento é 0,42 m, então ele só age se o jogador avançar 12 cm
+  com o menu aberto.
+
+### 7.4 O tamanho do texto é medido em GRAUS
+
+O padrão desta base (`js/xr/xrhud.js`) é **0,7° de altura de maiúscula** como
+alvo e 0,35–0,4° como piso. A Meta não publica um número angular para corpo de
+texto — o mais próximo que ela publica é para alvo de toque:
+
+> *"Comfortably-sized hit targets should be a minimum of 22mm x 22mm / 48dp x
+> 48dp / **3˚FOV at 0.42m**."*
+> — [Meta Horizon Design — Accessibility](https://developers.meta.com/horizon/design/accessibility)
+
+Duas consequências:
+
+1. **A fatia inteira é um alvo**, e cada fatia deste disco mede bem mais de 3°
+   de FOV a 0,42 m — o disco todo tem 0,15 m de diâmetro, que dá 20,4° a essa
+   distância, e cada uma das quatro fatias fica com um quadrante disso.
+2. **O glifo é dimensionado pelo ângulo**, não pelo canvas: a mesma conta do
+   `js/xr/xrhud.js` (`2·atan((h/2)/d)`), medida na distância real da sessão.
+
+Contraste segue WCAG 2.1, que é o que a mesma página de acessibilidade adota:
+*"Normal text: 4.5:1 contrast ratio minimum"*.
+
+### 7.5 O que a pesquisa NÃO conseguiu confirmar
+
+Registrado de propósito, para ninguém tratar lembrança como fonte:
+
+- **Onde exatamente Half-Life: Alyx, Into the Radius, Boneworks/Bonelab e
+  The Walking Dead: Saints & Sinners ancoram o inventário.** Nenhuma fonte
+  citável foi acessível na rodada de pesquisa (Fandom 402, PCGamingWiki 403,
+  Valve Developer Wiki 403, GDC Vault com login). O conhecimento geral —
+  "pistola no quadril, espingarda no ombro, munição na mochila" — **não entrou
+  nesta decisão**, porque não foi verificado.
+- **Como esses jogos destacam a fatia selecionada e como cancelam.** Sem fonte.
+- A única coisa citável do Alyx é a mecânica de puxar a distância: *"Like the
+  gravity gun from Half-Life 2, the gravity gloves allow players to pick up
+  objects from a distance."*
+  ([Wikipedia](https://en.wikipedia.org/wiki/Half-Life:_Alyx)) — já usada na
+  §3.4, e não diz nada sobre menu.
+
+A decisão da §7.3 se apoia **inteira** em documentação oficial da Meta, que é
+mais forte do que a imitação de um jogo: a mesma página que proíbe o pulso em
+movimento é a que autoriza nascer dele.
+
+---
+
+## 8. De onde se mede o alcance quando a cabeça e o corpo se separam
+
+### 8.1 O que mudou, em número
+
+Até `2d55610` o colisor seguia a cabeça 1:1 e a separação era ruído: **0,0131 m
+no pior frame de 1799** de sessão normal (laudo de `fa9ed86`). É por isso que o
+critério **D2** está VERDE hoje com `js/interact.js` medindo de `player.pos` —
+medir do corpo e medir da cabeça davam o mesmo número.
+
+`2d55610` mudou a física do caso-limite, e mudou por um motivo que não se
+discute: o passo recusado voltava para o colisor e ele **atravessava 10,9623 m
+num pedido de 10 m**. Agora a parede segura o corpo e a cabeça segue — e o
+"fora do mundo" é DESENHADO (`js/xr/xrcomfort.js`), como o `head_behavior_mode:
+Fade` do Godot XR Tools.
+
+A Meta descreve os dois lados desse problema:
+
+> *"If a user walks into a virtual wall, the camera stops, but the user's
+> physical world movement continues, creating a disorienting experience."*
+>
+> *"**Disable rendering in invalid spaces:** If the camera moves into an invalid
+> area, such as inside a wall, the display could show a blank screen or visual
+> effects to guide the user back."*
+> — [Meta Horizon Design — Locomotion in virtual
+> environments](https://developers.meta.com/horizon/design/locomotion-virtual-environments/)
+
+### 8.2 A identidade que decide tudo
+
+Lendo `place()` (`js/xr/xrrig.js`), a posição de mundo da cabeça é, literalmente:
+
+```
+cabeça = player.pos + passoPendente + fora
+```
+
+- `passoPendente` é o passo físico que o jogo ainda não absorveu. Ele é drenado
+  todo frame ANTES da física (`game.js:3478`), com teto de 0,15 m por frame — a
+  72 Hz uma caminhada rápida gasta ~2 cm por frame, então isto fica perto de
+  zero o tempo todo.
+- `fora` é **exatamente o que o mundo RECUSOU**: só cresce em
+  `devolverPasso()`, e `devolverPasso()` só é chamado com a componente do passo
+  que a colisão do jogo desfez (`game.js:3647`).
+
+Logo: **a diferença entre "medir da cabeça" e "medir do corpo" É, ponto por
+ponto, o que a parede negou ao corpo do jogador.** Não é uma escolha de gosto
+entre duas réguas; é uma escolha entre devolver ou não devolver ao jogador o
+alcance que o mundo acabou de recusar.
+
+### 8.3 A régua escolhida
+
+**O alcance é medido da CABEÇA, descontado o que o mundo recusou:**
+
+```
+ref.xz = cabeça.xz − fora   (ao longo do eixo corpo→cabeça)
+ref.y  = player.pos.y
+```
+
+com um **teto absoluto** de 0,35 m de afastamento do corpo como segunda trava.
+
+Por que cada pedaço:
+
+- **Mede da cabeça** — é o que o D2 cobra ao pé da letra (*"Reprova: decisão a
+  partir de `player.pos`"*), e é o que corresponde ao mundo real do usuário
+  (VRC.Quest.Input.3).
+- **Desconta o recusado** — sem isso a régua entrega alcance por parede. Não é
+  hipótese: a separação medida na parede chega a **2,5 m** num teste de 3 m de
+  caminhada (`test/xr-parede.test.js`), e o servidor **não valida distância de
+  baú** (`server.js`, `openChest`: valida vivo, fase, repetição e um limite de
+  300 ms entre baús — distância, nenhuma). A régua do cliente é a única trava
+  que existe nesse caminho.
+- **Só X/Z** — `fora` só existe no plano horizontal (o rig só recusa passo
+  horizontal). Levar o Y da cabeça para a conta mudaria em ~1,6 m a esfera de
+  5 m do helicóptero e a banda de 3,5 m da bazuca — retoque de gameplay que
+  ninguém pediu, disfarçado de correção de VR.
+- **Teto de 0,35 m** — fica acima do pico de encosto de parede medido
+  (0,133 m) e abaixo do ponto em que a tela já está preta (`FORA_MAX = 0,50 m`
+  em `js/xr/xrcomfort.js`). É a trava que sobrevive se um dia aparecer
+  separação que o `fora` não explique.
+
+### 8.4 Quanto isso custa ao jogador — a conta honesta
+
+A objeção legítima contra descontar é: *"o jogador vê um baú ao alcance do
+braço e o jogo nega"*. A conta:
+
+- o raio do baú é **2,4 m** — muito maior que qualquer parede do jogo;
+- para o desconto NEGAR alguma coisa, o baú tem de estar entre 2,4 m e
+  2,4 m + separação, medido do corpo;
+- e a separação só passa de 0,20 m com a **tela já escurecendo**
+  (`FORA_MIN = 0,20`), chegando a preto em 0,50 m.
+
+Ou seja: a faixa negada existe apenas enquanto o jogador está com a cabeça
+dentro de um sólido e a vista apagando. **Em jogo normal a faixa negada tem
+1,3 cm de largura** — a separação medida no pior frame de 1799.
+
+### 8.5 O que NÃO foi adotado
+
+- **Medir da cabeça sem desconto.** Entrega ao jogador exatamente o alcance que
+  a parede negou. Com baú sem validação de distância no servidor, é vetor de
+  trapaça, não conforto.
+- **O menor dos dois (cabeça ou corpo).** É estritamente mais permissivo que
+  qualquer um dos dois isolados — abre o mesmo vetor por outro nome.
+- **Exigir linha de visão (raycast sem sólido no meio).** Seria a trava certa se
+  o desconto não existisse; com o desconto, o ganho por parede já é **zero por
+  construção**, e um raycast de cena por frame não cabe num orçamento que está
+  4,3× acima do teto de draw calls (`docs/vr/perf-xr.md`). Fica registrado como
+  a saída caso o modelo de `fora` mude.
+- **Mexer nos raios (2,4 / 2,8 / 4,5 / 5 m).** Nenhum número de gameplay muda
+  nesta rodada. Ampliar alcance é o que `test/security-regression.test.js`
+  existe para pegar.
+
+---
+
+## 9. O que a medição devolveu
+
+Tudo abaixo saiu de sessão `immersive-vr` de verdade (IWER + Chrome), pelo loop
+do próprio `game.js` — nenhum condutor de teste dirigindo o módulo. Arquivos:
+`test/xr-radial.test.js` (porta 3580) e `test/xr-alcance.test.js` (porta 3582).
+
+### 9.1 O radial
+
+| O que | Medido | Se estivesse errado |
+|---|---|---|
+| Nasce na direção da mão | **0,00°** de desvio, a **0,471 m** do olho | preso na cara: 57,90° |
+| Segue o pulso? | mão andou 0,528 m, disco andou **0,0000 m** | pendurado no pulso: 0,5281 m |
+| Segue a cabeça? | pescoço girou 40°, disco andou **0,0163 m** | preso na cara: 0,322 m |
+| Fatia escolhida acende | luma **176** contra **12,3** das outras | sem destaque: 12,3 contra 12,3 |
+| Miolo acende ao cancelar | luma **148,9** contra 12,3 | miolo apagado: 12,5 contra 12,3 |
+| Menor maiúscula | **0,92°** a 0,471 m (**0,79°** no teto de 0,55 m) | fonte de 14 px: 0,43° |
+| Disco inteiro | **21,6°** de FOV; cada fatia ≈ 10,8° | a Meta pede ≥ 3° para alvo |
+| I3, abrindo com a mão na cara | nasce a **0,420 m** | — |
+| I3, cabeça avançando 0,80 m | para em **0,300 m** | sem o guarda: **0,054 m** |
+| Custo | **1 draw call por olho** (2 no estéreo, mediana de 15, 3 rodadas) | invisível: mediana 0 |
+
+O `0,0163 m` da virada de pescoço não é folga do guarda: é a câmera de UNIÃO
+do three andando meia distância interpupilar ao girar (0,0315 m de meia-IPD,
+2·0,0315·sen 20° ≈ 0,022 m), e o corpo seguindo esse deslocamento como passo
+físico. É o disco ancorado no CORPO fazendo exatamente o que devia.
+
+### 9.2 O alcance
+
+| Cenário | Separação cabeça↔corpo |
+|---|---|
+| Caminhada livre de 1,2 m (corpo andou 1,200 m) | **0,0000 m** |
+| 1,8 m contra estrutura (corpo andou 0,680 m) | **1,1200 m** |
+| Cenário completo do baú, acumulado | **2,6100 m** |
+
+E a régua da instância do jogo, lida em 36 amostras durante a caminhada contra
+a parede (`Interact.alcance()`):
+
+- **sem a fiação de VR** (estado deste commit): saiu **0,0000 m** do corpo;
+- **com a fiação ligada** (verificada nesta worktree e revertida): saiu
+  **0,0060 m** do corpo, com 1,490 m de separação no ar — ou seja, seguiu a
+  cabeça só até onde o mundo aceitou o passo, e nem um centímetro além;
+- nas duas, **nunca passou da cabeça** (folga de 0,090–0,106 m).
+
+Alcance normal, ponta a ponta, nas duas fiações: baú a **2,30 m abre**, baú a
+**2,55 m não abre** — o raio de 2,4 m intacto.
+
+E a prova de que a rede pega o defeito certo: com a régua trocada pela **cabeça
+crua** (a "correção óbvia" do D2), o baú a **3,705 m do corpo** e 1,095 m da
+cabeça — do outro lado da parede — **abre**, e a régua chega a 1,490 m do corpo.
+Quatro casos da régua pura, o guarda da instância do jogo e o caso do baú
+através da parede ficam vermelhos juntos.

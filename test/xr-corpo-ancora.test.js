@@ -83,8 +83,25 @@ describe('o corpo em 1ª pessoa ancora na cabeça do jogador',
           };
           let topo = null, base = null;
           if (raiz && raiz.parent) {
+            /* CAIXA VIVA. Num SkinnedMesh o three calcula a caixa deformada UMA
+               vez e a guarda em `mesh.boundingBox` ("If the skinned mesh is
+               animated, the bounding box should be recomputed per frame in
+               order to reflect the current animation state" — doc do three).
+               Sem recalcular, `base` era a pose do PRIMEIRO frame arrastada
+               pela raiz: media a RAIZ e não o PÉ, e uma perna que não dobra
+               passava verde. */
+            raiz.traverse(o => { if (o.isSkinnedMesh) o.computeBoundingBox(); });
             box.setFromObject(raiz);
-            if (!box.isEmpty()) { topo = box.max.y - olho.y; base = box.min.y; }
+            if (!box.isEmpty()) base = box.min.y;
+            /* TOPO RÍGIDO: a raiz do corpo é o OLHO do boneco e o alto da
+               cabeça fica `eyeDrop` acima dela. É esta a régua do número que
+               este arquivo cita (0,709 m). O topo da CAIXA não serve: em VR os
+               controles emulados não descem junto com o agachamento, os braços
+               do boneco sobem atrás deles, e quem ganha o topo da caixa passa a
+               ser o DEDO — medido, 0,41 m acima do olho, sem nada de errado
+               com a cabeça (que fica a −0,111 m). */
+            topo = raiz.position.y + G.FpBody.TUNE.eyeDrop * raiz.scale.x
+              - (olho.y - G.XR.rig.position.y);
           }
           window.__C.amostra = {
             olhoY: olho.y,
@@ -136,30 +153,29 @@ describe('o corpo em 1ª pessoa ancora na cabeça do jogador',
         `a folga cabeça↔chão deu ${(a.olhoY - a.chao).toFixed(4)} m com o headset a 1,70`);
     });
 
-    it('AGACHADO: o corpo não agacha junto — LIMITE CONHECIDO, travado por número', async () => {
-      /* ISTO NÃO É UM VERDE, É UMA CERCA. O jogador que agacha 0,55 m fica com
-         o ombro do boneco ACIMA do próprio olho: a vista sai do meio do tórax.
-         O critério C5 pede o contrário ("corpo ancorado na cabeça com erro
-         ≤ 0,05 m"), e o VRIK nomeia o trade-off — `plantFeet` "can cause the
-         camera to exit the head".
+    it('AGACHADO: o corpo agacha junto — ombro abaixo do olho e pé no chão', async () => {
+      /* ERA UMA CERCA, VIROU UM VERDE. O número travado aqui na rodada
+         anterior era o LIMITE CONHECIDO: com o corpo ancorado nos PÉS, o
+         jogador que agachava 0,55 m ficava com o ombro do boneco 0,190 m
+         ACIMA do próprio olho e o topo do boneco 0,709 m acima — a vista
+         saindo do meio do tórax. O critério C5 pede o contrário ("corpo
+         ancorado na cabeça com erro ≤ 0,05 m").
 
-         Ancorar na cabeça foi TENTADO E MEDIDO nesta rodada: resolve o tórax e
-         enterra o pé em 0,31 a 0,47 m, porque o modelo do js/fpbody.js NÃO
-         encurta ao agachar (a dobra de `crouchT` gira coxa e canela em sentidos
-         que mantêm o pé onde está — o osso mais baixo não se move com `crouchT`
-         indo de 0 a 1). Sem um solver que encurte a perna, os dois defeitos são
-         o mesmo cobertor curto, e o conserto mora em js/fpbody.js.
-
-         Enquanto isso, o número fica TRAVADO aqui: falha se PIORAR. Foi assim
-         que este defeito cresceu sem ninguém ver — ninguém media. */
+         O que destravou foi js/fpbody.js passar a ENCURTAR A PERNA de verdade
+         (IK analítico de 2 ossos com o pé como alvo): com a perna que dobra, a
+         âncora pode ir para a cabeça sem enterrar o pé. Medido depois:
+         ombro −0,122 m (abaixo), topo do boneco +0,183 m, pé −0,017 m do
+         chão — que é a tolerância declarada de AFUNDA_MAX. */
       await pose(1.70, 2500);
       const a = await pose(1.15, 1800);
-      assert.ok(a.topo < 0.80,
-        `o topo do boneco ficou ${a.topo.toFixed(4)} m acima do olho do jogador agachado ` +
-        '(medido nesta rodada: 0,709 m; em pé são ~0,18 m, que é o alto da cabeça)');
-      assert.ok(a.ombroR.dy < 0.25,
-        `o ombro do boneco subiu para ${a.ombroR.dy.toFixed(4)} m acima do olho ` +
-        '(medido nesta rodada: +0,185 m)');
+      assert.ok(a.ombroR.dy < 0,
+        `o ombro do boneco ficou ${a.ombroR.dy.toFixed(4)} m em relação ao olho ` +
+        '(negativo = abaixo; medido antes do conserto: +0,190 m)');
+      assert.ok(a.topo < 0.30,
+        `o topo do boneco ficou ${a.topo.toFixed(4)} m acima do olho do jogador ` +
+        'agachado (medido antes do conserto: 0,709 m; em pé são ~0,18 m)');
+      assert.ok(Math.abs(a.base - a.chao) < 0.06,
+        `agachado, o pé do boneco ficou a ${(a.base - a.chao).toFixed(4)} m do chão`);
     });
 
     it('e o corpo continua ancorado no eixo da cabeça, não deslocado do centro', async () => {
