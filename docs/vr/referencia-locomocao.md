@@ -436,3 +436,203 @@ citado no §A6 de `docs/vr/criterio-aaa.md`).
 O escurecimento **não** é preferência do jogador: desligar a vinheta de
 conforto no painel não o desliga. Vinheta é conforto; ver do outro lado da
 parede é integridade do mundo.
+
+---
+
+## 7. A CORTINA — quando ela fecha, quanto ela atrasa, e o que ela explica
+
+O §6 escolheu **Fade**. A validação de `2d55610` mediu o Fade escolhido e
+achou três coisas que a escolha não resolvia sozinha, e que são o assunto
+desta seção:
+
+| medido em `2d55610` | número |
+|---|--:|
+| a vista fica limpa até | **1,10 m** de separação cabeça↔colisor |
+| atraso da cortina | **0,33 s** (frame 40: `fora` 0,225 e `escuro` 0,000; frame 60: `fora` 1,058 e `escuro` 1,000) |
+| separação máxima com o jogador insistindo | **8,4140 m** (sem teto) |
+| o dono, lendo isso | *"a tela fica preta quando encosto na parede e nada explica por quê"* |
+
+### 7.1 A conta que ninguém tinha feito: QUANDO o outro lado aparece
+
+`FORA_MIN = 0,20` e `FORA_MAX = 0,50` eram números de conforto, calibrados
+pela separação medida em uso normal. **Nenhum dos dois tem relação com o
+instante em que o mundo vaza.** Esse instante é geometria, e a geometria deste
+jogo é:
+
+- **colisor do jogador: raio `0,42 m`** (`game.js`, `player.radius`), e
+  `Structures.collide` para o CENTRO do colisor a exatamente um raio da face
+  do sólido. Ou seja: com o corpo preso na parede, a cabeça cruza a FACE
+  quando a separação passa de **0,42 m**;
+- **plano near da câmera: `0,08 m`** (`PerspectiveCamera(75, …, 0.08, 1000)`).
+  Geometria mais perto que isso é recortada. Como as paredes são caixas de
+  material `FrontSide`, recortar a face da frente é ver o que está do outro
+  lado dela.
+
+Logo: **o vazamento começa em `0,42 − 0,08 = 0,34 m` de separação**, e não em
+0,50. A cortina de `2d55610` só ficava preta em 1,10 m — **0,76 m de
+caminhada com a vista vazando**, que é o defeito com nome e número.
+
+Daí os limiares desta rodada: **`FORA_MIN = 0,16` · `FORA_MAX = 0,32`**. O topo
+é o vazamento com 2 cm de folga; a base fica acima do pico de encosto medido
+(0,133 m em `fa9ed86`) e MUITO acima do uso normal (0,0131 m no pior de 1799
+frames; 0,0083 m nos 3840 frames de `2d55610`).
+
+### 7.2 O atraso não é conforto, é resíduo de implementação
+
+A rampa era `FORA_K · dt` (3/s) **nos dois sentidos**: 1/3 de segundo do claro
+ao preto. A 1,44 m/s de caminhada isso é 0,48 m percorridos ENQUANTO a tela
+ainda abre.
+
+O número 3/s é do Godot XR Tools, e lá ele existe porque **o gatilho de lá é
+binário**: o shape cast da cabeça bate ou não bate, e a rampa é o que dá
+gradualidade. Aqui o sinal é CONTÍNUO (a separação, em metros), então a
+gradualidade já vem da geometria: 0,16 → 0,32 m a 1,44 m/s são 0,11 s de
+fechamento progressivo, sem rampa temporal nenhuma.
+
+**Decisão: fechar acompanha a geometria no mesmo frame; abrir mantém freio.**
+Fechar de repente é a técnica de *blink* (o próprio `PISCADA_S = 0,08` deste
+projeto), confortável e usada em todo snap turn do gênero. Abrir de repente é
+um flash de luz na cara de quem está no escuro — esse continua a `3/s`, que é
+exatamente a taxa de descida do Godot (`_fade_value -= delta * 3.0`).
+
+Fonte da taxa, verbatim
+([`player_body.gd`](https://github.com/GodotVR/godot-xr-tools/blob/master/addons/godot-xr-tools/player/player_body.gd)):
+
+```gdscript
+if fade:
+    _fade_value = max(_fade_value + delta * 3.0, 0.0)
+elif _fade and _fade_value > 0.0:
+    _fade_value = max(_fade_value - delta * 3.0, 0.0)
+```
+
+### 7.3 O gatilho que faltava — e o parapeito
+
+**O gatilho do Godot NÃO é a distância.** Foi assim que este repositório o
+citou até aqui, e é meia verdade. O código, verbatim:
+
+```gdscript
+var safe := min(_head_shape_cast.get_closest_collision_safe_fraction(),
+                max_head_distance / target_move_distance)
+if safe < 1.0:
+    if head_behavior_mode == 0:
+        var push_back_by = body_movement * (1.0 - safe)
+        global_position += push_back_by
+    else:
+        fade = true
+```
+
+São **dois** gatilhos, e o primeiro é uma **consulta de física na cabeça** —
+um shape cast que pergunta ao mundo se a cabeça vai bater. `max_head_distance`
+(`@export_range(0.0, 2.0, 0.01) var max_head_distance = 1.0`) é só o
+**batente**. A implementação daqui tinha o batente e **não tinha a consulta**.
+
+Isso importa porque **a separação não distingue dois gestos opostos**:
+
+| gesto | separação típica | o que deve acontecer |
+|---|--:|---|
+| enfiar a cabeça na parede | 0,3 – 1,0 m | escurecer |
+| **debruçar sobre um parapeito** (sacada, muretinha, capô, janela) | 0,3 – 0,6 m | **não escurecer** — é gesto legítimo de VR |
+
+Os dois moram na MESMA faixa de separação. Nenhum limiar de distância os
+separa: as duas pontas se sobrepõem. **O que os separa é o mundo:** no
+primeiro a cabeça está DENTRO de sólido, no segundo está no AR. É exatamente a
+pergunta que o shape cast do Godot faz.
+
+**Decisão: a cortina passa a ser vetada por uma sonda de sólido na cabeça.**
+`Structures.collide` já é essa consulta — é o mesmo empurrão que o corpo do
+jogador usa, com um raio menor e uma fatia de altura na cabeça:
+
+- raio da sonda **0,25 m** (cabeça e ombros; dá 0,17 m de margem sobre o
+  `near` de 0,08 — a "antecipação" que o shape cast do Godot tem por ser um
+  CAST e não um teste de ponto);
+- fatia de altura **0,24 m** centrada no olho, que é o que faz `collide`
+  IGNORAR um parapeito cujo topo está abaixo da cabeça (`pos.y >= by1 - 0.12`
+  é a linha dele que faz isso);
+- o empurrão devolvido é `raio − distância até a face`, ou seja **a
+  proximidade**, e a direção dele é a direção da parede. Sai de graça na mesma
+  chamada.
+
+Sem a sonda (fiação ausente, ou geometria que `Structures` não conhece — carro,
+helicóptero) a cortina cai no comportamento por separação do §7.1. É o padrão
+seguro: erra para o lado de escurecer.
+
+### 7.4 O teto de `fora`, e o preço dele em A6
+
+`devolverPasso` somava sem clamp: 8,4140 m medidos numa caminhada só. O teto é
+**1,00 m** — o `max_head_distance` do Godot, o mesmo número e o mesmo papel.
+
+O que o teto custa: **acima dele a vista para de responder ao passo físico**,
+que é a letra de A6. O que o defende: **a cortina está em 1,0000 desde
+0,32 m**, ou seja três vezes antes. Não existe display deixando de responder;
+existe display preto. E o excedente **não é jogado fora** — vira dívida
+(`excedente`), e o passo de volta paga a dívida ANTES de mexer na vista, senão
+entrar 3 m e sair 3 m deixaria o jogador 2 m fora do lugar para sempre.
+
+Isso é **exceção declarada**, com amarra em código (`EXCECOES` em
+`js/xr/xrcomfort.js`): ela só vale enquanto a cortina fechar ESTRITAMENTE antes
+do teto. Se alguém subir `FORA_MAX` acima do teto, a exceção deixa de valer
+sozinha e a auditoria fica vermelha.
+
+### 7.5 O que a cortina EXPLICA — e por que uma grade
+
+Preto liso não explica nada: a leitura de quem está de headset é *"apagou"*.
+O que o jogador de Quest já sabe ler sem manual é a **grade do Guardian** — o
+próprio sistema desenha uma parede quadriculada quando ele chega no limite da
+área. Copiar essa gramática é usar um vocabulário que ele já tem.
+
+Duas peças, as duas no mesmo shader que já existia:
+
+1. **a cortina FECHA PELO LADO DA PAREDE.** A direção vem de graça da sonda
+   (§7.3). O escuro nasce onde o sólido está e varre até fechar tudo — quem
+   está lá dentro vê de que lado veio o problema, e para onde voltar;
+2. **grade sobre o escuro**, ciano fraco, no estilo da grade de limite. Ela
+   distingue "o jogo colocou uma barreira aqui" de "a tela apagou". O alpha
+   continua 1 (o mundo continua ocluso — integridade não muda); só a COR deixa
+   de ser preto liso.
+
+**Fonte:** a grade do Guardian é do sistema Meta Quest e todo jogador a
+conhece; **não encontrei documento primário da Meta prescrevendo grade
+in-app** — as páginas de conforto que consegui abrir
+([locomotion-best-practices](https://developers.meta.com/horizon/design/locomotion-best-practices/),
+[locomotion-comfort-usability](https://developers.meta.com/horizon/resources/locomotion-comfort-usability/),
+[reduce-optic-flow](https://developers.meta.com/horizon/resources/locomotion-design-reduce-optic-flow/))
+falam de vinheta e de *soft camera collisions* e nada de cabeça dentro de
+sólido. O que elas dão, verbatim:
+
+> "When the camera collides with virtual objects, opt for a soft collision
+> approach where the camera slows down before stopping, rather than an abrupt
+> halt."
+
+> "use vignettes to darken or completely occlude the edges of the screen when
+> movement occurs" … "a diminished field of view can potentially be
+> disorienting or claustrophobic"
+
+E o SDK WebXR da própria Meta, sobre a taxa da vinheta:
+
+> "Keep slide speeds moderate (4–6 m/s) and add a vignette with a **quick ease
+> in/out**."
+> ([immersive-web-sdk, docs/concepts/locomotion](https://github.com/facebook/immersive-web-sdk/blob/main/docs/concepts/locomotion/index.md))
+
+**"quick ease in/out"** é o mais perto de lastro que achei para fechar rápido;
+o resto do número (fechar no mesmo frame) é decisão daqui, derivada da conta do
+§7.1 e não de fonte.
+
+### 7.6 O que ficou SEM lastro de fonte primária, e é honesto dizer
+
+- **Half-Life: Alyx, Boneworks, Into the Radius** — `developer.valvesoftware.com`
+  responde **403** a busca automatizada e as páginas de loja não descrevem o
+  comportamento de cabeça-em-geometria. **Não encontrado.** O que se afirma
+  sobre esses jogos aqui é só o que já estava no §6 (Boneworks empurra o corpo
+  porque tem corpo físico), e continua sem citação primária. A decisão que fica
+  sem lastro por causa disso: **nada** — o desenho inteiro desta seção se apoia
+  no Godot XR Tools, que é fonte primária aberta e legível.
+- **Números de vinheta da Meta** (quanto escurecer, em quantos segundos):
+  **não encontrado** — as três páginas de conforto não trazem número nenhum.
+  Unity XR Interaction Toolkit publica defaults de *ease in/out* do Tunneling
+  Vignette, mas as cinco URLs de manual que tentei responderam 404.
+  Decisão sem lastro por causa disso: **a taxa de ABERTURA** — fica em 3/s
+  porque é a do Godot, não porque a Meta a recomende.
+- **Raio da sonda (0,25 m) e fatia de altura (0,24 m):** derivados da geometria
+  DESTA base (raio 0,42, near 0,08, caminhada 1,44 m/s), não de fonte. O Godot
+  usa um shape cast cujo tamanho não consegui ler no `.tscn` (o arquivo não
+  declara as shapes).

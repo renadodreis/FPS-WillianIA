@@ -33,7 +33,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.7.5",
-    "socket.io-client": "^4.7.5"
+    "socket.io-client": "^4.7.5",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -50,7 +51,6 @@
     "knip": "^6.26.0",
     "madge": "^8.0.0",
     "puppeteer-core": "^24.43.1",
-    "sharp": "^0.34.5",
-    "three": "^0.185.1"
+    "sharp": "^0.34.5"
   }
 }

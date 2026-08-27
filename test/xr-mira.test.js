@@ -131,7 +131,7 @@ async function instalarSondas() {
       return {
         arma: (G.arsenal[G.gunIndex] || {}).name || '?',
         saiu,
-        aoCano: O.distanceTo(vec(G.canoMundo())),
+        aoCano: O.distanceTo(vec(G.canoPosDoTiro())),   // boca CONGELADA no tiro: a outra já viu o coice
         canoY: vec(G.canoDoTiro()).y,
         naLinha: aoRaio(O, mO, mD),
         /* ÂNGULO CONTRA O CANO — a única medida deste arquivo que não vem do
@@ -236,6 +236,19 @@ describe('o tiro sai onde a mira aponta, em VR (B3)', { skip: !CHROME && 'Chrome
     const pior = Math.max(...angs);
     assert.ok(pior < 0.5,
       `a ${r.nome} sai a ${pior.toFixed(3)}° do cano (${angs.map(a => a.toFixed(3) + '°').join(', ')}); teto 0,5°`);
+    /* E A ORIGEM TEM DE ESTAR NA BOCA. Este caso não existia, e a falta dele
+       deixou passar um foguete nascendo a 0,9087 m ATRÁS do cano — na ocular.
+       Com o tubo atravessando parede, o foguete detonava a 0,390 m da cabeça:
+       42 de dano no próprio jogador. O ângulo estava perfeito e a origem não. */
+    /* A ORIGEM TEM DE ESTAR NA BOCA, E AQUI O TETO É DURO. A falta deste caso
+       deixou passar um foguete nascendo a 0,9087 m ATRÁS do cano — na ocular.
+       Com o tubo atravessando parede ele detonava a 0,390 m da cabeça: 42 de
+       dano no próprio jogador. Projétil VISÍVEL não aceita origem deslocada:
+       ou sai do tubo, ou explode onde o jogador não mandou. */
+    const longe = r.t.filter(t => t.aoCano > 0.02).map(t => `${(t.aoCano * 100).toFixed(1)} cm`);
+    assert.equal(longe.length, 0,
+      `o foguete da ${r.nome} nasce a ${longe.join(', ')} do cano (teto 2 cm); ` +
+      'origem atrás da boca faz o foguete detonar na cara de quem atira');
     const espalha = pior - Math.min(...angs);
     assert.ok(espalha < 0.1,
       `o ângulo da ${r.nome} variou ${espalha.toFixed(3)}° entre três tiros em direções diferentes — é zeragem dependente do cenário, e ela anda sozinha`);
@@ -243,9 +256,16 @@ describe('o tiro sai onde a mira aponta, em VR (B3)', { skip: !CHROME && 'Chrome
        hitscan. É esta medida que morre com a zeragem reinjetada: convergir do
        tubo para um ponto qualquer inclina o foguete, e a inclinação aparece
        nas distâncias longas mesmo quando o ângulo parece pequeno. */
+    /* O TETO DO FOGUETE É OUTRO, E O MOTIVO ESTÁ ESCRITO PARA NÃO SER LIDO COMO
+       AFROUXAMENTO. O hitscan cobra 2 cm porque erra cabeça; o foguete nasce na
+       BOCA (caso acima, teto duro de 2 cm) e voa PARALELO à alça, então o
+       resíduo é um deslocamento constante do tamanho da altura da alça — com
+       7,5 m de estilhaço, isso não decide nada. O que decidia era a zeragem
+       ANDAR entre tiros, e disso cuidam os dois asserts de ângulo acima.
+       25 cm reprova qualquer volta da zeragem (que dava 37,39 cm a 50 m). */
     const ruins = [];
     for (const t of r.t) for (const d of DISTS) {
-      if (t.erros[d] > TETO) ruins.push(`${d} m: ${(t.erros[d] * 100).toFixed(2)} cm`);
+      if (t.erros[d] > 0.25) ruins.push(`${d} m: ${(t.erros[d] * 100).toFixed(2)} cm`);
     }
     assert.equal(ruins.length, 0,
       `o foguete da ${r.nome} não passa onde a alça aponta:\n  ${ruins.join('\n  ')}`);
@@ -276,7 +296,12 @@ describe('o tiro sai onde a mira aponta, em VR (B3)', { skip: !CHROME && 'Chrome
       if (!b) return { semTiro: true, arma: g.name };
       const T = MP.THREE;
       const O = new T.Vector3().fromArray(b.origem);
-      const D = new T.Vector3().fromArray(b.dir).normalize();
+      /* A DIREÇÃO VEM DE `direcaoDoTiro()`, NÃO DE `b.dir`. O que o jogo passa
+         para a balística já carrega o SPREAD, que é dispersão deliberada da
+         arma e não erro de mira — medi-lo aqui reprovaria a arma por fazer o
+         que ela deve. O que este caso cobra é a decisão de mira; a origem,
+         essa é medida no vetor real. */
+      const D = new T.Vector3().fromArray(G.direcaoDoTiro()).normalize();
       const m = G.miraDoTiro();
       const mO = new T.Vector3().fromArray(m.origem);
       const mD = new T.Vector3().fromArray(m.direcao).normalize();

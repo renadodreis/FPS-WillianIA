@@ -31,8 +31,24 @@ export function createFpBody(deps) {
     fingersL: [0.8, 0.3, -0.4],
     elbowOut: 0.34,        // quão aberto o cotovelo fica (direção do pole)
     elbowDown: 0.5,
-    reachBend: 0.95,       // fração do alcance onde a mão chega: sobra dobra de cotovelo
-    clavMax: 0.45,         // extensão máxima da clavícula rumo à âncora (m)
+    /* Fração do alcance onde a mão chega: sobra dobra de cotovelo. É uma
+       RAZÃO, então atravessou o conserto de escala do braço sem recalibração —
+       e a prova é que a pose de VR passou a ser a MESMA do desktop: cotovelo
+       direito 145,51° → 143,07°, que é o número que o desktop já dava com a
+       clavícula estendida. Era um ângulo diferente porque o triângulo estava
+       inconsistente, não porque a calibração pedisse outro valor. */
+    reachBend: 0.95,
+    /* Extensão máxima da clavícula rumo à âncora, em metros de MUNDO — e
+       DELIBERADAMENTE fora da escala do avatar, ao contrário do resto da
+       calibração do corpo. Medido: escalá-la junto com o boneco (0,45 × 0,89 =
+       0,4025 m em VR) não muda NADA no braço direito, que nunca encosta neste
+       teto (ele para em `alcance × reachBend`), e afasta a mão ESQUERDA da
+       âncora em mais 0,048 m — 0,2992 → 0,3472 m na empunhadura de perto e
+       0,4428 → 0,4914 m na de longe. O braço esquerdo já não alcança o
+       guarda-mão em VR (ver o relatório da rodada: a âncora fica a 0,89–1,03 m
+       do ombro, contra 0,59 m de braço), e encurtar o único recurso que
+       compra alcance só piora o que já está no limite. */
+    clavMax: 0.45,
     /* AGACHAR ENCURTA A PERNA. O jogo baixa o olho de 1,62 m para 1,04 m
        (game.js, `eyeH`): 0,58 m é o tanto que a perna tem de encurtar para o
        pé continuar no chão quando o corpo desce junto com a câmera. Em VR
@@ -92,6 +108,12 @@ export function createFpBody(deps) {
   const _alvo = new THREE.Vector3(), _poloP = new THREE.Vector3(), _poloA = new THREE.Vector3();
   const _qf = new THREE.Quaternion(), _qf2 = new THREE.Quaternion();
   const _lenP = { a: 0, b: 0 };   // coxa/canela já na ESCALA DO MUNDO deste frame
+  /* BRAÇO E ANTEBRAÇO NA ESCALA DO MUNDO DESTE FRAME — e, ao mesmo tempo, a
+     única forma de medir de fora QUAL comprimento o solver alimentou na lei
+     dos cossenos. Sem esta leitura, "o IK pede um braço maior do que existe"
+     só dá para inferir; com ela o teste compara o número que entrou no solver
+     com a distância que os ossos realmente vencem no mundo. */
+  const alcanceUsado = { r: { a: 0, b: 0 }, l: { a: 0, b: 0 } };
   let legPairs = null; // montado uma vez, quando o rig fica pronto
   let legLen = null;   // { r: {a, b}, l: {a, b} } coxa/canela
   let pernaDobra = 0;  // quanto a perna encurta até o joelho chegar no limite (m)
@@ -119,8 +141,22 @@ export function createFpBody(deps) {
     .then(gltf => {
       const model = gltf.scene;
       prepRiggedMesh(model);
-      // normaliza a altura e pendura na câmera, ancorando pelo BOUNDING BOX
-      // (o pivô do GLB não é o pescoço — sem isto a câmera nasce dentro do peito)
+      /* normaliza a altura e pendura na câmera, ancorando pelo BOUNDING BOX
+         (o pivô do GLB não é o pescoço — sem isto a câmera nasce dentro do peito)
+
+         E ESTA LINHA É A ORIGEM MATERIAL DE UM DEFEITO QUE CUSTOU CARO, então
+         fica escrito: `setFromObject` num `SkinnedMesh` GRAVA o resultado em
+         `mesh.boundingBox`, e o three NUNCA invalida esse campo. Daqui em
+         diante, qualquer `Box3.setFromObject` sobre este corpo devolve a caixa
+         da pose que existia AGORA — a pose de bind —, por mais que os ossos se
+         mexam depois. `computeBoundingBox` do `SkinnedMesh` é ciente da pose
+         (passa por `applyBoneTransform`); quem congela é o cache, não o cálculo.
+
+         Aqui isso é CORRETO e proposital: o que se quer é a altura em repouso,
+         uma vez, para calcular a escala. O que não se pode é medir pose animada
+         por caixa depois disto — mede-se por OSSO (`bone.getWorldPosition`), e
+         foi por ignorar isso que três arquivos de teste desta base passaram a
+         medir a RAIZ acreditando medir os pés. */
       const box = new THREE.Box3().setFromObject(model);
       const h = box.max.y - box.min.y;
       const s = (TUNE.height / Math.max(h, 1e-3)) * TUNE.scale;
@@ -232,13 +268,22 @@ export function createFpBody(deps) {
 
   /* IK analítico de 2 ossos com dobra guiada por "pole" (cotovelo) */
   function solveArm(sh, up, fore, hand, len, targetPos, sideSign) {
+    /* O COMPRIMENTO QUE ENTRA NO SOLVER É O DESTE FRAME, não o do
+       carregamento. `armLen` foi medido com a raiz em escala 1; em VR a raiz
+       carrega a escala do avatar (js/xr/xrbody.js dimensiona o boneco pelo
+       jogador) e o solver trabalha em MUNDO. Ver `resolverPernas`: é o mesmo
+       defeito que deixava o joelho dobrado com o jogador de pé. */
+    const escala = bodyRoot.scale.x || 1;
+    const L = alcanceUsado[sideSign > 0 ? 'r' : 'l'];
+    L.a = len.a * escala;
+    L.b = len.b * escala;
     // clavícula: âncora além do alcance → o OMBRO estende rumo ao alvo até
     // sobrar dobra de cotovelo (o clamp sozinho deixava o braço reto e a mão
     // curta — a âncora de apoio fica a até ~1 m do ombro em várias armas)
     if (sh) {
       _v.copy(targetPos).sub(up.getWorldPosition(_v2));
       const need = Math.min(
-        Math.max(_v.length() - (len.a + len.b) * TUNE.reachBend, 0), TUNE.clavMax);
+        Math.max(_v.length() - (L.a + L.b) * TUNE.reachBend, 0), TUNE.clavMax);
       if (need > 1e-4) {
         _v.normalize().multiplyScalar(need);                 // delta em mundo
         sh.parent.getWorldQuaternion(_q).invert();
@@ -249,7 +294,7 @@ export function createFpBody(deps) {
     // pole: cotovelo pra fora/baixo em relação à câmera
     camera.getWorldQuaternion(_tq);
     _poloA.set(sideSign * TUNE.elbowOut, -TUNE.elbowDown, 0.05).applyQuaternion(_tq);
-    dobrar2Ossos(up, fore, hand, len, targetPos, _poloA);
+    dobrar2Ossos(up, fore, hand, L, targetPos, _poloA);
     // (o punho é alinhado depois por alignHand — eixo dos dedos + rolagem)
   }
 
@@ -529,6 +574,11 @@ export function createFpBody(deps) {
     /* quanto a perna consegue encurtar antes de o joelho passar do limite
        humano (metros, no espaço da raiz — em VR multiplique pela escala) */
     get pernaDobra() { return pernaDobra; },
+    /* QA: braço e antebraço que o solver ALIMENTOU na lei dos cossenos no
+       último frame, em metros de MUNDO. É o número que decide onde o cotovelo
+       e a mão param; comparar com a distância real entre os ossos é o que
+       separa "o IK acertou" de "o IK pediu um braço que não existe". */
+    get alcanceDoIK() { return alcanceUsado; },
     bones: B, TUNE, bodyRoot,
     /* inspeção: solta o corpo no mundo pra fotografar de fora (calibração) */
     debugDetach(x, y, z) {

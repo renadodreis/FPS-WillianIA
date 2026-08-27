@@ -520,6 +520,60 @@ describe('o radial que se vê (IWER, sessão imersiva real)', { skip: !CHROME &&
     assert.ok(custo <= 2, `o radial custou ${custo} draw calls no estéreo, mais de 1 por olho`);
   });
 
+  /* O CASO QUE FALTAVA, E É POR ELE QUE ESTE ARQUIVO INTEIRO PASSAVA POR
+     ACIDENTE. Validação independente comentou `scene.add(radial)` e este
+     arquivo ficou 11 de 12 VERDE — inclusive "ACENDE um objeto de MUNDO",
+     "medido nos pixels da textura" e "sair do VR limpa o disco da cena". O
+     motivo é que tudo aqui lia `visible` e a textura, e nada perguntava se o
+     objeto estava NO GRAFO DA CENA. Um objeto com `visible: true` fora da cena
+     não é desenhado por ninguém.
+     Foi a oitava ocorrência do padrão nesta base — e a primeira em que o furo
+     era o arquivo todo, não um assert. */
+  it('o disco está NO GRAFO DA CENA quando aberto — `visible` sozinho não desenha nada', async () => {
+    const r = await h.play(async () => {
+      const G = window.__game;
+      window.__A.botao('left', 'trigger', 1);
+      await window.__A.espera(160);
+      const e = G.XRInterage.estado().radial;
+      let achou = false;
+      window.__MP.scene.traverse(o => { if (o === G.XRInterage.radial) achou = true; });
+      window.__A.botao('left', 'trigger', 0);
+      await window.__A.espera(240);
+      return { naCena: e.naCena, visivel: e.visivel, noGrafo: achou };
+    });
+    assert.equal(r.noGrafo, true,
+      'o disco não está no grafo da cena — com `visible: true` e sem pai, ninguém o desenha');
+    assert.equal(r.naCena, true, 'o estado do módulo não sabe que o disco está na cena');
+    assert.equal(r.visivel, true, 'o disco aberto tem de estar visível E na cena');
+  });
+
+  /* SEGUNDA SESSÃO — o defeito que este arquivo não pegava porque nunca entrava
+     em VR duas vezes. `exit()` tira o disco da cena sem descartá-lo, e a versão
+     anterior de `montarRadial()` saía cedo por `if (radial) return`: a partir da
+     segunda entrada o disco existia, reportava-se visível, e nunca mais voltava
+     para a cena. O mesmo valia para o marcador de interação — ou seja, o
+     destaque dos baús sumia para o resto da sessão. */
+  it('depois de sair e VOLTAR ao VR, o disco volta para a cena', async () => {
+    const r = await h.play(async () => {
+      const G = window.__game;
+      await G.XR.exit();
+      await window.__A.espera(400);
+      await G.XR.enter();
+      await window.__A.espera(700);
+      window.__A.botao('left', 'trigger', 1);
+      await window.__A.espera(200);
+      const e = G.XRInterage.estado().radial;
+      let achou = false;
+      window.__MP.scene.traverse(o => { if (o === G.XRInterage.radial) achou = true; });
+      window.__A.botao('left', 'trigger', 0);
+      await window.__A.espera(240);
+      return { noGrafo: achou, naCena: e.naCena };
+    });
+    assert.equal(r.noGrafo, true,
+      'na SEGUNDA sessão o disco não voltou para a cena — o menu some para o resto da partida');
+    assert.equal(r.naCena, true, 'o estado mente sobre o disco estar na cena na segunda sessão');
+  });
+
   it('sair do VR limpa o disco da cena (nada de menu flutuante no desktop)', async () => {
     const r = await h.play(async () => {
       await window.__R.abrir();

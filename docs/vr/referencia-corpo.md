@@ -305,7 +305,163 @@ movimento.
 
 ---
 
-## 5. O que este documento NÃO fecha
+## 5. O BRAÇO QUE O IK PEDIA — o mesmo defeito de escala, do outro lado do corpo
+
+Quem consertou a perna (§4) registrou o risco em vez de mexer nele: *"`armLen`
+tem o mesmo defeito de escala que eu consertei na perna"*. Esta seção mede a
+suspeita, confirma e fecha.
+
+### 5.1 O defeito, medido dentro da sessão
+
+Sessão IWER, headset a 1,70 m, fuzil na mão. Ossos lidos no MUNDO por
+`bone.getWorldPosition` num gancho no `FpBody.update`, **depois** do solver do
+frame — nunca por `Box3` (armadilha do §4.5).
+
+| medida (escala da raiz do boneco = 0,89455) | antes |
+|---|--:|
+| braço+antebraço que os ossos vencem no mundo | 0,5881 m |
+| braço+antebraço alimentado na lei dos cossenos | **0,6574 m (+11,79 %)** |
+| raiz do braço → empunhadura, já com a clavícula estendida | **0,6245 m** |
+| mão do boneco → empunhadura (direita) | **0,0639 m** |
+| ângulo do cotovelo direito | 145,51° |
+
+A terceira linha é a que não fecha: a raiz do braço parou a **0,6245 m** da
+empunhadura e o braço vence **0,5881 m**. Sobram 0,0365 m que nenhuma dobra de
+cotovelo resolve — **o alvo estava fora de alcance por construção.**
+
+**O CONTROLE que fecha o diagnóstico.** Mesmo código, mesma arma, no desktop,
+com a raiz em escala 1: pedido = real = 0,6574 m e a mão a **0,0000 m** da
+empunhadura, nas duas mãos. Não é o IK; é a escala.
+
+### 5.2 Por que a clavícula piora em vez de salvar
+
+`solveArm` estende a clavícula até a raiz do braço ficar a
+`alcance × reachBend` do alvo (0,95). Com o alcance FALSO ela mira 0,6245 m e
+**para de estender ali** — exatamente fora do alcance verdadeiro. É por isso
+que o erro medido (0,0639 m) é maior que o excesso de alcance (0,0365 m): o
+solver ainda gasta parte do que resta dobrando o cotovelo com um triângulo
+inconsistente. A assinatura é estável e não depende da pose: em duas
+empunhaduras diferentes a raiz parou no MESMO 0,6245 m, porque esse número é
+`alcance pedido × reachBend` e nada mais.
+
+### 5.3 O conserto, e por que é o mesmo da perna
+
+Uma linha de geometria, não de calibração: `armLen` é medido no carregamento
+com a raiz em escala 1, o solver trabalha em METROS DE MUNDO, e em VR a raiz
+carrega a escala do avatar (`js/xr/xrbody.js`, §3.3). Então o comprimento entra
+no solver multiplicado pela escala DAQUELE frame — que é o que
+`resolverPernas` já fazia com a coxa e a canela desde o §4.
+
+### 5.4 O resultado
+
+| medida (headset 1,70 m, escala 0,89455) | antes | depois |
+|---|--:|--:|
+| comprimento alimentado no solver | 0,6574 m | **0,5881 m** (= o osso) |
+| raiz do braço → empunhadura | 0,6245 m | **0,5587 m** (= 0,95 × alcance real) |
+| **mão direita → empunhadura** | **0,0639 m** | **0,0000 m** |
+| ângulo do cotovelo direito | 145,51° | **143,07°** |
+| ombro direito → olho do jogador | 0,3775 m | 0,3989 m |
+| âncora da empunhadura no mundo | (0,5100; 4,1577; 3,4118) | (0,5100; 4,1580; 3,4121) |
+
+Duas leituras dessa tabela valem mais que as outras:
+
+- **A ARMA NÃO SE MEXEU.** A âncora da empunhadura está no mesmo ponto do
+  mundo, a menos de 0,3 mm (jitter da suavização). Quem andou foi a MÃO DO
+  BONECO, até a arma. Era o risco óbvio do conserto — puxar a arma para o
+  corpo em vez de levar o corpo até a arma — e não aconteceu.
+- **O cotovelo de VR virou o cotovelo do desktop.** 143,07° é exatamente o
+  número que o desktop dá na mesma situação (clavícula estendida, mão no limite
+  de `reachBend`). A pose de VR passou a ser uma cópia em escala da pose que
+  foi calibrada por screenshot — que é a definição de "a escala agora está
+  certa".
+
+O conserto não é calibrado para uma altura só: com o headset a 2,05 m
+(escala 1,079, do OUTRO lado de 1, onde o defeito antigo pedia um braço mais
+CURTO do que existe) o pedido continua batendo com o osso e a mão continua na
+empunhadura. Está no `test/xr-braco-alcance.test.js`.
+
+### 5.5 `reachBend` e `clavMax`: um não precisou de nada, o outro foi medido
+
+- **`reachBend` = 0,95 não mudou, e a prova é o cotovelo.** É uma RAZÃO, então
+  atravessa uma mudança de escala sem recalibração. O ângulo do cotovelo em VR
+  saiu de 145,51° e foi para os 143,07° do desktop: o ângulo estava diferente
+  porque o triângulo estava inconsistente, não porque a calibração pedisse
+  outro valor.
+- **`clavMax` = 0,45 m fica em metros de MUNDO, fora da escala do avatar — e
+  isso foi medido, não presumido.** Escalá-la junto com o boneco (0,4025 m em
+  VR) não muda NADA no braço direito, que nunca encosta nesse teto, e afasta a
+  mão ESQUERDA da âncora em mais 0,048 m: 0,2992 → 0,3472 m numa empunhadura e
+  0,4428 → 0,4914 m na outra. O braço esquerdo já é o que não alcança (§5.6);
+  encurtar o único recurso que compra alcance só piora o que está no limite.
+
+### 5.6 O que este conserto NÃO resolve: o braço ESQUERDO
+
+Medido, e fica registrado como está: a mão esquerda do boneco continua a
+**0,2992 m** da âncora de apoio (0,4428 m na empunhadura mais esticada), o
+mesmo número de antes do conserto. A causa é outra e é aritmética simples: a
+âncora `supportHand` do fuzil fica **0,5508 m** à frente da empunhadura (é o
+vão entre as duas mãos no modelo da arma), o que a deixa a **0,89–1,03 m** do
+ombro esquerdo do boneco, contra **0,5881 m** de braço mais **0,45 m** de
+clavícula. A clavícula esquerda trabalha NO TETO e o cotovelo fica a 175,8° —
+braço reto e ainda curto.
+
+**Ressalva honesta sobre este número:** não consegui manter a arma NIVELADA no
+kit emulado durante a amostra — o cano lia (0; 0; −1) no instante em que o
+controle era posto e (0,086; 0,707; −0,702) dentro do `FpBody.update` do mesmo
+frame, e pousar a mão esquerda sobre a âncora engata a mira de duas mãos, que
+move a âncora de novo (laço). Com a arma apontada 45° para cima a âncora de
+apoio sobe junto, então **0,2992 m é o que dá para medir hoje, não um veredito
+sobre a pose real de tiro.** O que NÃO depende da orientação é a aritmética
+acima: 0,5508 m de vão de arma + o ombro esquerdo do lado errado do corpo não
+cabem em 0,5881 m de braço.
+
+E há um ponto de desenho por trás disso, que não é deste módulo: **em VR a mão
+esquerda do boneco mira a âncora da ARMA, não o CONTROLE ESQUERDO do jogador.**
+Enquanto o jogador segura o guarda-mão os dois coincidem; assim que ele solta,
+a mão do boneco continua agarrada a um ponto onde a mão dele não está.
+`js/xr/xrweapon.js` já sabe se o apoio está engatado (`APOIO_PEGA` /
+`APOIO_SOLTA`, com histerese) — é a informação que falta chegar em
+`js/fpbody.js`.
+
+### 5.7 Fontes desta seção
+
+- **Lei dos cossenos para membro de dois ossos:**
+  [Alan Zucconi, *Inverse Kinematics for 2-bone limbs*](https://www.alanzucconi.com/2018/05/02/ik-2/)
+  — `cos(α) = (b² + c² − a²) / (2bc)`, com `b` = distância até o alvo. **A
+  página NÃO trata alvo fora de alcance nem `d < |a−b|`**: os dois clamps de
+  `dobrar2Ossos` são deste repositório, e o segundo veio da perna (§4).
+- **Analítico vs. heurístico:** [Inverse kinematics
+  (Wikipédia)](https://en.wikipedia.org/wiki/Inverse_kinematics) — *"An
+  analytic solution … is a closed-form expression that takes the end-effector
+  pose as input and gives joint positions as output"*, e *"Analytical inverse
+  kinematics solvers can be significantly faster than numerical solvers and
+  provide more than one solution, but only a finite number of solutions, for a
+  given end-effector pose."* **O artigo não discute alvo inalcançável nem o
+  volume de trabalho do membro** — a ressalva do §4.2 continua valendo.
+- **A caixa de um `SkinnedMesh` não reflete a pose:** fonte do three 0.185.1,
+  `SkinnedMesh.computeBoundingBox` — *"If the skinned mesh is animated, the
+  bounding box should be recomputed per frame in order to reflect the current
+  animation state."* É por isso que todo número desta seção sai de osso.
+- **Proporção de braço humano:** [Body proportions
+  (Wikipédia)](https://en.wikipedia.org/wiki/Body_proportions) — *"An average
+  person is generally 7-and-a-half heads tall (including the head)"*, *"arms
+  measure to about three heads long"*, *"hands are as long as the face"*. Serve
+  só como faixa de plausibilidade: o braço do rig mede 0,313 da altura do
+  boneco (ombro→punho), e a referência, lida em cabeças, dá algo entre 0,27
+  (ombro→punho) e 0,40 (ombro→ponta do dedo). **Está dentro da faixa** — ou
+  seja, o osso não é o problema, o número que entrava no solver é que era.
+- **Diretriz da Meta sobre comprimento de braço / IK de avatar em primeira
+  pessoa:** *não encontrado nesta rodada.* As URLs de design de mãos
+  (`developers.meta.com/horizon/design/hands-design-intro/`,
+  `.../hands-hand-tracking`) e a de visão geral dos Meta Avatars devolveram 404
+  ou não tratam do assunto, e o orçamento de busca da sessão estava esgotado.
+  Nenhuma decisão desta seção depende disso: o critério usado é geométrico
+  (o comprimento que entra no solver tem de ser o comprimento que os ossos
+  vencem), não ergonômico.
+
+---
+
+## 6. O que este documento NÃO fecha
 
 - **C4 (escala 1:1 do MUNDO)**: medido nesta rodada e **fora da posse desta
   frente**. Em metros, dentro da sessão: carro **3,586 m** de comprimento
@@ -317,3 +473,15 @@ movimento.
 - **Travar altura se o corpo virar hitbox de rede** (Contractors): hoje a
   altura do headset não muda hitbox, então não é vetor de trapaça — vira, se um
   dia o corpo em VR for o que os outros enxergam.
+- **O braço ESQUERDO alcançar o guarda-mão** (§5.6): medido, explicado e NÃO
+  resolvido. Depende de o `js/fpbody.js` saber o que o `js/xr/xrweapon.js` já
+  sabe (se a mão de apoio está engatada) — e disso ele só fica sabendo por
+  fiação no `game.js`, que é de outra posse.
+- **A ORDEM DENTRO DO FRAME em XR:** `FpBody.update` roda dentro do
+  `applyFpsCamera` (game.js:2113), e o `XRArma.aplicar` que reposiciona a arma
+  no controle roda DEPOIS (game.js:3769). Ou seja, em XR os braços do boneco
+  são resolvidos contra a pose da arma do frame ANTERIOR. Parado o erro é zero
+  (medido: 0,0000 m), então não é o defeito do §5 — mas com a arma em
+  movimento é um frame de atraso da mão em relação à arma. Consertar é mover
+  uma chamada no `game.js`; medir antes, porque a ordem tem contrato escrito
+  logo acima dela.

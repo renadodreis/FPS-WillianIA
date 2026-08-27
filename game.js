@@ -2306,9 +2306,15 @@ const _miraOrigDoTiro = new THREE.Vector3(), _miraDirDoTiro = new THREE.Vector3(
    disparo mede o RECUO — numa automática ele já subiu quase um grau quando a
    sonda chega, e 0,88° a 10 m são 15 cm de "defeito" que não existe. */
 const _canoDirDoTiro = new THREE.Vector3();
+const _canoPosDoTiro = new THREE.Vector3();
 const _qCanoQA = new THREE.Quaternion();
 function marcarCanoQA() {
   _canoDirDoTiro.set(0, 0, -1).applyQuaternion(muzzle.getWorldQuaternion(_qCanoQA));
+  /* A POSIÇÃO TAMBÉM CONGELA. Ler `canoMundo()` depois do disparo mede o
+     COICE: a bazuca tem o mais pesado do arsenal e move a boca dezenas de
+     centímetros em meio segundo. Medir a origem do tiro contra a boca de
+     DEPOIS já produziu um "defeito" de 42 cm que não existia. */
+  muzzle.getWorldPosition(_canoPosDoTiro);
 }
 /* Registra o que ESTE disparo usou. Tem que ser chamada em TODO ramo de
    `fire()` que dá `return` cedo: a faca e a bazuca saíam antes da linha de
@@ -2403,8 +2409,23 @@ function fire(t) {
     /* EM XR O FOGUETE NASCE NA LINHA DE MIRA, pelo mesmo motivo do hitscan e do
        projétil do BR: origem no tubo com direção da alça deixa um erro
        CONSTANTE do tamanho da altura da alça, e erro de origem não fecha em
-       distância nenhuma. No monitor continua saindo do tubo. */
-    const origemFoguete = XR.presenting ? _rayOrig : _v3;
+       distância nenhuma. No monitor continua saindo do tubo.
+
+       CORREÇÃO, e ela inverte a decisão acima PARA O FOGUETE. Pôr a origem na
+       linha de mira funciona para hitscan e para projétil invisível, mas não
+       para um foguete: medido, a origem ficava de 0,46 a 0,91 m ATRÁS da boca, e
+       com o tubo atravessando uma parede o foguete detonava a 0,390 m da cabeça
+       — 42 de dano no próprio jogador, onde antes era zero. A causa é o coice: a
+       bazuca tem o mais pesado do arsenal, e sob recuo a linha de mira (que sai
+       da mão) e o cano (que sai da arma) divergem, então a projeção de um no
+       outro anda.
+
+       O FOGUETE NASCE NA BOCA E VOA PARALELO À LINHA DE MIRA. Origem exata (o
+       jogador vê sair do tubo, e nada detona na cara dele), sem zeragem
+       nenhuma (que era o defeito original), e o resíduo é um deslocamento
+       CONSTANTE do tamanho da altura da alça — irrelevante num projétil com
+       7,5 m de estilhaço. É o que o gênero faz com projétil visível. */
+    const origemFoguete = _v3;
     Rockets.fire(origemFoguete, _rayDir);
     marcarTiroQA(origemFoguete, _rayDir);
     return;
@@ -2992,6 +3013,33 @@ const XRInterage = createXrInteract({
   cabecaXR: alvo => (XR.presenting ? XR.headWorldPosition(alvo) : null),
   foraXR: () => (XR.presenting ? XR.foraDoCorpo : 0),
 });
+/* SONDA DE SÓLIDO NA CABEÇA — o `_head_shape_cast` do Godot XR Tools, que é o
+   gatilho PRIMÁRIO do fade de lá (`max_head_distance` é só o batente). Sem ela,
+   DEBRUÇAR sobre um parapeito (0,3–0,6 m de cabeça adiante do corpo) e ENFIAR a
+   cabeça na parede (0,3–1,0 m) são o mesmo número, e nenhum limiar de distância
+   os separa — o que os separa é o mundo. Ver docs/vr/referencia-locomocao.md §7.3.
+
+   `Structures.collide` JÁ É essa consulta: uma esfera de cabeça e ombros na
+   altura do olho, e o empurrão que ela sofre é a proximidade do sólido (e a
+   direção dele). A fatia de 0,24 m centrada no olho é o que faz o `collide`
+   ignorar parapeito — a linha `pos.y >= by1 - 0.12` dele.
+
+   SÓ RODA COM O MUNDO RECUSANDO PASSO (`foraDoCorpo >= 0,10 m`): abaixo disso a
+   cortina é zero de qualquer jeito (ela só começa em 0,16 m), então a varredura
+   de paredes não acontece em jogo normal. */
+const _cabSondaXR = new THREE.Vector3();
+function sondaDeSolidoXR() {
+  if (!XR.presenting || XR.foraDoCorpo < 0.10) return undefined;
+  XR.headWorldPosition(_cabSondaXR);
+  const x0 = _cabSondaXR.x, z0 = _cabSondaXR.z;
+  _cabSondaXR.y -= 0.12;
+  Structures.collide(_cabSondaXR, 0.25, 0.24);
+  const dx = _cabSondaXR.x - x0, dz = _cabSondaXR.z - z0;
+  const m = Math.hypot(dx, dz);
+  // a direção útil aponta da cabeça PARA o sólido: o oposto do empurrão
+  return m > 1e-6 ? { m, x: -dx / m, z: -dz / m } : { m: 0, x: 0, z: 0 };
+}
+
 /* PAINEL E HUD DENTRO DO MUNDO. O menu, as opções e o HUD são DOM, e DOM não
    existe dentro de uma sessão imersiva: com o aparelho na cara não havia como
    pausar, mudar o conforto ou sair da partida. */
@@ -3553,8 +3601,17 @@ function tick(forceDt) {
     /* GIRO: contínuo por padrão, em passos por opção do jogador
        (js/xr/xrturn.js explica por que o padrão diverge do "default to snap"
        da Meta). O pivô é a cabeça, e isso é do rig. */
-    // com o painel aberto o yaw não pode acumular invisível e saltar ao retomar
-    const giroXR = XR.giro.atualizar(dt, ui3d.capturando ? 0 : eixoDeGiro(fontes));
+    /* O RADIAL SUSPENDE O GIRO, e esta linha é onde isso vale. O
+       `js/xr/xrinput.js` já zera `cmd.girar` com o menu aberto — só que NINGUÉM
+       lê `cmd.girar`: o giro sai de `eixoDeGiro(fontes)`, direto das fontes, e
+       passava por cima da suspensão. Medido por validação independente: girando
+       com o radial aberto, o disco ia parar a 101,05° do eixo da vista, porque
+       ele congela no mundo (é o que a Meta manda fazer) e a vista girava por
+       baixo dele.
+       Com o painel aberto o yaw também não pode acumular invisível e saltar ao
+       retomar — é a mesma família de defeito, e a mesma linha resolve as duas. */
+    const menuAberto = ui3d.capturando || (cmd && cmd.radial && cmd.radial.aberto);
+    const giroXR = XR.giro.atualizar(dt, menuAberto ? 0 : eixoDeGiro(fontes));
     xrYaw = XR.giro.yaw;
     /* A vinheta tem que ser DESLIGÁVEL, e desligar de verdade: zerar as
        entradas não bastaria, porque a esfera continuaria no caminho do render. */
@@ -3579,7 +3636,7 @@ function tick(forceDt) {
        seria espiar por parede). O colisor agora PARA na parede (js/xr/xrrig.js);
        sem este escurecimento o jogador ficaria com a vista do lado de lá sem
        sinal nenhum. */
-    XR.conforto.intrusao(dt, XR.foraDoCorpo);
+    XR.conforto.intrusao(dt, XR.foraDoCorpo, sondaDeSolidoXR());
     /* PAINEL ABERTO NÃO JOGA. Sem esta guarda, o gatilho que escolhe "SAIR DA
        PARTIDA" dispara um tiro no mesmo frame, e o analógico do menu anda com o
        jogador no mundo. Soltar as teclas presas é parte do acordo: sair da
@@ -4479,6 +4536,7 @@ window.__game = {
   /* a mesma coisa, congelada no instante do tiro: é esta que vale para medir
      alinhamento, porque a outra já viu o recuo */
   canoDoTiro: () => _canoDirDoTiro.toArray(),
+  canoPosDoTiro: () => _canoPosDoTiro.toArray(),
   origemDoTiro: () => _origemDoTiro.toArray(),
   direcaoDoTiro: () => _direcaoDoTiro.toArray(),
   miraDoTiro: () => ({ origem: _miraOrigDoTiro.toArray(), direcao: _miraDirDoTiro.toArray() }),

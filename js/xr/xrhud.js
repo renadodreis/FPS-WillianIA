@@ -383,7 +383,10 @@ export function createXrHud({
         const glifoPx = chave === 'arma' ? 108 * 0.72 : chave === 'mapa' ? 3 * (256 / cvH) : 44 * 0.72;
         out[chave] = {
           nome: p.obj.name,
-          visivel: !!p.obj.visible,
+          /* mesma lição do js/xr/xrinteract.js: `visible` true com o objeto
+             fora do grafo é "visível" que ninguém vê */
+          visivel: !!(p.obj.visible && p.obj.parent),
+          naCena: !!p.obj.parent,
           temPai: !!p.obj.parent,
           paiNome: p.obj.parent ? p.obj.parent.name : null,
           pos: pos.toArray(),

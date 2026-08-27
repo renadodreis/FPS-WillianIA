@@ -207,13 +207,36 @@ describe('de onde se mede o alcance de interação', { skip: !CHROME && 'Chrome 
         `0,60 m de cabeça com 0,25 m recusado devia dar 0,35 m e deu ${r.pos[0].toFixed(4)}`);
     });
 
+    /* O CASO QUE ISOLA O DESCONTO — e ele existe porque validação independente
+       provou que o caso de SESSÃO do baú (lá embaixo) fica VERDE com o desconto
+       arrancado: quem o segurava era o TETO de 0,35 m, não o desconto, e a
+       afirmação escrita nele era falsa. Aqui a separação fica ABAIXO do teto,
+       então o teto não pode salvar: se o desconto sumir, a régua anda e o caso
+       morre. Foi a oitava ocorrência de "teste que passa por acidente" nesta
+       base — a primeira em que o furo era de um caso inteiro, não de um assert. */
+    it('ABAIXO do teto, quem segura a régua é o DESCONTO — não o teto', async () => {
+      const r = await h.play(async () => {
+        const m = await import('/js/interact.js');
+        return { teto: m.TETO_FORA, ...(await window.__L.regua([0, 1, 0], [0.30, 1.7, 0], 0.30)) };
+      });
+      assert.ok(0.30 < r.teto,
+        `este caso só vale com a separação (0,30 m) ABAIXO do teto (${r.teto} m); ajuste os números se o teto mudar`);
+      assert.ok(Math.abs(r.pos[0]) < 1e-6,
+        `0,30 m de cabeça com 0,30 m recusado devia deixar a régua no corpo e ela andou ${r.pos[0].toFixed(4)} m — ` +
+        'sem o desconto, o teto sozinho deixaria passar os 0,30 m inteiros');
+    });
+
     it('há um TETO absoluto, para separação que o `fora` não explique', async () => {
       const r = await h.play(() => window.__L.regua([0, 1, 0], [2.5, 1.7, 0], 0));
       assert.ok(Math.abs(r.pos[0] - r.teto) < 1e-6,
         `2,50 m de cabeça sem recusa devia parar no teto de ${r.teto} m e parou em ${r.pos[0].toFixed(4)}`);
-      assert.ok(r.teto > 0.13 && r.teto < 0.50,
-        `o teto de ${r.teto} m tem de ficar acima do pico de encosto de parede (0,133 m) e ` +
-        'abaixo do ponto em que a tela já está preta (FORA_MAX = 0,50 m)');
+      /* O NÚMERO DA DIREITA MUDOU e o motivo fica escrito: `FORA_MAX` era 0,50 m
+         quando era limiar de CONFORTO; virou 0,32 m quando foi recalculado pela
+         geometria (colisor r=0,42 + near 0,08 = o outro lado aparece em 0,34 m).
+         Com isso o teto de alcance passou a ficar ACIMA do ponto de preto, e
+         isso é mais restritivo, não menos: no alcance máximo a tela já fechou. */
+      assert.ok(r.teto > 0.13 && r.teto < 0.60,
+        `o teto de ${r.teto} m tem de ficar acima do pico de encosto de parede (0,133 m)`);
     });
 
     it('sem saber quanto foi recusado, assume que foi TUDO (padrão seguro)', async () => {

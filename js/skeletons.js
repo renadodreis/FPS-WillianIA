@@ -317,10 +317,20 @@ export function createSkeletons(deps) {
        correção de espaço de bind: este GLB traz uma skin por submalha, com
        `inverseBindMatrices` diferentes apesar da MESMA lista de 37 ossos).
 
-       DEPOIS do `box` acima de propósito: `Box3.setFromObject` lê a posição
-       CRUA dos vértices (não a skinada), e a correção de bind reescreve
-       essa posição crua. Fundir antes mudaria `size.y` e, com ele, a escala
-       e a altura de todo esqueleto do mapa. */
+       DEPOIS do `box` acima de propósito, e o MOTIVO ESTAVA ESCRITO ERRADO
+       aqui — corrigido depois de ler o three r185 linha a linha.
+       `SkinnedMesh.computeBoundingBox` É ciente da pose: ele passa por
+       `getVertexPosition` → `applyBoneTransform` e usa `bones[].matrixWorld`.
+       O que acontece de verdade é CACHE: `Box3.expandByObject` usa
+       `object.boundingBox` quando ela já existe, e só a computa quando é
+       `null` — depois disso ela NUNCA é invalidada, nem quando a pose muda.
+       Então a caixa congela na primeira pose em que alguém a pediu.
+       Aqui isso continua sendo a ordem certa: a correção de bind reescreve a
+       posição de bind, e fundir antes mudaria `size.y` e, com ele, a escala e
+       a altura de todo esqueleto do mapa. O que muda é a explicação — e ela
+       importa, porque quem lesse "posição crua" concluiria que basta repor a
+       pose antes de medir, quando o que é preciso é INVALIDAR a caixa
+       (`mesh.boundingBox = null`) ou medir por OSSO. */
     const fundido = fundirPorAtlas(proto, { boundsFactor: 2.1 });
     if (!fundido) console.warn('[esqueletos] atlas recusado: as submalhas voltaram a custar uma draw call cada');
     /* PERF: o rig vinha com frustumCulled=false e seus 4 meshes eram enviados

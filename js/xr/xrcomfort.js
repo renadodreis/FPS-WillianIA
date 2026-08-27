@@ -86,6 +86,10 @@ export const LIMITES = {
      derrubou A4 quando os perfis rápidos ficaram alcançáveis. */
   andarPadraoMax: 2.0,
   correrPadraoMax: 4.0,
+  /* C2 · separação horizontal máxima entre a câmera e o centro do colisor.
+     Cumprido em jogo normal (0,0083 m em 3840 frames da receita canônica) e
+     ROMPIDO de propósito com a cabeça dentro de sólido — ver a exceção C2. */
+  separacaoM: 0.10,
 };
 
 /* EXCEÇÕES DECLARADAS.
@@ -158,6 +162,44 @@ export const EXCECOES = [{
      PC" não tem o argumento de equilíbrio competitivo que sustenta esta
      exceção — ele é só uma rampa longa —, e volta a responder por A4. */
   vale: eParidadeInteira,
+}, {
+  criterio: 'C2',
+  limite: 'separacaoM',
+  /* ESCOPO. A exceção de A4 vale para um PERFIL de locomoção; esta vale para
+     uma SITUAÇÃO, e `perfil: null` é explícito para que `excecaoDe` — que casa
+     por perfil — não possa alcançá-la por acidente com um plano forjado. */
+  perfil: null,
+  situacao: 'cabeça dentro de sólido',
+  porque:
+    'A6 GANHA DE C2 QUANDO OS DOIS NÃO CABEM, e eles não cabem quando o '
+    + 'jogador anda fisicamente para dentro de uma parede que não existe no '
+    + 'quarto dele. C2 quer o colisor debaixo da cabeça (<= 0,10 m); A6 proíbe '
+    + 'arrastar a vista ("The display should respond to the user movements '
+    + 'at all times, without exception"). Com a parede segurando o corpo, uma '
+    + 'das duas tem de ceder. Ceder A6 já foi medido nesta base: 3,00 m de '
+    + 'caminhada real moviam a vista 0,82 m e depois nada — é a coisa que mais '
+    + 'rápido enjoa, porque o corpo diz que andou e o olho diz que não. Ceder '
+    + 'C2 custa separação, e a separação é PAGA NA TELA: a cortina de intrusão '
+    + 'fecha antes de o outro lado aparecer, então o jogador nunca converte a '
+    + 'separação em vantagem. É o `head_behavior_mode: Fade` do Godot XR '
+    + 'Tools, que é o DEFAULT de lá, e a alternativa ("push away") é '
+    + 'exatamente empurrar o rig, que A6 proíbe.',
+  custo:
+    'Com a cabeça dentro de sólido a separação passa de 0,10 m e vai até o '
+    + 'teto de 1,00 m (`max_head_distance` do Godot). Em jogo normal o custo é '
+    + 'zero — 0,0083 m no pior dos 3840 frames da receita canônica de C2, e a '
+    + 'cortina não acende em frame nenhum. Acima do teto a vista congela, o '
+    + 'que é a letra de A6; o excedente vira dívida e é pago na volta, e a '
+    + 'tela está preta desde 0,32 m, três vezes antes do teto.',
+  /* A AMARRA, EM CÓDIGO. A exceção inteira se apoia em "o jogador não vê o
+     outro lado" e em "a vista só congela com a tela preta". As duas viram
+     desigualdade: a cortina tem de fechar ANTES do ponto de vazamento
+     (raio do colisor − near) e em, no máximo, METADE do teto de separação.
+     Quem mexer em `FORA_MAX`, no raio do colisor, no near ou no teto perde a
+     exceção sozinho, sem depender de alguém lembrar. */
+  vale: g => !!g && Number.isFinite(g.pretoEm) && Number.isFinite(g.vazaEm)
+    && Number.isFinite(g.teto)
+    && g.pretoEm <= g.vazaEm && g.pretoEm <= g.teto * 0.5,
 }];
 
 function excecaoDe(criterio, plano, lista) {
@@ -173,17 +215,59 @@ void main() {
 }`;
 
 /* O alpha cresce com o ângulo em relação ao centro da vista. `abertura` é o
-   cosseno do ângulo onde o escuro começa: 1 = fecha tudo, -1 = aberto. */
+   cosseno do ângulo onde o escuro começa: 1 = fecha tudo, -1 = aberto.
+
+   TRÊS CANAIS NA MESMA MALHA, e eles são três porque são três coisas
+   diferentes acontecendo com o jogador:
+
+   · `abertura` — o TÚNEL de andar/girar. Conforto, desligável no painel.
+   · `escuro`   — a PISCADA do giro em passos. Conforto, tela inteira, 80 ms.
+   · `parede`   — a CORTINA de intrusão: a cabeça está entrando em sólido.
+                  Não é conforto, é integridade do mundo, e não desliga.
+
+   A CORTINA FECHA PELO LADO DA PAREDE. `ladoParede` é a direção do sólido em
+   espaço de VISTA (a malha é filha da câmera, então o espaço local dela É o
+   da vista). O escuro nasce onde o sólido está e varre até fechar tudo: quem
+   está lá dentro vê de que lado veio o problema e para onde voltar. Preto liso
+   e instantâneo não informa nada — a leitura de quem está de headset é "a tela
+   apagou". Sem direção (`ladoParede` = 0) a cortina é uniforme, que é o
+   comportamento antigo e o padrão de quem não fia a sonda.
+
+   E A GRADE. Sobre o escuro, linhas fracas no estilo da grade de limite de
+   área do sistema — o único vocabulário de "barreira" que todo jogador de
+   Quest já sabe ler sem manual. O alpha continua 1 (o mundo continua ocluso;
+   integridade não muda); só a COR deixa de ser preto liso. A grade acende
+   com a cortina e SÓ com ela: túnel e piscada são conforto, não barreira. */
 const FRAG = `
 varying vec3 vDir;
 uniform float abertura;
 uniform float escuro;
+uniform float parede;
+uniform float grade;
+uniform vec3 ladoParede;
 void main() {
-  float c = -normalize(vDir).z;                 // 1 no centro da vista
+  vec3 d = normalize(vDir);
+  float c = -d.z;                               // 1 no centro da vista
   float borda = smoothstep(abertura, abertura - 0.35, c);
-  float a = max(borda, escuro);
+
+  // frente de escuro: +1.4 = nada; -1.4 = esfera inteira
+  float ll = dot(ladoParede, ladoParede);
+  float temLado = step(1e-4, ll);
+  vec3 ld = ladoParede * inversesqrt(max(ll, 1e-4));
+  float lado = dot(d, ld);
+  float frente = mix(1.4, -1.4, parede);
+  float cortina = mix(parede, smoothstep(frente - 0.30, frente + 0.30, lado), temLado);
+
+  float a = max(max(borda, escuro), cortina);
   if (a <= 0.001) discard;
-  gl_FragColor = vec4(0.0, 0.0, 0.0, a);
+
+  // grade de limite: meridianos e paralelos finos sobre o escuro da cortina
+  vec2 g = vec2(atan(d.x, -d.z), asin(clamp(d.y, -1.0, 1.0))) * 3.8;
+  vec2 gg = abs(fract(g) - 0.5);
+  float linha = 1.0 - smoothstep(0.03, 0.09, min(gg.x, gg.y));
+  vec3 cor = vec3(0.10, 0.55, 0.75) * (linha * grade * cortina);
+
+  gl_FragColor = vec4(cor, a);
 }`;
 
 /* Faixa do túnel de GIRO, em graus por segundo: abaixo de GIRO_MIN nada
@@ -218,13 +302,74 @@ const PISCADA_S = 0.08;   // ~80 ms, o tempo de um piscar de olhos
    O default é 1 = **Fade**, e a outra opção ("push away") é justamente
    empurrar o rig, que aqui é proibido. O fade de lá sobe a `delta * 3.0`.
 
-   Os dois limiares saem de medida, não de gosto: a separação em uso normal
-   foi medida em 0,0131 m no pior de 1799 frames da receita de sala, e o
-   encosto de parede pica em 0,133 m (validação de `fa9ed86`). Começar a
-   escurecer em 0,20 m deixa o uso normal e o encosto de leve intocados;
-   0,50 m é a cabeça do outro lado de uma parede de jogo. */
-const FORA_MIN = 0.20, FORA_MAX = 0.50;
+   ---------------------------------------------------------------
+   OS LIMIARES SAEM DA GEOMETRIA, e é esta a correção desta rodada.
+
+   Os anteriores (0,20 → 0,50) eram números de CONFORTO, calibrados pela
+   separação medida em uso normal. Nenhum dos dois tinha relação com o instante
+   em que o mundo vaza — e a validação de `2d55610` mediu o preço disso: a
+   vista ficava limpa até **1,10 m** de separação, com **0,33 s** de atraso.
+
+   O instante do vazamento é conta, não gosto:
+
+     raio do colisor  0,42 m   (`player.radius`, game.js) — `Structures.collide`
+                               para o CENTRO do colisor a um raio da face, então
+                               a cabeça cruza a FACE em 0,42 m de separação;
+     near da câmera   0,08 m   (`PerspectiveCamera(75, …, 0.08, 1000)`) — mais
+                               perto que isso é recortado, e recortar a face da
+                               frente de uma caixa `FrontSide` é ver o outro lado.
+
+     → **o outro lado aparece em 0,42 − 0,08 = 0,34 m de separação.**
+
+   Daí `FORA_MAX = 0,32`: o vazamento com 2 cm de folga. E `FORA_MIN = 0,16`:
+   acima do pico de encosto medido (0,133 m em `fa9ed86`) e muito acima do uso
+   normal (0,0131 m no pior de 1799 frames; 0,0083 m em 3840 frames de
+   `2d55610`). Escurecer a tela de quem só raspou num muro seria trocar um
+   defeito por outro pior — a outra ponta é medida em `test/xr-parede.test.js`.
+
+   `auditarIntrusao()` cobra essa conta contra a geometria do JOGO, e fica
+   vermelha se alguém mexer em qualquer um dos quatro números. */
+const FORA_MIN = 0.16, FORA_MAX = 0.32;
+
+/* TETO DA SEPARAÇÃO (`max_head_distance` do Godot, e o mesmo número de
+   `js/xr/xrrig.js`) e a rampa que garante a tela preta AO chegar nele: acima
+   do teto a vista congela, e isso só é defensável com a tela já fechada. */
+const FORA_TETO = 1.00, TETO_RAMPA = 0.15;
+
+/* A PORTA DA SONDA. `sonda` é a proximidade da cabeça a geometria sólida, em
+   metros (o empurrão que uma esfera de 0,25 m na cabeça sofreria). Zero =
+   cabeça no AR, e aí a cortina não acende: é o que distingue DEBRUÇAR sobre um
+   parapeito de ENFIAR a cabeça na parede, dois gestos que moram na mesma faixa
+   de separação e que nenhum limiar de distância separa. 0,10 m de amaciamento
+   para a porta não piscar com a cabeça parada na borda. */
+const SONDA_ABRE = 0.10;
+
 const FORA_K = 3;         // mesma taxa do Godot XR Tools (delta * 3.0)
+
+const clamp01 = v => Math.min(1, Math.max(0, v));
+
+/* QUANTO A CORTINA DEVERIA ESTAR FECHADA AGORA. Separado de `intrusao` porque
+   `auditarIntrusao` precisa da curva sem precisar de uma malha — auditoria com
+   aritmética própria vira uma segunda verdade que diverge do produto em
+   silêncio (a mesma razão de `residuoParado` usar `passoTunel`).
+
+   DOIS TERMOS, e são os dois gatilhos do Godot XR Tools:
+
+     min(_head_shape_cast.get_closest_collision_safe_fraction(),
+         max_head_distance / target_move_distance)
+
+   · o PRIMEIRO é a consulta de sólido — aqui, a separação com a porta da
+     sonda. Cabeça no ar (sonda 0) não escurece nada, seja qual for a
+     separação: é o parapeito;
+   · o SEGUNDO é o batente de distância, que fecha a tela AO chegar no teto de
+     `js/xr/xrrig.js`. Ele não é vetado pela sonda de propósito: é ele que
+     garante que a vista só congela com a tela preta, inclusive debruçado. */
+function alvoDaCortina(separacaoM, sondaM, temSonda) {
+  const porta = temSonda ? clamp01(sondaM / SONDA_ABRE) : 1;
+  const perto = clamp01((separacaoM - FORA_MIN) / (FORA_MAX - FORA_MIN)) * porta;
+  const teto = clamp01((separacaoM - (FORA_TETO - TETO_RAMPA)) / TETO_RAMPA);
+  return Math.max(perto, teto);
+}
 
 /* FECHA rápido e ABRE devagar: abrir de repente é um solavanco visual. E
    ABRE_MIN é a taxa MÍNIMA de abertura — a peça que fecha A5 pela raiz. */
@@ -318,6 +463,41 @@ export function auditar(plano, excecoesUsadas = EXCECOES) {
   return { perfil: p.perfil, ok: faltas.length === 0, faltas, excecoes, t95, pico, residuo };
 }
 
+/* AUDITORIA DA CORTINA DE INTRUSÃO — a conta do §7.1 de
+   docs/vr/referencia-locomocao.md, cobrada contra a geometria do JOGO.
+
+   Existe pelo mesmo motivo de `auditar()`: os quatro números que decidem se o
+   jogador vê o outro lado da parede moram em três arquivos diferentes (o raio
+   do colisor em `game.js`, o near na câmera, `FORA_MAX` aqui e o teto aqui e
+   em `js/xr/xrrig.js`). Sem um lugar que faça a conta, mexer em qualquer um
+   deles reabre o defeito em silêncio — que foi exatamente o que aconteceu
+   quando os limiares eram números de conforto sem relação com a geometria.
+
+   `raioColisor` e `near` são PARÂMETROS de propósito: quem chama passa os do
+   produto (`test/xr-parede.test.js` lê os dois do jogo dentro da sessão), e a
+   auditoria não pode conferir a própria tabela. */
+export function auditarIntrusao({ raioColisor = 0.42, near = 0.08 } = {}) {
+  /* O outro lado aparece quando a face do sólido cruza o plano near: o colisor
+     para a um raio da face, então isso é `raio − near` de separação. */
+  const vazaEm = raioColisor - near;
+  const g = { pretoEm: FORA_MAX, comecaEm: FORA_MIN, teto: FORA_TETO, vazaEm };
+  const faltas = [];
+  if (!(g.pretoEm <= vazaEm + 1e-9)) {
+    faltas.push({ criterio: 'A6c', limite: 'pretoEm', medido: g.pretoEm, teto: vazaEm });
+  }
+  const excecoes = [];
+  const eC2 = EXCECOES.find(e => e.criterio === 'C2');
+  if (eC2 && eC2.vale(g) === true) excecoes.push(eC2);
+  else faltas.push({ criterio: 'C2', limite: 'separacaoM', medido: FORA_TETO, teto: LIMITES.separacaoM });
+  /* A porta de baixo também é cobrada: escurecer a tela de quem só encostou
+     num muro seria trocar um defeito por outro pior. 0,133 m é o pico de
+     encosto medido na validação de `fa9ed86`. */
+  if (!(g.comecaEm > 0.133)) {
+    faltas.push({ criterio: 'C2b', limite: 'comecaEm', medido: g.comecaEm, teto: 0.133 });
+  }
+  return { ok: faltas.length === 0, faltas, excecoes, ...g };
+}
+
 export function createXrComfort({ THREE, camera }) {
   let malha = null, uni = null;
   let piscada = 0;          // 1 = totalmente escuro, decai sozinho
@@ -331,11 +511,20 @@ export function createXrComfort({ THREE, camera }) {
      de reduzi-lo. O módulo não pede que ninguém mude; ele só não delega o
      próprio estado a um índice de terceiro. */
   let ligada = false;
+  /* Rascunhos da conversão MUNDO → VISTA da direção da parede. Nenhum dos dois
+     é `Object3D`, então nascer aqui (no boot, junto com o resto da fachada XR)
+     não toca no `Math.random` seedado do worldgen. */
+  const _qCam = new THREE.Quaternion();
+  const _vLado = new THREE.Vector3();
 
   function anexar() {
     ligada = true;
     if (malha) { malha.visible = true; return; }
-    uni = { abertura: { value: -1 }, escuro: { value: 0 } };
+    uni = {
+      abertura: { value: -1 }, escuro: { value: 0 },
+      parede: { value: 0 }, grade: { value: 0 },
+      ladoParede: { value: new THREE.Vector3(0, 0, 0) },
+    };
     const geo = new THREE.SphereGeometry(0.35, 24, 16);
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT, fragmentShader: FRAG, uniforms: uni,
@@ -358,7 +547,7 @@ export function createXrComfort({ THREE, camera }) {
     ligada = false;
     tunelAtual = 0;
     piscada = 0;
-    if (uni) { uni.abertura.value = 1; uni.escuro.value = fora; }
+    if (uni) { uni.abertura.value = 1; uni.escuro.value = 0; uni.parede.value = fora; }
     /* A INTRUSÃO NÃO É PREFERÊNCIA. Desligar a vinheta é escolha do jogador;
        ver e atirar do outro lado da parede depois de andar fisicamente para
        dentro dela não é opção de conforto, é integridade do mundo. Por isso a
@@ -384,7 +573,10 @@ export function createXrComfort({ THREE, camera }) {
     piscada = Math.max(0, piscada - dt / PISCADA_S);
     malha.visible = ligada || fora > 0;
     uni.abertura.value = 1 - tunelAtual * 0.55;   // 1 = aberto, 0.45 = túnel fechado
-    uni.escuro.value = Math.max(piscada, fora);
+    /* A PISCADA É SÓ A PISCADA. Ela morava no mesmo uniform da cortina de
+       intrusão, e misturar os dois impedia a cortina de ter direção e grade
+       próprias — e fazia o túnel de corrida "herdar" a barreira. */
+    uni.escuro.value = piscada;
   }
 
   /* A CABEÇA ENTROU NO SÓLIDO — `metros` é a separação entre a cabeça e o
@@ -394,23 +586,51 @@ export function createXrComfort({ THREE, camera }) {
      comentário de `soltar()`. Cria a malha se ela ainda não existir, porque o
      jogador pode ter desligado a vinheta antes de encostar na primeira
      parede — e aí não haveria nada para escurecer. */
-  function intrusao(dt, metros) {
+  function intrusao(dt, metros, sonda) {
     const m = Number.isFinite(metros) ? Math.max(0, metros) : 0;
-    const alvo = Math.min(1, Math.max(0, (m - FORA_MIN) / (FORA_MAX - FORA_MIN)));
+    /* A SONDA pode vir como número (só a proximidade) ou como
+       `{ m, x, z }` (proximidade + direção do sólido, em MUNDO). Ausente =
+       não há consulta, e aí a cortina cai no comportamento por separação. */
+    let sondaM = 0, temSonda = false, sx = 0, sz = 0;
+    if (typeof sonda === 'number' && Number.isFinite(sonda)) {
+      sondaM = Math.max(0, sonda); temSonda = true;
+    } else if (sonda && typeof sonda === 'object' && Number.isFinite(sonda.m)) {
+      sondaM = Math.max(0, sonda.m); temSonda = true;
+      sx = Number.isFinite(sonda.x) ? sonda.x : 0;
+      sz = Number.isFinite(sonda.z) ? sonda.z : 0;
+    }
+    const alvo = alvoDaCortina(m, sondaM, temSonda);
     const passoDt = Number.isFinite(dt) && dt > 0 ? dt : 0;
-    /* RAMPA LINEAR, e é a mesma do Godot XR Tools (`_fade_value +=/-= delta *
-       3.0`): do claro ao preto em 1/3 de segundo, nos dois sentidos.
-       Exponencial aqui seria erro conhecido — ela divide a distância que falta
-       e NUNCA termina, que foi como a vinheta ficou com resíduo permanente e
-       derrubou A5 por três rodadas. Tela presa em cinza é pior neste caso: o
-       jogador não saberia que já saiu da parede. */
-    const max = FORA_K * passoDt;
-    const d = alvo - fora;
-    fora += Math.abs(d) <= max ? d : Math.sign(d) * max;
+    /* FECHA NO MESMO FRAME, ABRE COM FREIO — e a assimetria é o conserto.
+
+       A rampa era linear a 3/s NOS DOIS SENTIDOS, que é a taxa do Godot XR
+       Tools. Só que lá o gatilho é BINÁRIO (o shape cast bate ou não bate) e a
+       rampa é o que dá gradualidade; aqui o sinal é contínuo em metros e a
+       gradualidade já vem da geometria (0,16 → 0,32 m a 1,44 m/s são 0,11 s de
+       fechamento). Somar a rampa temporal em cima custava 1/3 de segundo —
+       0,48 m de caminhada — e é a CAUSA medida do vazamento de `2d55610`.
+
+       Abrir continua a 3/s (`_fade_value -= delta * 3.0`, verbatim do Godot):
+       devolver a vista de uma vez é um flash de luz na cara de quem está no
+       escuro. Exponencial em qualquer dos dois sentidos seria erro conhecido —
+       ela divide a distância que falta e NUNCA termina, que foi como a vinheta
+       ficou com resíduo permanente e derrubou A5 por três rodadas. */
+    if (alvo >= fora) fora = alvo;
+    else fora = Math.max(alvo, fora - FORA_K * passoDt);
     if (fora > 0 && !malha) { anexar(); ligada = false; }
     if (malha) {
+      /* A DIREÇÃO só é reescrita quando a sonda tem uma para dar, e é zerada
+         quando a cortina fecha por completo — direção velha presa numa cortina
+         que já abriu faria o escuro nascer do lado errado no encosto seguinte. */
+      if (temSonda && (sx !== 0 || sz !== 0)) {
+        camera.getWorldQuaternion(_qCam).invert();
+        _vLado.set(sx, 0, sz).applyQuaternion(_qCam);
+        if (_vLado.lengthSq() > 1e-9) uni.ladoParede.value.copy(_vLado).normalize();
+      } else if (fora <= 0) uni.ladoParede.value.set(0, 0, 0);
       malha.visible = ligada || fora > 0;
-      uni.escuro.value = Math.max(piscada, fora);
+      uni.parede.value = fora;
+      uni.grade.value = Math.min(1, Math.max(0, (fora - 0.15) / 0.45));
+      uni.escuro.value = piscada;
     }
     return fora;
   }

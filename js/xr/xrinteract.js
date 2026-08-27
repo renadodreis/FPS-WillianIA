@@ -372,7 +372,13 @@ export function createXrInteract({
   /* ---------------------------------------------------------------- */
   /* MARCADOR — criado DENTRO da sessão, nunca no boot. */
   function montar() {
-    if (grupo) return;
+    /* SEGUNDA SESSÃO. `exit()` tira o objeto da cena mas NÃO o joga fora — e a
+       versão anterior desta linha era `if (grupo) return`, então a partir da
+       segunda entrada em VR o marcador existia, estava "visível" pelo estado, e
+       nunca mais voltava para a cena. Medido por validação independente: o
+       destaque dos baús sumia para o resto da sessão depois de sair do VR uma
+       vez. Reanexar é idempotente e não cria objeto novo. */
+    if (grupo) { if (!grupo.parent) scene.add(grupo); return; }
     grupo = new THREE.Group();
     grupo.name = 'xrInteracaoMarcador';
     grupo.visible = false;
@@ -455,7 +461,8 @@ export function createXrInteract({
   }
 
   function montarRadial() {
-    if (radial) return;
+    // mesmo defeito de segunda sessão do `montar()` — ver o comentário lá
+    if (radial) { if (!radial.parent) scene.add(radial); return; }
     const cv = win && win.document ? win.document.createElement('canvas') : null;
     if (!cv) return;
     cv.width = RADIAL_CV; cv.height = RADIAL_CV;
@@ -774,7 +781,13 @@ export function createXrInteract({
          sozinhos não conferem nada. */
       radial: {
         existe: !!radial,
-        visivel: !!(radial && radial.visible),
+        /* `visible` NÃO BASTA, e isso custou um defeito inteiro: `exit()` tira o
+           objeto da cena sem mexer em `visible`, então o estado reportava
+           `visivel: true` com o disco fora do grafo — invisível na tela e
+           "visível" na API. Quem pergunta se dá para ver tem de receber as duas
+           condições. */
+        visivel: !!(radial && radial.visible && radial.parent),
+        naCena: !!(radial && radial.parent),
         aberto: radialNasceu,
         fatia: radialFatiaPintada === null ? -1 : radialFatiaPintada,
         pos: radial && radial.visible ? radial.position.toArray() : null,

@@ -41,6 +41,11 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
      cabeça e o corpo do jogador — o número que o escurecimento de intrusão
      consome (js/xr/xrcomfort.js). */
   let foraX = 0, foraZ = 0;
+  /* A DÍVIDA: o que o mundo recusou ALÉM do teto de `fora` (ver
+     `devolverPasso`). Não move a vista — a vista já parou no teto, com a tela
+     preta — e é paga pelo passo de volta antes de qualquer outra coisa. Sem
+     ela, entrar 3 m e sair 3 m deixaria o jogador 2 m fora do lugar. */
+  let exX = 0, exZ = 0;
   let carenciaEscoa = 0;   // frames em que o mundo recusou; enquanto isso, não escoa
   let cabecaX = 0, cabecaZ = 0, temBase = false;
   let pedidoRebase = 0;   // frames de carência do reset de referencial (ver rebasear)
@@ -73,7 +78,7 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
     /* zera o passo físico: a sessão nova começa com o jogador onde ele está,
        e a base é redefinida no primeiro `place` (a pose real da cabeça só
        chega no primeiro frame da sessão — antes disso seria um passo falso). */
-    passoX = 0; passoZ = 0; foraX = 0; foraZ = 0; carenciaEscoa = 0;
+    passoX = 0; passoZ = 0; foraX = 0; foraZ = 0; exX = 0; exZ = 0; carenciaEscoa = 0;
     temBase = false; pedidoRebase = 0;
     dentro = true;
     return rig;
@@ -205,17 +210,26 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
          corpo dele nunca chegou a entrar. A componente do passo que aponta
          para DENTRO do `fora` abate o `fora` e não vira passo; o resto segue
          normal. Sem isto o colisor dispara para trás quando o jogador sai —
-         a versão espelhada de atravessar a parede. */
-      const m = Math.hypot(foraX, foraZ);
-      if (m > 1e-9) {
-        const ux = foraX / m, uz = foraZ / m;
+         a versão espelhada de atravessar a parede.
+
+         E SÃO DUAS CAMADAS DE DÍVIDA, nesta ordem: primeiro o EXCEDENTE (o
+         que ficou além do teto de `fora`, que não moveu a vista na ida e
+         portanto não pode movê-la na volta), depois o `fora` visível (que
+         moveu, e desfaz na mesma medida). Trocar a ordem, ou pular a
+         primeira camada, é o que faria o jogador sair da parede num lugar
+         diferente daquele em que entrou. */
+      const abate = (ax, az, aplica) => {
+        const m = Math.hypot(ax, az);
+        if (m <= 1e-9) return;
+        const ux = ax / m, uz = az / m;
         const proj = px * ux + pz * uz;
-        if (proj < 0) {
-          const usa = Math.min(-proj, m);
-          foraX -= ux * usa; foraZ -= uz * usa;
-          px += ux * usa; pz += uz * usa;
-        }
-      }
+        if (proj >= 0) return;
+        const usa = Math.min(-proj, m);
+        aplica(ux * usa, uz * usa);
+        px += ux * usa; pz += uz * usa;
+      };
+      abate(exX, exZ, (dx2, dz2) => { exX -= dx2; exZ -= dz2; });
+      abate(foraX, foraZ, (dx2, dz2) => { foraX -= dx2; foraZ -= dz2; });
       passoX += px;
       passoZ += pz;
     }
@@ -228,11 +242,31 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
        renova a carência e nada escoa. */
     if (carenciaEscoa > 0) carenciaEscoa--;
     else {
-      const m = Math.hypot(foraX, foraZ);
+      /* A DÍVIDA ESCOA PRIMEIRO, e em silêncio: ela não move nada (não está
+         na vista nem no colisor), então perdoá-la só refaz o mapa entre o
+         quarto do jogador e o mundo — que é o que `rebasear()` faz de
+         propósito. Perdoar é obrigatório: sem isto, o jogador que insistiu
+         2 m contra um muro que depois CAIU teria 2 m de caminhada morta ao
+         voltar, pagando dívida de uma parede que não existe mais. */
+      let m = Math.hypot(exX, exZ);
       if (m > 1e-9) {
-        const k = Math.min(1, ESCOA_FORA / m);
-        passoX += foraX * k; passoZ += foraZ * k;
-        foraX -= foraX * k; foraZ -= foraZ * k;
+        /* …E SÓ COM O JOGADOR PARADO. Perdoar dívida enquanto ele CAMINHA é
+           refazer o mapa quarto↔mundo debaixo de um passo que está sendo
+           medido contra esse mapa: medido, entrar 3 m e sair 3 m terminava
+           0,3360 m atrás do lugar (exatamente 56 frames × 0,006). Parado, o
+           perdão não tem passo nenhum contra o que divergir — é o mesmo
+           raciocínio de `rebasear()`. */
+        if (Math.hypot(dx, dz) < PARADO_MAX) {
+          const k = Math.min(1, ESCOA_FORA / m);
+          exX -= exX * k; exZ -= exZ * k;
+        }
+      } else {
+        m = Math.hypot(foraX, foraZ);
+        if (m > 1e-9) {
+          const k = Math.min(1, ESCOA_FORA / m);
+          passoX += foraX * k; passoZ += foraZ * k;
+          foraX -= foraX * k; foraZ -= foraZ * k;
+        }
       }
     }
     rig.rotation.y = yaw;
@@ -292,6 +326,13 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
      0,006 m a 72 Hz ≈ 0,43 m/s: mais lento que qualquer caminhada, então o
      colisor alcança a cabeça andando, nunca saltando. */
   const ESCOA_FORA = 0.006;
+  /* TETO DA SEPARAÇÃO CABEÇA↔CORPO, em metros: o `max_head_distance` do Godot
+     XR Tools. O motivo, o custo em A6 e por que o excedente vira dívida em vez
+     de sumir estão no cabeçalho de `devolverPasso`. */
+  const FORA_TETO = 1.0;
+  /* "Parado" para efeito de perdoar dívida: 2 mm por frame são 0,14 m/s a
+     72 Hz — abaixo do tremor de quem está de pé sem andar. */
+  const PARADO_MAX = 0.002;
   /* Frames de carência depois de uma recusa. Dois bastam: a recusa chega uma
      vez por frame enquanto o jogador estiver empurrando a parede. */
   const ESCOA_CARENCIA = 2;
@@ -344,9 +385,42 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
      parede segura o corpo, C2). O preço é a cabeça ficar adiante do corpo, e
      esse preço é PAGO NA TELA — `js/xr/xrcomfort.js` escurece a vista conforme
      a separação cresce, que é o `head_behavior_mode: Fade` do Godot XR Tools.
-     Sem o escurecimento, isto seria espiar-parede de escala de sala. */
+     Sem o escurecimento, isto seria espiar-parede de escala de sala.
+
+     ---------------------------------------------------------------
+     O TETO, E POR QUE O EXCEDENTE VIRA DÍVIDA EM VEZ DE SUMIR.
+
+     Isto somava sem clamp, e a validação de `2d55610` mediu **8,4140 m** de
+     separação numa caminhada só (era 0,1331 m antes da mudança). Com a tela
+     preta isso não é vantagem visual, mas o corpo do jogador — e o cano da
+     arma, que anda com a cabeça — fica arbitrariamente fundo dentro de
+     geometria; `server.js:912` chega a descartar a replicação do traçante
+     passados 5 m de separação entre a boca do cano e `player.pos`.
+
+     O teto é **1,00 m**, que é o `max_head_distance` do Godot XR Tools
+     (`@export_range(0.0, 2.0, 0.01) var max_head_distance = 1.0`).
+
+     ELE CUSTA A LETRA DE A6: acima dele a vista para de responder ao passo
+     físico. O que o defende é que a cortina de `js/xr/xrcomfort.js` está em
+     1,0000 desde 0,32 m de separação — três vezes antes. Não existe display
+     deixando de responder; existe display preto. A exceção está declarada,
+     com amarra em código, em `EXCECOES` de `js/xr/xrcomfort.js`: ela só vale
+     enquanto a cortina fechar ESTRITAMENTE antes do teto.
+
+     E O EXCEDENTE NÃO É JOGADO FORA. Descartar seria a terceira versão errada
+     deste mesmo ponto: o jogador que entra 3 m e sai 3 m teria a vista andando
+     1 m para dentro e 3 m para fora, e terminaria **2 m atrás de onde
+     começou**, com o mundo deslocado por baixo dele para sempre. O excedente
+     vira DÍVIDA (`exX/exZ`), e o passo de volta paga a dívida ANTES de mexer
+     na vista (ver `place`). Entrar e sair devolve a cabeça no lugar. */
   function devolverPasso(dx, dz) {
     foraX += dx; foraZ += dz;
+    const m = Math.hypot(foraX, foraZ);
+    if (m > FORA_TETO) {
+      const k = FORA_TETO / m;
+      exX += foraX * (1 - k); exZ += foraZ * (1 - k);
+      foraX *= k; foraZ *= k;
+    }
     carenciaEscoa = ESCOA_CARENCIA;
   }
 
@@ -390,5 +464,11 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
        cabeça dele está em algo sólido. */
     get foraDoCorpo() { return { x: foraX, z: foraZ }; },
     get foraDoCorpoM() { return Math.hypot(foraX, foraZ); },
+    /* O TETO, para quem precisa saber que ele existe sem importar o módulo. */
+    get foraTeto() { return FORA_TETO; },
+    /* A DÍVIDA que não coube no teto (ver `devolverPasso`). Não é separação:
+       não move a vista e não entra em régua de alcance nenhuma. Existe para o
+       QA poder provar que ela é PAGA na volta em vez de descartada. */
+    get dividaM() { return Math.hypot(exX, exZ); },
   };
 }

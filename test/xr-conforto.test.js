@@ -208,11 +208,20 @@ describe('o contrato de conforto vale para TODO perfil que existir', () => {
        o custo existia, ninguém tinha registrado, e a validação o encontrou
        como se fosse defeito. */
     for (const e of C.EXCECOES) {
-      assert.ok(e.criterio && e.limite && e.perfil, `exceção incompleta: ${JSON.stringify(e)}`);
+      /* ESCOPO DECLARADO, num campo ou no outro. Uma exceção vale ou para um
+         PERFIL de locomoção (A4: só a linha IGUAL AO PC) ou para uma SITUAÇÃO
+         (C2: só com a cabeça dentro de sólido). Exceção sem escopo é exceção
+         para o jogo inteiro — cheque em branco com outro nome. */
+      const escopo = e.perfil || e.situacao;
+      assert.ok(e.criterio && e.limite && escopo, `exceção incompleta: ${JSON.stringify(e)}`);
       assert.ok(typeof e.porque === 'string' && e.porque.length > 80,
-        `exceção de ${e.criterio}/${e.perfil} sem motivo escrito`);
+        `exceção de ${e.criterio}/${escopo} sem motivo escrito`);
       assert.ok(typeof e.custo === 'string' && e.custo.length > 40,
-        `exceção de ${e.criterio}/${e.perfil} sem o custo declarado`);
+        `exceção de ${e.criterio}/${escopo} sem o custo declarado`);
+      /* E a amarra: exceção sem condição de validade em CÓDIGO é a prosa que a
+         rodada 10 mostrou não valer nada — o perfil forjado passou por ela. */
+      assert.equal(typeof e.vale, 'function',
+        `exceção de ${e.criterio}/${escopo} sem amarra em código`);
     }
   });
 
