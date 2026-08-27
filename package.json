@@ -24,6 +24,7 @@
     "vr:emulado": "node scripts/vr-emulado.js",
     "vr:censo": "node scripts/vr-censo.js",
     "vr:controles": "node scripts/vr-controles.js",
+    "vr:sessao": "node scripts/vr-sessao.js",
     "test:vr": "node scripts/test-vr.js"
   },
   "engines": {
