@@ -2347,6 +2347,17 @@ function fire(t) {
     SFX.melee();
     miraOrigem(_rayOrig);
     miraDirecao(_rayDir);
+    /* O GOLPE SAI NA DIREÇÃO DA LÂMINA. Armas sem alça tiram o eixo de mira de
+       `gripR → muzzle` (js/xr/xrweapon.js), e o punho da faca fica ABAIXO da
+       linha da lâmina: a diagonal punho-ponta aponta 10,086° acima de onde a
+       faca aponta. Medido em sessão. A 2 m isso são 35 cm — mata quem a lâmina
+       não encostou e erra quem ela encostou, na arma INICIAL do BR.
+       O ALCANCE não muda: `__BR_melee` continua com os mesmos 2,6 m a partir da
+       mesma origem. Aquilo é constante de game design, idêntica no monitor, e
+       mexer nela seria mudar balanceamento a pretexto de conserto de VR.
+       Fora de XR nada muda: lá o eixo vem da câmera, e a faca já golpeia para
+       onde o jogador olha. */
+    if (XR.presenting) { marcarCanoQA(); _rayDir.copy(_canoDirDoTiro); }
     if (window.__BR_melee) window.__BR_melee(_rayOrig, _rayDir, gun.dmg);
     marcarMiraQA(_rayOrig, _rayDir);
     marcarTiroQA(_rayOrig, _rayDir);

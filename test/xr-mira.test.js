@@ -321,6 +321,36 @@ describe('o tiro sai onde a mira aponta, em VR (B3)', { skip: !CHROME && 'Chrome
       `o projétil da ${r.arma} sai a ${r.grausDoCano.toFixed(3)}° do cano`);
   });
 
+  /* A FACA — arma INICIAL do BR, e o único defeito de jogo do laudo da rodada
+     13. Medido lá: o golpe nasce 44 cm atrás da lâmina e sai **8,3° fora do
+     eixo dela**. A causa é o eixo de mira das armas sem alça ser `gripR →
+     muzzle`, e o punho ficar ABAIXO da linha da lâmina — a diagonal punho-ponta
+     não é a direção para onde a lâmina aponta. O jogador esfaqueia para onde a
+     faca aponta e o jogo resolve o acerto noutra direção.
+     O ALCANCE (2,6 m a partir da origem) NÃO é medido aqui de propósito: é
+     constante de game design, idêntica no monitor, e mexer nela seria mudar
+     balanceamento a pretexto de conserto de VR. */
+  it('a FACA golpeia na direção da LÂMINA, não na diagonal punho-ponta', async () => {
+    const r = await h.play(async () => {
+      const nome = await window.__MIRA.acharArma(g => g.melee);
+      if (!nome) return { semFaca: true };
+      const t = [];
+      for (let i = 0; i < 3; i++) {
+        t.push(await window.__MIRA.tiro());
+        window.__A.stick('right', 1, 0); await window.__A.espera(150);
+        window.__A.solta(); await window.__A.espera(240);
+      }
+      return { nome, t };
+    });
+    assert.ok(!r.semFaca, 'nenhuma arma branca no arsenal — o caso não mediu nada');
+    const angs = r.t.map(x => x.grausDoCano);
+    const pior = Math.max(...angs);
+    assert.ok(pior < 0.5,
+      `a ${r.nome} golpeia a ${pior.toFixed(3)}° do eixo da lâmina ` +
+      `(${angs.map(a => a.toFixed(3) + '°').join(', ')}; teto 0,5°) — ` +
+      'a 2 m, 8° são 28 cm: mata quem a lâmina não encostou e erra quem ela encostou');
+  });
+
   /* O CASO QUE MATA A MUTAÇÃO DO EIXO ÓPTICO. Tudo o mais aqui compara o raio
      com a linha de mira — e o raio É a linha de mira, então nada disso denuncia
      um eixo óptico torto. O cano é geometria do modelo: se a alça apontar para

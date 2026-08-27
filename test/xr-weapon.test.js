@@ -426,7 +426,13 @@ describe('B7 — o tiro sai do CANO, não da ocular', { skip: !CHROME && 'Chrome
   before(async () => { h = await bootEmVR(bootGame, { port: 3436 }); });
   after(async () => { if (h) await h.close(); });
 
-  it('a origem do tiro fica na boca do cano (≤ 5 cm)', async () => {
+  /* O TÍTULO MENTIA, e o runner imprimia em verde que o B7 estava fechado.
+     Ele anunciava "≤ 5 cm" e o assert cobra 1,00 m — que é sanidade de
+     geometria da arma (ocular e cano no mesmo objeto), não o critério. Um
+     título que promete mais que o assert é a mesma família do teste que passa
+     por acidente: quem lê o relatório do runner conclui coisa que ninguém
+     mediu. Título agora diz o que o caso faz. */
+  it('ocular e cano ficam no mesmo objeto — sanidade de geometria da arma', async () => {
     const r = await h.play(async () => {
       const A = window.__A, G = window.__game;
       A.solta(); await A.espera(400);
@@ -444,7 +450,11 @@ describe('B7 — o tiro sai do CANO, não da ocular', { skip: !CHROME && 'Chrome
     assert.ok(r.d < 1.0, `ocular e cano a ${r.d.toFixed(3)} m — geometria da arma inesperada`);
   });
 
-  it('a origem REAL do raio fica a ≤ 5 cm da boca do cano', async () => {
+  /* MESMA CORREÇÃO DE TÍTULO: o assert deste caso cobra 0,25 m (altura de alça),
+     não os 0,05 m do critério — e a razão está escrita no comentário logo
+     abaixo. O critério B7 continua VERMELHO e a decisão sobre o texto dele é do
+     dono; teste não fecha critério por título. */
+  it('a origem REAL do raio não volta aos 44-91 cm do defeito original (teto de altura de alça)', async () => {
     /* ESTE é o critério B7, e é o caso que faltava: a suíte media a DIREÇÃO da
        mira e nunca a ORIGEM contra a geometria da arma. Não basta a mira estar
        certa — o servidor valida ALCANCE a partir da origem que o cliente manda,
