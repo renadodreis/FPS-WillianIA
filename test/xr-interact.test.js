@@ -27,7 +27,7 @@ const assert = require('node:assert/strict');
 const { CHROME, bootGame } = require('./helpers/harness');
 const { bootEmVR } = require('./helpers/iwer');
 
-const PORT = 3432;
+const PORT = 3480;   // faixa exclusiva desta frente (3480-3488)
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 /* Ferramentas na página (mesmo motivo de xr-weapon.test.js: `page.evaluate`
@@ -112,9 +112,20 @@ function instalarFerramentas() {
       m.updateWorldMatrix(true, false);
       return m.getWorldPosition(new T.Vector3()).toArray();
     },
+    /* D3: o gesto é a EMPUNHADURA. E como a mão fica a mais de 7,5 cm da casca
+       do baú (ela está no peito, apontando), o que vale aqui é o agarre à
+       DISTÂNCIA — que é verbo separado e pede confirmação: mantém o grip
+       apontado além de HOLD_LONGE (0,30 s). */
     async gesto() {
-      window.__A.botao('left', 'trigger', 1);
+      window.__A.botao('left', 'squeeze', 1);
+      await window.__A.espera(450);
+      window.__A.botao('left', 'squeeze', 0);
       await window.__A.espera(180);
+    },
+    /* o mesmo gesto no botão errado, para provar que ele NÃO vale */
+    async gestoNoGatilho() {
+      window.__A.botao('left', 'trigger', 1);
+      await window.__A.espera(450);
       window.__A.botao('left', 'trigger', 0);
       await window.__A.espera(180);
     },
@@ -214,6 +225,37 @@ describe('interação pela mão em VR (IWER, sessão imersiva real)', { skip: !C
     assert.ok(r.depois.chest > r.antes.chest,
       `o gatilho da mão de apoio não guardou nada no baú (${r.antes.chest} → ${r.depois.chest}): a interação não chegou no jogo`);
     assert.ok(r.depois.inv < r.antes.inv, 'o inventário não mudou — o baú não trocou item nenhum');
+  });
+
+  it('D3 — o mesmo gesto NO GATILHO não abre o baú (o botão de pegar é o grip)', async () => {
+    /* Este é o teste de EFEITO do critério D3. O unitário
+       (test/xr-agarrar.test.js) prova a geometria; aqui, dentro da sessão
+       imersiva de verdade, prova-se que apertar o botão errado não mexe no
+       mundo — VRC.Quest.Input.2: "use the Touch controller's grip button rather
+       than the trigger button". */
+    const r = await h.play(async () => {
+      window.__I.soloDeVerdade();
+      window.__I.longeDeTudo();
+      const b = window.__I.plantarBaus(1.5);
+      window.__I.apontarPara('left', b.esquerda);
+      const G = window.__game;
+      G.inventory.medkits = 4;
+      G.Interact.chest.medkits = 0;
+      await window.__A.espera(400);
+      const acionavel = !!(G.XRInterage.estado().alvo || {}).acionavel;
+      await window.__I.gestoNoGatilho();
+      await window.__A.espera(250);
+      const noGatilho = { chest: G.Interact.chest.medkits, inv: G.inventory.medkits };
+      await window.__I.gesto();                       // agora no grip
+      await window.__A.espera(250);
+      return { acionavel, noGatilho, noGrip: { chest: G.Interact.chest.medkits, inv: G.inventory.medkits } };
+    });
+    assert.equal(r.acionavel, true, 'o cenário não pôs o baú em alcance — o teste mediria o vazio');
+    assert.equal(r.noGatilho.chest, 0,
+      'o GATILHO abriu o baú: pegar no gatilho é exatamente o que o critério D3 reprova');
+    assert.equal(r.noGatilho.inv, 4, 'o gatilho mexeu no inventário');
+    assert.ok(r.noGrip.chest > 0,
+      'e o GRIP não abriu: o botão certo ficou sem verbo, que é pior que o defeito original');
   });
 
   it('o gesto emite um KeyboardEvent REAL — é o único caminho que o baú do BR escuta', async () => {

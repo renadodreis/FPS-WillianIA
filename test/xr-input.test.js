@@ -126,27 +126,52 @@ describe('botões', () => {
     assert.equal(r.pular, true);
   });
 
-  it('empunhadura da esquerda agacha', () => {
+  /* D3. A empunhadura é do AGARRAR, e isso não é gosto: VRC.Quest.Input.2 diz
+     "use the Touch controller's grip button rather than the trigger button"; o
+     grab do Immersive Web SDK da própria Meta roteia por `squeeze`; o
+     `GrabTypes` padrão do SteamVR é `Grip`; e `pickup_axis_action` do Godot XR
+     Tools nasce em `"grip"`. Quatro fontes, um resultado. Ver
+     docs/vr/referencia-interacao.md §2. */
+  it('empunhadura da esquerda AGARRA (VRC.Quest.Input.2), e não agacha', () => {
     const r = entrada.ler([mao('left', [0, 0, 0, 0], [false, true])]);
-    assert.equal(r.agachar, true);
+    assert.equal(r.agarrar, true, 'o grip esquerdo não virou o verbo de agarrar');
+    assert.equal(r.agachar, false,
+      'o grip continua agachando: com ele ocupado, pegar teria de sair no gatilho — o que a régua reprova');
+  });
+
+  it('o GATILHO da esquerda não agarra — pegar no gatilho é exatamente o que reprova', () => {
+    const r = entrada.ler([mao('left', [0, 0, 0, 0], [true])]);
+    assert.equal(r.agarrar, false);
   });
 });
 
 describe('correr e trocar de arma — sem isso não é FPS', () => {
-  /* Sobravam dois botões no Touch depois de andar/girar/atirar/mirar/pular/
-     agachar/usar/recarregar: o CLIQUE DO ANALÓGICO esquerdo (índice 3) e o B da
-     direita (índice 5). Sem correr, o mapa de battle royale é impraticável a pé;
-     sem trocar de arma, o jogador fica preso na inicial a partida inteira. */
-  it('clique do analógico esquerdo é correr', () => {
+  /* O Touch entrega 5 botões pressionáveis por mão (0,1,3,4,5): o índice 2 é
+     nulo, o 6 é capacitivo e o 7 é reservado pela plataforma — "Buttons reserved
+     by the UA or platform MUST NOT be exposed on the Gamepad" (W3C). Com o grip
+     esquerdo indo para o agarrar, agachar desce para o clique do analógico e
+     correr vai para o BATENTE, que é a convenção do gênero. */
+  it('clique do analógico esquerdo é AGACHAR', () => {
     const btns = [false, false, false, true];
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1], btns)]).correr, true);
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, 0], btns)]).agachar, true);
+  });
+
+  it('correr é o analógico no BATENTE, não o clique', () => {
+    // clique sem inclinada não corre
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, 0], [false, false, false, true])]).correr, false,
+      'o clique do analógico ainda corre — ele agora é o agachar');
+    // andar normal (meia inclinada) não corre
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, -0.6])]).correr, false,
+      'meia inclinada virou corrida: o jogador correria sem pedir');
+    // batente corre
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1])]).correr, true,
+      'empurrar o analógico até o fim não corre');
   });
 
   it('correr é estado contínuo, não borda — soltar para de correr', () => {
-    const seg = [false, false, false, true];
-    entrada.ler([mao('left', [0, 0, 0, -1], seg)]);
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1], seg)]).correr, true, 'segurar mantém');
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1])]).correr, false);
+    entrada.ler([mao('left', [0, 0, 0, -1])]);
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1])]).correr, true, 'segurar mantém');
+    assert.equal(entrada.ler([mao('left', [0, 0, 0, -0.3])]).correr, false);
   });
 
   it('B da direita troca de arma, um passo por aperto', () => {
@@ -186,6 +211,193 @@ describe('borda do gatilho — semi-automática precisa do APERTO, não do segur
     entrada.ler(gatilho(true));
     entrada.ler([]);                       // controle sumiu com o gatilho apertado
     assert.equal(entrada.ler(gatilho(true)).atirarAgora, true);
+  });
+});
+
+describe('radial do analógico direito — os quatro verbos que ficaram sem botão', () => {
+  /* D1. Granada, kit médico, comer e troca de acessório de mira não tinham
+     mapeamento NENHUM. E não é descuido: o Touch entrega 5 botões pressionáveis
+     por mão e todos já têm dono — sobrou UM, o clique do analógico direito.
+     Um botão para quatro verbos só fecha com um SELETOR.
+
+     Quatro fatias é o teto por ergonomia, não por preguiça: "keep the number of
+     buttons small… the attentional cone of vision is roughly 10 degrees" e "use
+     hand menu for quick action" (Microsoft Learn, Hand menu). Ver
+     docs/vr/referencia-interacao.md §4. */
+  const CIMA = [0, 0, 0, -1], DIREITA = [0, 0, 1, 0];
+  const BAIXO = [0, 0, 0, 1], ESQUERDA = [0, 0, -1, 0];
+  const CENTRO = [0, 0, 0, 0];
+
+  /* O BOTÃO É O GATILHO DA MÃO DE APOIO, e ele existe porque D3 o liberou: o
+     agarre saiu do gatilho e foi para a empunhadura. Indicador segura, polegar
+     escolhe — uma mão só.
+
+     Não é o clique do analógico direito, que seria o palpite óbvio: esse botão
+     JÁ É a pausa (js/xr/xrui.js, BOTAO_MENU = 3), que a loja exige
+     (VRC.Quest.Functional.2). E não é o analógico direito para escolher a fatia,
+     porque empurrar para o lado ali dispara o giro em passos — o giro é lido em
+     OUTRO módulo (js/xr/xrturn.js, direto das fontes), fora do alcance deste, e
+     um radial que gira a vista 45° ao ser aberto seria pior que a falta dele. */
+  const esq = (eixos, gatilho) => mao('left', eixos, [!!gatilho]);
+  const par = (eixos, gatilho) => [esq(eixos, gatilho), mao('right', CENTRO)];
+
+  it('o gatilho da mão de apoio ABRE o radial', () => {
+    assert.equal(entrada.ler(par(CENTRO, false)).radial.aberto, false, 'nasceu aberto');
+    assert.equal(entrada.ler(par(CENTRO, true)).radial.aberto, true,
+      'segurar o gatilho da mão de apoio não abriu o radial: os quatro verbos seguem sem botão');
+  });
+
+  it('o radial NÃO usa o clique do analógico direito — esse botão é a pausa', () => {
+    /* Colisão que a suíte não pegaria e o headset pegaria em dois segundos:
+       js/xr/xrui.js abre o painel de pausa nesse mesmo botão. Se o radial
+       também morasse ali, abrir o menu de itens abriria a pausa junto — e o
+       jogo pausado nem chega a processar o verbo. */
+    const cliqueDireito = [mao('left', CENTRO), mao('right', CENTRO, [false, false, false, true])];
+    assert.equal(entrada.ler(cliqueDireito).radial.aberto, false,
+      'o clique do analógico direito abriu o radial: ele já é o botão de pausa (VRC.Quest.Functional.2)');
+  });
+
+  it('com o radial aberto o jogador NÃO anda — o analógico esquerdo está escolhendo', () => {
+    assert.ok(entrada.ler(par(CIMA, false)).andar.y > 0.9, 'sem radial, andar tem que funcionar');
+    const e = criarEntradaXR();
+    e.ler(par(CENTRO, true));
+    const r = e.ler(par(CIMA, true));
+    assert.deepEqual([r.andar.x, r.andar.y], [0, 0],
+      'escolher a fatia de cima também mandou o jogador andar pra frente às cegas');
+  });
+
+  it('escolher a fatia não CORRE junto — o batente é a fatia, não a disparada', () => {
+    /* Defeito encontrado em sessão imersiva real, não no papel: a fatia é
+       alcançada empurrando o analógico até o fim, e o batente é exatamente o que
+       liga a corrida. Sem suspender junto, escolher qualquer verbo mandava um
+       `ShiftLeft` — o jogador confirmava o item já em disparada. */
+    const e = criarEntradaXR();
+    e.ler(par(CENTRO, true));
+    const r = e.ler(par(CIMA, true));
+    assert.equal(r.correr, false,
+      'escolher a fatia de cima ligou a corrida: o analógico está fazendo as duas coisas');
+  });
+
+  it('soltar a fatia com o polegar ainda na direção NÃO sai andando', () => {
+    /* O outro defeito da mesma sessão, e o pior dos dois: o jogador confirma
+       "granada" com o polegar para cima e, no frame seguinte, o radial já fechou
+       mas o analógico continua no batente — ele sai correndo para a frente sem
+       ter pedido. O analógico precisa passar pelo centro para voltar a andar,
+       exatamente como o giro em passos precisa rearmar. */
+    const e = criarEntradaXR();
+    e.ler(par(CENTRO, true));
+    e.ler(par(CIMA, true));
+    const solta = e.ler(par(CIMA, false));      // confirma, polegar ainda em cima
+    assert.equal(solta.radial.confirmou, 'KeyG', 'o cenário não confirmou — mediria o vazio');
+    assert.deepEqual([solta.andar.x, solta.andar.y], [0, 0],
+      'confirmar a fatia mandou o jogador andar no mesmo frame');
+    assert.equal(solta.correr, false, 'e ainda saiu correndo');
+    const depois = e.ler(par(CIMA, false));     // segue no batente, sem menu
+    assert.deepEqual([depois.andar.x, depois.andar.y], [0, 0],
+      'no frame seguinte já saiu andando: falta o rearme da locomoção');
+
+    // e o rearme não pode travar o jogo: passou pelo centro, anda de novo
+    e.ler(par(CENTRO, false));
+    const volta = e.ler(par(CIMA, false));
+    assert.ok(volta.andar.y > 0.9,
+      `depois de voltar ao centro o jogador tem que andar de novo, veio ${volta.andar.y}`);
+    assert.equal(volta.correr, true, 'e correr no batente também tem que voltar');
+  });
+
+  it('cada DIREÇÃO do analógico é um verbo — medido por direção, não por "tem fatia"', () => {
+    const esperado = [
+      [CIMA, 'KeyG'], [DIREITA, 'KeyQ'], [BAIXO, 'KeyF'], [ESQUERDA, 'KeyT'],
+    ];
+    for (const [eixos, code] of esperado) {
+      const e = criarEntradaXR();
+      e.ler(par(CENTRO, true));               // abre
+      const r = e.ler(par(eixos, true));      // escolhe
+      assert.equal(r.radial.code, code,
+        `a direção ${JSON.stringify(eixos.slice(2))} devia selecionar ${code}, veio ${r.radial.code}`);
+    }
+  });
+
+  it('soltar o clique CONFIRMA a fatia, uma vez só', () => {
+    entrada.ler(par(CENTRO, true));
+    entrada.ler(par(CIMA, true));
+    const solta = entrada.ler(par(CIMA, false));
+    assert.equal(solta.radial.confirmou, 'KeyG', 'soltar não confirmou a fatia escolhida');
+    assert.equal(solta.radial.aberto, false, 'o radial ficou aberto depois de confirmar');
+    assert.equal(entrada.ler(par(CIMA, false)).radial.confirmou, null,
+      'a confirmação repetiu no frame seguinte: uma escolha viraria rajada de granadas');
+  });
+
+  it('SEGURAR a fatia não confirma em rajada — a confirmação é só no soltar', () => {
+    /* Achado numa corrida de mutação: confirmar enquanto o analógico está na
+       fatia passou impune por todos os outros testes daqui. A 72 Hz isso é uma
+       granada POR FRAME enquanto o polegar decide — o jogador esvazia o
+       inventário só de olhar o menu. Mesmo motivo pelo qual a troca de arma e o
+       giro em passos exigem borda. */
+    entrada.ler(par(CENTRO, true));
+    const segurando = [];
+    for (let i = 0; i < 5; i++) segurando.push(entrada.ler(par(CIMA, true)).radial.confirmou);
+    assert.deepEqual(segurando, [null, null, null, null, null],
+      `segurar a fatia confirmou ${segurando.filter(Boolean).length}× em 5 frames`);
+    assert.equal(entrada.ler(par(CIMA, false)).radial.confirmou, 'KeyG',
+      'e depois de tanto segurar, soltar tem que confirmar UMA vez');
+  });
+
+  it('soltar com o analógico no CENTRO cancela — abrir sem querer não pode gastar item', () => {
+    entrada.ler(par(CENTRO, true));
+    entrada.ler(par(CIMA, true));
+    entrada.ler(par(CENTRO, true));          // voltou pro centro: larga a fatia
+    const solta = entrada.ler(par(CENTRO, false));
+    assert.equal(solta.radial.confirmou, null,
+      'soltar no centro confirmou mesmo assim: o radial gasta item por acidente');
+  });
+
+  it('inclinada fraca não entra na fatia (o analógico descansa em ±0,1)', () => {
+    entrada.ler(par(CENTRO, true));
+    const r = entrada.ler(par([0, 0, 0, -0.25], true));
+    assert.equal(r.radial.code, null,
+      'o repouso do analógico já selecionou uma fatia — a escolha piscaria sozinha');
+  });
+
+  it('o analógico do GIRO nem é tocado pelo radial', () => {
+    /* Defesa em profundidade. O giro que VALE mora noutro módulo
+       (js/xr/xrturn.js, lido direto das fontes pelo game.js), e o desenho já
+       evita o conflito pondo botão e fatia na mesma mão — a esquerda. Aqui se
+       cobra que a saída de giro DESTE módulo também fique quieta enquanto o
+       radial está aberto: se um dia alguém religar `cmd.girar`, o radial não
+       pode voltar a girar a vista. O SINAL entra no assert porque medir
+       "girou/não girou" já deixou passar movimento invertido nesta base. */
+    const comGiro = eixos => [esq(CENTRO, true), mao('right', eixos)];
+    const giros = [];
+    giros.push(entrada.ler(comGiro(CENTRO)).girar);
+    giros.push(entrada.ler(comGiro(DIREITA)).girar);
+    giros.push(entrada.ler(comGiro(CENTRO)).girar);
+    giros.push(entrada.ler(comGiro(ESQUERDA)).girar);
+    assert.deepEqual(giros, [0, 0, 0, 0],
+      `com o radial aberto o analógico direito girou o mundo (por frame: ${JSON.stringify(giros)})`);
+  });
+
+  it('o radial funciona na FORMA NATIVA do WebXR (array-like, não Array)', () => {
+    /* Mesma armadilha que descartou os dois controles por semanas: o emulador
+       faz `class XRInputSourceArray extends Array`, então Array.isArray dá true
+       nele e FALSE no runtime real. */
+    const nativo = itens => {
+      const o = { length: itens.length, [Symbol.iterator]: Array.prototype[Symbol.iterator] };
+      itens.forEach((v, i) => { o[i] = v; });
+      return o;
+    };
+    assert.equal(Array.isArray(nativo([])), false, 'o dublê tem que NÃO ser Array');
+    entrada.ler(nativo(par(CENTRO, true)));
+    assert.equal(entrada.ler(nativo(par(CIMA, true))).radial.code, 'KeyG',
+      'o radial não leu a forma que o navegador entrega de verdade');
+    assert.equal(entrada.ler(nativo(par(CIMA, false))).radial.confirmou, 'KeyG');
+  });
+
+  it('sem o controle da mão de apoio o radial não fica preso aberto', () => {
+    entrada.ler(par(CENTRO, true));
+    entrada.ler(par(CIMA, true));
+    const r = entrada.ler([mao('right', CENTRO)]);   // o controle do botão sumiu
+    assert.equal(r.radial.aberto, false, 'o radial ficou aberto com o controle ausente');
+    assert.equal(r.radial.confirmou, null, 'controle sumindo confirmou uma fatia sozinho');
   });
 });
 

@@ -3538,6 +3538,15 @@ function tick(forceDt) {
       }
       teclaXR('KeyR', cmd.recarregar);
       teclaXR('KeyE', cmd.usar);
+      /* OS QUATRO VERBOS DO RADIAL (js/xr/xrinput.js). Granada, kit médico,
+         comer e trocar acessório de mira não tinham botão nenhum no Touch — o
+         controle acabou, e a saída do gênero é um menu radial no analógico.
+         A LINHA TEM DE FICAR AQUI, e o motivo é ordem de leitura: `shootUpdate`
+         lê `justPressed` mais abaixo e `justPressed.clear()` apaga tudo no fim
+         do frame, então `code` escrito depois disto nunca chega a ser visto.
+         `confirmou` é um pulso de UM frame, que é exatamente o que `teclaXR`
+         traduz em tecla que sobe e desce. */
+      for (const c of ['KeyG', 'KeyQ', 'KeyF', 'KeyT']) teclaXR(c, cmd.radial.confirmou === c);
       mouse.shooting = cmd.atirar;
       /* SEMI-AUTOMÁTICA LÊ O CLIQUE, não o segurar (`gun.auto ? mouse.shooting :
          mouse.clicked`, logo abaixo em shootUpdate). Sem esta linha a pistola, a
@@ -3649,6 +3658,10 @@ function tick(forceDt) {
   if (xrOn) XRInterage.update({
     maoRaio: XR.mao('left'), maoPunho: XR.punho('left'),
     fontes: (renderer.xr.getSession && renderer.xr.getSession() || {}).inputSources, dt,
+    /* `null` diz ao módulo que a PONTE acima é a dona do despacho dos verbos.
+       Sem isto os dois emitem, e quem escuta `keydown` recebe o verbo duas
+       vezes — usar dois kits médicos com um gesto só. */
+    radial: null,
   });
   Interact.update(dt, t);
   if (Cannon) Cannon.update(dt, t);
