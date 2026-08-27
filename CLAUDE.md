@@ -110,6 +110,14 @@ mexer no repositório de outra pessoa — só com pedido explícito.
 - **Cuidado com o que mede o harness em vez do produto.** `startBRMatch` pula a
   fase da nave DE PROPÓSITO; uma sonda que lê a fase logo depois "prova" que o
   jogo não começa da nave — e não prova nada.
+- **Triagem de flake feita sob carga NÃO é triagem.** O runner re-roda o arquivo
+  isolado até 3× e chama de REGRESSÃO REAL o que não passar duas vezes
+  seguidas. Isso pressupõe máquina ociosa — e com agentes rodando testes em
+  paralelo o isolamento é só de porta, não de CPU. Aconteceu: `xr-haptics` foi
+  classificado como regressão real com 3 falhas isoladas consecutivas, passou
+  4× isolado logo depois, e a suíte inteira em máquina limpa (load 1,23) passou
+  sem tocá-lo. **Antes de investigar uma "regressão real", confira a carga** —
+  é a mesma lição da medição de boot, que só fechou com condição declarada.
 - **`git add -A` com agente trabalhando na árvore commita o trabalho dele pela
   metade — inclusive MUTANTE de teste.** Aconteceu: um agente estava numa rodada
   de reinjeção de defeito (para provar que os testes pegam), e um `git add -A`
