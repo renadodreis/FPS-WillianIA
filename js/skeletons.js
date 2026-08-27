@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import { meleeBlocked } from './aihelpers.js';
-import { fundirPorAtlas } from './meshutils.js';
+import { fundirPorAtlas, noSeed } from './meshutils.js';
 
 /* Mapa de eixos do rig (Sketchfab exporta em T-pose; tudo abaixo foi
    validado EMPIRICAMENTE com capturas por eixo — não confiar em intuição):
@@ -335,7 +335,17 @@ export function createSkeletons(deps) {
     });
     const preparedMaterials = new Set();
     for (const sk of list) {
-      const root = cloneRig(proto); // rig compartilhado quebra com .clone() comum
+      /* `noSeed` PORQUE ISTO É O CONTRATO MAIS CARO DO REPOSITÓRIO. `cloneRig`
+         cria um `Object3D` por osso, e todo `Object3D` gasta 4 números do
+         `Math.random` seedado no UUID: sem a cerca, a quantidade de esqueletos
+         entra na ORDEM DE CONSUMO do stream global e desloca o worldgen de
+         todos os jogadores. Hoje isso não quebra nada porque a criação
+         acontece depois de sítios/inimigos/boss/alien — ou seja, segura por
+         ORDEM DE EXECUÇÃO, não por construção. Qualquer fatiamento de boot que
+         mova esta linha para cima quebraria o mundo em silêncio.
+         Conferido com test/carregamento-determinismo.test.js: a impressão
+         digital do mundo não muda com a cerca. */
+      const root = noSeed(() => cloneRig(proto)); // rig compartilhado quebra com .clone() comum
       root.scale.setScalar(s);
       root.position.y = -box.min.y * s; // pés no chão do grupo
       root.traverse(o => {
