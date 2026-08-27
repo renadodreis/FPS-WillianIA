@@ -173,7 +173,12 @@ describe('controles de VR no runtime emulado (IWER)', { skip: !CHROME && 'Chrome
     assert.ok(d < 0.3, `o repouso do analógico moveu ${d.toFixed(3)} m`);
   });
 
-  it('clique do analógico faz CORRER', async () => {
+  /* O GESTO DE CORRER MUDOU, e o nome deste caso mentia depois da mudança.
+     Com a empunhadura esquerda virando AGARRAR (D3), `agachar` desceu para o
+     CLIQUE do analógico e `correr` subiu para o BATENTE (>= 0,92). Este caso
+     passou a dirigir o batente contra a caminhada plena (0,88), que é a faixa
+     em que se anda cheio sem sair correndo. */
+  it('o BATENTE do analógico faz CORRER (o clique agora agacha)', async () => {
     /* Mede a VELOCIDADE ESTABILIZADA, não a distância acumulada. Distância a
        partir do repouso mistura a rampa de aceleração com o jitter de frame da
        sessão, e o teste ficava intermitente medindo a mesma corrida que já
@@ -181,8 +186,7 @@ describe('controles de VR no runtime emulado (IWER)', { skip: !CHROME && 'Chrome
     const velMedia = async correr => {
       const A = window.__A, MP = window.__MP;
       A.solta(); await A.espera(250);
-      A.stick('left', 0, -1);
-      if (correr) A.botao('left', 'thumbstick', 1);
+      A.stick('left', 0, correr ? -1 : -0.88);
       await A.espera(700);                       // deixa a rampa assentar
       const am = [];
       for (let i = 0; i < 10; i++) {
@@ -457,8 +461,7 @@ describe('conforto: vinheta de túnel e piscada no giro', { skip: !CHROME && 'Ch
     const r = await h.play(async () => {
       const A = window.__A;
       A.solta(); await A.espera(200);
-      A.stick('left', 0, -1);
-      A.botao('left', 'thumbstick', 1);          // correndo
+      A.stick('left', 0, -1);                    // correndo: o BATENTE é o sprint
       await A.espera(1200);
       const t = window.__game.XR.conforto.tunel;
       A.solta();

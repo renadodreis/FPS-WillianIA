@@ -97,6 +97,10 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
        drenar isto na posição do jogador põe o colisor debaixo da CABEÇA. */
     consumirPasso: alvo => rig.consumirPasso(alvo),
     devolverPasso: (dx, dz) => rig.devolverPasso(dx, dz),
+    /* Separação cabeça↔corpo que o mundo RECUSOU, em metros. É o que o
+       escurecimento de intrusão consome (js/xr/xrcomfort.js): a parede segura
+       o colisor, e este número diz quanto a cabeça já entrou no sólido. */
+    get foraDoCorpo() { return rig.foraDoCorpoM; },
     rebasear: () => rig.rebasear(),
     headWorldPosition: alvo => rig.headWorldPosition(alvo),
     get presenting() { return apresentando(); },

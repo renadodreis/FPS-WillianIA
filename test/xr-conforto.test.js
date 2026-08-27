@@ -152,6 +152,56 @@ describe('o contrato de conforto vale para TODO perfil que existir', () => {
     assert.ok(r.faltas.some(f => f.criterio === 'A4'), 'a falta de A4 sumiu junto com a paridade');
   });
 
+  it('a amarra da exceção confere as CINCO condições — e o perfil FORJADO reprova', () => {
+    /* ESTE É O CASO QUE FALTAVA, e ele é literal: o objeto abaixo é o que o
+       validador da rodada 10 passou para o `auditar()` do próprio módulo e
+       recebeu de volta `ok: true`, `t95: 0,7500 s` (CINCO vezes o teto) e a
+       exceção de A4 carimbada. O motivo era que `vale` conferia uma das cinco
+       condições que a exceção declara ("escala 1 e os quatro números do PC
+       bit por bit"): só a escala.
+
+       Uma exceção que carimba isso não é amarra, é cheque em branco para o
+       próximo perfil que alguém chamar de `paridade`. Falha se a amarra
+       voltar a olhar menos do que declara, ou se o plano deixar de carregar a
+       base do PC (`pc`), que é o que torna as outras quatro checáveis. */
+    const forjado = { perfil: 'paridade', escala: 1, andar: 12, correr: 25, aceleraSolo: 4 };
+    const r = C.auditar(forjado);
+    assert.equal(r.ok, false,
+      `o perfil forjado passou com t95 de ${(r.t95 * 1000).toFixed(0)} ms e exceção ` +
+      `${r.excecoes.map(e => e.criterio).join('+') || 'nenhuma'}`);
+    assert.equal(r.excecoes.length, 0, 'a exceção cobriu um perfil que não prova ser paridade');
+    assert.ok(r.faltas.some(f => f.criterio === 'A4'), 'a falta de A4 não apareceu no forjado');
+
+    /* E cada uma das cinco condições, sozinha, derruba a exceção: um perfil
+       que é paridade em tudo MENOS num campo não é paridade inteira. */
+    const bom = L.politicaDeVelocidade(PC, 'paridade');
+    assert.equal(C.auditar(bom).excecoes.length, 1, 'a paridade de verdade perdeu a exceção');
+    for (const campo of ['andar', 'correr', 'agachar', 'mirar']) {
+      const torto = { ...bom, [campo]: bom[campo] * 0.5 };
+      assert.equal(C.auditar(torto).ok, false,
+        `perfil com ${campo} diferente do PC ainda recebeu a exceção de paridade`);
+    }
+    assert.equal(C.auditar({ ...bom, escala: 0.99 }).ok, false, 'escala ≠ 1 recebeu a exceção');
+    const semBase = { ...bom }; delete semBase.pc;
+    assert.equal(C.auditar(semBase).ok, false,
+      'plano sem a base do PC recebeu a exceção — sem base não há como PROVAR paridade');
+  });
+
+  it('o mecanismo de exceção morde por lista, não por confiança no nome', () => {
+    /* A lista real tem uma entrada só, e um dia pode ter zero. Testar o
+       mecanismo apenas com a lista real deixaria este caso vazio no instante
+       em que ela mudasse — por isso a lista entra por parâmetro. Falha se
+       `auditar` passar a ignorar exceções, ou a aceitar uma cuja condição de
+       validade diz não. */
+    const paridade = L.politicaDeVelocidade(PC, 'paridade');
+    const nunca = [{ criterio: 'A4', limite: 'rampa95S', perfil: 'paridade',
+      porque: 'exceção sintética deste teste', custo: 'nenhum', vale: () => false }];
+    assert.equal(C.auditar(paridade, nunca).ok, false,
+      'a exceção foi aplicada mesmo com a condição de validade dizendo não');
+    assert.equal(C.auditar(paridade, []).ok, false, 'com a lista vazia a rampa longa passou');
+    assert.equal(C.auditar(paridade).ok, true, 'a lista real deixou de cobrir a paridade');
+  });
+
   it('a exceção declara MOTIVO e CUSTO — exceção sem texto é ambiguidade', () => {
     /* Falha se alguém acrescentar uma exceção só com o nome do perfil. A
        rodada que derrubou A4 tinha a decisão certa tomada e NÃO ESCRITA:

@@ -36,6 +36,12 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
   /* passo FÍSICO acumulado: o quanto o jogador andou pelo cômodo e o jogo
      ainda não absorveu. Ver o cabeçalho de `place`. */
   let passoX = 0, passoZ = 0;
+  /* O QUE O MUNDO RECUSOU. Separado do passo de propósito: isto NUNCA é
+     oferecido ao colisor (ver `devolverPasso`), e é a separação entre a
+     cabeça e o corpo do jogador — o número que o escurecimento de intrusão
+     consome (js/xr/xrcomfort.js). */
+  let foraX = 0, foraZ = 0;
+  let carenciaEscoa = 0;   // frames em que o mundo recusou; enquanto isso, não escoa
   let cabecaX = 0, cabecaZ = 0, temBase = false;
   let pedidoRebase = 0;   // frames de carência do reset de referencial (ver rebasear)
 
@@ -67,7 +73,8 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
     /* zera o passo físico: a sessão nova começa com o jogador onde ele está,
        e a base é redefinida no primeiro `place` (a pose real da cabeça só
        chega no primeiro frame da sessão — antes disso seria um passo falso). */
-    passoX = 0; passoZ = 0; temBase = false; pedidoRebase = 0;
+    passoX = 0; passoZ = 0; foraX = 0; foraZ = 0; carenciaEscoa = 0;
+    temBase = false; pedidoRebase = 0;
     dentro = true;
     return rig;
   }
@@ -191,15 +198,51 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
        É o que cobre recentrar, redefinição de piso e falha de rastreio, sem
        depender da ordem em que o runtime entrega pose e evento. */
     if (Math.hypot(dx, dz) <= PASSO_HUMANO_MAX) {
-      passoX += dx * c + dz * s;
-      passoZ += -dx * s + dz * c;
+      let px = dx * c + dz * s;
+      let pz = -dx * s + dz * c;
+      /* ANDAR DE VOLTA PAGA A DÍVIDA PRIMEIRO. O jogador que entrou com a
+         cabeça no muro e saiu de lá não pode arrastar o colisor para trás: o
+         corpo dele nunca chegou a entrar. A componente do passo que aponta
+         para DENTRO do `fora` abate o `fora` e não vira passo; o resto segue
+         normal. Sem isto o colisor dispara para trás quando o jogador sai —
+         a versão espelhada de atravessar a parede. */
+      const m = Math.hypot(foraX, foraZ);
+      if (m > 1e-9) {
+        const ux = foraX / m, uz = foraZ / m;
+        const proj = px * ux + pz * uz;
+        if (proj < 0) {
+          const usa = Math.min(-proj, m);
+          foraX -= ux * usa; foraZ -= uz * usa;
+          px += ux * usa; pz += uz * usa;
+        }
+      }
+      passoX += px;
+      passoZ += pz;
+    }
+    /* O OBSTÁCULO SAIU DA FRENTE? A porta abre, a cidade cai, o carro anda.
+       O que estava fora escoa de volta para o passo — devagar, e só depois de
+       alguns frames sem ninguém recusar. Despejar tudo de uma vez seria o
+       teleporte de colisor que o anti-cheat do servidor lê como trapaça; não
+       escoar nunca deixaria o corpo plantado atrás de uma parede que não
+       existe mais. Enquanto o mundo continuar recusando, `devolverPasso`
+       renova a carência e nada escoa. */
+    if (carenciaEscoa > 0) carenciaEscoa--;
+    else {
+      const m = Math.hypot(foraX, foraZ);
+      if (m > 1e-9) {
+        const k = Math.min(1, ESCOA_FORA / m);
+        passoX += foraX * k; passoZ += foraZ * k;
+        foraX -= foraX * k; foraZ -= foraZ * k;
+      }
     }
     rig.rotation.y = yaw;
-    // rig = alvo da cabeça menos a posição da cabeça já girada pelo yaw
+    /* rig = alvo da cabeça menos a posição da cabeça já girada pelo yaw.
+       A cabeça vai para (x,z) + passo + FORA: o `fora` é o que mantém a vista
+       onde o corpo do jogador realmente está, com o colisor parado na parede. */
     rig.position.set(
-      x + passoX - (hx * c + hz * s),
+      x + passoX + foraX - (hx * c + hz * s),
       y,
-      z + passoZ - (-hx * s + hz * c),
+      z + passoZ + foraZ - (-hx * s + hz * c),
     );
   }
 
@@ -245,6 +288,13 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
      O evento continua sendo escutado, como sinal extra e barato. */
   const PASSO_HUMANO_MAX = 0.35;
   const REBASE_FRAMES = 3;
+  /* Volta do `fora` para o passo, por frame, quando o mundo para de recusar.
+     0,006 m a 72 Hz ≈ 0,43 m/s: mais lento que qualquer caminhada, então o
+     colisor alcança a cabeça andando, nunca saltando. */
+  const ESCOA_FORA = 0.006;
+  /* Frames de carência depois de uma recusa. Dois bastam: a recusa chega uma
+     vez por frame enquanto o jogador estiver empurrando a parede. */
+  const ESCOA_CARENCIA = 2;
   function consumirPasso(alvo, limite = PASSO_MAX) {
     const out = alvo || { x: 0, z: 0 };
     const m = Math.hypot(passoX, passoZ);
@@ -274,18 +324,30 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
     return out;
   }
 
-  /* O QUE A PAREDE REJEITOU VOLTA PRA CÁ. O jogo soma o passo em `player.pos`
-     ANTES da física; se a colisão empurra o jogador de volta, o acumulado já
-     foi reduzido e a cabeça é arrastada — medido: 3,0 m de passo físico contra
-     um sólido moviam a vista só 0,560 m, ou seja, o mundo travava enquanto o
-     jogador andava de verdade no quarto dele.
+  /* O QUE A PAREDE REJEITOU VOLTA PRA CÁ — E NÃO PARA O DRENO DO COLISOR.
 
-     Devolver mantém a cabeça onde o corpo do jogador realmente está, com o
-     colisor parado na parede. A cabeça passa a ficar ADIANTE do colisor, que é
-     o certo: quem anda contra uma parede virtual atravessa mesmo — ela não
-     existe no quarto. O que não pode é o jogo puxar a vista de volta. */
+     Duas coisas erradas já foram medidas neste mesmo ponto, e a segunda
+     nasceu da correção da primeira:
+
+     1. NÃO devolver: o passo saía do acumulado, a colisão empurrava
+        `player.pos` de volta e a CABEÇA era arrastada junto — 3,0 m de
+        caminhada real moviam a vista 0,82 m e depois nada. O mundo travava
+        enquanto o jogador andava de verdade no quarto dele.
+     2. Devolver para `passoX/passoZ`: no frame seguinte o `consumirPasso`
+        oferecia tudo de novo ao colisor, 0,15 m por frame, sem parar. Medido
+        na validação de `fa9ed86`: **10 m de caminhada física contra
+        estrutura, o colisor andou 10,9623 m** — atravessou. Em multijogador
+        isso não é desconforto, é vetor de trapaça.
+
+     Agora o recusado vira `fora`: ele mantém a cabeça onde o corpo do jogador
+     realmente está (a vista não trava, A6) e NUNCA é oferecido ao colisor (a
+     parede segura o corpo, C2). O preço é a cabeça ficar adiante do corpo, e
+     esse preço é PAGO NA TELA — `js/xr/xrcomfort.js` escurece a vista conforme
+     a separação cresce, que é o `head_behavior_mode: Fade` do Godot XR Tools.
+     Sem o escurecimento, isto seria espiar-parede de escala de sala. */
   function devolverPasso(dx, dz) {
-    passoX += dx; passoZ += dz;
+    foraX += dx; foraZ += dz;
+    carenciaEscoa = ESCOA_CARENCIA;
   }
 
   /* RECENTRAR NÃO É ANDAR. `recenter()` (ou o `reset` que o sistema dispara ao
@@ -322,5 +384,11 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
     get rig() { return rig; },
     get entered() { return dentro; },
     get passoPendente() { return { x: passoX, z: passoZ }; },
+    /* SEPARAÇÃO CABEÇA↔CORPO que o mundo recusou, em metros e em MUNDO.
+       É o que alimenta o escurecimento de intrusão: enquanto isto for zero o
+       jogador está dentro do mundo jogável, e quanto maior, mais fundo a
+       cabeça dele está em algo sólido. */
+    get foraDoCorpo() { return { x: foraX, z: foraZ }; },
+    get foraDoCorpoM() { return Math.hypot(foraX, foraZ); },
   };
 }

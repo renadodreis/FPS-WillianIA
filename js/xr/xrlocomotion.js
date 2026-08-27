@@ -115,7 +115,14 @@ export const PERFIS = {
      Paridade tem que ser paridade INTEIRA: dar aceleração instantânea com
      velocidade de PC deixaria quem está de headset MELHOR que quem está no
      monitor em duelo de canto (quem chega ao topo primeiro ganha a troca),
-     e vantagem de headset não é conforto, é defeito de projeto. */
+     e vantagem de headset não é conforto, é defeito de projeto.
+
+     A rampa longa deste perfil é EXCEÇÃO DECLARADA a A4, aceita pelo
+     validador na rodada 10 com uma condição: a amarra tem que existir em
+     CÓDIGO. Ela existe em `js/xr/xrcomfort.js` (`EXCECOES[].vale`), e é por
+     causa dela que este objeto carrega `rampaDoPc` em vez de um número solto:
+     a exceção só alcança um plano que prove ser paridade inteira — escala 1 E
+     os quatro números E a rampa, todos idênticos aos do PC. */
   paridade: { escala: 1, rampaDoPc: true },
 };
 
@@ -181,6 +188,20 @@ export function politicaDeVelocidade(base = {}, perfil = PADRAO.perfil) {
     mirar: num(base.mirar) * k,
     aceleraSolo: rampaDoPc ? num(base.aceleraSolo) : ACEL_XR_SOLO,
     aceleraAr: num(base.aceleraAr),
+    /* A BASE VIAJA JUNTO — e não é enfeite de depuração: é o que torna a
+       amarra da exceção de A4 VERIFICÁVEL. A exceção declara valer só para
+       "paridade inteira: escala 1 e os quatro números do PC bit por bit", e
+       quem a avalia (`js/xr/xrcomfort.js`) recebe só o plano. Sem os números
+       do PC dentro dele, a única condição checável era `escala === 1` — e foi
+       assim que um perfil forjado com `andar: 12, correr: 25, aceleraSolo: 4`
+       saiu APROVADO com a exceção carimbada e t95 de 0,75 s (5× o teto),
+       medido pelo validador na rodada 10. Plano sem `pc` não prova nada e não
+       recebe exceção nenhuma. */
+    pc: {
+      andar: num(base.andar), correr: num(base.correr),
+      agachar: num(base.agachar), mirar: num(base.mirar),
+      aceleraSolo: num(base.aceleraSolo), aceleraAr: num(base.aceleraAr),
+    },
   };
 }
 

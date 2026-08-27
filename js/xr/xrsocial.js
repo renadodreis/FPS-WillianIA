@@ -410,8 +410,16 @@ export function createXrSocial({
      ficam, e refazer a lista a cada frame de hover seria lixo por nada. */
   function chaveLayout() {
     const d = _ler() || {};
+    /* `jogando` ENTRA NA CHAVE porque ele DECIDE UMA ZONA: `SAIR DA PARTIDA`
+       só existe com partida em andamento (ver `zonasSala`). Fora da chave, a
+       lista fica congelada na do estado anterior — a partida começa com o
+       jogador na aba SALA e o botão de sair não nasce; a partida acaba e o
+       botão continua lá, acionável e mudo, que é exatamente o botão morto que
+       a cerca veio eliminar. O cache só pode ignorar o que não muda o LAYOUT,
+       e este muda. */
     return aba + '|' + pagina + '|' + hostId + '|' + eu() + '|' + vivos + '|' + fase +
-      '|' + txt(d.tempo) + '|' + txt(d.partida) + '|' + (bloqueado() ? 'x' : '.') +
+      '|' + txt(d.tempo) + '|' + txt(d.partida) + '|' + (d.jogando ? 'j' : '.') +
+      '|' + (bloqueado() ? 'x' : '.') +
       '|' + jogadores.map(p =>
       p.nick + ':' + p.kills + (p.alive ? 'v' : 'm') + (p.spectator ? 'e' : '')).join(',') +
       '|' + log.slice(-LINHAS_LOG).map(m => (m.sys ? '!' : m.nick) + ':' + m.msg).join('/');

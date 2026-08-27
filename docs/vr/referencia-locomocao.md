@@ -305,3 +305,134 @@ Não implementado, com fonte para quando for a hora: modo sentado com
 deslocamento de piso (Alyx *Stand*, Meta *Height Offset*), interruptor de pernas
 para não atrapalhar loot (Ghosts of Tabor), e travar altura se o corpo virar
 hitbox de rede (Contractors).
+
+---
+
+## 5. Aceleração: instantânea ou gradual? (o que decidiu A4)
+
+Levantamento feito na rodada 10, quando a decisão sobre o perfil `paridade`
+voltou à mesa. A pergunta era exatamente esta: **rampa de 273 ms é conforto ou
+é lag?**
+
+### 5.1 A documentação oficial, verbatim
+
+> "This method involves setting fixed movement speeds (e.g., stopped, walking,
+> running) and **switching between them instantly**."
+> "**By keeping accelerations brief and infrequent**, the likelihood of
+> discomfort is reduced."
+> "This **reduces the duration of perceived acceleration**, minimizing the
+> mismatch between what users see and feel."
+> "When the camera collides with virtual objects, opt for a **soft collision**
+> approach where the camera slows down before stopping, rather than an abrupt
+> halt."
+— Meta, [Locomotion Comfort and Usability](https://developers.meta.com/horizon/resources/locomotion-comfort-usability/)
+
+> "**Limit acceleration duration and frequency** to reduce sensory mismatch."
+> "Keep acceleration events **brief and infrequent**."
+> "Use stepped translations, restrict movement axes, control camera elevation,
+> and **implement soft camera collisions**."
+> "Offer smooth turning as an opt-in feature, tuning speed and acceleration
+> carefully."
+— Meta, [Locomotion Best Practices](https://developers.meta.com/horizon/design/locomotion-best-practices/)
+
+> "The average human being walks at a rate of about three miles per hour
+> (1.4 meters per second) and runs at about twice that speed."
+> "Vignettes, sometimes referred to as Tunnel Vision, darken or completely
+> occlude the edges of the screen when movement occurs... They serve to limit
+> the amount of visible optic flow, which can help reduce vection **during
+> acceleration**."
+> "The tradeoff with vignettes is that a diminished field of view can
+> potentially be **disorienting or claustrophobic** for the user."
+— Meta, [Reduce Optic Flow](https://developers.meta.com/horizon/resources/locomotion-design-reduce-optic-flow/)
+
+> Comfort checklist: "Keep slide speeds **moderate (4–6 m/s)** and add a
+> vignette with a quick ease in/out." · "**Avoid sudden camera height
+> changes**; use the floating stand-off and gentle step handling."
+> Player Collider: "A capsule (0.5 m radius) with **floating spring-damper**
+> keeps you slightly above ground while respecting slopes and steps."
+— Meta, [Immersive Web SDK, docs/concepts/locomotion](https://github.com/facebook/immersive-web-sdk/blob/main/docs/concepts/locomotion/index.md)
+
+### 5.2 O que isso responde, e o que NÃO responde
+
+**Responde:** a direção é encurtar a aceleração, não alongá-la. "Velocidade
+quantizada" — trocar de velocidade **instantaneamente** — é apresentada como
+técnica de conforto, não como o oposto dele. Uma rampa de 273 ms é o estímulo
+que as duas páginas mandam encurtar.
+
+**Não responde:** nada disso fala de **equilíbrio competitivo entre um jogador
+de headset e um de monitor na mesma partida**, que é o argumento que sustenta o
+perfil `paridade` deste jogo. As diretrizes tratam do conforto de um jogador
+sozinho; o custo de dar ao headset um arranque melhor que o do monitor não é
+assunto delas.
+
+### 5.3 O que ficou decidido aqui
+
+Os perfis `conforto` e `alcance` (o padrão e o do meio) aceleram em **50 ms**
+medidos — bem dentro do teto de 150 ms de A4, e é a leitura literal da
+recomendação. O perfil `paridade` (linha `IGUAL AO PC`) mantém a rampa do
+monitor por **decisão de projeto, declarada como exceção** em
+`js/xr/xrcomfort.js`, com motivo e custo escritos e com uma amarra que agora é
+**código**: a exceção só alcança um plano que prove ser paridade inteira —
+escala 1 **e** os quatro números de velocidade **e** a rampa, todos idênticos
+aos do PC (`eParidadeInteira`). Antes da rodada 10 a amarra conferia uma das
+cinco condições, e um perfil forjado (`andar: 12, correr: 25, aceleraSolo: 4`)
+saía aprovado com t95 de 0,75 s — cinco vezes o teto.
+
+---
+
+## 6. A cabeça do jogador entra na parede — o que o gênero faz
+
+O jogador anda no quarto dele; a parede do jogo não existe lá. As três saídas
+conhecidas e o que cada uma custa:
+
+| saída | quem usa | custo |
+|---|---|---|
+| **Empurrar o corpo/rig** ("push away") | Godot XR Tools (opção), corpos físicos tipo Boneworks | move a vista sem o pescoço do jogador — proibido por A6 e pelo Oculus BP |
+| **Fade para preto** | **Godot XR Tools (DEFAULT)** | cega o jogador enquanto ele está fora do mundo |
+| **Deixar atravessar sem nada** | (o que este jogo fazia) | ver e atirar do outro lado da parede: espiar-parede de escala de sala |
+
+Godot XR Tools, [`addons/godot-xr-tools/player/player_body.gd`](https://github.com/GodotVR/godot-xr-tools/blob/master/addons/godot-xr-tools/player/player_body.gd):
+
+```gdscript
+## Behaviour mode when players head collides, or moves beyond
+## [member max_head_distance].
+## Push away, pushes the player body away.
+## Fade, fades view to black.
+@export_enum("Push away", "Fade", "Disabled") var head_behavior_mode = 1
+
+## Maximum distance the head may move away from the player body
+@export_range(0.0, 2.0, 0.01) var max_head_distance = 1.0
+```
+
+O default é **1 = Fade**, o fade sobe e desce a `delta * 3.0` (≈ 1/3 de segundo
+do claro ao preto) e o gatilho é duplo: **colisão da cabeça** OU **distância
+cabeça↔corpo** acima de `max_head_distance`.
+
+Do lado da Meta, a recomendação de "soft camera collisions" trata do movimento
+**comandado** (o colisor desacelera antes de parar), não do passo físico — e o
+passo físico não pode ser desacelerado por ninguém: *"The display should
+respond to the user's movements at all times, without exception"* (Oculus BP,
+citado no §A6 de `docs/vr/criterio-aaa.md`).
+
+### 6.1 O que ficou decidido aqui, e por quê
+
+**Fade**, com o passo recusado virando separação em vez de empurrão:
+
+1. A cabeça atravessa — a vista responde ao corpo do jogador, sempre (A6).
+2. O que a parede recusa **nunca volta para o colisor** (`foraX/foraZ` em
+   `js/xr/xrrig.js`, separado do passo drenável). Antes, o recusado voltava ao
+   mesmo acumulado que alimenta o colisor e ele atravessava: **10 m de
+   caminhada física pedidos, colisor andou 10,9623 m** (validação de `fa9ed86`).
+3. A separação vira **escurecimento progressivo** (`intrusao()` em
+   `js/xr/xrcomfort.js`): nada até 0,20 m, preto total em 0,50 m, rampa linear
+   de 1/3 de segundo — os números do Godot, com o limiar calibrado pela
+   medição desta base (separação de 0,0131 m no pior frame de uso normal;
+   0,133 m no encosto de parede).
+4. Quando o obstáculo some, a separação **escoa** de volta para o passo a
+   0,006 m por frame (≈ 0,43 m/s): o colisor alcança a cabeça andando, nunca
+   saltando — salto de colisor é o que o anti-cheat de teleporte do servidor lê
+   como trapaça.
+
+O escurecimento **não** é preferência do jogador: desligar a vinheta de
+conforto no painel não o desliga. Vinheta é conforto; ver do outro lado da
+parede é integridade do mundo.

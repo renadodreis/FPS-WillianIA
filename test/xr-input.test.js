@@ -26,9 +26,9 @@
 const { describe, it, before, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-let criarEntradaXR, DEADZONE, SNAP_RAD;
+let criarEntradaXR, DEADZONE, SNAP_RAD, CORRER_TILT, ANDAR_CHEIO;
 before(async () => {
-  ({ criarEntradaXR, DEADZONE, SNAP_RAD } = await import('../js/xr/xrinput.js'));
+  ({ criarEntradaXR, DEADZONE, SNAP_RAD, CORRER_TILT, ANDAR_CHEIO } = await import('../js/xr/xrinput.js'));
 });
 
 /* dublê de XRInputSource: só o que o módulo lê */
@@ -455,6 +455,51 @@ describe('robustez — controle é hardware, e hardware falta', () => {
   it('eixo com lixo (NaN, string) não vira movimento', () => {
     const r = entrada.ler([mao('left', [0, 0, NaN, 'muito'])]);
     assert.deepEqual([r.andar.x, r.andar.y], [0, 0]);
+  });
+
+  /* A FAIXA DE CAMINHADA PLENA, e por que ela existe.
+     Quando `correr` desceu para o batente do analógico (para liberar a
+     empunhadura ao AGARRAR), a caminhada normalizada só chegava a 100 % em
+     inclinada 1,0 — que já é corrida. Na prática o jogador nunca andava
+     inteiro: travava em 92 % e o passo seguinte era disparada. A caminhada
+     passa a valer cheia a partir de `ANDAR_CHEIO` (0,85), e a corrida começa
+     em `CORRER_TILT` (0,92): entre os dois há uma faixa real onde o polegar
+     descansa andando a 100 % sem sair correndo.
+     Se alguém igualar as duas constantes, este caso morre — e é para morrer:
+     igualadas, andar cheio deixa de ser alcançável. */
+  describe('a faixa entre andar cheio e correr', () => {
+    const frente = m => mao('left', [0, 0, 0, -m], [false, false, false, false]);
+
+    it('a caminhada chega a 100 % ANTES do batente de corrida', () => {
+      assert.ok(ANDAR_CHEIO < CORRER_TILT,
+        `ANDAR_CHEIO (${ANDAR_CHEIO}) tem que ser MENOR que CORRER_TILT (${CORRER_TILT}), senão andar cheio e correr começam no mesmo ponto`);
+      const r = entrada.ler([frente(ANDAR_CHEIO)]);
+      assert.ok(Math.abs(Math.hypot(r.andar.x, r.andar.y) - 1) < 1e-6,
+        `na inclinada ${ANDAR_CHEIO} a caminhada deu ${Math.hypot(r.andar.x, r.andar.y).toFixed(3)}, não 1`);
+      assert.equal(r.correr, false, `inclinada ${ANDAR_CHEIO} já disparou corrida`);
+    });
+
+    it('dentro da faixa anda cheio e NÃO corre', () => {
+      const meio = (ANDAR_CHEIO + CORRER_TILT) / 2;
+      const r = entrada.ler([frente(meio)]);
+      assert.ok(Math.abs(Math.hypot(r.andar.x, r.andar.y) - 1) < 1e-6,
+        `na inclinada ${meio.toFixed(3)} a caminhada não está cheia`);
+      assert.equal(r.correr, false, `inclinada ${meio.toFixed(3)} disparou corrida antes do batente`);
+    });
+
+    it('no batente corre, e a caminhada não passa de 100 %', () => {
+      const r = entrada.ler([frente(1)]);
+      assert.equal(r.correr, true, 'o batente não disparou corrida');
+      assert.ok(Math.hypot(r.andar.x, r.andar.y) <= 1 + 1e-6,
+        'a caminhada passou de 100 % no batente');
+    });
+
+    it('abaixo da faixa a caminhada é proporcional — inclinar pouco anda pouco', () => {
+      const r = entrada.ler([frente(0.5)]);
+      const v = Math.hypot(r.andar.x, r.andar.y);
+      assert.ok(v > 0.1 && v < 1,
+        `inclinada 0,5 deu ${v.toFixed(3)}: a caminhada deixou de ser proporcional`);
+    });
   });
 
   it('mão desconhecida é ignorada em vez de virar as duas', () => {

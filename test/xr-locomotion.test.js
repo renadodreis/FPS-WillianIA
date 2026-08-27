@@ -122,6 +122,23 @@ describe('política de velocidade em XR (unidade)', () => {
       'paridade com rampa instantânea é vantagem competitiva de headset');
   });
 
+  it('TODO plano carrega a base do PC — é ela que torna a exceção de A4 verificável', () => {
+    /* A exceção de A4 diz valer só para "paridade inteira: escala 1 e os
+       quatro números do PC bit por bit". Quem a avalia recebe só o plano; sem
+       a base do PC dentro dele, a única condição checável era `escala === 1`,
+       e um perfil forjado (`andar: 12, correr: 25, aceleraSolo: 4`) saía
+       APROVADO com a exceção carimbada e t95 de 0,75 s — cinco vezes o teto.
+       Falha se alguém tirar `pc` do plano: a amarra volta a ser prosa. */
+    for (const nome of M.ORDEM) {
+      const p = M.politicaDeVelocidade(PC, nome);
+      assert.ok(p.pc && typeof p.pc === 'object', `o plano de ${nome} não carrega a base do PC`);
+      for (const campo of ['andar', 'correr', 'agachar', 'mirar', 'aceleraSolo', 'aceleraAr']) {
+        assert.equal(p.pc[campo], PC[campo],
+          `a base do PC no plano de ${nome} diverge em ${campo}: ${p.pc[campo]} ≠ ${PC[campo]}`);
+      }
+    }
+  });
+
   it('`alcance` corre mais rápido que o gás da fase 1 — e `conforto` não', () => {
     /* Falha se a âncora de `alcance` cair abaixo da fuga, ou se `conforto`
        subir e o degrau do meio deixar de ter motivo para existir.
@@ -335,10 +352,20 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
       `mirando ${r.plano.mirar.toFixed(3)} m/s`);
   });
 
+/* O MAPEAMENTO DO ANALÓGICO MUDOU, e estes casos foram reapontados na
+   integração. `agachar` saiu da empunhadura esquerda (que virou AGARRAR, D3) e
+   foi para o CLIQUE do analógico; `correr` saiu do clique e foi para o BATENTE
+   (>= CORRER_TILT). Caminhar no talo passou a significar correr, então cada
+   caso passa a dirigir o que ele diz medir:
+     andar     -> inclinada de 0,88 (caminhada plena, abaixo do batente)
+     correr    -> batente (1,0)
+     agachado  -> 0,88 + clique do analógico
+     mirando   -> 0,88 + empunhadura DIREITA (a mira não mudou)
+   A faixa 0,85–0,92 existe para isto: andar cheio sem sair correndo. */
   it('ANDAR estabiliza em escala humana — não nos 5,20 m/s do monitor', async () => {
     /* Falha se a linha `let speed = WALK_SPEED` voltar, ou se o módulo
        parar de ser consultado: o regime volta a 5,20. */
-    const am = await h.play(() => window.__VEL.perfil([['stick', 'left', 0, -1]], 1600));
+    const am = await h.play(() => window.__VEL.perfil([['stick', 'left', 0, -0.88]], 1600));
     const v = regime(am);
     console.log(`      andar: ${v.toFixed(3)} m/s em ${frames(am)} frames de render`);
     assert.ok(frames(am) > 20, `só ${frames(am)} frames de render na janela: sessão parada`);
@@ -349,7 +376,7 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
   it('CORRER estabiliza na corrida humana da Meta', async () => {
     /* Falha se `RUN_SPEED` voltar à linha do sprint. 8,600 → 2,800. */
     const am = await h.play(() => window.__VEL.perfil(
-      [['stick', 'left', 0, -1], ['botao', 'left', 'thumbstick', 1]], 1800));
+      [['stick', 'left', 0, -1]], 1800));
     const v = regime(am);
     console.log(`      correr: ${v.toFixed(3)} m/s`);
     assert.ok(Math.abs(v - 2.8) < 0.08,
@@ -361,9 +388,9 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
        `CROUCH_SPEED`/`ADS_SPEED`, que é o descuido natural: o jogador
        agachado ficaria mais rápido que andando. */
     const ag = await h.play(() => window.__VEL.perfil(
-      [['stick', 'left', 0, -1], ['botao', 'left', 'squeeze', 1]], 1800));
+      [['stick', 'left', 0, -0.88], ['botao', 'left', 'thumbstick', 1]], 1800));
     const mi = await h.play(() => window.__VEL.perfil(
-      [['stick', 'left', 0, -1], ['botao', 'right', 'squeeze', 1]], 1800));
+      [['stick', 'left', 0, -0.88], ['botao', 'right', 'squeeze', 1]], 1800));
     const vAg = regime(ag), vMi = regime(mi);
     console.log(`      agachado: ${vAg.toFixed(3)} m/s · mirando: ${vMi.toFixed(3)} m/s`);
     assert.ok(Math.abs(vAg - 0.846) < 0.05,
@@ -418,7 +445,7 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
       G.camera.getWorldDirection(olhar); olhar.y = 0; olhar.normalize();
       MP.player.vel.x = 0; MP.player.vel.z = 0;
       const p0 = [MP.player.pos.x, MP.player.pos.z];
-      A.stick('left', 0, -1);
+      A.stick('left', 0, -0.88);   // caminhada plena, abaixo do batente de correr
       await A.espera(1200);
       A.solta();
       const dx = MP.player.pos.x - p0[0], dz = MP.player.pos.z - p0[1];
@@ -440,7 +467,7 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
       const A = window.__A;
       A.solta(); await A.espera(300);
       A.stick('left', 0, -1);
-      A.botao('left', 'thumbstick', 1);
+      A.stick('left', 0, -1);   // corrida é o BATENTE do analógico (js/xr/xrinput.js)
       await A.espera(1400);
       const v = window.__game.XR.conforto.tunel;
       A.solta();
@@ -458,7 +485,7 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
       const L = window.__game.XRAndar;
       L.preferir({ velocidade: 'paridade' });
       const am = await window.__VEL.perfil(
-        [['stick', 'left', 0, -1], ['botao', 'left', 'thumbstick', 1]], 1800);
+        [['stick', 'left', 0, -1]], 1800);
       L.preferir({ velocidade: 'conforto' });
       return am;
     });
@@ -472,7 +499,7 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
     /* Falha se `preferir` só souber descer. O caso anterior deixou o módulo
        de volta em `conforto` — este cobra que isso é verdade no PRODUTO. */
     const am = await h.play(() => window.__VEL.perfil(
-      [['stick', 'left', 0, -1], ['botao', 'left', 'thumbstick', 1]], 1600));
+      [['stick', 'left', 0, -1]], 1600));
     const v = regime(am);
     assert.ok(Math.abs(v - 2.8) < 0.08, `voltou ao conforto e correu ${v.toFixed(3)} m/s`);
   });

@@ -165,6 +165,31 @@ describe('giro em VR (runtime emulado IWER)', { skip: !CHROME && 'Chrome não en
       `velocidade padrão ${p.velocidade}°/s fora da faixa que os FPS de VR usam (90–180)`);
   });
 
+  it('…e é a INSTÂNCIA DO JOGO que nasce assim, não só o módulo', async () => {
+    /* O caso acima constrói uma instância nova para ler o padrão — e uma
+       instância nova não prova nada sobre o que o JOGADOR recebe: quem monta o
+       giro é js/xr/xrboot.js, e bastaria um `preferir` na fiação para o
+       headset nascer em snap com este arquivo verde. É o buraco de ESTADO que
+       esta base já pagou caro (cinco arquivos de teste de rig de roda verdes
+       com o carro errado na primeira tela).
+
+       Aqui a leitura é da instância que o jogo usa, com o armazém como o
+       jogador novo o tem: vazio. */
+    const r = await h.play(() => {
+      const G = window.__game;
+      let salvo;
+      try { salvo = window.localStorage.getItem('callofai_vr'); } catch { salvo = 'INACESSÍVEL'; }
+      return { prefs: G.XR.giro.prefs, salvo };
+    });
+    assert.equal(r.salvo, null,
+      `o teste não está medindo um jogador novo: o armazém já tem "${r.salvo}"`);
+    assert.equal(r.prefs.modo, 'suave',
+      `a instância do jogo nasceu em "${r.prefs.modo}" — o dono reprovou o snap fixo ` +
+      '("viro com o controle e move igual PC, uns 30 graus de uma vez")');
+    assert.equal(r.prefs.velocidade, 180,
+      `a instância do jogo nasceu a ${r.prefs.velocidade}°/s (o default do Immersive Web SDK é 180)`);
+  });
+
   it('segurar o analógico gira SEM SALTOS — a curva é contínua', async () => {
     await h.play(preferir, { modo: 'suave', velocidade: 120 });
     const r = await h.play(ensaio, 1, 1000);

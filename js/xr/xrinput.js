@@ -68,6 +68,12 @@ const SNAP_OFF = 0.35;             // e o quanto precisa voltar pra rearmar
    depressa não pode virar corrida sem o jogador pedir, e o batente é a única
    posição que ele alcança de propósito sem olhar. */
 export const CORRER_TILT = 0.92;
+/* Onde a CAMINHADA já vale 100 %. Tem de ficar ABAIXO de `CORRER_TILT`, senão
+   andar cheio e correr começam no mesmo ponto e o jogador nunca consegue a
+   caminhada inteira — ou passa direto para a disparada. A faixa entre os dois
+   (0,85–0,92) é a caminhada plena, e é o que dá ao polegar um lugar para
+   descansar sem sair correndo. */
+export const ANDAR_CHEIO = 0.85;
 
 /* RADIAL. Entra na fatia acima de RADIAL_ON, larga a fatia abaixo de
    RADIAL_OFF — histerese, pelo mesmo motivo da zona morta: o analógico do Touch
@@ -98,6 +104,12 @@ function semZonaMorta(v) {
   if (a <= DEADZONE) return 0;
   return Math.sign(v) * ((a - DEADZONE) / (1 - DEADZONE));
 }
+
+/* `ANDAR_CHEIO` é inclinada CRUA (é assim que o jogador pensa e é assim que
+   `CORRER_TILT` é comparado). Mas `m` já saiu da zona morta, então o limiar
+   precisa vir para o mesmo espaço — senão a caminhada só chega a 96 % onde
+   deveria estar cheia, que é o defeito que este cálculo existe para não ter. */
+const ANDAR_CHEIO_SZ = (ANDAR_CHEIO - DEADZONE) / (1 - DEADZONE);
 
 function eixos(fonte) {
   const g = fonte && fonte.gamepad;
@@ -237,8 +249,13 @@ export function criarEntradaXR() {
       const x = escolhendo ? 0 : semZonaMorta(e.x);
       const y = escolhendo ? 0 : -semZonaMorta(e.y);   // eixo 3 negativo = frente
       const m = Math.hypot(x, y);
-      // diagonal não pode andar mais rápido que reto
-      const k = m > 1 ? 1 / m : 1;
+      /* BANDA MORTA QUE APARECEU NA INTEGRAÇÃO. Com `correr` no batente
+         (CORRER_TILT), a caminhada normalizada só chegava a 100 % em m = 1 —
+         que já é corrida. Na prática o jogador nunca andava a 100 %: travava em
+         92 % e o passo seguinte era disparada. A caminhada passa a chegar ao
+         cheio JÁ no limiar de corrida, sem degrau entre os dois. Diagonal
+         continua sem andar mais rápido que reto. */
+      const k = m > 0 ? Math.min(1, m / ANDAR_CHEIO_SZ) / m : 0;
       /* `+ 0` normaliza o zero NEGATIVO que `Math.sign` propaga: -0 e 0 são
          iguais em `===` mas diferentes em `Object.is`, e comparação estrita
          de teste (e qualquer `Object.is` no caminho) enxerga a diferença. */

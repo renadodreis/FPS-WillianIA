@@ -87,6 +87,11 @@ async function instalar() {
       eu: { id: (window.__MP_init && window.__MP_init.id) || null, nick: 'EU' },
       partida: 1,
       tempo: '01:23',
+      /* O MESMO CAMPO QUE O game.js MANDA (`jogando: state.started`), e não um
+         atalho de teste: é ele que decide se a aba da sala oferece SAIR DA
+         PARTIDA. Sem partida em andamento o botão acionava e não fazia nada —
+         botão morto encontrado em dois cliques a partir da primeira tela. */
+      jogando: !!window.__jogandoQA,
     }),
     enviar: txt => {
       window.__espia.enviadas.push(txt);
@@ -659,6 +664,51 @@ describe('conversa, placar e sala dentro do headset',
       /* 1, não 2: com dois donos do mesmo gatilho (o painel e um andaime) esta
          contagem vira 2 — foi assim que o clique em "GIRO" alternava e voltava. */
       assert.equal(r.chamadas, 1, `a ação de começar foi chamada ${r.chamadas} vezes`);
+    });
+
+    it('SAIR DA PARTIDA só existe COM partida em andamento — senão é botão morto', async () => {
+      /* §4.5 do laudo da rodada 9: a aba `sala` empurrava `SAIR DA PARTIDA`
+         sem condição nenhuma. O jogador chegava lá em DOIS cliques a partir
+         da primeira tela do headset (MULTIJOGADOR → SALA), o raio marcava, o
+         gatilho acionava — e nada acontecia, porque sem partida em andamento
+         `voltarAoMenu()` devolve ao mesmo menu.
+
+         É a regra que o próprio cabeçalho de js/xr/xrmenu.js escreve ("NENHUM
+         BOTÃO MORTO... botão que recusa é pior que botão ausente"), aplicada
+         às linhas do menu e não à aba para onde o menu leva. Este caso cobra
+         os DOIS lados: sem partida o botão não existe, com partida ele existe
+         E aciona — porque tirar o botão sem checar o outro lado deixaria o
+         jogador em partida sem saída pelo painel. */
+      const r = await h.play(async () => {
+        const S = window.__S, soc = window.__social;
+        window.__jogandoQA = false;
+        soc.selecionar('sala');
+        await S.esperar(3);
+        const semPartida = soc.zonas().some(z => z.id === 'sair');
+        window.__jogandoQA = true;
+        await S.esperar(3);
+        const comPartida = soc.zonas().some(z => z.id === 'sair');
+        window.__conta.sair = 0;
+        const sob = await S.mirarZona('sair');
+        await S.clicar();
+        await S.esperar(3);
+        const acionou = S.estadoUi().ultimoAcionado;
+        const chamadas = window.__conta.sair;
+        window.__jogandoQA = false;
+        await S.paraLonge();
+        soc.selecionar('pausa');
+        await S.esperar(2);
+        return { semPartida, comPartida, sob, acionou, chamadas };
+      });
+      assert.equal(r.semPartida, false,
+        'sem partida em andamento a aba SALA ainda oferece SAIR DA PARTIDA — ' +
+        'o raio marca, o gatilho aciona e nada acontece');
+      assert.equal(r.comPartida, true,
+        'com a partida rolando o botão de sair sumiu: o jogador de headset ficou sem saída no painel');
+      assert.ok(r.sob && r.sob.id === 'sair',
+        `apontei para SAIR e o painel marcou ${JSON.stringify(r.sob)}`);
+      assert.equal(r.acionou, 'sair', 'mirar e puxar o gatilho não acionou o botão de sair');
+      assert.equal(r.chamadas, 1, `a ação de sair foi chamada ${r.chamadas} vezes`);
     });
 
     it('a sala mostra quem está nela, com a coroa do anfitrião', async () => {

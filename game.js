@@ -2941,7 +2941,10 @@ const XRUI = createXrUi({
     pausar: () => setPaused(true),
     retomar: () => setPaused(false),
     // recentrar zera o giro artificial e replanta o rig SEM mover o jogador no mundo
-    recentrar: () => { XR.giro.zerar(); xrYaw = 0; XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw); },
+    /* `calibrar()` junto: a referência de altura do corpo não desce sozinha
+       (ela só sobe, com sustentação), e recentrar é o gesto que o jogador já
+       usa quando alguma coisa ficou fora do lugar. */
+    recentrar: () => { XR.giro.zerar(); xrYaw = 0; XR.corpo.calibrar(); XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw); },
     /* SAIR encerra a sessão junto, e é deliberado: `voltarAoMenu()` aterrissa
        no menu principal, que ainda é DOM. Sair da partida sem sair do VR
        deixaria o jogador de pé no mundo sem menu — o beco que esta rodada veio
@@ -3507,6 +3510,14 @@ function tick(forceDt) {
       XR.conforto.update(dt, Math.hypot(player.vel.x, player.vel.z), XRAndar.correr,
         giroXR.velocidade);
     }
+    /* A CABEÇA ENTROU NO SÓLIDO — e esta linha fica FORA do `if` da vinheta de
+       propósito. Desligar a vinheta é escolha do jogador; ver e atirar do outro
+       lado da parede depois de andar fisicamente para dentro dela não é opção
+       de conforto, é integridade do mundo (e, num jogo com outros jogadores,
+       seria espiar por parede). O colisor agora PARA na parede (js/xr/xrrig.js);
+       sem este escurecimento o jogador ficaria com a vista do lado de lá sem
+       sinal nenhum. */
+    XR.conforto.intrusao(dt, XR.foraDoCorpo);
     /* PAINEL ABERTO NÃO JOGA. Sem esta guarda, o gatilho que escolhe "SAIR DA
        PARTIDA" dispara um tiro no mesmo frame, e o analógico do menu anda com o
        jogador no mundo. Soltar as teclas presas é parte do acordo: sair da

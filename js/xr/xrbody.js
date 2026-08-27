@@ -72,6 +72,16 @@ const AGACHA_ENTRA = 0.28;            // queda de cabeça que conta como agachar
 const AGACHA_SAI = 0.20;              // e a que devolve o "em pé" (histerese)
 const AGACHA_CHEIO = 0.55;            // queda que conta como agachamento total
 const DE_PE = [1.10, 2.10];           // faixa plausível de altura de olho (m)
+/* SUBIR A REFERÊNCIA EXIGE SUSTENTAÇÃO. Ela era o MÁXIMO histórico absoluto,
+   e máximo absoluto não tem como desfazer engano: 0,4 s de headset erguido
+   (jogador ajeitando a correia, rastreio pulando, aparelho na mão) travava a
+   altura "em pé" em 2,05 m, e o jogador DE PÉ passava o resto da sessão com
+   `agachado: true` e `crouchT: 1` — colisor menor e velocidade de agachado —
+   com o boneco 21 % maior. Medido em sessão.
+
+   Quem cresceu de verdade continua alto no frame seguinte; um pico, não. 0,75 s
+   é mais que qualquer falha de rastreio e menos que qualquer "levantei". */
+const SUSTENTA = 0.75;
 const ESCALA = [0.70, 1.15];          // trava da escala do boneco
 const CABECA_MIN = 0.15;              // abaixo disso a leitura não é de cabeça de gente
 
@@ -86,6 +96,7 @@ export function criarCorpoXR({ THREE, camera }) {
   let agachado = false, agacharFrac = 0;
   let yawCorpo = 0, escala = 1;
   let suspeita = false;
+  let candidato = 0, candidatoT = 0;   // altura alta ainda não confirmada (ver SUSTENTA)
 
   const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4();
   const _cx = new THREE.Box3(), _cx2 = new THREE.Box3();
@@ -178,11 +189,22 @@ export function criarCorpoXR({ THREE, camera }) {
     suspeita = !(Number.isFinite(y) && y > CABECA_MIN);
     if (!suspeita) {
       alturaCabeca = y;
-      // "em pé" é o mais alto que a cabeça já esteve: em XR o pulo do JOGO
-      // move o rig, não a cabeça, então esta leitura só sobe se o jogador
-      // subir de verdade.
-      if (alturaCabeca > alturaDePe) alturaDePe = trava(alturaCabeca, DE_PE);
-      else if (alturaDePe === 0) alturaDePe = trava(alturaCabeca, DE_PE);
+      /* "EM PÉ" É A MAIOR ALTURA SUSTENTADA, não a maior leitura. Em XR o
+         pulo do JOGO move o rig e não a cabeça, então subir aqui é subir de
+         verdade — mas "de verdade" inclui o headset erguido pela mão e o
+         rastreio pulando, e o máximo absoluto não tinha como desfazer isso.
+         O candidato guarda o MENOR valor mantido durante a janela: um pico
+         dentro dela não puxa a referência para cima junto. */
+      if (alturaDePe === 0) alturaDePe = trava(alturaCabeca, DE_PE);
+      else if (alturaCabeca > alturaDePe) {
+        if (candidatoT > 0) candidato = Math.min(candidato, alturaCabeca);
+        else { candidato = alturaCabeca; }
+        candidatoT += passo;
+        if (candidatoT >= SUSTENTA) {
+          alturaDePe = trava(candidato, DE_PE);
+          candidatoT = 0;
+        }
+      } else { candidato = 0; candidatoT = 0; }
     }
 
     const queda = suspeita ? 0 : Math.max(0, alturaDePe - alturaCabeca);
@@ -211,7 +233,23 @@ export function criarCorpoXR({ THREE, camera }) {
     /* Origem do corpo: debaixo da cabeça, recuada para o CENTRO da cabeça, e
        nunca tão baixa que o pé fure o piso. Agachando, a origem para de
        descer — quem desce é o joelho (js/fpbody.js dobra a perna por
-       `player.crouchT`, que este agachamento alimenta). */
+       `player.crouchT`, que este agachamento alimenta).
+
+       O PREÇO DESSA ORDEM ESTÁ MEDIDO, e ele é conhecido: com os PÉS tendo
+       prioridade, o jogador que agacha 0,55 m fica com o ombro do boneco
+       0,185 m ACIMA do próprio olho e o topo do boneco 0,709 m acima — a
+       vista saindo do meio do tórax. O VRIK nomeia esse trade-off (`plantFeet`
+       "can cause the camera to exit the head") e o critério C5 pede o
+       contrário ("corpo ancorado na cabeça com erro ≤ 0,05 m").
+
+       Ancorar na cabeça foi TENTADO e MEDIDO nesta rodada: resolve o tórax e
+       enterra o pé em 0,31 a 0,47 m, porque o modelo do js/fpbody.js NÃO
+       encurta ao agachar — a dobra de `crouchT` gira coxa e canela em sentidos
+       que mantêm o pé no mesmo lugar em relação à raiz (medido: o osso mais
+       baixo não se move com `crouchT` indo de 0 para 1). Sem um solver que
+       encurte a perna de verdade, os dois defeitos são o mesmo cobertor curto,
+       e a saída certa mora no rig do corpo, não aqui. Fica registrado em
+       docs/vr/referencia-corpo.md §4 com número. */
     const recuo = RECUO + RECUO_AGACHADO * agacharFrac;
     corpo.position.set(
       camera.position.x + Math.sin(yawCorpo) * recuo,
