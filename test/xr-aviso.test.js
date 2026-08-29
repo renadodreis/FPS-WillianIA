@@ -182,12 +182,30 @@ describe('o aviso central existe DENTRO do mundo em VR (H1)',
       /* Todo `Object3D` gasta 4 números do `Math.random` seedado no UUID e a
          ordem de consumo é contrato do worldgen (test/carregamento-determinismo).
          Um painel criado no `update()` de graça, mesmo invisível, é consumo. */
-      const r = await h.play(() => ({
-        aviso: window.__game.XRHud.aviso || null,
-        updates: window.__AV.contadores().updatesDoJogo,
-      }));
+      /* ESPERA PELA CONDIÇÃO, NÃO POR TEMPO. A afirmação "o jogo está
+         conduzindo o módulo" continua sendo cobrada — sem ela, este caso
+         mediria um painel que ninguém atualiza e o `null` valeria por
+         qualquer motivo. O que mudou é COMO ela é esperada: a versão anterior
+         lia a contagem uma vez, depois de 600 ms fixos, e sob a carga da
+         suíte completa o boot só tinha rendido 9 frames — o caso ficou
+         VERMELHO com a fiação intacta, e o runner classificou como regressão
+         real. É a mesma lição do CLAUDE.md sobre medir com a máquina
+         carregada, na forma de limiar de frames.
+
+         Sondando até 12 s, a fiação morta continua reprovando (a contagem
+         nunca sai do lugar) e a máquina lenta só demora mais. */
+      const r = await h.play(async () => {
+        const alvo = 12;
+        for (let i = 0; i < 120 && window.__AV.contadores().updatesDoJogo <= alvo; i++) {
+          await window.__A.espera(100);
+        }
+        return {
+          aviso: window.__game.XRHud.aviso || null,
+          updates: window.__AV.contadores().updatesDoJogo,
+        };
+      });
       assert.ok(r.updates > 10,
-        `o game.js chamou XRHud.update ${r.updates} vezes — sem fiação viva não há o que medir`);
+        `em 12 s o game.js chamou XRHud.update só ${r.updates} vezes — sem fiação viva não há o que medir`);
       assert.equal(r.aviso, null,
         'o painel de aviso já existia antes de qualquer mensagem — objeto criado de graça');
     });
