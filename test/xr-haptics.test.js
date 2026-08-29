@@ -330,6 +330,18 @@ describe('háptico na sessão de verdade', { skip: !CHROME && 'Chrome não encon
     const r = await h.play(async () => {
       const R = window.__MP.renderer;
       const s = R.xr.getSession();
+      /* ESPERA PELA CONDIÇÃO, NÃO POR TEMPO. As fontes de entrada aparecem
+         DEPOIS de `XR.presenting` — o runtime emulado registra os controles em
+         seguida, não junto. Numa máquina ociosa a diferença é de um frame;
+         rodando depois de 370 arquivos, a leitura cai no meio e o arquivo
+         inteiro é classificado como REGRESSÃO REAL com "fontes de entrada com
+         gamepad: []". Já aconteceu três vezes nesta suíte, em três arquivos
+         diferentes. A afirmação continua sendo DOIS atuadores; só a espera
+         mudou, e a sessão que não entrega controle nenhum continua reprovando
+         depois do teto. */
+      for (let i = 0; i < 100 && Array.from(s.inputSources).length < 2; i++) {
+        await new Promise(r2 => setTimeout(r2, 100));
+      }
       const atuadores = Array.from(s.inputSources).map(f => {
         const g = f.gamepad;
         return { mao: f.handedness, n: (g && g.hapticActuators && g.hapticActuators.length) || 0 };
@@ -342,7 +354,7 @@ describe('háptico na sessão de verdade', { skip: !CHROME && 'Chrome não encon
         lido: window.__lerAtuador('right') };
     });
     assert.equal(r.temP, true, 'sem IWER.P_GAMEPAD não há como ler o registro do runtime');
-    assert.equal(r.atuadores.length, 2, `fontes de entrada com gamepad: ${JSON.stringify(r.atuadores)}`);
+    assert.equal(r.atuadores.length, 2, `em 10 s, fontes de entrada com gamepad: ${JSON.stringify(r.atuadores)}`);
     for (const a of r.atuadores) assert.equal(a.n, 1, `${a.mao} sem atuador: ${a.n}`);
     assert.equal(r.lido.atuador, true);
     assert.deepEqual({ v: r.lido.ultimo.value, d: r.lido.ultimo.duration }, { v: 0.42, d: 33 },

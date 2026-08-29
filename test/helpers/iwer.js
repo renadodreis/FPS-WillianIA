@@ -83,6 +83,27 @@ async function bootEmVR(bootGame, { port, autoStart = false, emJogo = true, init
      INTERAÇÃO precisam do jogo RODANDO e ganhavam isso de graça daquela linha:
      é ela que este `emJogo` substitui, no MESMO ponto do tempo (dentro da
      sessão, depois do rig pronto). Quem quer medir o MENU passa `emJogo: false`. */
+  /* OS CONTROLES CHEGAM DEPOIS DO `presenting`, E ESPERAR POR ELES É DAQUI.
+     `XR.presenting` fica verdadeiro assim que a sessão começa; o runtime
+     emulado só registra as duas fontes de entrada em seguida. Numa máquina
+     ociosa a diferença é de um frame e ninguém vê. Rodando dentro da suíte
+     completa, depois de centenas de arquivos, a leitura cai no meio — e o
+     runner promove isso a REGRESSÃO REAL, mandando alguém investigar código
+     que está certo. Aconteceu TRÊS vezes, em três arquivos diferentes
+     (`xr-controle-anda`, `xr-haptics` e, na mesma família, `xr-aviso`), com
+     sintomas diferentes: "0 fontes de entrada", "fontes com gamepad: []",
+     "chamou XRHud.update 9 vezes".
+
+     Remendar arquivo por arquivo trata o sintoma. A espera mora aqui porque é
+     aqui que a promessa "a sessão está pronta para ser medida" é feita: quem
+     chama `bootEmVR` recebe uma sessão com os dois controles, ou o teto
+     estoura e o teste falha na PRÓPRIA asserção dele, com o número que ele
+     mede. A espera nunca fabrica controle — só observa. */
+  await h.page.waitForFunction(
+    "(() => { const s = window.__MP && window.__MP.renderer.xr.getSession();"
+    + " return !!s && Array.from(s.inputSources).length >= 2; })()",
+    { timeout: 20000, polling: 100 },
+  ).catch(() => { /* deixa o teste falhar na asserção dele, com o número dele */ });
   if (emJogo) await h.page.evaluate(() => { window.__game.forceStart(); });
   return h;
 }
