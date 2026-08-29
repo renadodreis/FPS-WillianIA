@@ -96,6 +96,17 @@ separadas**, mais um validador independente medindo a **árvore principal**.
   pronta. A fila espera.
 - **Worktree isola ARQUIVO, não PORTA.** Agente e suíte usam as mesmas portas
   fixas por arquivo de teste. Não dispare agente enquanto `npm test` roda.
+- **E a fila que espera pelo validador tem de esperar pela PORTA, não só pelo
+  arquivo.** Um validador registrou ter encontrado `server.js` de duas outras
+  worktrees vivos durante a rodada dele, um deles segurando a porta de um
+  arquivo central da medição. Ele não descartou o laudo: mostrou 30 min de
+  separação no relógio, ocupou uma porta própria para medir o que acontece
+  (`FALHOU ALTO — servidor de QA encerrou antes do boot`, ou seja porta ocupada
+  dá falha barulhenta, não número errado) e apontou que todo mutante mexeu o
+  número na direção prevista e todo restore o trouxe de volta — o que um
+  servidor estranho não faria. **Não colidiu por sorte de relógio.** Ao segurar
+  a árvore para o validador, segure também as portas: nenhuma outra frente roda
+  teste enquanto ele mede.
 - **Posse disjunta não evita conflito SEMÂNTICO.** Duas entregas certas sozinhas
   quebraram juntas: uma moveu `correr` para o batente do analógico (para liberar
   a empunhadura ao agarrar) e a outra tinha testes que dirigiam o batente para
