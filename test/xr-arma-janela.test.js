@@ -17,7 +17,23 @@
      · o ÂNGULO, em graus, entre a reta olho→ponto-vermelho e o eixo óptico,
        com o olho em cinco posições laterais diferentes: é a definição de
        colimador, e é zero para qualquer posição do olho ou não é red dot;
-     · o custo em DRAW CALLS, contado pelo `renderer.info` do three.
+     · o custo em DRAW CALLS: quantos objetos a affordance pendura no grafo da
+       mira × quantas vistas o renderer submete por frame (DUAS, uma por olho —
+       é a unidade que E2 declara), mais o RAIO DESENHADO de cada um em metros.
+       O `renderer.info` bruto fica impresso como diagnóstico, e só isso: entre
+       a arma no quadril e a arma no olho mudam grama, LOD e frustum, e esse
+       ruído do mundo já entrou uma vez na conta como se fosse custo da
+       affordance.
+
+   O QUE ESTE CASO NÃO CONTAVA, e foi medido por validação independente: as
+   três asserções de custo eram aritmética do próprio ajudante — `vistas() >= 1`
+   numa função que terminava em `|| 1`, `objs() <= 2` numa soma de dois
+   booleanos, e `custo <= 2 × vistas` que é `objs × vistas ≤ 2 × vistas`.
+   Pendurando TRÊS anéis de 30 cm de raio no `guiaAro` (+3 draw calls por olho,
+   e um alvo vermelho de 60 cm na cara do jogador), o arquivo continuava 5 de 5
+   VERDE. Hoje a contagem varre a árvore a partir de `XRArma.miraNode()` e o
+   mesmo mutante dá 5 objetos / 10 draw calls contra teto de 2 / 4, com o raio
+   de 0,300 m nomeado na mensagem.
 
    ÂNCORA INDEPENDENTE. O eixo óptico de referência é reconstruído aqui a
    partir de `WeaponRig` (os pontos `eye` e `front` do perfil da mira, que são
@@ -158,10 +174,63 @@ function instalarSonda() {
     constantes: () => window.__XRW,
     /* Quantas vistas o renderer submete por frame. Em sessão imersiva são
        DUAS (uma por olho), e é por isso que todo objeto custa em dobro — é a
-       unidade do critério E2. */
+       unidade do critério E2.
+
+       O `|| 1` QUE ESTAVA AQUI ERA O DEFEITO. Com ele, `vistas() >= 1` era
+       verdade por aritmética do próprio ajudante: fora de sessão, sem
+       ArrayCamera, sem nada, a função devolvia 1 e a asserção passava. Agora
+       ela devolve `null` quando não há estéreo, e o caso cobra DOIS — que é a
+       unidade que E2 declara. Sem estéreo, a medida de custo em XR não vale e
+       o caso tem de dizer isso em vez de fingir. */
     vistas: () => {
       const c = MP.renderer.xr.getCamera && MP.renderer.xr.getCamera();
-      return (c && c.cameras && c.cameras.length) || 1;
+      return (c && c.cameras && c.cameras.length) || null;
+    },
+    /* ================================================================
+       TUDO O QUE A AFFORDANCE DESENHA, VARRIDO NO GRAFO — não os dois
+       punhos que o módulo publica.
+
+       A versão anterior contava `(aro no grafo ? 1 : 0) + (ponto no grafo ? 1
+       : 0)` e cobrava `<= 2`: soma de dois booleanos contra teto 2, ou seja
+       aritmética do ajudante. Validação independente pendurou TRÊS anéis de
+       30 cm de raio no `guiaAro` (js/xr/xrweapon.js, `criarGuia`) — +3 draw
+       calls por olho e um alvo vermelho de 60 cm na cara do jogador — e este
+       arquivo continuou 5 de 5 VERDE.
+
+       Aqui a conta desce a árvore inteira a partir do nó da mira
+       (`XRArma.miraNode()`, que é o pai de tudo que a affordance pendura) e
+       conta o que o renderer vai submeter: malha/linha/ponto/sprite, com
+       geometria e material, VISÍVEL em toda a cadeia até a cena. Um filho
+       novo entra na conta, esteja ele pendurado no aro, no ponto ou no nó.
+
+       E mede o RAIO DESENHADO de cada um, em metros, do atributo de posição
+       da geometria × escala de mundo: a affordance representa uma tolerância
+       de 8,5 cm, então nada dela pode ser maior que isso. É o eixo em que o
+       anel de 30 cm aparece mesmo que alguém um dia conte os objetos certo.
+       ================================================================ */
+    desenhaveis: () => {
+      const raiz = G.XRArma.miraNode ? G.XRArma.miraNode() : null;
+      const lista = [];
+      if (!raiz || !noGrafo(raiz)) return lista;
+      raiz.traverse(o => {
+        if (!(o.isMesh || o.isLine || o.isPoints || o.isSprite)) return;
+        if (!o.material || !o.geometry) return;
+        for (let n = o; n; n = n.parent) { if (!n.visible) return; if (n === MP.scene) break; }
+        const pos = o.geometry.getAttribute('position');
+        let rmax = 0;
+        if (pos) {
+          for (let i = 0; i < pos.count; i++) {
+            const r = Math.hypot(pos.getX(i), pos.getY(i), pos.getZ(i));
+            if (r > rmax) rmax = r;
+          }
+        }
+        const esc = o.getWorldScale(new T.Vector3());
+        lista.push({
+          nome: o.name || '(sem nome)',
+          raio: rmax * Math.max(Math.abs(esc.x), Math.abs(esc.y), Math.abs(esc.z)),
+        });
+      });
+      return lista;
     },
   };
   return true;
@@ -285,33 +354,63 @@ describe('a janela de mira tem corpo no mundo',
         window.__AR.cabeca(1.70);
         window.__AR.mao(0.55, 0.95, -0.15);      // arma no quadril, bem fora
         await window.__AR.espera(900);
-        return { ...window.__AR.ler(), vistas: window.__AR.vistas() };
+        return { ...window.__AR.ler(), vistas: window.__AR.vistas(), lista: window.__AR.desenhaveis() };
       });
       const dentro = await h.play(async () => {
         window.__AR.cabeca(1.70);
         const r = await window.__AR.mirarCom(0.24, 0);
-        return { ...r, vistas: window.__AR.vistas() };
+        return { ...r, vistas: window.__AR.vistas(), lista: window.__AR.desenhaveis() };
       });
       const naBorda = await h.play(async () => {
         window.__AR.cabeca(1.70);
         const r = await window.__AR.mirarCom(0.30, 0.10);   // aro ACESO: o pior caso
-        return { ...r, vistas: window.__AR.vistas() };
+        return { ...r, vistas: window.__AR.vistas(), lista: window.__AR.desenhaveis() };
       });
-      const objs = r => (r.aroNoGrafo ? 1 : 0) + (r.pontoNoGrafo ? 1 : 0);
-      const custo = r => objs(r) * r.vistas;
+      const objs = r => r.lista.length;
+      const custo = r => objs(r) * (r.vistas || 0);
+      const nomes = r => (r.lista.length
+        ? r.lista.map(o => `${o.nome} r=${f3(o.raio)} m`).join(', ') : '(nenhum)');
+      const maiorRaio = r => r.lista.reduce((m, o) => Math.max(m, o.raio), 0);
       console.log(`  vistas submetidas por frame: ${dentro.vistas}`);
       console.log(`  quadril → objetos ${objs(longe)} → ${custo(longe)} draw calls` +
-        ` (info bruto ${longe.drawCalls})`);
+        ` (info bruto ${longe.drawCalls}) · ${nomes(longe)}`);
       console.log(`  mirando → objetos ${objs(dentro)} → ${custo(dentro)} draw calls` +
-        ` (info bruto ${dentro.drawCalls})`);
+        ` (info bruto ${dentro.drawCalls}) · ${nomes(dentro)}`);
       console.log(`  PIOR CASO (aro aceso) → objetos ${objs(naBorda)} →` +
-        ` ${custo(naBorda)} draw calls (info bruto ${naBorda.drawCalls})`);
-      assert.ok(dentro.vistas >= 1, 'o renderer não reportou vista nenhuma: a medida não vale');
+        ` ${custo(naBorda)} draw calls (info bruto ${naBorda.drawCalls}) · ${nomes(naBorda)}`);
+
+      /* A UNIDADE DE E2 É O OLHO. Sem estéreo confirmado o custo em XR não foi
+         medido — e o `|| 1` do ajudante antigo fazia esta linha passar mesmo
+         sem sessão nenhuma. */
+      assert.equal(dentro.vistas, 2,
+        `o renderer submeteu ${dentro.vistas} vista(s) por frame: sem os DOIS olhos ` +
+        'esta medida não é o custo de XR, e E2 se mede por olho');
+
+      /* O QUE A AFFORDANCE PODE CUSTAR, e as três grandezas são independentes
+         entre si: quantos objetos ela pendura PARADA, quantos no pior caso, e
+         o tamanho do que ela desenha. Os três anéis de 30 cm da reinjeção
+         estouram os três. */
+      assert.ok(objs(longe) <= 1,
+        `com a arma no quadril, longe da janela, a affordance deixou ${objs(longe)} ` +
+        `objeto(s) no grafo (${nomes(longe)}): parada ela só pode custar o ponto ` +
+        'colimado, ou vira imposto permanente de ' + custo(longe) + ' draw calls');
       assert.ok(objs(naBorda) <= 2,
-        `a affordance tinha de ser no máximo 2 objetos: são ${objs(naBorda)}`);
+        `no pior caso a affordance pendurou ${objs(naBorda)} objetos no grafo da ` +
+        `mira (${nomes(naBorda)}): o desenho declarado é aro + ponto, ou seja 2`);
       assert.ok(custo(naBorda) <= 2 * dentro.vistas,
         `no pior caso a affordance custa ${custo(naBorda)} draw calls, acima do teto de` +
         ` ${2 * dentro.vistas} (2 objetos × ${dentro.vistas} vistas)`);
+
+      /* E O TAMANHO. A affordance É a tolerância em tamanho natural: nada nela
+         pode ser maior que `PERP_MAX`. Um objeto de 30 cm de raio pendurado
+         aqui não é só custo — é um alvo de 60 cm na cara do jogador, e a
+         contagem de objetos sozinha não o vê se alguém o pendurar no lugar de
+         outro. */
+      const raio = Math.max(maiorRaio(longe), maiorRaio(dentro), maiorRaio(naBorda));
+      assert.ok(raio <= K.PERP_MAX + 0.001,
+        `o maior objeto da affordance tem ${f3(raio)} m de raio, contra PERP_MAX ` +
+        `${f3(K.PERP_MAX)} m: ela representa a tolerância em tamanho natural, e ` +
+        'nada dela pode ser maior que ela');
     });
 
     it('DENTRO da janela o aro APAGA e o ponto fica cheio (o ferro assume)', async () => {

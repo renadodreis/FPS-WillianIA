@@ -43,6 +43,16 @@
      · formato 3 (medir o eixo em que o defeito não aparece): o empate é medido
        com as DUAS distâncias publicadas, e o caso só vale se as duas estiverem
        dentro dos respectivos limiares — senão ele não exercita empate nenhum.
+     · formato 7 (`||` com um termo que se satisfaz sozinho): o espião grava os
+       DOIS termos de `apoiando: XRArma.duasMaos() || XRArma.gripOcupado()` no
+       mesmo instante, e cada caso de porta fechada ATRIBUI a medida. Foi por
+       aqui que validação independente derrubou o caso do APOIO: nele a mão
+       está no guarda-mão, `duasMaos()` fecha a porta sozinho, e com
+       `gripOcupado: () => false` o arquivo dava 4 verdes e 2 vermelhos com o
+       apoio entre os VERDES — ele media a porta e não o mecanismo. Com a
+       atribuição, o mesmo mutante dá 3 vermelhos e o do apoio imprime
+       "`gripOcupado()` verdadeiro em só 0,0% dos 36 frames (a porta fechou em
+       100,0%, e `duasMaos()` estava ligado em 100,0%)".
 
    PORTA 3678 (só deste arquivo).
    ================================================================ */
@@ -64,11 +74,31 @@ function instalarSonda() {
      `XRInterage.update`, e é ELE que decide se o agarre roda. Ler uma variável
      interna do módulo da arma mediria a intenção; ler o argumento mede o que
      chega. O embrulho ANOTA e repassa — não chama, não decide, não substitui.
+
+     E ANOTA OS DOIS TERMOS QUE PODEM TER FECHADO A PORTA, no mesmo instante.
+     O game.js faz `apoiando: XRArma.duasMaos() || XRArma.gripOcupado()`, e um
+     `||` só diz que ALGUÉM fechou. Validação independente derrubou o caso do
+     APOIO exatamente por aí: levando a mão ao guarda-mão, `duasMaos()` sozinho
+     já fecha a porta, então a máquina de prioridade nova (`gripOcupado`) não
+     participava — com `gripOcupado: () => false` o arquivo dava 4 verdes e 2
+     vermelhos, e o caso do apoio estava entre os VERDES. É o sétimo formato da
+     lista do CLAUDE.md: `||` com um termo que se satisfaz sozinho.
+
+     Com os dois termos gravados por frame, cada caso ATRIBUI a medida: nas
+     poses em que o braço não está na arma, a porta tem de fechar com
+     `duasMaos()` FALSO (senão o boneco está agarrando um guarda-mão que a mão
+     do jogador não está tocando); e na pose de apoio, `gripOcupado()` tem de
+     estar VERDADEIRO junto — a porta não pode depender só do termo velho.
      ================================================================ */
   const porta = [];
   const uOrig = G.XRInterage.update.bind(G.XRInterage);
   G.XRInterage.update = (args) => {
-    porta.push({ apoiando: !!(args && args.apoiando), t: performance.now() });
+    porta.push({
+      apoiando: !!(args && args.apoiando),
+      duasMaos: !!(G.XRArma.duasMaos && G.XRArma.duasMaos()),
+      ocupado: !!(G.XRArma.gripOcupado && G.XRArma.gripOcupado()),
+      t: performance.now(),
+    });
     return uOrig(args);
   };
 
@@ -201,6 +231,12 @@ function instalarSonda() {
 
 /* fração de frames do aperto em que a porta chegou FECHADA */
 const fechada = lista => (lista.length ? lista.filter(p => p.apoiando).length / lista.length : 0);
+/* …e a fração em que cada um dos DOIS termos do `||` estava verdadeiro. É o
+   que atribui a porta fechada ao mecanismo certo em vez de aceitar qualquer
+   um dos dois. */
+const fracDe = (lista, campo) =>
+  (lista.length ? lista.filter(p => p[campo]).length / lista.length : 0);
+const pct = x => `${(x * 100).toFixed(1)}%`;
 
 describe('o grip esquerdo tem uma ORDEM declarada: pente → apoio → agarrar',
   { skip: !CHROME && 'Chrome não encontrado' }, () => {
@@ -242,11 +278,28 @@ describe('o grip esquerdo tem uma ORDEM declarada: pente → apoio → agarrar',
         `a mão nem chegou à zona do peito (${f3(r.antes.dPeito)} m > 0,25 m): ` +
         'o cenário não exercita o limiar (formato 9), nada a medir');
       const frac = fechada(r.porta);
+      const fDuas = fracDe(r.porta, 'duasMaos'), fOcup = fracDe(r.porta, 'ocupado');
+      console.log(`  [pente] porta fechada ${pct(frac)} · duasMaos ${pct(fDuas)} · ` +
+        `gripOcupado ${pct(fOcup)} · ${r.porta.length} frames`);
       assert.ok(frac >= 0.9,
         `buscando o pente a ${f3(r.antes.dPeito)} m do peito, a porta do agarre chegou ` +
         `FECHADA em ${(frac * 100).toFixed(1)}% dos ${r.porta.length} frames do aperto ` +
         `(modo publicado: ${r.durante.modo}). Com a porta aberta por ${f3(0.6)} s — o dobro de ` +
         'HOLD_LONGE — recarregar apontado para um baú abre o baú.');
+      /* ATRIBUIÇÃO. Buscando o pente a mão NÃO está no guarda-mão, então o
+         termo velho do `||` não pode ser quem fecha — se ele estivesse ligado
+         aqui, o braço do boneco estaria agarrado a uma arma que a mão do
+         jogador não toca, e a porta fechada seria efeito colateral disso em
+         vez da máquina de prioridade. */
+      assert.ok(fDuas <= 0.1,
+        `a porta fechou com \`duasMaos()\` verdadeiro em ${pct(fDuas)} dos ` +
+        `${r.porta.length} frames, com a mão a ${f3(r.antes.dCano)} m da linha do cano: ` +
+        'quem tinha de fechar aqui é `gripOcupado()`, e o termo velho do `||` está ' +
+        'segurando o caso no lugar do mecanismo que ele deveria medir');
+      assert.ok(fOcup >= 0.9,
+        `\`gripOcupado()\` esteve ligado em só ${pct(fOcup)} dos ${r.porta.length} frames ` +
+        `do aperto, com a porta fechada em ${pct(frac)}: a porta que este caso mede não ` +
+        'veio da máquina de prioridade');
       assert.equal(r.durante.modo, 'pente',
         `o modo do grip esquerdo veio "${r.durante.modo}" com a mão a ${f3(r.antes.dPeito)} m do peito`);
     });
@@ -303,9 +356,35 @@ describe('o grip esquerdo tem uma ORDEM declarada: pente → apoio → agarrar',
         `o modo veio "${r.durante.modo}" com a mão a ${f3(r.antes.dCano)} m da linha do cano ` +
         `e ${f3(r.antes.dPeito)} m do peito`);
       const frac = fechada(r.porta);
+      const fDuas = fracDe(r.porta, 'duasMaos'), fOcup = fracDe(r.porta, 'ocupado');
+      console.log(`  [apoio] porta fechada ${pct(frac)} · duasMaos ${pct(fDuas)} · ` +
+        `gripOcupado ${pct(fOcup)} · ${r.porta.length} frames`);
       assert.ok(frac >= 0.9,
         `apoiando a arma, a porta do agarre chegou FECHADA em só ${(frac * 100).toFixed(1)}% ` +
         `dos ${r.porta.length} frames`);
+      /* ================================================================
+         O CASO QUE ESTAVA SENDO SEGURADO PELO TERMO VELHO.
+
+         Aqui — e SÓ aqui — os dois termos do `||` são verdadeiros ao mesmo
+         tempo: a mão está no guarda-mão, então `duasMaos()` fecha a porta
+         sozinho. Medido por validação independente: com `gripOcupado: () =>
+         false` o arquivo dava 4 verdes e 2 vermelhos, e este caso estava entre
+         os verdes — ele media a porta, e a porta estava sendo fechada por
+         quem não é o assunto do arquivo.
+
+         A grandeza que faltava é a ATRIBUIÇÃO: a máquina de prioridade tem de
+         declarar o grip OCUPADO também nesta pose. Se ela não declarar, a
+         porta passa a depender inteiramente de `duasMaos()` — que fala do
+         BRAÇO engatado por proximidade, não do trabalho que o BOTÃO está
+         fazendo — e no dia em que a histerese de `APOIO_PEGA`/`APOIO_SOLTA`
+         soltar por um frame, a mão de apoio abre um baú.
+         ================================================================ */
+      assert.ok(fOcup >= 0.9,
+        `com a mão apoiada a ${f3(r.antes.dCano)} m da linha do cano, \`gripOcupado()\` ` +
+        `esteve verdadeiro em só ${pct(fOcup)} dos ${r.porta.length} frames do aperto ` +
+        `(a porta fechou em ${pct(frac)}, e \`duasMaos()\` estava ligado em ${pct(fDuas)}). ` +
+        'A porta está fechada pelo termo VELHO do `||`, e a máquina de prioridade ' +
+        'não participa desta pose: o caso mediria verde com ela inteira desligada.');
     });
 
     it('EMPATE: a mão dentro das DUAS zonas escolhe `pente` — a ordem é declarada', async () => {
@@ -369,9 +448,26 @@ describe('o grip esquerdo tem uma ORDEM declarada: pente → apoio → agarrar',
         `o modo trocou para "${r.depois.modo}" no meio do aperto, com a mão a ` +
         `${f3(r.depois.dPeito)} m do peito — a decisão não está travada na borda`);
       const frac = fechada(r.porta);
+      const fDuas = fracDe(r.porta, 'duasMaos'), fOcup = fracDe(r.porta, 'ocupado');
+      console.log(`  [trava] porta fechada ${pct(frac)} · duasMaos ${pct(fDuas)} · ` +
+        `gripOcupado ${pct(fOcup)} · ${r.porta.length} frames`);
       assert.ok(frac >= 0.95,
         `a porta do agarre chegou FECHADA em ${(frac * 100).toFixed(1)}% dos ${r.porta.length} ` +
         'frames do aperto: ela abriu no meio, que é exatamente quando o `gripSeguraT` já passou de HOLD_LONGE');
+      /* ATRIBUIÇÃO. A mão atravessa a zona do apoio no caminho do peito para
+         fora (medido: `duasMaos()` ligado em 28,1% dos frames deste aperto, e
+         é por isso que o teto aqui NÃO é sobre ele — seria uma condição que o
+         cenário não cumpre). O que a TRAVA promete é outra coisa: o modo
+         escolhido na borda vale o aperto INTEIRO, então `gripOcupado()` tem de
+         estar ligado do começo ao fim. Com a máquina de prioridade desligada,
+         a porta passa a subir e descer com a geometria — que é exatamente o
+         instante em que o `gripSeguraT` já passou de HOLD_LONGE e o agarre
+         dispara. */
+      assert.ok(fOcup >= 0.95,
+        `\`gripOcupado()\` esteve ligado em só ${pct(fOcup)} dos ${r.porta.length} frames do ` +
+        `aperto (a porta fechou em ${pct(frac)}, com \`duasMaos()\` em ${pct(fDuas)}): a ` +
+        'decisão da borda não está travada — quem está segurando a porta é a geometria ' +
+        'do momento, pelo termo velho do `||`');
       assert.equal(r.solto.modo, 'livre',
         `soltar o grip deixou o modo em "${r.solto.modo}": a trava virou resíduo`);
     });

@@ -3086,6 +3086,71 @@ const XRInterage = createXrInteract({
   cabecaXR: alvo => (XR.presenting ? XR.headWorldPosition(alvo) : null),
   foraXR: () => (XR.presenting ? XR.foraDoCorpo : 0),
 });
+/* O QUE A PAREDE COMEU VOLTA PRO RIG. Sem isto o passo físico saía do
+   acumulado, a colisão empurrava `player.pos` de volta, e a CABEÇA era
+   arrastada junto — medido: 3 m de caminhada real contra um sólido moviam a
+   vista 0,82 m e depois nada. O mundo travava enquanto o jogador andava de
+   verdade no quarto dele.
+
+   Só a componente NA DIREÇÃO do passo é devolvida: o jogador também se move
+   pelo analógico no mesmo frame, e projetar separa o que a parede recusou do
+   que ele escolheu não andar. Devolvido, o colisor para na parede e a cabeça
+   segue onde o corpo está — adiante do colisor, que é o certo: quem anda
+   contra uma parede virtual atravessa, porque ela não existe no quarto.
+
+   VIROU FUNÇÃO porque agora tem DOIS chamadores: o frame normal (depois do
+   `playerUpdate`) e o frame em que o `playerUpdate` não roda (ver
+   `resolverPassoSemFisicaXR`). Duplicar a conta em dois pontos do arquivo mais
+   quente do repo é como as duas metades de um contrato deixam de concordar. */
+function devolverRejeicaoXR() {
+  if (_alvoPassoXR.pedido <= 1e-6) return;
+  const perdaX = _alvoPassoXR.x - player.pos.x, perdaZ = _alvoPassoXR.z - player.pos.z;
+  const k = _alvoPassoXR.pedido;
+  const proj = (perdaX * _alvoPassoXR.dx + perdaZ * _alvoPassoXR.dz) / (k * k);
+  if (proj > 0) {
+    const f = Math.min(1, proj);
+    XR.devolverPasso(_alvoPassoXR.dx * f, _alvoPassoXR.dz * f);
+  }
+  _alvoPassoXR.pedido = 0;
+}
+
+/* SEM `playerUpdate` NESTE FRAME NÃO EXISTE PAREDE — e o passo físico continua
+   chegando ao colisor, porque o dreno roda em TODO estado (é o que faz o corpo
+   seguir a cabeça com o painel aberto e com a cinemática rodando). Sem esta
+   consulta, o jogador de headset ANDA DE VERDADE atravessando parede, com o
+   colisor junto: mediria 0,98 m de 0,98 m contra um sólido. Seria trocar uma
+   falha de integridade de mundo por outra pior — e em multijogador a segunda é
+   vetor de trapaça, não desconforto.
+
+   `Structures.collide` é a MESMA chamada do `playerUpdate` (mesmo raio, mesma
+   altura), e o que ela recusa volta pro rig pelo MESMO canal do jogo normal:
+   vira separação cabeça↔corpo, que a cortina de js/xr/xrcomfort.js escurece.
+   Ela não cobre veículo (o carro colide noutro trecho do `playerUpdate`), e
+   isso é de propósito: nestes estados o dreno já não roda dirigindo. */
+function resolverPassoSemFisicaXR() {
+  if (_alvoPassoXR.pedido <= 1e-6) return;
+  Structures.collide(player.pos, player.radius, 1.7);
+  devolverRejeicaoXR();
+  /* E O CHÃO ANDA JUNTO. Este trecho nasceu de um defeito que a própria
+     correção acima criou: com o colisor caminhando durante a pausa, a cota
+     dele deixa de valer, e é ela que o rig recebe como piso. Medido na
+     encosta mais íngreme que achei no mapa (−0,7009 m por metro), 1 m de
+     caminhada física com o painel aberto deixava `player.pos.y` 0,7009 m
+     acima do terreno — e ao FECHAR o `playerUpdate` reassentava tudo de uma
+     vez: o rig caía 0,7009 m NUM FRAME. É o mesmo teleporte de vista que
+     este trabalho veio consertar, no eixo vertical.
+
+     Só com o jogador NO CHÃO, e só dentro da mesma janela de 0,55 m que o
+     `playerUpdate` usa para "grudar" em descida: quem pausou no ar continua
+     no ar (o mundo está parado, e a gravidade volta ao retomar), e quem
+     caminhou até uma ribanceira cai ao retomar, como sempre caiu. Sem
+     gravidade, sem som de pouso e sem trauma — nada disto é evento de jogo,
+     é o piso acompanhando um passo que já aconteceu. */
+  if (!player.onGround) return;
+  const gy = groundAt(player.pos.x, player.pos.z, player.pos.y);
+  if (Math.abs(player.pos.y - gy) < 0.55) player.pos.y = gy;
+}
+
 /* SONDA DE SÓLIDO NA CABEÇA — o `_head_shape_cast` do Godot XR Tools, que é o
    gatilho PRIMÁRIO do fade de lá (`max_head_distance` é só o batente). Sem ela,
    DEBRUÇAR sobre um parapeito (0,3–0,6 m de cabeça adiante do corpo) e ENFIAR a
@@ -3679,6 +3744,14 @@ function tick(forceDt) {
       _alvoPassoXR.pedido = Math.hypot(_passoXR.x, _passoXR.z);
       _alvoPassoXR.x = player.pos.x; _alvoPassoXR.z = player.pos.z;
       _alvoPassoXR.dx = _passoXR.x; _alvoPassoXR.dz = _passoXR.z;
+      /* O `playerUpdate` NÃO VAI RODAR NESTES ESTADOS, e é ele quem põe a
+         parede na frente do passo. A lista tem de casar com o guarda do
+         `playerUpdate` (e com o `return` do ramo de menu/pausa, que sai do
+         tick antes dele): quem sair daqui atravessa parede andando de
+         verdade. Ver `resolverPassoSemFisicaXR`. */
+      if (!state.started || state.paused || window.__BR_freeze || state.cinematic) {
+        resolverPassoSemFisicaXR();
+      }
     } else _alvoPassoXR.pedido = 0;
 
     /* GIRO: contínuo por padrão, em passos por opção do jogador
@@ -3795,9 +3868,6 @@ function tick(forceDt) {
          mexe. O mundo continua vivo ao fundo; o que sai é o trilho de
          câmera. O ponto de vista do menu em VR é assunto da Fase 5. */
       if (!xrOn) MenuCam.update(dt);
-      // sem isto o rig fica na origem do mundo e o menu em VR vira "de pé no
-      // meio do mapa"; plantado no spawn, o jogador olha o mundo do lugar certo
-      else XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
       /* HORA E CLIMA FIXOS NO MENU. O passeio é a vitrine do jogo e antes
          pegava o clima que estivesse rolando — a rodada anterior caiu num céu
          fechado e os quatro planos saíram cinzas. Golden hour (halo de Mie
@@ -3807,6 +3877,17 @@ function tick(forceDt) {
       Env.tod = MENU_TOD;
       Env.weather = 'limpo';
     }
+    /* O RIG É POSICIONADO AQUI TAMBÉM, e não só no menu — este ramo cobre o
+       menu E a pausa, e antes só o menu era atendido. Sem isto, no menu o rig
+       ficaria na origem do mundo ("de pé no meio do mapa"); e com o PAINEL DE
+       PAUSA aberto o rig congelava, o que custou o defeito inteiro desta
+       rodada: o corpo do jogador parava de acompanhar a cabeça e o mundo
+       deslizava ao retomar. O passo físico continua sendo medido em qualquer
+       estado pelo `sync()` (js/xr/xrboot.js); o que esta linha acrescenta é o
+       rig SEGUIR o corpo — inclusive na COTA, que muda enquanto o jogador
+       caminha pelo quarto e sem a qual a vista cai de uma vez ao fechar
+       (medido na encosta mais íngreme do mapa: 0,7009 m num frame). */
+    if (xrOn) XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
     /* A grade de grama fica ANCORADA no spawn durante o menu. Seguir a câmera
        do passeio (que salta ~800 m a cada corte) enfileiraria os 169 chunks a
        cada troca de plano e o REBUILD_BUDGET (6/frame) pagaria isso por meio
@@ -3843,27 +3924,7 @@ function tick(forceDt) {
      continuava andando, pulando e olhando com "VOCÊ MORREU" na tela. O corpo
      para onde caiu (o tombo da câmera é do applyFpsCamera, que segue rodando). */
   if (!player.dead && !state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
-  /* O QUE A PAREDE COMEU VOLTA PRO RIG. Sem isto o passo físico saía do
-     acumulado, a colisão empurrava `player.pos` de volta, e a CABEÇA era
-     arrastada junto — medido: 3 m de caminhada real contra um sólido moviam a
-     vista 0,82 m e depois nada. O mundo travava enquanto o jogador andava de
-     verdade no quarto dele.
-
-     Só a componente NA DIREÇÃO do passo é devolvida: o jogador também se move
-     pelo analógico no mesmo frame, e projetar separa o que a parede recusou do
-     que ele escolheu não andar. Devolvido, o colisor para na parede e a cabeça
-     segue onde o corpo está — adiante do colisor, que é o certo: quem anda
-     contra uma parede virtual atravessa, porque ela não existe no quarto. */
-  if (_alvoPassoXR.pedido > 1e-6) {
-    const perdaX = _alvoPassoXR.x - player.pos.x, perdaZ = _alvoPassoXR.z - player.pos.z;
-    const k = _alvoPassoXR.pedido;
-    const proj = (perdaX * _alvoPassoXR.dx + perdaZ * _alvoPassoXR.dz) / (k * k);
-    if (proj > 0) {
-      const f = Math.min(1, proj);
-      XR.devolverPasso(_alvoPassoXR.dx * f, _alvoPassoXR.dz * f);
-    }
-    _alvoPassoXR.pedido = 0;
-  }
+  devolverRejeicaoXR();
   shootUpdate(dt, t);
   stepPhysics(dt, intendedDt);
   Car.update(dt, t);
@@ -3925,6 +3986,15 @@ function tick(forceDt) {
        câmera. Descartar por frame é o mesmo que recusar acumular, e mantém a
        cinemática dona da câmera sem tocar nela nem nos projéteis. */
     Touch.takeLook();
+    /* O RIG CONTINUA SEGUINDO O CORPO DURANTE A CINEMÁTICA. Ela é dona da
+       CÂMERA, não dos PÉS: o jogador de headset continua andando pelo quarto
+       dele, e a cinemática é justamente onde ele fica parado assistindo e se
+       mexe à vontade. Sem esta linha o rig congelava e o corpo dele ficava
+       para trás — colisor 0,0000 m para 0,9800 m de caminhada — e ao terminar
+       a cinemática o mundo deslizava 1,0000 m num frame. Isto NÃO bloqueia a
+       cinemática nem os projéteis: `place()` move o rig, e a cinemática
+       escreve a câmera, que é filha dele. */
+    if (xrOn) XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
   } else {
     applyTouchLook(); // ANTES do applyFpsCamera: ele só soma delta de recuo
     applyFpsCamera(dt, t);

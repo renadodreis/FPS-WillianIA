@@ -49,6 +49,30 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
   let carenciaEscoa = 0;   // frames em que o mundo recusou; enquanto isso, não escoa
   let cabecaX = 0, cabecaZ = 0, temBase = false;
   let pedidoRebase = 0;   // frames de carência do reset de referencial (ver rebasear)
+  /* O ÚLTIMO GIRO ARTIFICIAL COMANDADO. `rastrear()` leva o passo do espaço do
+     rig para o mundo com ele, e quem o escreve é `place()`. O passo que o
+     jogador deu entre o frame passado e este aconteceu SOB o giro do frame
+     passado, então usar o último comandado é o certo — e é o único disponível
+     quando quem chama é o contrato de frame, que não posiciona nada. */
+  let yawAtual = 0;
+  /* Alguém já mediu o passo NESTE frame? O contrato de frame (`rastrear`) mede
+     no começo; `place()` mede só se ninguém mediu, e é isso que mantém idêntico
+     o comportamento de quem só chama `place()` — os testes de unidade do
+     módulo, e a ação de recentrar. */
+  let rastreado = false;
+  /* O CORPO, como o jogo o comandou no último `place()`. Serve à régua de
+     separação (ver `separacaoM`), que precisa de um alvo que não venha do
+     acumulado do próprio rig. */
+  let corpoX = 0, corpoZ = 0, temCorpo = false;
+  /* O ALARME DO DESCARTE. `PASSO_HUMANO_MAX` descarta em silêncio, e silêncio
+     foi exatamente o que transformou um frame não rastreado em 1,000 m de
+     mundo deslizando: com o painel de pausa aberto o passo físico não era
+     medido, e ao fechar o metro inteiro chegava como UM salto — o guarda o
+     classificava como recentrar (decisão certa para o sinal que recebeu) e o
+     jogava fora, e o rig replantava a cabeça sobre o corpo. Em operação sadia
+     isto fica em zero; diferente de zero em jogo é um frame que ninguém
+     rastreou. Falha silenciosa por construção é pior que falha barulhenta. */
+  let saltoDescartado = 0, saltosDescartados = 0;
 
   /* transform LOCAL da câmera antes de entrar: em XR ele é sobrescrito
      todo frame, então sem cópia não há como devolver o desktop intacto */
@@ -80,6 +104,8 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
        chega no primeiro frame da sessão — antes disso seria um passo falso). */
     passoX = 0; passoZ = 0; foraX = 0; foraZ = 0; exX = 0; exZ = 0; carenciaEscoa = 0;
     temBase = false; pedidoRebase = 0;
+    yawAtual = 0; rastreado = false; temCorpo = false;
+    saltoDescartado = 0; saltosDescartados = 0;
     dentro = true;
     return rig;
   }
@@ -173,11 +199,52 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
      `consumirPasso()` e somá-lo na posição de jogo — aí o colisor passa a
      seguir a cabeça, e a cota do terreno passa a ser amostrada embaixo dela.
      A cabeça não pula na troca: o que entra em `x,z` sai de `passo`. */
-  function place(x, y, z, yaw) {
-    if (!dentro || !rig) return; // fora do XR não existe rig — e criar um custaria rand
+  /* ================================================================
+     MEDIR O PASSO FÍSICO É CONTRATO DE FRAME, NÃO DECISÃO DE ESTADO.
+
+     Isto morava dentro de `place()`, e `place()` mora dentro do
+     `applyFpsCamera` — que DOIS estados do jogo tiram do caminho do tick (o
+     painel de pausa aberto e a cinemática da cidade). O jogador andava 1 m
+     pelo quarto e o resultado medido era:
+
+         a vista andou ............ 1,0000 m   (certo: rastreio nunca para)
+         o COLISOR andou .......... 0,0000 m   (o corpo dele ficou para trás)
+         separação cabeça↔corpo ... 1,0236 m   (teto de C2: 0,10 m)
+         XR.foraDoCorpo ........... 0,0000 m   (nenhuma cortina acendeu)
+         AO FECHAR O PAINEL ....... 1,0000 m de mundo deslizando EM UM FRAME
+
+     As duas metades do estrago vêm da MESMA linha ausente. Sem medir, o passo
+     nunca entra no acumulado, `consumirPasso()` não tem o que entregar e o
+     colisor fica plantado — e a cabeça, que o headset move de qualquer jeito,
+     sai de cima dele até 1 m sem que o rig saiba (por isso `foraDoCorpo` em
+     zero: ele é a separação que o MUNDO recusou, e o mundo não recusou nada).
+     Quando `place()` volta, o metro inteiro chega como UM delta, estoura
+     `PASSO_HUMANO_MAX` e é descartado como recentrar — o guarda está certo,
+     quem o alimenta é que estava errado (é a ressalva de F3 no laudo).
+
+     Separar resolve os dois de uma vez e resolve para SEMPRE: quem chama isto
+     é o `sync()` (js/xr/xrboot.js), que roda uma vez por frame em TODO estado,
+     antes de qualquer código encostar em câmera — o mesmo lugar e o mesmo
+     motivo de `atualizarPose()`. Nenhum estado novo do jogo re-arma a
+     armadilha, porque nenhum estado passa por fora do `sync()`.
+
+     O QUE ELE NÃO FAZ: posicionar. O rig só é reposicionado por `place()`, e
+     é isso que mantém a distinção honesta — rastrear é obrigação de frame,
+     posicionar é decisão do jogo. Com o rig parado a cabeça segue andando
+     sozinha (ela é filha dele e quem a escreve é o three), e o colisor anda o
+     mesmo tanto pelo dreno: os dois ficam juntos sem ninguém arrastar
+     ninguém.
+
+     Chamar duas vezes no mesmo frame não conta o passo duas vezes — `cabecaX`
+     já foi atualizada e o segundo delta é zero. O que roda duas vezes é o
+     escoamento, 6 mm; acontece só quando o jogador aperta RECENTRAR (que
+     chama `place()` fora do tick) e é menor que o próprio tremor da mão.
+     ================================================================ */
+  function rastrear() {
+    if (!dentro || !rig) return;
     atualizarPose();             // a pose DESTE frame, não a do anterior (ver acima)
     const hx = camera.position.x, hz = camera.position.z;
-    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const c = Math.cos(yawAtual), s = Math.sin(yawAtual);
     /* Um reset pendente vira base nova AQUI, com a pose já atualizada, e leva
        o acumulado junto: depois de o referencial mudar, o acumulado descreve um
        mundo que não existe mais. */
@@ -201,8 +268,13 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
     cabecaX = hx; cabecaZ = hz;
     /* Salto grande demais para ser passo: aceita a pose e segue sem acumular.
        É o que cobre recentrar, redefinição de piso e falha de rastreio, sem
-       depender da ordem em que o runtime entrega pose e evento. */
-    if (Math.hypot(dx, dz) <= PASSO_HUMANO_MAX) {
+       depender da ordem em que o runtime entrega pose e evento.
+       O tamanho do que foi jogado fora fica gravado (ver `saltoDescartado`):
+       enquanto isto for medido todo frame, um descarte em jogo denuncia um
+       frame que ninguém rastreou — que é como o mundo deslizou 1 m. */
+    const salto = Math.hypot(dx, dz);
+    if (salto > PASSO_HUMANO_MAX) { saltoDescartado = salto; saltosDescartados++; }
+    if (salto <= PASSO_HUMANO_MAX) {
       let px = dx * c + dz * s;
       let pz = -dx * s + dz * c;
       /* ANDAR DE VOLTA PAGA A DÍVIDA PRIMEIRO. O jogador que entrou com a
@@ -269,6 +341,34 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
         }
       }
     }
+    rastreado = true;
+  }
+
+  /* POSICIONAR O RIG. Mede o passo antes SÓ se ninguém mediu neste frame —
+     assim quem chama apenas `place()` (os testes de unidade deste módulo)
+     continua com o comportamento de sempre, e quem honra o contrato de frame
+     não conta o passo duas vezes.
+
+     A MARCA SÓ É LIMPA POR QUEM A ACENDEU AQUI, e isso não é detalhe: o painel
+     chama `place()` fora do tick (a ação RECENTRAR), e nesse frame `place()`
+     roda DUAS vezes. Limpando a marca sempre, a segunda passada mediria de
+     novo — e o segundo `rastrear()` consumiria mais um frame da carência de
+     rebase, que é justamente a proteção que RECENTRAR precisa: ela existe
+     porque o evento `reset` chega antes de a pose nova alcançar a câmera, e
+     gastá-la em dobro ressuscita o deslocamento em degraus de 0,15 m. Com a
+     marca do `sync()` intacta, a segunda passada só posiciona.
+
+     `atualizarPose()` de novo é de graça e é idempotente (ver o cabeçalho):
+     `rastrear()` já a chamou, mas `place()` não pode depender de quem passou
+     antes — é a mesma razão pela qual o `sync()` chama e ela continua aqui. */
+  function place(x, y, z, yaw) {
+    if (!dentro || !rig) return; // fora do XR não existe rig — e criar um custaria rand
+    yawAtual = yaw;
+    if (!rastreado) { rastrear(); rastreado = false; }
+    atualizarPose();
+    const hx = camera.position.x, hz = camera.position.z;
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    corpoX = x; corpoZ = z; temCorpo = true;
     rig.rotation.y = yaw;
     /* rig = alvo da cabeça menos a posição da cabeça já girada pelo yaw.
        A cabeça vai para (x,z) + passo + FORA: o `fora` é o que mantém a vista
@@ -278,6 +378,29 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
       y,
       z + passoZ + foraZ - (-hx * s + hz * c),
     );
+  }
+
+  /* A SEPARAÇÃO CABEÇA↔CORPO DE VERDADE, medida na geometria: onde o rig está
+     AGORA mais a pose do headset AGORA, contra o corpo que o jogo comandou no
+     último `place()`. Nada disto sai do acumulado do próprio rig.
+
+     POR QUE ELA NÃO PODE SER `foraDoCorpoM`, que é o que a cortina consome:
+     aquele número é a separação que o MUNDO recusou, e existe separação que o
+     mundo nunca viu. No defeito do painel de pausa a cabeça estava 1,0236 m
+     fora do corpo e `foraDoCorpo` lia 0,0000 — porque nenhuma parede tinha
+     recusado nada; o que faltava era o rig ser rastreado. Uma régua que só
+     pergunta ao produto não enxerga o que o produto não sabe.
+
+     Lida durante o tick, a pose é a que o `render()` do frame anterior
+     escreveu (é o atraso que `atualizarPose()` existe para corrigir); lida
+     depois do render, é exata. Para QA, meça depois do render. */
+  function separacaoM() {
+    if (!dentro || !rig || !temCorpo) return 0;
+    const c = Math.cos(rig.rotation.y), s = Math.sin(rig.rotation.y);
+    const hx = camera.position.x, hz = camera.position.z;
+    const wx = rig.position.x + (hx * c + hz * s);
+    const wz = rig.position.z + (-hx * s + hz * c);
+    return Math.hypot(wx - corpoX, wz - corpoZ);
   }
 
   /* Devolve (e zera) o passo físico ainda não absorvido pelo jogo, em MUNDO.
@@ -451,6 +574,10 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
 
   return {
     enter, exit, place, headWorldPosition, consumirPasso, devolverPasso, rebasear,
+    /* O CONTRATO DE FRAME: medir o passo físico. Chamado pelo `sync()`
+       (js/xr/xrboot.js) uma vez por frame, em TODO estado do jogo — inclusive
+       naqueles em que o `place()` não roda. Ver o cabeçalho de `rastrear`. */
+    rastrear,
     /* Exposto para o `sync()` (js/xr/xrboot.js) chamar no COMEÇO do frame: o
        `place()` já se protege sozinho, mas ele roda tarde no tick, e todo o
        resto (corpo, alcance de interação, HUD, mira) lia a mesma pose velha. */
@@ -470,5 +597,13 @@ export function createXrRig({ THREE, scene, camera, renderer = null }) {
        não move a vista e não entra em régua de alcance nenhuma. Existe para o
        QA poder provar que ela é PAGA na volta em vez de descartada. */
     get dividaM() { return Math.hypot(exX, exZ); },
+    /* A SEPARAÇÃO DE VERDADE, em metros (ver `separacaoM`). Diferente de
+       `foraDoCorpoM`: aquele é o que o mundo recusou, este é onde a cabeça
+       está. Os dois coincidem quando o rig é rastreado todo frame — e é a
+       divergência entre eles que denuncia quando ele não é. */
+    get separacaoM() { return separacaoM(); },
+    /* O ALARME DO DESCARTE (ver a declaração). Zero em operação sadia. */
+    get saltoDescartadoM() { return saltoDescartado; },
+    get saltosDescartados() { return saltosDescartados; },
   };
 }

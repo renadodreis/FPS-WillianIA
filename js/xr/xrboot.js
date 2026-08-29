@@ -74,7 +74,17 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
        Por frame, e não só ao entrar: no primeiro frame da sessão o espaço de
        referência ainda pode não existir, e o three troca o espaço quando o jogo
        pede outro tipo. A função sai na primeira linha quando já está ouvindo. */
-    if (p) { rig.atualizarPose(); ouvirReset(); }
+    /* E O PASSO FÍSICO É MEDIDO AQUI, PELO MESMO MOTIVO E NO MESMO LUGAR.
+       Ele morava dentro do `place()`, que mora dentro do `applyFpsCamera`, que
+       DOIS estados do jogo tiram do caminho do tick (painel de pausa aberto,
+       cinemática da cidade). Nesses dois o corpo do jogador parava de
+       acompanhar a cabeça — colisor 0,0000 m para 1,0000 m de caminhada, 1,02 m
+       de separação sem cortina nenhuma — e ao voltar o metro inteiro chegava
+       como UM salto, era descartado como recentrar, e o mundo deslizava 1 m num
+       frame. Medir é obrigação de FRAME; posicionar continua sendo decisão do
+       jogo, e continua em `place()`. Ver o cabeçalho de `rastrear` em
+       js/xr/xrrig.js. */
+    if (p) { rig.atualizarPose(); rig.rastrear(); ouvirReset(); }
     /* `quality.restaurar()` PRIMEIRO, e a ordem importa menos que o fato de ele
        estar aqui: esta linha já foi escrita uma vez e sumiu quando outro wiring
        reescreveu o mesmo `else if`. O sintoma era mudo — o jogador tirava o
@@ -101,6 +111,13 @@ export function createXrBoot({ THREE, renderer, scene, camera, getCsm = () => nu
        escurecimento de intrusão consome (js/xr/xrcomfort.js): a parede segura
        o colisor, e este número diz quanto a cabeça já entrou no sólido. */
     get foraDoCorpo() { return rig.foraDoCorpoM; },
+    /* A SEPARAÇÃO GEOMÉTRICA cabeça↔corpo, que é OUTRA coisa: `foraDoCorpo` é
+       o que o mundo recusou, esta é onde a cabeça está. QA e diagnóstico —
+       `js/interact.js` continua lendo `foraDoCorpo`, cuja semântica não muda. */
+    get separacao() { return rig.separacaoM; },
+    /* Passo físico que o guarda de `PASSO_HUMANO_MAX` jogou fora. Zero em
+       operação sadia; diferente de zero é frame não rastreado (ver xrrig.js). */
+    get saltoDescartado() { return rig.saltoDescartadoM; },
     rebasear: () => rig.rebasear(),
     headWorldPosition: alvo => rig.headWorldPosition(alvo),
     get presenting() { return apresentando(); },

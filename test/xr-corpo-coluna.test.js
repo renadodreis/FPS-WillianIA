@@ -78,10 +78,39 @@ function instalarSonda() {
     raiz.updateWorldMatrix(true, true);
     G.camera.updateWorldMatrix(true, false);
     const olho = wp(G.camera);
+    /* ================================================================
+       AS DUAS RÉGUAS QUE FALTAVAM PARA I3.
+
+       (a) OS OLHOS DE VERDADE. `G.camera` em XR fica no CENTRO da cabeça e o
+       critério I3 mede a partir de CADA OLHO — é a mesma diferença que fez
+       `js/fpbody.js` perseguir 0,19 m em vez de 0,15 m (o comentário do
+       `olhoLivre` de lá registra meia IPD medida em 0,0315 m). Medir do centro
+       é medir de um ponto que não existe na cabeça de ninguém; as duas câmeras
+       estéreo do `renderer.xr` são os olhos que o compositor desenha.
+
+       (b) A DISTÂNCIA SEM O SERVO. `bodyRoot.userData.recuoOlho` é o vetor de
+       MUNDO que empurra o corpo inteiro para longe do olho (teto
+       `TUNE.recuoMax` = 0,015 m). Subtraindo esse vetor do vértice sai onde a
+       malha ESTARIA sem ele — ou seja, quantos milímetros o servo comprou.
+
+       Por que isto: o teto do caso de I3 era 0,15 m contra um produto que
+       persegue 0,19 m com um mecanismo de autoridade 0,015 m. A janela em que
+       o caso podia ficar vermelho tinha 15 mm de largura e nunca era visitada:
+       com `recuoMax: 0` (servo desligado) o arquivo ficava 6 de 6 VERDE. Com
+       (b) o caso passa a medir o mecanismo, e não só o resultado.
+       ================================================================ */
+    const camXR = MP.renderer.xr.getCamera && MP.renderer.xr.getCamera();
+    const olhos = (camXR && camXR.cameras && camXR.cameras.length)
+      ? camXR.cameras.map(c => new T.Vector3().setFromMatrixPosition(c.matrixWorld))
+      : [];
+    const recuo = raiz.userData.recuoOlho
+      ? new T.Vector3().copy(raiz.userData.recuoOlho) : new T.Vector3();
     /* MALHA INTEIRA por vértice skinado: quem toca o chão primeiro num
        agachamento fundo pode ser a bainha da capa, e olhar só a bota passaria
        com o casaco atravessando o piso. */
     let minV = Infinity, maxV = -Infinity, osso = '?', ossoTopo = '?', perto = Infinity;
+    let pertoOlhos = Infinity, pertoSemServo = Infinity, ossoPerto = '?';
+    const _q = new T.Vector3();
     /* O TOPO IGNORA O BRAÇO, e isto NÃO é conveniência: no kit emulado os
        controles não descem junto com o headset, então o braço do boneco sobe
        atrás deles e quem ganha o topo passa a ser o DEDO — medido aqui, +0,3372 m
@@ -118,7 +147,15 @@ function instalarSonda() {
            mão parada perto do rosto é artefato do dublê, não do produto. */
         if (!/^(Sholder|Arm_|Hand|Finger)/.test(d)) {
           const dd = _p.distanceTo(olho);
-          if (dd < perto) perto = dd;
+          if (dd < perto) { perto = dd; ossoPerto = d; }
+          /* I3 se mede de CADA OLHO, não do centro da cabeça */
+          for (const e of olhos) {
+            const de = _p.distanceTo(e);
+            if (de < pertoOlhos) pertoOlhos = de;
+          }
+          /* e onde a malha estaria se o servo não tivesse empurrado */
+          const ds = _q.copy(_p).sub(recuo).distanceTo(olho);
+          if (ds < pertoSemServo) pertoSemServo = ds;
         }
         if (_p.y >= minV) continue;
         minV = _p.y;
@@ -173,7 +210,16 @@ function instalarSonda() {
       raizNoPeito: B.chest.worldToLocal(raizW.clone()).toArray(),
       raizMenosOlho: raizW.clone().sub(olho).toArray(),
       ancoraC5,
-      olhoMin: G.FpBody.olhoMin, olhoMinTronco: perto,
+      olhoMin: G.FpBody.olhoMin, olhoMinTronco: perto, ossoPerto,
+      /* I3 pela régua do próprio critério: a menor distância a QUALQUER dos
+         dois olhos estéreo. `olhos` é publicado para o caso poder recusar a
+         medida quando o renderer não entregou os dois. */
+      olhoMinOlhos: Number.isFinite(pertoOlhos) ? pertoOlhos : null,
+      olhos: olhos.length,
+      ipd: olhos.length === 2 ? olhos[0].distanceTo(olhos[1]) : null,
+      /* o mecanismo: quanto o servo empurrou, e onde a malha estaria sem ele */
+      recuoOlho: G.FpBody.recuoOlho,
+      olhoMinSemServo: Number.isFinite(pertoSemServo) ? pertoSemServo : null,
       colunaDivida: G.FpBody.colunaDivida,
       /* O TOPO DA MALHA EM RELAÇÃO AO OLHO — a régua que o laudo desta base já
          usou para o defeito antigo ("topo do boneco 0,709 m acima do olho").
@@ -293,7 +339,9 @@ describe('em VR o jogador sentado no chão não fica com o quadril debaixo do pi
           `${f4(m.torsoSobreOPiso)} · ancoraC5 ${f4(m.ancoraC5)} · topo ` +
           `${f4(m.topoRelOlho)} · ombro ` +
           `${f4(m.ombroRelY)} · flexão ${f2(m.flexao)}° · dobra ${f4(m.dobra)} · ` +
-          `dívida ${f4(m.colunaDivida)} · olhoMinTronco ${f4(m.olhoMinTronco)} · ` +
+          `dívida ${f4(m.colunaDivida)} · olhoMinTronco ${f4(m.olhoMinTronco)} ` +
+          `(${m.ossoPerto}) · olhos ${m.olhos} → I3 ${f4(m.olhoMinOlhos)} · servo ` +
+          `${f4(m.recuoOlho)} → sem ele ${f4(m.olhoMinSemServo)} · ` +
           `raizY ${f4(m.raizY)} · afundou ${f4(m.afundou)} · [réguas descartadas: ` +
           `cabRel ${f4(dist(m.cabRel, dePe.cabRel))} · ombroDist ${f4(m.ombroDistR)}]`);
       }
@@ -366,17 +414,79 @@ describe('em VR o jogador sentado no chão não fica com o quadril debaixo do pi
     });
 
     it('e a dobra não traz a malha para dentro do olho (I3)', () => {
-      /* O RISCO NOVO QUE A CORREÇÃO CRIA, medido: dobrar o tronco leva a gola e
+      /* ================================================================
+         O RISCO NOVO QUE A CORREÇÃO CRIA, medido: dobrar o tronco leva a gola e
          o ombro para a frente, que é justamente a direção do olho. O critério
-         I3 proíbe geometria dentro de 0,15 m do olho, e js/fpbody.js tem servo
-         próprio para isso (`recuoOlho`, teto 0,015 m) — este caso cobra que ele
-         dê conta também nesta pose. */
+         I3 proíbe geometria dentro de 0,15 m do olho.
+
+         O QUE ESTE CASO NÃO MEDIA. Ele tinha uma linha só —
+         `olhoMinTronco > 0.15` — contra um produto que persegue
+         `TUNE.olhoLivre` = 0,19 m com um servo de autoridade `TUNE.recuoMax` =
+         0,015 m. O teto do teste ficava 40 mm ABAIXO do alvo do produto e o
+         mecanismo só move 15 mm: a janela em que o caso podia ficar vermelho
+         tinha 15 mm de largura e nunca era visitada. Validação independente
+         desligou o servo (`recuoMax: 0`) e o arquivo ficou 6 de 6 VERDE —
+         sexto e nono formatos da lista do CLAUDE.md ao mesmo tempo (outro
+         guarda segurando o caso, e cenário que não exercita o limiar).
+
+         AS TRÊS RÉGUAS DE AGORA, e nenhuma delas é o mesmo número duas vezes:
+         1. I3 medido de CADA OLHO (as duas câmeras estéreo), que é como o
+            critério é escrito. `G.camera` fica no CENTRO da cabeça, e essa
+            diferença é meia IPD — é literalmente por causa dela que o produto
+            persegue 0,19 e não 0,15.
+         2. Onde a malha estaria SEM o servo, que também tem de respeitar I3:
+            o servo é remendo declarado, com 15 mm de autoridade, e não pode
+            ser o que separa o jogo do critério.
+         3. E O MECANISMO: no degrau em que a malha entra na faixa que o centro
+            da cabeça já não garante (0,15 m + meia IPD MEDIDA nesta sessão), o
+            servo tem de estar comprando distância de verdade. Medido: a 0,65 m
+            de cabeça ele compra 14,1 mm (0,1707 m contra 0,1566 m sem ele).
+         ================================================================ */
+      /* a régua do critério exige os dois olhos; sem eles a medida é do centro
+         da cabeça e otimista por meia IPD */
+      assert.ok(fundo.every(m => m.olhos === 2 && m.ipd > 0.03),
+        'o renderer não entregou as DUAS câmeras estéreo com IPD plausível ' +
+        `(olhos ${fundo.map(m => m.olhos).join('/')}, ipd ${f4(fundo[0].ipd)} m): ` +
+        'sem elas I3 estaria sendo medido de um ponto que não existe em cabeça nenhuma');
+      const meiaIpd = fundo[0].ipd / 2;
+      let mexeu = 0;
       for (const m of fundo) {
         assert.ok(m.olhoMinTronco > 0.15,
           `com a cabeça a ${f4(m.alvoY)} m a malha do boneco chegou a ` +
-          `${f4(m.olhoMinTronco)} m do olho (I3 exige 0,15 m), com a coluna dobrada ` +
-          `${f2((m.dobra || 0) * 180 / Math.PI)}°`);
+          `${f4(m.olhoMinTronco)} m do CENTRO DA CABEÇA (I3 exige 0,15 m), com a coluna ` +
+          `dobrada ${f2((m.dobra || 0) * 180 / Math.PI)}°`);
+        assert.ok(m.olhoMinOlhos > 0.15,
+          `com a cabeça a ${f4(m.alvoY)} m a malha do boneco (${m.ossoPerto}) chegou a ` +
+          `${f4(m.olhoMinOlhos)} m do OLHO MAIS PRÓXIMO — que é a régua que I3 escreve, ` +
+          `e não o centro da cabeça (que viu ${f4(m.olhoMinTronco)} m)`);
+        assert.ok(m.olhoMinSemServo > 0.15,
+          `com a cabeça a ${f4(m.alvoY)} m a malha estaria a ${f4(m.olhoMinSemServo)} m do ` +
+          `olho sem o servo de recuo (que empurrou ${f4(m.recuoOlho)} m). O servo tem 15 mm ` +
+          'de autoridade e é remendo declarado: ele não pode ser o que separa o jogo de I3');
+        /* 3. O MECANISMO. `0,15 + meia IPD` é a faixa em que a medida do centro
+           deixa de garantir o critério nos olhos — é exatamente o raciocínio
+           que fixou `olhoLivre` em 0,19, mas aqui a meia IPD é MEDIDA nesta
+           sessão em vez de lida do módulo. Entrando nela, o servo tem de
+           comprar distância. */
+        if (m.olhoMinSemServo < 0.15 + meiaIpd) {
+          mexeu++;
+          const ganho = m.olhoMinTronco - m.olhoMinSemServo;
+          assert.ok(ganho >= 0.005,
+            `com a cabeça a ${f4(m.alvoY)} m a malha entrou a ${f4(m.olhoMinSemServo)} m do ` +
+            `olho (dentro de 0,15 + meia IPD = ${f4(0.15 + meiaIpd)} m) e o servo de recuo ` +
+            `comprou só ${f4(ganho)} m (recuoOlho ${f4(m.recuoOlho)} m). Nesta faixa ele TEM ` +
+            'de empurrar: sem ele, I3 está sendo respeitado por sorte de geometria e não ' +
+            'por mecanismo — e a margem que sobra é de milímetros');
+        }
       }
+      /* E O CENÁRIO TEM DE CHEGAR LÁ. Sem nenhum degrau dentro da faixa, a
+         asserção acima nunca roda e o caso volta a ser a linha única que não
+         podia falhar. */
+      assert.ok(mexeu >= 1,
+        `nenhum dos ${fundo.length} degraus levou a malha para dentro de ` +
+        `${f4(0.15 + meiaIpd)} m do olho: a varredura não exercita o servo de recuo, e ` +
+        'este caso não está medindo o mecanismo de I3 (o pior degrau ficou a ' +
+        `${f4(Math.min(...fundo.map(x => x.olhoMinSemServo)))} m)`);
     });
 
     it('a coluna dobra dentro do que uma coluna humana dobra', () => {

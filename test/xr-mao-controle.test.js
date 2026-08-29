@@ -123,6 +123,13 @@ function instalarSonda() {
          assinatura de alvo inalcançável por construção */
       ombroLAoControle: pL ? wp(B.shL).distanceTo(pL) : null,
       bracoL: wp(B.upL).distanceTo(wp(B.foL)) + wp(B.foL).distanceTo(wp(B.haL)),
+      /* O VÃO DE MÃO DA ARMA: empunhadura → guarda-mão, medido entre as duas
+         âncoras do MODELO (js/weaponrig.js). É a assinatura geométrica que
+         distingue uma arma longa da outra (0,55 / 0,60 / 0,64 m), e é ela que
+         permite ao caso das três armas provar que trocou de arma de verdade em
+         vez de medir a mesma três vezes. */
+      vaoMao: ancR && ancL ? ancR.distanceTo(ancL) : null,
+      indice: G.gunIndex,
     };
   }
   window.__M = { amostra: null, erro: null, quero: false };
@@ -360,8 +367,22 @@ describe('em VR a mão do boneco fica no CONTROLE do jogador',
     it('vale para as três armas longas, que têm vãos de mão diferentes', async () => {
       /* 0,5508 / 0,6015 / 0,6412 m entre empunhadura e guarda-mão: se a mão do
          boneco seguisse a ARMA, o erro andaria com esse vão. Seguindo o
-         CONTROLE, ele não anda. */
-      const fora = [];
+         CONTROLE, ele não anda.
+
+         O CASO NÃO CONFERIA QUE TROCOU DE ARMA — e essa era a falha. Ele
+         mandava `justPressed.add('Digit1'|'Digit2'|'Digit3')` e lia o resíduo
+         três vezes; `m.arma` só aparecia na string de erro, e os três vãos
+         citados no comentário acima NUNCA eram lidos. Validação independente
+         trocou `switchWeapon(1)` e `switchWeapon(2)` por `switchWeapon(0)` em
+         game.js (as três teclas passam a dar a MESMA arma) e o arquivo
+         continuou 7 de 7 VERDE: era o nono formato da lista do CLAUDE.md, um
+         cenário que não exercita o que promete.
+
+         Agora o vão de mão de cada arma é MEDIDO — das âncoras `handR`/`handL`
+         do modelo, que são geometria desenhada em js/weaponrig.js e não saem
+         de nada que este arquivo testa — e o caso cobra três armas distintas
+         com três vãos distintos ANTES de olhar para o resíduo da mão. */
+      const linhas = [];
       for (const par of [['Digit1', 0], ['Digit2', 1], ['Digit3', 2]]) {
         const m = await h.play(async (t, oL) => {
           const G = window.__game, MP = window.__MP;
@@ -375,11 +396,43 @@ describe('em VR a mão do boneco fica no CONTROLE do jogador',
           await new Promise(r => setTimeout(r, 400));
           return await window.__M.ler();
         }, par[0], APOIO);
-        if (m.maoEsqNoControle >= MAO_NO_CONTROLE || m.maoDirNaArma >= MAO_NA_ARMA) {
-          fora.push(`${m.arma}: esq ${m.maoEsqNoControle.toFixed(4)} m do controle, ` +
-            `dir ${m.maoDirNaArma.toFixed(4)} m da empunhadura`);
-        }
+        linhas.push({ tecla: par[0], ...m });
+        console.log(`    [${par[0]}] arma "${m.arma}" (índice ${m.indice}) · vão de mão ` +
+          `${m.vaoMao === null ? 'n/d' : m.vaoMao.toFixed(4)} m · esq ` +
+          `${m.maoEsqNoControle.toFixed(4)} m do controle · dir ` +
+          `${m.maoDirNaArma.toFixed(4)} m da empunhadura`);
       }
+
+      /* CONDIÇÃO DE MEDIDA, e ela precede o resíduo: três teclas, três armas.
+         Sem isto o caso é uma medida repetida três vezes. */
+      const nomes = linhas.map(m => m.arma);
+      const indices = linhas.map(m => m.indice);
+      assert.equal(new Set(indices).size, 3,
+        `as três teclas deram os índices de arma ${indices.join(' / ')} — o caso mediu ` +
+        `a MESMA arma mais de uma vez (nomes: ${nomes.join(' / ')}) e não exercita ` +
+        'vão de mão nenhum');
+      assert.equal(new Set(nomes).size, 3,
+        `as três teclas deram as armas ${nomes.join(' / ')}: sem três armas distintas ` +
+        'não há três vãos de mão a comparar');
+
+      /* E OS VÃOS TÊM DE SER MESMO DIFERENTES: é o vão que separa "a mão segue
+         o CONTROLE" de "a mão segue a ARMA". Se ele não variar, os três
+         resíduos poderiam ser pequenos pelo motivo errado. */
+      assert.ok(linhas.every(m => m.vaoMao !== null),
+        'alguma arma não publicou as duas âncoras de mão — sem vão não há o que separar');
+      const vaos = linhas.map(m => m.vaoMao);
+      const espalho = Math.max(...vaos) - Math.min(...vaos);
+      assert.ok(espalho > 0.05,
+        `os vãos de mão das três armas variaram só ${espalho.toFixed(4)} m ` +
+        `(${vaos.map(v => v.toFixed(4)).join(' / ')}): sem essa variação, "a mão segue o ` +
+        'CONTROLE e não a ARMA" não está sendo posto à prova — medido no projeto: ' +
+        '0,5508 / 0,6015 / 0,6412 m, ou seja 0,0904 m de espalhamento');
+
+      const fora = linhas.filter(m =>
+        m.maoEsqNoControle >= MAO_NO_CONTROLE || m.maoDirNaArma >= MAO_NA_ARMA)
+        .map(m => `${m.arma} (vão ${m.vaoMao.toFixed(4)} m): esq ` +
+          `${m.maoEsqNoControle.toFixed(4)} m do controle, dir ` +
+          `${m.maoDirNaArma.toFixed(4)} m da empunhadura`);
       assert.deepEqual(fora, [], `armas com a mão fora do lugar: ${fora.join(' | ')}`);
     });
   });

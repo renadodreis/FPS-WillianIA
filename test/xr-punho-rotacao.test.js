@@ -47,6 +47,22 @@
    eixo punho→nós dos dedos. `js/fpbody.js` calcula o mesmo eixo, mas o teste
    não o lê de lá: lê do rig, que é a âncora independente.
 
+   E O EIXO DOS DEDOS NÃO BASTA PARA O CASO DA MÃO NA ARMA — foi o furo desta
+   rodada. Rolar a palma em volta do eixo dos dedos não move esse eixo um grau,
+   então as duas asserções daquele caso eram cegas para `TUNE.rollL`: a
+   comparação com `TUNE.fingersL` no espaço da arma dá 0,00° por álgebra (é a
+   conta que o próprio `alignHand` faz), e o ângulo dedos↔cano é `fingersL`
+   contra o −Z do modelo, dois literais. Validação independente pôs `rollL: 0`
+   — a palma esquerda gira 91,67° e deixa de abraçar o guarda-mão por baixo, que
+   é literalmente a frase da mensagem de erro do caso — e os cinco casos
+   continuaram VERDES.
+
+   O eixo que faltava é a ROLAGEM, e ela se mede pelo BASTÃO: a base de grip
+   deduzida do GLB (dedos × polegar), cujo −Z é o bastão que a mão segura pela
+   spec do WebXR, contra a direção do CANO (`direcaoDoCano()`, o objeto `muzzle`
+   desenhado). Duas canetas diferentes, nenhuma delas passando por `fingersL`,
+   `rollL` ou `alignHand`. Medido: 50,76° intacto contra 131,84° com `rollL: 0`.
+
    NUNCA `Box3` (a caixa de um `SkinnedMesh` é congelada na primeira pose
    pedida) e SEMPRE no `renderer.render`, que é o único instante em que a arma
    já está no punho do jogador.
@@ -64,8 +80,20 @@ const PORT = 3640;
 /* O punho é RÍGIDO na mão: girar o controle gira o osso o mesmo tanto. A folga
    cobre a suavização de pose e o servo anti-olho de js/fpbody.js. */
 const RIGIDO_MAX = 12;     // graus
-/* Mão NA ARMA: o eixo dos dedos continua na direção de empunhadura da arma. */
-const NA_ARMA_MAX = 8;     // graus
+/* MÃO NA ARMA — o teto da ROLAGEM, e ele NÃO é um número escolhido: é o SINAL
+   da projeção.
+
+   O eixo do bastão deduzido é perpendicular ao eixo dos dedos por construção, e
+   os dedos ficam a 64,91° do cano (`fingersL` é a calibração de projeto, 65,0°).
+   Logo o ângulo bastão↔cano vive confinado em [25,09°, 154,91°], simétrico em
+   volta de 90° — e 90° é o único marco não-arbitrário que essa faixa tem: abaixo
+   dele o bastão aponta PARA A FRENTE ao longo do cano (a mão abraça o
+   guarda-mão), acima dele aponta PARA TRÁS (a palma virou e a mão está encostada
+   de lado, não fechada em volta).
+
+   Medido: 50,75° com o produto intacto — 39,25° de margem — e 131,88° com
+   `rollL: 0`, que é a palma girada 91,67°. */
+const ROLAGEM_MAX = 90;    // graus
 
 async function esperarCorpo() {
   const G = window.__game;
@@ -89,6 +117,68 @@ function instalarSonda() {
     return acc.lengthSq() > 1e-8 ? acc.normalize() : new T.Vector3(0, 1, 0);
   };
   const eixoL = eixoLocal(B.haL), eixoR = eixoLocal(B.haR);
+
+  /* ================================================================
+     A NORMAL DA PALMA, PELA GEOMETRIA DO GLB — o eixo que faltava.
+
+     O eixo dos dedos sozinho NÃO descreve a mão: rolar a palma em volta dele
+     não o move um grau. `TUNE.rollL` (−1,6 rad) é exatamente essa rolagem, e
+     era ela que este arquivo não media — validação independente pôs
+     `rollL: 0` (a palma esquerda gira 91,67° e deixa de abraçar o guarda-mão
+     por baixo, que é literalmente a frase da mensagem de erro do caso) e os 5
+     casos continuaram VERDES.
+
+     Como se acha a normal sem perguntar ao código sob teste: o POLEGAR é o
+     osso de falange base que nasce mais perto do punho (menor projeção no eixo
+     dos dedos — anatomicamente o metacarpo do polegar sai do carpo, não da
+     fileira dos nós). Ortogonalizado contra os dedos, ele dá a direção
+     "lado do polegar"; o produto vetorial dedos × polegar é perpendicular ao
+     plano da palma, ou seja a NORMAL. Tudo isso sai das posições de REPOUSO
+     dos ossos no GLB desenhado — a mesma classe de âncora que o cano.
+
+     E O QUE SE COBRA NÃO É A NORMAL DIRETO — é o BASTÃO que a mão segura.
+     A spec do WebXR define o `gripSpace` como o espaço em que "if the user was
+     holding a straight rod in their hand, it would be aligned with the
+     negative Z axis". `js/fpbody.js` deduz essa base do GLB com
+     `−Y = dedos`, `+X = dedos × polegar`, e o terceiro eixo fechando a base
+     destra — é ela que vira `FpBody.punhoOffset`, e é ela que o caso da mão
+     DIREITA deste arquivo já usa como âncora independente. O eixo do bastão é
+     portanto o `−Z` dessa base: `gx × dedos`.
+
+     A AFIRMAÇÃO, então, é geométrica e não de gosto: **a mão de apoio segura o
+     GUARDA-MÃO, e o bastão que ela segura é o CANO.** Os dois lados vêm de
+     canetas diferentes — o bastão das posições de repouso das falanges no GLB,
+     o cano do objeto `muzzle` desenhado (`direcaoDoCano()`) — e nenhum dos
+     dois passa por `TUNE.fingersL`, `TUNE.rollL` ou `alignHand`, que é o
+     código sob teste.
+
+     Por que ESTE eixo e não a normal da palma direto: a normal contra o cano
+     tem de ser dobrada para [0°, 90°] (o sinal de `dedos × polegar` depende da
+     mão), e a dobra é cega justamente para esta rolagem — medido, 49,61°
+     intacto e 49,36° com `rollL: 0`, porque 2 × 44,35° ≈ 91,67° e o valor cai
+     em cima do próprio espelho. O eixo do bastão não tem esse problema: ele é
+     uma direção com sinal, e a rolagem o move o ângulo inteiro.
+     ================================================================ */
+  const normalLocal = (mao, eixo) => {
+    const base = [];
+    for (const f of mao.children) if (f.isBone && /^Finger/.test(f.name)) base.push(f);
+    if (base.length < 3) return null;
+    let pol = base[0], min = Infinity;
+    for (const f of base) {
+      const d = f.position.dot(eixo);
+      if (d < min) { min = d; pol = f; }
+    }
+    const t = new T.Vector3().copy(pol.position);
+    t.addScaledVector(eixo, -t.dot(eixo));
+    if (t.lengthSq() <= 1e-8) return null;
+    return new T.Vector3().crossVectors(eixo, t.normalize()).normalize();
+  };
+  const palmaL = normalLocal(B.haL, eixoL);
+  /* O EIXO DO BASTÃO no espaço local da mão: `−Z` da base do grip deduzida do
+     GLB, que com `gx = dedos × polegar` e `gy = −dedos` é `gx × dedos`. */
+  const bastaoLocal = (gx, f) =>
+    (gx ? new T.Vector3().crossVectors(gx, f).normalize() : null);
+  const bastaoL = bastaoLocal(palmaL, eixoL);
 
   const wq = o => o.getWorldQuaternion(new T.Quaternion());
   const wp = o => o.getWorldPosition(new T.Vector3());
@@ -142,6 +232,16 @@ function instalarSonda() {
       /* ÂNCORA INDEPENDENTE: o CANO, que é geometria do modelo desenhado (o
          mesmo motivo pelo qual `direcaoDoCano()` existe para a mira). */
       angDedosCano: graus(dedosL, new T.Vector3().fromArray(G.direcaoDoCano())),
+      /* O BASTÃO QUE ESTA MÃO SEGURA, DEDUZIDO DO GLB, CONTRA O CANO.
+         (ver o bloco de `bastaoLocal`: é a mesma construção que o caso da
+         mão direita já usa, aplicada ao contrato do apoio) */
+      angBastaoCano: bastaoL
+        ? graus(dedosMundo(B.haL, bastaoL), new T.Vector3().fromArray(G.direcaoDoCano()))
+        : null,
+      /* diagnóstico: a normal da palma contra o cano, sem dobra */
+      angPalmaCano: palmaL
+        ? graus(dedosMundo(B.haL, palmaL), new T.Vector3().fromArray(G.direcaoDoCano()))
+        : null,
       desvioPunho: desvio,
       /* eixo do bastão (grip −Z, a spec do WebXR) e o quanto os dedos do
          boneco se inclinam em relação a ele */
@@ -391,15 +491,45 @@ describe('em VR o punho esquerdo do boneco gira com a MÃO, não com a arma',
          (`fingersL` normalizado tem 0,423 de componente no cano). */
       const m = await pose(APOIO, null, null);
       condicao(m, true);
-      console.log(`    [mão na arma] dedos↔cano ${f2(m.angDedosCano)}° · ` +
+      console.log(`    [mão na arma] dedos↔cano ${f2(m.angDedosCano)}° · BASTÃO deduzido do ` +
+        `GLB ↔ cano ${f2(m.angBastaoCano)}° · palma↔cano ${f2(m.angPalmaCano)}° · ` +
         `dedos↔"empunhadura" ${f2(m.angDedosArma)}° (esta é a conta do próprio ` +
         `produto: 0,00° por álgebra) · mão→controle ${f4(m.maoNoControle)} m`);
       assert.ok(m.angDedosCano > 40 && m.angDedosCano < 120,
         `com a mão de apoio NA ARMA, o eixo dos dedos ficou a ${f2(m.angDedosCano)}° ` +
         'do cano: a palma deixou de cruzar o guarda-mão');
-      assert.ok(m.angDedosArma < NA_ARMA_MAX,
-        `o eixo dos dedos ficou a ${f2(m.angDedosArma)}° da direção de empunhadura ` +
-        'que o produto calcula');
+      /* ================================================================
+         A ROLAGEM, QUE É O QUE FALTAVA MEDIR.
+
+         `angDedosArma` NÃO é asserido aqui, e o motivo está escrito para não
+         voltar: `alignHand` gira a mão até o eixo dos dedos apontar para
+         `dirL`, e este arquivo computa o eixo dos dedos pelo MESMO somatório
+         de falanges — a leitura é 0,00° por construção, contra um teto de 8°.
+         O `angDedosCano` acima também é quase constante: ele é
+         `TUNE.fingersL` contra o −Z do modelo, dois literais, e sobrevive a
+         qualquer rolagem porque rolar a palma NÃO move o eixo dos dedos.
+         Prova: com `rollL: 0` (a palma gira 91,67°) o arquivo inteiro ficava
+         5 de 5 VERDE.
+
+         O eixo que o defeito ocupa é a NORMAL DA PALMA. Uma mão que abraça um
+         guarda-mão tem a palma virada para o eixo do cilindro, logo a normal
+         perpendicular ao cano. E a régua é independente por construção: a
+         normal sai das posições de repouso das falanges do GLB (dedos ×
+         polegar) e o cano sai de `direcaoDoCano()`, que é o objeto `muzzle`
+         desenhado — nenhum dos dois passa por `fingersL`, `rollL` ou
+         `alignHand`. Com `rollL: 0` este número cai de ~90° para ~25°.
+         ================================================================ */
+      assert.ok(m.angBastaoCano !== null,
+        'não achei o polegar entre as falanges base da mão esquerda: sem ele não há ' +
+        'base de grip deduzida, e a rolagem do punho volta a não ser medida por ninguém');
+      assert.ok(m.angBastaoCano < ROLAGEM_MAX,
+        `com a mão de apoio NA ARMA, o bastão que a mão do boneco segura — o −Z da base ` +
+        `de grip deduzida do GLB, a mesma âncora do caso da mão direita — ficou a ` +
+        `${f2(m.angBastaoCano)}° do CANO, ou seja apontando PARA TRÁS ao longo dele ` +
+        `(teto ${ROLAGEM_MAX}°, faixa geométrica possível [25,09°, 154,91°], medido ` +
+        'intacto 50,75°). A mão não está abraçando o guarda-mão: a palma virou e ela ' +
+        'só encosta de lado. É a ROLAGEM do punho (`TUNE.rollL`), e nenhum ângulo de ' +
+        'DEDOS a enxerga — rolar a palma não move o eixo dos dedos um grau.');
     });
 
     it('MÃO NA ARMA: girar o controle NÃO gira o punho — quem manda é a arma', async () => {
