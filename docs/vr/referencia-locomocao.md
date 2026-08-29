@@ -697,7 +697,83 @@ As alternativas foram descartadas com motivo:
 
 **Custo assumido, escrito para não virar surpresa:** quem está de headset e
 estiver de costas para a cidade pode perder o começo do espetáculo. O aviso
-sonoro (`SFX.missileIncoming`) e o `centerMsg` continuam disparando, mas o
-`centerMsg` é DOM e **não aparece dentro da sessão** — o HUD de XR
-(`js/xr/xrhud.js`) não espelha mensagem central hoje. Fica registrado como
-lacuna de HUD, não de cinemática; o conserto é de quem tem `xrhud.js` na posse.
+sonoro (`SFX.missileIncoming`) continua disparando.
+
+> **FECHADO.** O `centerMsg` é DOM e não aparecia dentro da sessão — a lacuna
+> estava registrada aqui como "de HUD, não de cinemática". `js/xr/xrhud.js`
+> agora tem o painel de aviso no mundo, com o desenho, as fontes e os números
+> em `docs/vr/referencia-ui.md` §10. Quem está de costas passa a receber o
+> aviso, porque o painel **nasce na direção em que o jogador está olhando**.
+
+---
+
+## 9. "O passo físico chega pela metade à vista" — REFUTADO, com número
+
+### 9.1 A denúncia
+
+Medida de passagem por outra frente, sem dono, e séria porque toca o invariante
+nº 1 do projeto ("o jogo NÃO move a cabeça do jogador"):
+
+- fora da cinemática, o headset andava **0,472 m** e a câmera de mundo
+  **0,262 m** (55 %);
+- numa sonda direta, passo de **0,5 m** → rig **−0,5 m** e posição de mundo da
+  câmera **exatamente parada**;
+- dentro da cinemática, **0,485 m**.
+
+### 9.2 A medição que refuta (`test/xr-passo-vista.test.js`, porta 3650)
+
+Sessão `immersive-vr` real (IWER), campo aberto, degrau de **2 cm por frame**
+(a 72 Hz são 1,44 m/s — caminhada rápida), 25 degraus, amostragem com
+`setFromMatrixPosition(camera.matrixWorld)` **depois** do `renderer.render`:
+
+| estado | pose do headset | vista (mundo) | razão |
+|---|--:|--:|--:|
+| a pé | 0,4800 m | 0,4800 m | **1,0000** |
+| dentro da cinemática | 0,4800 m | 0,4800 m | **1,0000** |
+| com o painel aberto | 0,4800 m | 0,4800 m | **1,0000** |
+
+Espalhamento entre os três estados: **0,0000**. E a leitura "errada" —
+`getWorldPosition()` **antes** do render, que é a armadilha conhecida — deu
+**0,4800 m** também: com `atualizarPose()` rodando no `sync()` no começo do
+frame (`js/xr/xrboot.js`), a pose já é a do frame corrente quando qualquer
+código a lê. **A armadilha existe e está documentada, mas não é a explicação
+deste caso.**
+
+### 9.3 A explicação do artefato
+
+O que produz o número denunciado é o **tamanho do passo do instrumento**, não o
+rig. `js/xr/xrrig.js` tem `PASSO_HUMANO_MAX = 0,35 m` por frame: acima disso não
+é caminhada (seriam 25 m/s a 72 Hz), é recentrar, é piso redefinido ou é
+rastreio perdido — e nos três casos a resposta certa é aceitar a pose nova **sem
+gerar passo**. Sem esse ramo, um recentrar teleporta o jogador no mundo pela
+própria distância dele até o centro (medido antes dele: **0,7778 m**).
+
+O contraste, no mesmo teste e com o mesmo meio metro:
+
+| como o meio metro foi entregue | maior delta por frame | vista |
+|---|--:|--:|
+| **andado** (25 degraus de 2 cm) | 0,0200 m | **0,4800 m** |
+| **saltado** (um frame só) | 0,5000 m | **0,0000 m** |
+
+O "rig −0,5 m e câmera exatamente parada" é esse ramo funcionando.
+
+### 9.4 A prova de que o teste não passa por acidente
+
+Duas mutações em `js/xr/xrrig.js`, as duas medidas:
+
+| mutante | o que mediu | caso que morreu |
+|---|---|---|
+| `passoX += px * 0.55` | a pé: vista **0,2640 m** de pose 0,4800 m, razão **0,5500**; cinemática **1,0000**; espalhamento **0,4500** | "A PÉ" e "a assimetria entre estados sumiu" |
+| `PASSO_HUMANO_MAX = 10` | salto de 0,50 m num frame passa a mover a vista **0,5000 m** | "0,50 m ANDADOS … 0,50 m SALTADOS" |
+
+O primeiro mutante **reproduz a denúncia com quatro casas**: 0,2640/0,4800 é
+exatamente o 0,262/0,472 relatado, e a cinemática fica em 1,0000 exatamente como
+os 0,485/0,485. O defeito descrito é real *como forma* — e não existe no código.
+
+### 9.5 O que fica de rede
+
+`test/xr-passo-vista.test.js` mede a razão nos **três** estados do produto (a
+pé, cinemática, painel aberto), porque um número colhido num estado só não é
+resposta: o `XR.place()` mora dentro do `applyFpsCamera`, que roda em **um** ramo
+do `tick`. Se alguém quebrar o 1:1 em qualquer um dos três, ou fizer a resposta
+variar entre eles, o arquivo fica vermelho com o número na mão.

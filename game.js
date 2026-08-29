@@ -1328,6 +1328,12 @@ function centerMsg(text, dur = 1800) {
   ui.centerMsg.style.opacity = '1';
   clearTimeout(msgTimer);
   msgTimer = setTimeout(() => ui.centerMsg.style.opacity = '0', dur);
+  /* O MESMO AVISO DENTRO DO MUNDO. A sessão `immersive-vr` sem `dom-overlay`
+     não desenha DOM: sem esta linha "⚠ MÍSSEIS SE APROXIMANDO DA CIDADE"
+     simplesmente não existe no headset, e quem está de costas para a cidade
+     não recebe sinal nenhum. `XRHud` é declarado bem mais abaixo, mas o ramo
+     só é avaliado com sessão viva — muito depois do módulo terminar. */
+  if (XR.presenting) XRHud.mensagem(text, dur);
 }
 
 /* números de dano flutuantes (pool de divs) */
@@ -3845,6 +3851,9 @@ function tick(forceDt) {
   if (xrOn) XRHud.update({
     arma: weaponRoot, pulso: XR.punho('left') || XR.mao('left'),
     cabeca: camera.getWorldPosition(_xrCabeca),
+    /* o aviso central mora no espaço do RIG e persegue a cabeça amortecido:
+       precisa dos dois e do passo de tempo (ver o cabeçalho de js/xr/xrhud.js) */
+    rig: XR.rig, camera, dt,
   });
   if (window.__CityDestruction) window.__CityDestruction.tick(dt);
 

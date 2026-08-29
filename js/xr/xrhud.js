@@ -177,15 +177,103 @@ export const DIST_PULSO = 0.55;
 export const DIST_MAPA = 0.55;
 const PISO = { arma: DIST_ARMA, pulso: DIST_PULSO, mapa: DIST_MAPA };
 
+/* ================================================================
+   O AVISO CENTRAL — a mensagem que o headset não recebia.
+
+   O DEFEITO: `centerMsg` (game.js) é DOM, e dentro de uma sessão
+   `immersive-vr` sem `dom-overlay` o DOM não chega ao compositor. Medido:
+   **"⚠ MÍSSEIS SE APROXIMANDO DA CIDADE" não existe no headset** — os
+   mísseis voam, a cidade cai, e quem está de costas não recebe sinal
+   nenhum. É H1 no seu caso mais caro: a informação que decide se o jogador
+   sai de dentro da cidade a tempo.
+
+   E É O CASO QUE QUEBRA A REGRA DOS OUTROS PAINÉIS DESTE ARQUIVO. Munição
+   e inventário podem morar na arma e no pulso porque quem quer saber
+   OLHA. Um aviso não: ele existe justamente para quem NÃO está olhando.
+   A Meta escreve as duas metades desse conflito na mesma página:
+
+     "Avoid locking HUD style content to the user's head movements."
+     "Anchor information and digital content to a space, OR LOOSELY FOLLOW
+      THE USER USING SMOOTHING ANIMATION."
+     "Display content and text within the users' field-of-view and PREVENT
+      THE USERS FROM HAVING TO TURN THEIR HEAD."
+   — Meta, MR design guideline (Key considerations)
+
+   Ou seja, a saída não é escolher entre grudar na cara e ficar mudo no
+   mundo: é o meio-termo que a própria plataforma nomeia — nasce na
+   direção em que o jogador está olhando, fica PARADO enquanto ele só dá
+   uma olhada, e ALCANÇA quem virou de vez, amortecido. É a mesma
+   disciplina do painel de sessão (js/xr/xrui.js), com os mesmos ângulos:
+   solta aos 35°, para aos 8°, constante de tempo 0,22 s. Dois números
+   diferentes para a mesma coisa seriam ergonomia inventada.
+
+   A DISTÂNCIA é 1,0 m, e não é chute: "the window can be placed around 1
+   meter from the user" (Meta, para tela maior de interação indireta),
+   "Many have found that 1 meter is a comfortable distance for menus and
+   GUIs" (Meta · Display), e acima do piso óptico de 0,75 m do Oculus Best
+   Practices. É onde o painel de sessão desta base já vive (1,004 m).
+
+   A ALTURA vai ACIMA da linha do olho, e isso é uma DECISÃO com custo. A
+   diretriz que existe manda o contrário — "roughly 1 meter distance
+   slightly below the user's line of sight", e o Android XR dá o ângulo
+   (5° abaixo) —, mas ela fala de conteúdo de PERMANÊNCIA. Aqui o critério
+   que decide é o outro requisito da mesma página, "Doesn't obstruct the
+   user's view": no centro, o aviso cobre exatamente o que o jogador está
+   mirando, e ainda cai em cima do painel de sessão (que ocupa de −0,32 m
+   a +0,14 m em torno do olho, a 1,0 m). 0,24 m acima do olho (13,5°)
+   deixa 2,6 cm de folga sobre o painel e tira o texto da linha de tiro.
+   **Diretriz específica para notificação transitória em VR: NÃO
+   ENCONTRADO** na documentação da Meta — o que sustenta a escolha é a
+   cláusula de não-oclusão, não uma regra de notificação.
+
+   ANDAR PARA A FRENTE TAMBÉM TEM DE SOLTAR O PAINEL, e essa é a armadilha
+   estrutural do lazy-follow por ângulo: caminhar em linha reta na direção
+   do painel não muda o erro angular em UM grau, então um painel que só
+   corrige ângulo fica parado enquanto a cabeça chega nele — 1 m de
+   caminhada física contra um painel a 1 m é painel dentro do olho (I3
+   proíbe geometria a menos de 0,15 m). Por isso a faixa de distância
+   [0,75 m, 1,35 m] dispara o mesmo reposicionamento que o cone.
+
+   CUSTO: **uma draw call por olho**, e só enquanto a mensagem vive. O
+   canvas é repintado quando o TEXTO muda, nunca por frame.
+
+   NADA NASCE NO BOOT — nem no primeiro `update()`: o painel só é criado
+   na primeira mensagem. Todo `Object3D` gasta 4 números do `Math.random`
+   seedado no UUID e a ordem de consumo é contrato do worldgen.
+   ================================================================ */
+export const AVISO_CV_W = 896, AVISO_CV_H = 256;
+export const AVISO_W = 0.50;
+export const AVISO_H = AVISO_W * AVISO_CV_H / AVISO_CV_W;   // 0,1429 m
+export const DIST_AVISO = 1.0;
+export const AVISO_SOBE = 0.24;
+/* Histerese do reposicionamento, idêntica à do painel de sessão. */
+export const AVISO_CONE_SOLTA = 35 * Math.PI / 180;
+export const AVISO_CONE_PARA = 8 * Math.PI / 180;
+/* Faixa de distância aceita antes de o painel ser reposicionado. O piso é o
+   "minimum comfortable distance, 75 cm" do Oculus BP; o teto é a folga que
+   evita ficar repondo o painel a cada passo do jogador. */
+export const AVISO_PERTO = 0.75, AVISO_LONGE = 1.35;
+const AVISO_TAU = 0.22;      // constante de tempo do amortecimento, em s
+const AVISO_FADE = 0.25;     // esmaecimento no fim da mensagem, em s
+const AVISO_PX = 60;         // corpo da fonte no canvas
+const AVISO_LINHAS = 2;
+
 const GRAU = Math.PI / 180;
 const num = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 const pct = v => Math.max(0, Math.min(1, num(v)));
+const trava = (v, a, b) => Math.min(b, Math.max(a, v));
 
 export function createXrHud({
   THREE, ler = () => ({}),
   win = typeof window === 'undefined' ? null : window,
 } = {}) {
   const _p = new THREE.Vector3(), _alvo = new THREE.Vector3();
+  /* rascunhos do aviso, todos reusados: alocar Vector3 por frame num
+     Snapdragon é lixo de GC dentro do orçamento de 13,9 ms */
+  const _olhoL = new THREE.Vector3(), _fwdL = new THREE.Vector3(),
+    _aAlvo = new THREE.Vector3(), _aTmp = new THREE.Vector3(),
+    _aDir = new THREE.Vector3(),
+    _aQ = new THREE.Quaternion(), _aFwd = new THREE.Vector3();
 
   const paineis = {
     arma: { obj: null, ctx: null, tex: null, assin: '', pai: null },
@@ -195,6 +283,194 @@ export function createXrHud({
   const CHAVES = ['arma', 'pulso', 'mapa'];
   let visto = { arma: false, pulso: false, mapa: false };
   let ultima = {};
+
+  /* ---------------------------------------------------------------- */
+  /* AVISO CENTRAL (ver o cabeçalho da seção). Estado próprio: o painel tem
+     ciclo de vida de MENSAGEM, não de frame. */
+  const aviso = {
+    obj: null, ctx: null, tex: null, texto: '', pintado: '',
+    fim: 0, dur: 0, emissoes: 0, repondo: false, relogio: 0,
+    /* posição em espaço LOCAL DO RIG, e não em mundo: o rig é o corpo do
+       jogador, então guardar aqui faz o painel viajar com quem anda de
+       analógico e ficar PARADO para quem anda pelo quarto (o rig compensa o
+       passo físico — é o desenho de js/xr/xrrig.js). Guardar em mundo faria
+       o painel escorregar para trás a cada metro de locomoção artificial. */
+    pos: new THREE.Vector3(), temPos: false,
+  };
+  const agora = () => (win && win.performance && typeof win.performance.now === 'function'
+    ? win.performance.now() : Date.now());
+
+  function criarAviso() {
+    if (aviso.obj) return aviso;
+    const doc = win && win.document;
+    const cv = doc ? doc.createElement('canvas') : null;
+    if (cv) { cv.width = AVISO_CV_W; cv.height = AVISO_CV_H; aviso.ctx = cv.getContext('2d'); }
+    aviso.tex = cv ? new THREE.CanvasTexture(cv) : null;
+    if (aviso.tex) aviso.tex.colorSpace = THREE.SRGBColorSpace;
+    aviso.obj = new THREE.Mesh(
+      new THREE.PlaneGeometry(AVISO_W, AVISO_H),
+      new THREE.MeshBasicMaterial({
+        map: aviso.tex, transparent: true, opacity: 1, depthWrite: false, depthTest: false,
+        toneMapped: false, side: THREE.FrontSide,
+      }));
+    aviso.obj.name = 'xrHudAviso';
+    /* acima dos painéis diegéticos: um aviso atrás da arma é um aviso que
+       não existe. `depthTest: false` é deliberado — quem está DENTRO de um
+       prédio quando os mísseis chegam precisa ver a mesma coisa que quem
+       está no campo. */
+    aviso.obj.renderOrder = 9990;
+    aviso.obj.frustumCulled = false;
+    aviso.obj.visible = false;
+    return aviso;
+  }
+
+  /* Quebra em até `AVISO_LINHAS` linhas, por PALAVRA. O `centerMsg` carrega
+     de "+ munição" a "⚠ MÍSSEIS SE APROXIMANDO DA CIDADE", e cortar no meio
+     de uma palavra é o jeito de deixar o aviso ilegível justamente no caso
+     longo, que é o urgente. */
+  function linhasDe(ctx, texto, maxPx) {
+    const palavras = String(texto).split(/\s+/).filter(Boolean);
+    const linhas = [];
+    let atual = '';
+    for (const p of palavras) {
+      const t = atual ? atual + ' ' + p : p;
+      if (atual && ctx.measureText(t).width > maxPx && linhas.length < AVISO_LINHAS - 1) {
+        linhas.push(atual); atual = p;
+      } else atual = t;
+    }
+    if (atual) linhas.push(atual);
+    return linhas.slice(0, AVISO_LINHAS);
+  }
+
+  function pintarAviso() {
+    const ctx = aviso.ctx;
+    if (!ctx || aviso.pintado === aviso.texto) return;
+    aviso.pintado = aviso.texto;
+    ctx.clearRect(0, 0, AVISO_CV_W, AVISO_CV_H);
+    ctx.fillStyle = 'rgba(8,12,18,0.86)';
+    ctx.fillRect(0, 0, AVISO_CV_W, AVISO_CV_H);
+    ctx.strokeStyle = 'rgba(255,190,120,0.55)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, AVISO_CV_W - 4, AVISO_CV_H - 4);
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${AVISO_PX}px system-ui, sans-serif`;
+    ctx.fillStyle = '#ffe6c2';
+    const margem = 36;
+    const linhas = linhasDe(ctx, aviso.texto, AVISO_CV_W - margem * 2);
+    const passo = AVISO_PX * 1.35;
+    const y0 = AVISO_CV_H / 2 - (linhas.length - 1) * passo / 2;
+    for (let i = 0; i < linhas.length; i++) {
+      ctx.fillText(linhas[i], AVISO_CV_W / 2, y0 + i * passo, AVISO_CV_W - margem * 2);
+    }
+    if (aviso.tex) aviso.tex.needsUpdate = true;
+  }
+
+  /* A MENSAGEM. Espelha o `centerMsg` do game.js: mesmo texto, mesma
+     duração. Só aqui o painel é criado — nunca no boot, nunca no update. */
+  function mensagem(texto, ms = 1800) {
+    const t = String(texto == null ? '' : texto);
+    if (!t) return false;
+    criarAviso();
+    aviso.texto = t;
+    aviso.dur = Math.max(1, num(ms, 1800));
+    aviso.fim = agora() + aviso.dur;
+    aviso.emissoes++;
+    /* NASCE ONDE O JOGADOR ESTÁ OLHANDO. É a metade do requisito que o
+       lazy-follow sozinho não entrega: quem está de costas para a cidade
+       não pode depender de o painel vir atrás dele. */
+    aviso.temPos = false;
+    aviso.repondo = false;
+    pintarAviso();
+    return true;
+  }
+
+  /* Onde o painel deveria estar AGORA, em espaço local do rig. */
+  function alvoDoAviso(rig, camera, olho) {
+    _olhoL.copy(olho);
+    rig.worldToLocal(_olhoL);
+    /* a frente do olhar, levada ao espaço do rig por um ponto auxiliar: é
+       robusto à rotação do rig (snap turn escreve `rig.rotation.y`) sem
+       precisar compor quaternions à mão */
+    camera.getWorldQuaternion(_aQ);
+    _aFwd.set(0, 0, -1).applyQuaternion(_aQ);
+    _aTmp.copy(olho).add(_aFwd);
+    rig.worldToLocal(_aTmp);
+    _fwdL.copy(_aTmp).sub(_olhoL); _fwdL.y = 0;
+    if (_fwdL.lengthSq() < 1e-8) _fwdL.set(0, 0, -1); else _fwdL.normalize();
+    _aAlvo.copy(_fwdL).multiplyScalar(DIST_AVISO).add(_olhoL);
+    _aAlvo.y = _olhoL.y + AVISO_SOBE;
+    return _aAlvo;
+  }
+
+  function atualizarAviso(rig, camera, olho, dt) {
+    if (!aviso.obj) return false;
+    const t = agora();
+    if (!aviso.texto || t >= aviso.fim) {
+      aviso.obj.visible = false;
+      aviso.relogio = t;
+      return false;
+    }
+    /* sem rig, sem câmera ou sem a cabeça não há onde pousar: fora da
+       sessão o `centerMsg` do DOM continua sendo quem mostra a mensagem */
+    if (!rig || !camera || !olho) { aviso.obj.visible = false; aviso.relogio = t; return false; }
+    if (aviso.obj.parent !== rig) rig.add(aviso.obj);
+
+    const passo = typeof dt === 'number' && Number.isFinite(dt) && dt > 0
+      ? dt
+      /* relógio próprio quando quem chama não passa `dt`. Um dono só do
+         tempo: se `dt` vier, ele manda. */
+      : Math.min(0.1, Math.max(0, (t - aviso.relogio) / 1000));
+    aviso.relogio = t;
+
+    const alvo = alvoDoAviso(rig, camera, olho);
+    if (!aviso.temPos) { aviso.pos.copy(alvo); aviso.temPos = true; aviso.repondo = false; }
+
+    /* erro angular no plano horizontal, do painel contra a frente do olhar */
+    _aTmp.copy(aviso.pos).sub(_olhoL); _aTmp.y = 0;
+    const raio = _aTmp.length();
+    const erro = raio < 1e-4 ? Math.PI
+      : Math.acos(trava(_aDir.copy(_aTmp).divideScalar(raio).dot(_fwdL), -1, 1));
+    /* distância REAL ao olho (3D, com a subida): é ela que I3 cobra */
+    const dist = aviso.pos.distanceTo(_olhoL);
+    if (!aviso.repondo && (erro > AVISO_CONE_SOLTA || dist < AVISO_PERTO || dist > AVISO_LONGE)) {
+      aviso.repondo = true;
+    }
+    if (aviso.repondo) {
+      const k = 1 - Math.exp(-passo / AVISO_TAU);
+      aviso.pos.lerp(alvo, k);
+      /* A interpolação linear é uma CORDA e corta caminho por dentro do
+         arco, parando mais perto que a distância de leitura — o mesmo
+         defeito já medido no painel de sessão (chegava a 0,70 m contra um
+         piso de 0,75 m). O reposicionamento anda SOBRE o arco. */
+      _aTmp.copy(aviso.pos).sub(_olhoL); _aTmp.y = 0;
+      const r2 = _aTmp.length();
+      if (r2 > 1e-4) {
+        _aTmp.multiplyScalar(DIST_AVISO / r2).add(_olhoL);
+        aviso.pos.x = _aTmp.x; aviso.pos.z = _aTmp.z;
+      }
+      aviso.pos.y = _olhoL.y + AVISO_SOBE;
+      _aTmp.copy(aviso.pos).sub(_olhoL); _aTmp.y = 0;
+      const r3 = _aTmp.length();
+      const erro2 = r3 < 1e-4 ? Math.PI
+        : Math.acos(trava(_aTmp.divideScalar(r3).dot(_fwdL), -1, 1));
+      if (erro2 < AVISO_CONE_PARA
+        && aviso.pos.distanceTo(_olhoL) >= AVISO_PERTO
+        && aviso.pos.distanceTo(_olhoL) <= AVISO_LONGE) aviso.repondo = false;
+    }
+
+    aviso.obj.position.copy(aviso.pos);
+    aviso.obj.visible = true;
+    /* esmaecer no fim: corte seco em VR lê como falha de render, e o
+       movimento residual chama atenção para o que já foi lido */
+    const resta = (aviso.fim - t) / 1000;
+    aviso.obj.material.opacity = resta >= AVISO_FADE ? 1 : Math.max(0, resta / AVISO_FADE);
+    aviso.obj.updateWorldMatrix(true, false);
+    /* encara a POSIÇÃO do olho, não a orientação da cabeça: é o que mantém
+       o painel como objeto do mundo em vez de coisa colada na vista */
+    aviso.obj.lookAt(olho);
+    return true;
+  }
 
   /* `cvExterno` é o caso do mapa: o canvas já existe e já é pintado por quem
      sabe jogar (o `MiniMap` do game.js). Aqui ele vira textura e mais nada —
@@ -334,10 +610,18 @@ export function createXrHud({
      (js/xr/xrhands.js `punho('left')`) — a palma, não o raio de mira;
      `cabeca` é a posição de MUNDO do olho (em XR `camera.position` é local
      ao rig e não serve). */
-  function update({ arma = null, pulso = null, cabeca = null } = {}) {
+  function update({ arma = null, pulso = null, cabeca = null,
+    rig = null, camera = null, dt = null } = {}) {
     const d = ler() || {};
     ultima = d;
     const olho = cabeca || null;
+
+    /* O AVISO É INDEPENDENTE DO RESTO. Ele não pende da arma nem da mão, não
+       some no ADS e não obedece a `oculto` — dirigindo ou voando o jogador
+       precisa da mensagem do mesmo jeito, e é dirigindo que ele mais precisa
+       (o carro leva para dentro da cidade). Fica ANTES do laço dos painéis
+       diegéticos para que uma saída antecipada de lá nunca o cale. */
+    atualizarAviso(rig, camera, olho, dt);
 
     criar('arma', ARMA_W, ARMA_H, ARMA_CV_W, ARMA_CV_H, 'xrHudArma');
     criar('pulso', PULSO_W, PULSO_H, PULSO_CV_W, PULSO_CV_H, 'xrHudPulso');
@@ -418,6 +702,14 @@ export function createXrHud({
       p.pai = null; p.assin = '';
     }
     visto = { arma: false, pulso: false, mapa: false };
+    /* O aviso sai da cena junto — mas a MENSAGEM morre com a sessão em vez
+       de ficar pendurada esperando a próxima: reentrar no VR e receber na
+       cara um alerta de mísseis de dez minutos atrás seria pior que nada. */
+    if (aviso.obj) {
+      aviso.obj.visible = false;
+      if (aviso.obj.parent) aviso.obj.parent.remove(aviso.obj);
+    }
+    aviso.texto = ''; aviso.fim = 0; aviso.temPos = false; aviso.repondo = false;
   }
 
   /* Altura angular do glifo, em graus, a partir da distância medida: é o
@@ -427,14 +719,55 @@ export function createXrHud({
   }
 
   return {
-    update, exit,
+    update, exit, mensagem,
     get arma() { return paineis.arma.obj; },
     get pulso() { return paineis.pulso.obj; },
     get mapa() { return paineis.mapa.obj; },
+    /* `null` até a primeira mensagem, e isso é contrato: um `Object3D`
+       criado antes disso gastaria 4 números do `Math.random` seedado. */
+    get aviso() { return aviso.obj; },
+    /* Quantas mensagens este painel recebeu. Existe para o QA distinguir
+       quem alimentou o aviso (a fiação do game.js ou um andaime de teste)
+       sem precisar de bandeira de fiação no produto. */
+    get avisoEmissoes() { return aviso.emissoes; },
     MAPA_W, MAPA_H,
     /* leitura pura para QA — nada aqui ACIONA nada */
     estado(cabeca = null) {
       const out = { dados: ultima, visivel: { ...visto } };
+      if (!aviso.obj) out.aviso = null;
+      else {
+        aviso.obj.updateWorldMatrix(true, false);
+        const pos = aviso.obj.getWorldPosition(new THREE.Vector3());
+        const d = cabeca ? pos.distanceTo(cabeca) : null;
+        const normal = new THREE.Vector3(0, 0, 1)
+          .applyQuaternion(aviso.obj.getWorldQuaternion(new THREE.Quaternion()));
+        let encara = null;
+        if (cabeca) {
+          const paraOlho = new THREE.Vector3().subVectors(cabeca, pos);
+          if (paraOlho.lengthSq() > 1e-9) {
+            encara = Math.acos(Math.max(-1, Math.min(1, normal.dot(paraOlho.normalize())))) / GRAU;
+          }
+        }
+        /* altura de MAIÚSCULA do glifo, em metros: 0,72 do corpo da fonte,
+           a mesma razão usada nos painéis diegéticos deste arquivo */
+        const glifoM = AVISO_H * (AVISO_PX * 0.72) / AVISO_CV_H;
+        out.aviso = {
+          nome: aviso.obj.name,
+          texto: aviso.texto,
+          visivel: !!(aviso.obj.visible && aviso.obj.parent),
+          naCena: !!aviso.obj.parent,
+          paiNome: aviso.obj.parent ? aviso.obj.parent.name : null,
+          pos: pos.toArray(),
+          distancia: d,
+          opacidade: aviso.obj.material.opacity,
+          repondo: aviso.repondo,
+          restaMs: Math.max(0, aviso.fim - agora()),
+          anguloEncara: encara,
+          grausH: d === null ? null : graus(AVISO_W, d),
+          grausV: d === null ? null : graus(AVISO_H, d),
+          grausTexto: d === null ? null : graus(glifoM, d),
+        };
+      }
       for (const chave of CHAVES) {
         const p = paineis[chave];
         if (!p.obj) { out[chave] = null; continue; }

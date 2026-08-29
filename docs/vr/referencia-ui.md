@@ -550,3 +550,119 @@ dá para o que se fixa por tempo, e fica acima do piso do critério.
    piso de texto. Ele não é texto e o critério não o cobre, mas o número está
    aqui para não ser descoberto de novo: quem quiser blip legível precisa
    engordá-lo no canvas do minimapa, que é do `game.js`.
+
+---
+
+## 10. O AVISO CENTRAL (H1) — a mensagem que o headset não recebia
+
+### 10.1 O que estava medido
+
+`centerMsg` (game.js:1326) escreve num `<div id="centerMsg">`, e dentro de uma
+sessão `immersive-vr` sem `dom-overlay` o DOM **não chega ao compositor**.
+Consequência: **"⚠ MÍSSEIS SE APROXIMANDO DA CIDADE"
+(`city-destruction-client.js:190`) não existe no headset**. Os mísseis voam, a
+cidade cai, e quem está de costas não recebe sinal nenhum. É H1 no seu caso
+mais caro — a informação que decide se o jogador sai de dentro da cidade a
+tempo — e o mesmo buraco engole `+ munição`, `Baú: itens retirados`, o placar
+do curso de argolas e o resto do `centerMsg`.
+
+### 10.2 O conflito que este painel tem e os outros não
+
+Munição e inventário podem morar na arma e no pulso porque quem quer saber
+**olha**. Um aviso existe justamente para quem **não** está olhando. Colar na
+cabeça resolve isso e reprova em H2; ancorar no mundo aprova em H2 e não
+resolve nada.
+
+A saída não foi inventada aqui: está na mesma página da Meta, nas três frases
+que descrevem as duas metades do problema e o meio-termo.
+
+> "**Avoid locking HUD style content to the user's head movements.**"
+> "Anchor information and digital content to a space, **or loosely follow the
+> user using smoothing animation**."
+> "Display content and text within the users' field-of-view and **prevent the
+> users from having to turn their head**."
+
+— [Meta · Key considerations (MR design guideline)](https://developers.meta.com/horizon/design/mr-design-guideline/)
+
+O painel, então: **nasce na direção em que o jogador está olhando** no instante
+da mensagem (resolve o jogador de costas), **fica parado no mundo** enquanto
+ele só dá uma olhada (não é head-locked), e **alcança amortecido** quem virou
+de vez. É a mesma disciplina do painel de sessão (`js/xr/xrui.js`) e com os
+mesmos ângulos — solta aos 35°, para aos 8°, τ = 0,22 s. Dois números
+diferentes para a mesma coisa seriam ergonomia inventada.
+
+### 10.3 A armadilha do lazy-follow por ângulo: andar para a frente
+
+Caminhar em linha reta na direção do painel **não muda o erro angular em um
+grau**. Um painel que só corrige ângulo fica parado enquanto a cabeça chega
+nele: 1 m de caminhada física contra um painel a 1 m é painel dentro do olho, e
+I3 proíbe geometria a menos de 0,15 m. Por isso a faixa de distância
+**[0,75 m, 1,35 m]** dispara o mesmo reposicionamento que o cone — e o piso é o
+número do Oculus BP:
+
+> "the proximity necessary to prevent problems will most likely bring the
+> interface closer than the recommended **minimum comfortable distance, 75 cm**."
+
+— [Oculus Best Practices (PDF)](https://static.oculus.com/documentation/pdfs/intro-vr/latest/bp.pdf)
+
+Medido em sessão: caminhando 1,00 m contra o painel, a distância mínima ao olho
+foi **0,7589 m**. Com a guarda de distância removida (mutação
+`M4-sem-guarda-dist`), o caso fica vermelho.
+
+### 10.4 A altura, que é uma DECISÃO com custo
+
+A diretriz que existe manda o contrário do que foi feito: "roughly 1 meter
+distance **slightly below** the user's line of sight" (Meta), com o ângulo vindo
+do Android XR ("5° below"). Ela fala de conteúdo de **permanência**.
+
+O que decidiu aqui foi o outro requisito da **mesma página** — *"Doesn't
+obstruct the user's view"*: no centro, o aviso cobre exatamente o que o jogador
+está mirando, e ainda cai em cima do painel de sessão (que ocupa de −0,32 m a
++0,14 m em torno do olho, a 1,0 m). **0,24 m acima do olho (13,5°)** deixa
+2,6 cm de folga sobre o painel e tira o texto da linha de tiro.
+
+**Diretriz específica para notificação transitória em VR: NÃO ENCONTRADO** na
+documentação da Meta (procurado em *Key considerations*, *Panels*, *Hands UI
+best practices*). O que sustenta a escolha é a cláusula de não-oclusão, não uma
+regra de notificação — e isso fica declarado em vez de virar número com cara de
+fonte.
+
+### 10.5 Os números, medidos em sessão imersiva real
+
+Condição declarada: Chrome com GPU real, IWER preset Quest 3, sessão
+`immersive-vr` de verdade, jogo em partida, máquina ociosa (load 1 min < 0,3).
+**Duas execuções independentes** — a segunda dentro da bateria de regressão —,
+porque uma medição só não é baseline.
+
+| o que | execução 1 | execução 2 | régua |
+|---|--:|--:|---|
+| distância ao olho | **1,0284 m** | 1,0284 m | "around 1 meter" (Meta); ≥ 0,75 m (BP) |
+| ângulo de encaramento | **0,00°** | 0,00° | encarar o olho, não a orientação da cabeça |
+| painel | **27,33° × 7,95°** | idem | — |
+| altura de maiúscula | **1,343°** | 1,343° | alvo 0,7°, piso 0,35–0,4° → folga de 1,9× |
+| olhada de 20° move o painel | **0,0000 m** | 0,0000 m | não é head-locked (H2) |
+| virada de 110° move o painel | **1,5216 m** | 1,5182 m | alcança quem virou (Meta) |
+| pai na cena | **`xrRig`** | idem | nunca a câmera |
+| caminhada de 1 m contra ele | mínimo **0,7589 m** | 0,7589 m | I3 (0,15 m) e BP (0,75 m) |
+| sumiço, pedido de 1200 ms | **1213 ms** | 1301 ms | mensagem que fica é pior que a que falta |
+| custo (mediana pareada) | **2 em estéreo = 1 por olho** | 2 | teto de 2 (`DoubleSide` dobra) |
+
+O sumiço varia com o passo de amostragem do teste (100 ms), não com o painel: o
+relógio do módulo apaga no milissegundo pedido, e o que oscila é quando o
+observador olha.
+
+### 10.6 O que NÃO foi resolvido, e fica declarado
+
+1. **Uma mensagem por vez.** `centerMsg` sobrescreve o texto anterior, e o
+   espelho faz o mesmo. Duas mensagens em 100 ms — pegar munição em cima do
+   aviso da cidade — e a segunda apaga a primeira. É o comportamento do
+   monitor, mantido de propósito para não divergir; se o dono quiser fila com
+   prioridade (o aviso da cidade não podendo ser apagado por "+ munição"), é
+   decisão dele porque muda o que `centerMsg` significa.
+2. **Sem áudio espacial junto.** O `SFX.missileIncoming()` já toca, mas não é
+   posicional: o jogador ouve que algo vem, não de onde. Áudio espacial é o que
+   o gênero usa para orientar sem virar a cabeça, e não foi tocado nesta rodada.
+3. **`depthTest: false` é deliberado** — quem está dentro de um prédio quando os
+   mísseis chegam precisa ver a mesma coisa que quem está no campo —, mas isso
+   significa que o painel atravessa geometria. A 1,0 m e 13,5° acima do olho o
+   caso é raro; não foi medido em cidade fechada.
