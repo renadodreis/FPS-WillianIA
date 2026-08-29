@@ -41,6 +41,49 @@ export function createHeli(deps) {
   const vel = new THREE.Vector3();
   let yaw = 0, pitchK = 0, rollK = 0, rotorSpd = 0;
 
+  /* ================================================================
+     O ASSENTO DO PILOTO, para o RIG DE VR.
+
+     No monitor quem desenha a cena voando é a câmera de PERSEGUIÇÃO
+     (`carCameraUpdate`, em game.js), e `player.pos` é só o ponto que
+     recentra grama e chunks — por isso o `update()` abaixo pode escrevê-lo
+     na COTA DO TERRENO debaixo do helicóptero sem que ninguém veja.
+
+     Em XR não existe câmera de perseguição: o rig VAI para onde o jogo
+     mandar, e mandar `player.pos` põe o jogador de headset NO CHÃO vendo o
+     helicóptero subir sem ele. Medido: helicóptero a 22,54 m, olho a
+     2,85 m — 20,95 m fora da cabine desenhada, voando.
+
+     ESTE GETTER NÃO TOCA EM `player.pos` DE PROPÓSITO. Aquele número é
+     lido por muita coisa que nada tem a ver com a cabeça do jogador — a
+     mira dos inimigos, o dano da zona, o estado mandado ao servidor (que
+     tem anti-teleporte) — e levá-lo a 130 m de altura mudaria o jogo do
+     MONITOR para consertar o headset. O rig ganha uma fonte própria; o
+     resto do jogo continua lendo o que sempre leu.
+
+     A ORIGEM DO GRUPO É O PISO DO RIG (y local 0), e não o piso desenhado
+     da fuselagem (0,40) nem o da cabine de vidro (0,65): em `local-floor`
+     quem dá a altura do olho é o APARELHO, e o piso tem de ficar abaixo
+     dela o bastante para caber tanto quem pilota SENTADO (olho ~1,15 m,
+     que cai no centro da cabine, 1,20) quanto quem pilota DE PÉ (olho
+     ~1,70 m, ainda dentro da fuselagem, que vai até 1,90). Subir o piso
+     para o piso desenhado jogaria a cabeça de quem está de pé para fora
+     do teto.
+
+     x = 1,50 põe o piloto DENTRO da cabine de vidro (que vai de 1,15 a
+     2,05 no eixo do nariz), e o deslocamento gira pelo `quaternion`
+     INTEIRO do grupo — o assento é parafusado na fuselagem, então ele
+     acompanha guinada, rolagem e arfagem. O que NÃO acompanha é a
+     ROTAÇÃO DA VISTA: em XR o yaw do rig é do jogador (giro artificial e
+     pescoço), e girar a vista dele porque o veículo girou é a rotação
+     imposta que D5 proíbe em 0 rad. */
+  const ASSENTO = new THREE.Vector3(1.5, 0, 0);
+  const _assento = new THREE.Vector3();
+  function assentoXR(out) {
+    return (out || _assento).copy(ASSENTO)
+      .applyQuaternion(group.quaternion).add(group.position);
+  }
+
   function tryEnter() {
     if (player.pos.distanceTo(group.position) > 5) return false;
     if (window.__BR_heliTaken) { centerMsg('Helicóptero ocupado!', 1400); return false; }
@@ -96,5 +139,5 @@ export function createHeli(deps) {
       SFX.heliUpdate(false, 0);
     }
   }
-  return { group, update, tryEnter, exit, get vel() { return vel; } };
+  return { group, update, tryEnter, exit, assentoXR, get vel() { return vel; } };
 }

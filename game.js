@@ -1963,6 +1963,42 @@ function applyTouchLook() {
   mouse.swayY += look.dy;
 }
 
+/* ONDE FICAM OS PÉS DO JOGADOR DE HEADSET NESTE FRAME. Fonte única das
+   QUATRO chamadas de `XR.place` deste arquivo (câmera, menu/pausa,
+   cinemática e a ação RECENTRAR): duplicar a escolha em quatro pontos do
+   arquivo mais quente do repo é como as duas metades de um contrato deixam
+   de concordar.
+
+   VOANDO, O CORPO DO JOGADOR É O ASSENTO — não `player.pos`. `Heli.update`
+   escreve `player.pos` na COTA DO TERRENO debaixo do helicóptero, e o
+   comentário de lá diz por quê ("player acompanha (recentra grama/chunks)"):
+   no monitor quem desenha a cena voando é a câmera de PERSEGUIÇÃO, que não
+   olha `player.pos`. Em XR não existe perseguição — o rig VAI para onde o
+   jogo mandar. Medido: helicóptero a 22,54 m, olho do jogador a 2,85 m,
+   20,95 m fora da cabine desenhada, VOANDO. `Heli.assentoXR` é a fonte
+   própria do rig (js/heli.js); `player.pos` continua sendo exatamente o que
+   sempre foi para o resto do jogo — mira dos inimigos, dano da zona e o
+   estado mandado ao servidor, que tem anti-teleporte.
+
+   O YAW CONTINUA SENDO `xrYaw`, e isso é D5 na letra: "nada gira a vista …
+   0 rad de rotação imposta". O ASSENTO acompanha a fuselagem em POSIÇÃO (o
+   deslocamento gira pelo quaternion do grupo, lá em js/heli.js); girar a
+   VISTA porque o veículo guinou é enjoo, não imersão. Medido: o helicóptero
+   guinou 126,96° e o rig girou 0,0000°.
+
+   O CARRO NÃO ENTRA AQUI de propósito: `carCameraUpdate` põe `player.pos`
+   no chassi com a cota do terreno, e o carro anda NO chão — medido, o olho
+   fica 1,70 m acima do piso do veículo, que é onde a cabeça do motorista
+   está. Não há defeito para consertar, e mexer nele seria mexer no que não
+   foi medido. */
+const _assentoXR = new THREE.Vector3();
+function placeRigXR() {
+  if (state.flying) {
+    Heli.assentoXR(_assentoXR);
+    XR.place(_assentoXR.x, _assentoXR.y, _assentoXR.z, xrYaw);
+  } else XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
+}
+
 function applyFpsCamera(dt, t) {
   // ---- screen shake (trauma decai, intensidade = trauma²) ----
   trauma = Math.max(0, trauma - dt * 1.7);
@@ -2005,7 +2041,7 @@ function applyFpsCamera(dt, t) {
      chega na câmera: arrastar a vista de quem está com o aparelho na cara é
      enjoo, não game feel. O giro do rig fica em 0 — girar o mundo sob o
      jogador é a mesma armadilha, e giro artificial é da Fase 3 (snap turn). */
-  if (XR.presenting) XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
+  if (XR.presenting) placeRigXR();
   else camera.quaternion.setFromEuler(_euler);
 
   // ---- posição do olho: altura (agachar), bob, dip de pouso, shake ----
@@ -3200,7 +3236,7 @@ const XRUI = createXrUi({
     /* `calibrar()` junto: a referência de altura do corpo não desce sozinha
        (ela só sobe, com sustentação), e recentrar é o gesto que o jogador já
        usa quando alguma coisa ficou fora do lugar. */
-    recentrar: () => { XR.giro.zerar(); xrYaw = 0; XR.corpo.calibrar(); XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw); },
+    recentrar: () => { XR.giro.zerar(); xrYaw = 0; XR.corpo.calibrar(); placeRigXR(); },
     /* SAIR encerra a sessão junto, e é deliberado: `voltarAoMenu()` aterrissa
        no menu principal, que ainda é DOM. Sair da partida sem sair do VR
        deixaria o jogador de pé no mundo sem menu — o beco que esta rodada veio
@@ -3758,7 +3794,20 @@ function tick(forceDt) {
        `consumirPasso` ("descartar o excedente → a cabeça era ARRASTADA de
        volta"). Nesses dois quem responde é a CORTINA, que passa a entrar pela
        separação GEOMÉTRICA (ver a chamada de `XR.conforto.intrusao`). */
-    if (!state.driving && !state.flying) {
+    /* E O ESPECTADOR DO BR É O QUARTO ESTADO COM DONO PRÓPRIO. `spectStep()`
+       (br-game.js) reescreve `player.pos` INTEIRO todo frame, e o espectador
+       não é morto (`enterSpectator` devolve `player.dead = false`) nem
+       dirigindo nem voando: o passo saía do acumulado, entrava em `player.pos`
+       e era apagado antes de chegar à vista. Medido em sessão imersiva:
+       0,9600 m de caminhada física → 0,0200 m de vista (2,08 %), que é A6 puro.
+       O discriminador é a FASE, e ela mora no br-game.js — que é script
+       clássico e não exporta nada para este tick. Por isso ele PUBLICA uma
+       bandeira de nível (`window.__BR_espectador`), escrita todo frame do
+       `brTick` a partir de `S.phase`, no mesmo vocabulário de
+       `window.__BR_freeze` e `window.__BR_active`. Com o dreno desligado o
+       acumulado do rig fica de pé e a cabeça anda 1:1 sobre a órbita, que
+       continua seguindo o alvo assistido. */
+    if (!state.driving && !state.flying && !window.__BR_espectador) {
       XR.consumirPasso(_passoXR);
       player.pos.x += _passoXR.x;
       player.pos.z += _passoXR.z;
@@ -3928,7 +3977,7 @@ function tick(forceDt) {
        rig SEGUIR o corpo — inclusive na COTA, que muda enquanto o jogador
        caminha pelo quarto e sem a qual a vista cai de uma vez ao fechar
        (medido na encosta mais íngreme do mapa: 0,7009 m num frame). */
-    if (xrOn) XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
+    if (xrOn) placeRigXR();
     /* A grade de grama fica ANCORADA no spawn durante o menu. Seguir a câmera
        do passeio (que salta ~800 m a cada corte) enfileiraria os 169 chunks a
        cada troca de plano e o REBUILD_BUDGET (6/frame) pagaria isso por meio
@@ -4035,7 +4084,7 @@ function tick(forceDt) {
        a cinemática o mundo deslizava 1,0000 m num frame. Isto NÃO bloqueia a
        cinemática nem os projéteis: `place()` move o rig, e a cinemática
        escreve a câmera, que é filha dele. */
-    if (xrOn) XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
+    if (xrOn) placeRigXR();
   } else {
     applyTouchLook(); // ANTES do applyFpsCamera: ele só soma delta de recuo
     applyFpsCamera(dt, t);

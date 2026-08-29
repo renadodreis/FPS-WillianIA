@@ -138,7 +138,19 @@ async function instalarSonda() {
     window.__BR_freeze = false;
   };
   const rOrig = MP.renderer.render.bind(MP.renderer);
-  const _v = new T.Vector3();
+  /* O CORPO DO JOGADOR NEM SEMPRE É `player.pos`. Desde que o rig do piloto
+     passou a sentar no assento do helicóptero (rodada 19), `player.pos` voando
+     é o número que o SERVIDOR vê — a mira dos inimigos, o dano da zona, o
+     anti-teleporte —, e não o lugar onde o corpo do piloto está. Medindo a
+     separação contra ele, os dois casos de VOO liam 1,5200 m constantes, que é
+     o próprio deslocamento do assento e não separação nenhuma.
+
+     A régua é que envelheceu, não o produto: com esta função os números de voo
+     voltam EXATAMENTE aos publicados na rodada 18 (campo 1,0000 m, parede
+     3,5000 m), o que é confirmação independente. */
+  const _v = new T.Vector3(), _corpo = new T.Vector3();
+  const corpoDoJogo = () => ((MP.state.flying && G.Heli && G.Heli.assentoXR)
+    ? G.Heli.assentoXR(_corpo) : MP.player.pos);
   MP.renderer.render = (cena, cam) => {
     const r = rOrig(cena, cam);
     if (S.on) {
@@ -157,7 +169,7 @@ async function instalarSonda() {
            uma régua que só pergunta ao produto não vê o que o produto não
            sabe (foi assim que 1,02 m de separação conviveram com
            `foraDoCorpo` em 0,0000). */
-        sep: Math.hypot(_v.x - MP.player.pos.x, _v.z - MP.player.pos.z),
+        sep: (c => Math.hypot(_v.x - c.x, _v.z - c.z))(corpoDoJogo()),
         fora: G.XR.foraDoCorpo,
         sepP: G.XR.separacao,
         /* O QUE ESCURECE A TELA, lido do uniform da malha — não de um

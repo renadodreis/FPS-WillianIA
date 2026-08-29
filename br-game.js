@@ -1961,6 +1961,40 @@
       const dtQueda = Math.min(bruto, 0.5);
       lastT = nowMs;
       lastRaf = nowMs; // sinal de "aba visível" pro watchdog de segundo plano
+      /* QUEM É O DONO DE `player.pos` NESTE FRAME — a bandeira que o game.js
+         lê para NÃO drenar o passo físico do rig de VR aqui.
+
+         `spectStep()` reescreve `MP.player.pos` INTEIRO todo frame (alvo
+         assistido + órbita). O dreno do game.js é guardado por
+         `!state.driving && !state.flying`, e o espectador não é nenhum dos
+         dois — `enterSpectator()` até devolve `player.dead = false`. Então o
+         passo saía do acumulado do rig, entrava em `player.pos` e era apagado
+         pela linha abaixo, sem chegar à vista: medido em sessão imersiva,
+         0,9600 m de caminhada física → 0,0200 m de vista (2,08 %). É A6 puro,
+         e é a MESMA família que a rodada 18 mediu em dirigindo/voando ("ligar
+         o dreno num estado cujo dono reescreve `player.pos` depois faz a
+         cabeça ser arrastada").
+
+         COM O DRENO DESLIGADO o acumulado do rig fica de pé, e é ELE que a
+         cabeça soma sobre o corpo comandado (`place()` em js/xr/xrrig.js põe a
+         cabeça em `(x,z) + passo + fora`). O jogador anda pelo quarto e a vista
+         anda com ele 1:1, enquanto a órbita continua seguindo o alvo — que é o
+         outro lado, e sem ele "congelar player.pos" pareceria conserto.
+
+         É UMA BANDEIRA DE NÍVEL, escrita todo frame a partir da FASE, e não um
+         evento de transição: o `brTick` roda no rAF da janela e o tick do jogo
+         no do XR — são filas diferentes, e um frame de atraso numa borda é
+         inofensivo, enquanto uma transição perdida deixaria o dreno desligado
+         para sempre. `S.phase` é lida, nunca escrita, por este trecho.
+
+         E ELA FICA ACIMA DO `return` DE `__BR_active`, com o termo dentro da
+         conta: escrita depois, uma partida que terminasse com a fase em SPECT
+         deixaria a bandeira ligada PARA SEMPRE — e o jogador voltaria ao solo
+         sem dreno, com o colisor parado debaixo de uma cabeça que anda. Hoje
+         nada zera `__BR_active` neste cliente, e é exatamente por isso: uma
+         bandeira que depende de ninguém nunca mexer numa linha vizinha é falha
+         silenciosa por construção. */
+      window.__BR_espectador = !!window.__BR_active && S.phase === 'SPECT';
       if (!window.__BR_active) return;
 
       /* morte decretada pelo servidor: aplica assim que o jogo deixar */
