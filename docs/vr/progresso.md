@@ -698,3 +698,105 @@ carga da máquina anotada).
 3. Se item 4 fechar, seguir o roteiro mínimo "já dá para jogar" (medir tiro
    acertando 10/15 onde o retículo indicou, 3 inimigos eliminados sem enxame,
    5 min sem UI na frente, morte→jogar de novo→voltar ao menu dentro do VR).
+
+---
+
+## Rodada 18 — item 4 verificado sem defeito; um guarda vazio corrigido · 2026-08-29
+
+**P0 desta rodada:** medir item 4 (campo de visão limpo) no produto real, por
+ordem da rodada 17.
+
+### Medição do item 4 — SEM defeito de produto
+
+`docs/vr/validacao-18a231e.md` (laudo independente mais recente, ancestral do
+HEAD atual) já media H1/H2/H3 — os três aprovam: aviso central no grafo da
+cena a 1,0284 m do olho (H1), os quatro painéis medidos ficaram todos ≥ 0,4773 m
+e nenhum ancorado na câmera exceto a vinheta de conforto, que tem de ser (H2),
+retículo por ausência declarada (H3). O único apontamento do laudo era de
+TESTE, não de produto — §5.1, `xr-aviso.test.js` entregava ao produto os
+argumentos que ele precisa para funcionar (formato 4) — e **já estava
+corrigido no commit `8d81f6c`, antes desta frente começar**. Não há item 4
+vermelho para atacar. Documentado aqui para não reabrir de graça.
+
+### P0 substituto: o outro achado de teste do mesmo laudo, ainda aberto
+
+Varri os outros achados §5.2–§5.8 do mesmo laudo contra o HEAD atual: §5.2–5.7
+já estavam corrigidos (commit `4855d57`, anterior a esta frente). **§5.8
+(`test/xr-corpo-piso.test.js`, caso "o número que o produto publica bate com a
+malha que aparece") continuava aberto.**
+
+### Causa comprovada
+
+O filtro `varredura.filter(m => m.folga < -ENTERRO_MAX && m.afundou < 0.01)` é
+vazio por construção SEMPRE: seu antecedente (`folga < -ENTERRO_MAX`) é a
+NEGAÇÃO exata do caso anterior do mesmo arquivo ("NENHUM degrau enterra a
+malha"), que já garante `folga ≥ -ENTERRO_MAX` em todo degrau quando passa.
+Reinjetei `js/fpbody.js:1575` (`afundou = Math.max(0, piso - baixo)` →
+`afundou = 0`) e o arquivo continuou 7 de 7 verde — confirmado, bate com o
+laudo.
+
+**Achado no processo, medido:** tentei ancorar a medida em algo independente
+(quadril/joelho/tornozelo por osso, que é como `js/fpbody.js` computa `baixo`)
+comparando contra `afundou` na MESMA varredura (1,85–0,70 m de cabeça). Não
+adianta: nesta faixa o quadril NUNCA cruza o piso — pico de afundamento medido
+por fora é **0,0000 m em todo degrau**, porque o clamp de quadril/coluna
+(travado pelos casos deste arquivo e do describe "abaixo do quadril") é
+hermético. Cheguei a escrever `assert.ok(picoPerna > TOL)` e ela morreu no
+produto CORRETO — pego pelo próprio TDD antes de entrar no repo (formato 9:
+"cenário que não exercita o limiar"). A direção "afundou sobe quando a perna
+realmente relata abaixo do piso" não tem cenário natural em nenhum degrau
+desta varredura.
+
+### Mudança
+
+`test/xr-corpo-piso.test.js`, dois casos:
+
+1. **"o número que o produto publica bate com a perna medida por fora"**
+   (substitui o vazio): compara `FpBody.afundou` contra uma estimativa
+   independente por osso (quadril/joelho/tornozelo já capturados pela sonda),
+   com tolerância de 0,03 m. Direção "sem falso positivo" — real, mas não pega
+   o mutante histórico sozinha (ambos os lados dão ~0 no produto saudável).
+2. **"quando o osso do quadril REALMENTE relata abaixo do piso, `afundou`
+   acompanha"** (novo): monkey-patch de UM frame em `B.leg1R.getWorldPosition`
+   — o MESMO objeto que `js/fpbody.js` lê para publicar `afundou` — deslocando
+   -0,15 m, com o headset primeiro agachado a 0,95 m (onde o quadril já tem
+   pouca folga, ~0,06 m medido na varredura) para o offset atravessar o piso
+   de verdade. Não toca o solver de perna/coluna, que os casos acima já
+   travam como hermético — isola a pergunta "o número publicado acompanha o
+   osso" da pergunta "o osso vai parar lá sozinho", que são invariantes
+   diferentes.
+
+Armadilha no caminho: a primeira versão do caso 2 rodava com o headset ainda
+em pé (herdado do `pePlantado` do fim do `before()`), quadril a ~0,96 m do
+piso — um offset de 0,15 m não chegava nem perto de zero, e o caso morria
+"esperado 0,0000 m" mesmo com o monkey-patch funcionando perfeitamente
+(confirmado por instrumentação: a leitura patcheada batia exatamente com
+`antes − 0,15`). Precisa agachar ANTES de aplicar o offset.
+
+### Teste (TDD)
+
+Vermelho confirmado com `afundou = 0` fixo reinjetado em `js/fpbody.js:1575`:
+caso 2 morre com `'com o quadril relatando 0.1412 m abaixo do piso, o produto
+publicou afundou=0.0000'` — motivo certo, com número. Verde depois de
+reverter, nas duas vezes.
+
+### Verificado
+
+`test/xr-corpo-piso.test.js` (8/8), vizinhos de corpo (`xr-corpo-coluna`,
+`xr-body`, `xr-punho-rotacao`: 37/37 juntos), `npm run lint` limpo. `npm run
+test:vr` completo: **762 pass, 0 fail, 1 skip, 763 testes, 145 suítes**
+(1437 s).
+
+### Próxima prioridade
+
+1. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
+   ainda sem dono. Pesquisa já feita em `docs/vr/referencia-interacao.md` §6:
+   inventário corporal (ombro/cintura) foi descartado por depender de
+   `js/xr/xrbody.js` "de outra frente" — que agora É esta frente, madura
+   desde as rodadas 17/18. Vale reavaliar essa opção antes de inventar uma
+   nova, mas é design novo: pesquisar referência do gênero antes de codar,
+   por regra do porte.
+2. Seguir o roteiro mínimo "já dá para jogar": medir tiro acertando 10/15 onde
+   o retículo indicou, 3 inimigos eliminados sem enxame, 5 min sem UI na
+   frente, morte→jogar de novo→voltar ao menu dentro do VR — nenhum medido
+   ainda nesta rodada de loop.

@@ -167,6 +167,17 @@ function instalarSonda() {
     if (window.__M.erro) throw new Error('sonda: ' + window.__M.erro);
     return window.__M.amostra;
   };
+  /* MUTAÇÃO ISOLADA DE UM OSSO SÓ — não do jogo. `js/fpbody.js` lê
+     `quadril.getWorldPosition(_hipP).y` do MESMO objeto `B.leg1R` todo frame
+     para publicar `afundou`; sobrescrever o método na instância (não no
+     protótipo) faz o produto e esta sonda enxergarem o MESMO deslocamento
+     sem tocar no solver de perna/coluna que os outros casos deste arquivo já
+     travam como hermético. Restaura sozinho, mesmo se `ler()` explodir. */
+  window.__M.comOssoForcado = async (offsetY) => {
+    const origGWP = B.leg1R.getWorldPosition.bind(B.leg1R);
+    B.leg1R.getWorldPosition = v => { const r = origGWP(v); r.y += offsetY; return r; };
+    try { return await window.__M.ler(); } finally { B.leg1R.getWorldPosition = origGWP; }
+  };
   return { ok: !!(B.footR && B.footL && B.leg1R && B.leg2R) };
 }
 
@@ -290,14 +301,44 @@ describe('em VR o boneco não fica enterrado em nenhuma altura de agachamento',
         'o joelho que está absorvendo o agachamento');
     });
 
-    it('o número que o produto publica bate com a malha que aparece', () => {
-      /* `FpBody.afundou` é o que o QA e js/xr/xrbody.js leem. Se ele disser
-         zero enquanto a malha está enterrada, o próximo defeito passa
-         despercebido — é o mesmo tipo de mentira do `pernaDobra` previsto. */
-      const mentindo = varredura.filter(m => m.folga < -ENTERRO_MAX && m.afundou < 0.01);
-      assert.deepEqual(mentindo.map(m => `cabeca ${f4(m.alvoY)}: malha ${f4(m.folga)}, ` +
-        `afundou ${f4(m.afundou)}`), [],
-      'o produto publicou afundou≈0 com a malha dentro do chão');
+    it('o número que o produto publica bate com a perna medida por fora', () => {
+      /* ACHADO por validação independente (docs/vr/validacao-18a231e.md §5.8):
+         o antecedente `folga < -ENTERRO_MAX` é a NEGAÇÃO exata do caso anterior
+         ("NENHUM degrau enterra a malha") — se aquele caso passa, `folga` nunca
+         fica abaixo de `-ENTERRO_MAX` aqui, e `mentindo` é vazio por construção
+         SEMPRE, produto certo ou não. Reinjetando `afundou = 0` fixo em
+         js/fpbody.js o arquivo inteiro continuava 7 de 7 verde.
+
+         A âncora agora é INDEPENDENTE do que `folga` mede (vértice de malha):
+         a mesma sonda já lê `quadrilY`/`joelhoY` e `tornozeloSobreOPiso` por
+         OSSO, do jeito que `js/fpbody.js` computa `baixo` para publicar
+         `afundou` — mas lidos aqui, no teste, sem perguntar ao módulo. Se
+         `FpBody.afundou` for travado ou desconectado da perna real, diverge
+         desta conta e o caso morre com número. */
+      const TOL = 0.03;   // ruído de posição de osso entre chamadas de amostra
+      const linhas = varredura.map(m => {
+        const joelhoSobreOPiso = m.joelhoY - m.chao;
+        const baixoIndependente = Math.min(
+          m.quadrilSobreOPiso, joelhoSobreOPiso, m.tornozeloSobreOPiso);
+        const esperado = Math.max(0, -baixoIndependente);
+        return { m, esperado, diff: Math.abs(m.afundou - esperado) };
+      });
+      const divergiu = linhas.filter(l => l.diff > TOL);
+      assert.deepEqual(divergiu.map(l => `cabeca ${f4(l.m.alvoY)}: afundou=` +
+        `${f4(l.m.afundou)} vs perna-por-fora=${f4(l.esperado)} (dif ${f4(l.diff)})`), [],
+        'FpBody.afundou não bate com a perna medida por fora (quadril/joelho/' +
+        'tornozelo) — o número publicado ficou desconectado da pose real');
+      /* MEDIDO, NÃO SUPOSTO: nesta varredura inteira (1,85 a 0,70 m de cabeça)
+         o quadril NUNCA cruza o piso — o pico de afundamento medido por fora é
+         0,0000 m em todo degrau, porque o clamp de quadril/coluna (travado nos
+         casos acima e no describe "abaixo do quadril") é hermético nessa
+         faixa. Um `assert.ok(picoPerna > TOL)` aqui seria FALSO no produto
+         correto — cheguei a escrever essa asserção, rodei, e ela morreu no
+         produto intacto: é exatamente o formato 9 do CLAUDE.md ("cenário que
+         não exercita o limiar"), só que desta vez pego pelo próprio processo
+         de TDD antes de entrar no repo. A direção "afundou sobe quando a
+         perna realmente relata abaixo do piso" não tem cenário natural nesta
+         faixa — é o próximo caso, por mutação isolada de UM osso. */
       /* QUAL DAS DUAS GUARDAS DO PÉ ESTE ARQUIVO CONSEGUE COBRAR, E POR QUÊ.
 
          Eram os 0,001 m de `peErguido`, e esse número vive NO RUÍDO: na
@@ -322,6 +363,43 @@ describe('em VR o boneco não fica enterrado em nenhuma altura de agachamento',
         `nenhum degrau exigiu que o pé deslizasse para a frente (pico ` +
         `${f4(pico)} m): ou a varredura não agacha, ou o joelho nunca chega ao ` +
         'limite e este arquivo não está medindo o mecanismo que diz medir');
+    });
+
+    it('quando o osso do quadril REALMENTE relata abaixo do piso, `afundou` acompanha', async () => {
+      /* A direção que o caso anterior não conseguiu exercitar: aqui o produto
+         não é enganado com um argumento fabricado (formato 4) — é o MESMO
+         objeto `B.leg1R` que `js/fpbody.js` lê todo frame para publicar
+         `afundou`, com `getWorldPosition` deslocado 0,15 m para baixo por UM
+         instante. O solver de perna/coluna não é tocado: ele continua
+         resolvendo a pose real, só que a LEITURA do quadril mente por um
+         frame, do mesmo jeito que um sensor de rastreio poderia mentir.
+
+         AGACHA PRIMEIRO — de propósito. Este caso roda depois de `pePlantado`
+         (headset de volta a 1,90 m, de pé), e de pé o quadril mede ~0,96 m
+         acima do piso: um offset de 0,15 m não chega nem perto de zero. Só
+         com a folga já pequena (degrau de 0,95 m de cabeça, ~0,06 m de
+         quadril acima do piso, medido na varredura) o offset atravessa o
+         piso de verdade. */
+      await h.play(async () => {
+        window.__xrEmulado.position.set(0, 0.95, 0);
+        await new Promise(r => setTimeout(r, 700));
+      });
+      const OFFSET = -0.15;
+      const forcado = await h.play(off => window.__M.comOssoForcado(off), OFFSET);
+      const esperado = Math.max(0, -Math.min(
+        forcado.quadrilSobreOPiso, forcado.joelhoY - forcado.chao, forcado.tornozeloSobreOPiso));
+      assert.ok(esperado > 0.05,
+        `a mutação não alcançou o osso que o produto lê (esperado ${f4(esperado)} m ` +
+        'de afundamento independente) — o monkey-patch não está no objeto certo');
+      assert.ok(Math.abs(forcado.afundou - esperado) < 0.03,
+        `com o quadril relatando ${f4(esperado)} m abaixo do piso, o produto publicou ` +
+        `afundou=${f4(forcado.afundou)} — desconectado da leitura real do osso ` +
+        '(reinjete `js/fpbody.js:1575`, `afundou = Math.max(0, piso - baixo)` → ' +
+        '`afundou = 0`, e este caso morre com este mesmo número)');
+      const depois = await h.play(() => window.__M.ler());
+      assert.ok(depois.afundou < 0.03,
+        `depois de desfazer a mutação, afundou continuou em ${f4(depois.afundou)} — ` +
+        'o monkey-patch vazou para fora deste caso');
     });
   });
 
