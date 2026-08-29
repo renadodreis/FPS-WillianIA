@@ -88,24 +88,37 @@ async function instalarFerramentas() {
     return v;
   };
 
-  /* ADAPTADOR 2 — enriquece a chamada que o game.js JÁ FAZ. Não chama
-     `update()`: embrulha. Se o jogo parar de chamar, nada roda — que é
-     exatamente o que se quer de um observador. */
-  let updatesDoJogo = 0, suprimir = false;
+  /* OBSERVADOR DO `update` — ele CONFERE, nunca preenche.
+
+     A versão anterior deste embrulho repunha `rig` e `camera` na chamada:
+     `Object.assign({}, o, { rig: G.XR.rig, camera: MP.camera })`. O cabeçalho
+     dizia "o único embrulho aqui é um OBSERVADOR", e não era — quem faz
+     `rig.add(aviso.obj)` é o `atualizarAviso`, que retorna cedo sem os dois.
+     Consequência medida por validação independente: arrancando
+     `rig: XR.rig, camera` da fiação do `game.js`, o painel de aviso SOME do
+     grafo da cena (pai `null`, `naCena` false) e este arquivo continuava
+     **9 de 9 verde**. H1 verde e desprotegido — o quarto formato da lista do
+     CLAUDE.md, o teste dirigindo o produto em vez de observá-lo.
+
+     Agora o embrulho só CONTA, e conta também as chamadas que chegaram SEM os
+     argumentos que o produto precisa. `semArgs` é asserido abaixo: se a fiação
+     do `game.js` sumir, ele sobe e o caso fica vermelho com número. */
+  let updatesDoJogo = 0, semArgs = 0, suprimir = false;
   const uOrig = G.XRHud.update.bind(G.XRHud);
   G.XRHud.update = (o = {}) => {
     updatesDoJogo++;
+    if (!o.rig || !o.camera) semArgs++;
     /* `suprimir` existe só para a medida de CUSTO: apagar o quad escrevendo
-       `visible = false` à mão perderia a corrida contra o `update()` do
-       jogo, que o reacende no frame seguinte enquanto a mensagem vive.
-       Cortando o `rig` na entrada, quem apaga é o próprio módulo — e nada
-       mais da cena muda, que é o requisito da diferença pareada. */
-    return uOrig(Object.assign({}, o, { rig: suprimir ? null : G.XR.rig, camera: MP.camera }));
+       `visible = false` à mão perderia a corrida contra o `update()` do jogo,
+       que o reacende no frame seguinte enquanto a mensagem vive. Cortar o
+       `rig` REMOVE um argumento que o jogo mandou — não fabrica nenhum —,
+       então não pode fazer produto quebrado passar. */
+    return suprimir ? uOrig(Object.assign({}, o, { rig: null })) : uOrig(o);
   };
 
   const vec = () => new T.Vector3();
   window.__AV = {
-    contadores: () => ({ mudos, updatesDoJogo }),
+    contadores: () => ({ mudos, updatesDoJogo, semArgs }),
     /* dispara a MESMA chamada literal do evento da cidade */
     disparar: (texto = '⚠ MÍSSEIS SE APROXIMANDO DA CIDADE', ms = 3000) => MP.centerMsg(texto, ms),
     estado: () => {
@@ -202,10 +215,20 @@ describe('o aviso central existe DENTRO do mundo em VR (H1)',
         return {
           aviso: window.__game.XRHud.aviso || null,
           updates: window.__AV.contadores().updatesDoJogo,
+          semArgs: window.__AV.contadores().semArgs,
         };
       });
       assert.ok(r.updates > 10,
         `em 12 s o game.js chamou XRHud.update só ${r.updates} vezes — sem fiação viva não há o que medir`);
+      /* A FIAÇÃO TEM DE MANDAR `rig` E `camera`. Sem eles `atualizarAviso`
+         retorna cedo e o painel nunca entra no grafo — o aviso de mísseis
+         simplesmente não existe no headset, com este arquivo verde. Foi assim
+         que a validação independente derrubou a versão anterior deste teste:
+         arrancando `rig: XR.rig, camera` do game.js, o painel sumia da cena
+         (pai `null`) e os 9 casos continuavam passando. */
+      assert.equal(r.semArgs, 0,
+        `${r.semArgs} de ${r.updates} chamadas de XRHud.update chegaram sem \`rig\`/\`camera\` — ` +
+        'sem eles o painel de aviso nunca entra no grafo da cena, e H1 fica verde e desprotegido');
       assert.equal(r.aviso, null,
         'o painel de aviso já existia antes de qualquer mensagem — objeto criado de graça');
     });
