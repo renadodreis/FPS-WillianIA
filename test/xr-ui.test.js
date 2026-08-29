@@ -430,6 +430,65 @@ describe('painel de sessão em VR (IWER, sessão imersiva real)', { skip: !CHROM
       `no solo a tela de morte não ofereceu jogar de novo: ${r.join(', ')}`);
   });
 
+  it('clicar em JOGAR DE NOVO reinicia a partida de verdade, não só mostra o botão', async () => {
+    /* As três provas do caso anterior/seguinte medem o PAINEL (oferece
+       "reaparecer", é o mesmo painel de sempre) — nenhuma clica de verdade e
+       confere que a partida volta. É exatamente o item do roteiro da missão
+       ("morrer de forma controlada e escolher JOGAR DE NOVO"). Mata o
+       jogador pelo caminho REAL (`playerDamage`, não `player.dead = true` na
+       mão — puxar na mão pula o timeout de 600ms de `Morte.mostrar()` e não
+       prova que o painel abre SOZINHO como game.js:3748 promete a quem está
+       de headset).
+
+       DE PROPÓSITO antes de "SAIR DA PARTIDA acaba a partida": aquele caso
+       termina a partida (`state.started = false`), e sem a partida rodando
+       `playerDamage` nem processa dano (`state.paused` fica true com o menu
+       na tela) — o painel de morte nunca abriria sozinho. Achado assim: a
+       primeira versão deste teste, posicionada DEPOIS do fim de partida,
+       morria com `modo: "menu"` em vez de `"morte"`.
+
+       `window.__MP_active` TAMBÉM precisa ir a `false`, não só `__BR_active`:
+       o harness nasce com `online: true` (armadilha conhecida deste arquivo
+       de ajuda) e ISSO liga `__MP_active` direto — sem tocar em `__BR_active`.
+       O painel oferece "reaparecer" olhando só `!__BR_active`
+       (`podeReaparecer`, game.js), mas `restartMatch()` recusa em
+       `__MP_active || __BR_active` — com só um dos dois zerado o botão
+       aparece e não faz nada (achado assim: `dead` continuava `true` depois
+       do clique). Em produção os dois nascem e morrem juntos, sempre pelo
+       mesmo br-game.js — é o harness que os desacopla. */
+    const r = await h.play(async () => {
+      const G = window.__game, MP = window.__MP;
+      const antesBR = window.__BR_active, antesMP = window.__MP_active;
+      window.__BR_active = false; window.__MP_active = false;   // solo de verdade
+      window.__UI.fechar();
+      await window.__A.espera(150);
+      MP.player.health = 100; MP.player.dead = false; MP.player.armor = 0;
+      MP.playerDamage(9999, null, { type: 'test' });
+      // 600 ms do timeout de Morte.mostrar() + folga para o tick abrir o painel
+      await window.__A.espera(950);
+      const antes = window.__U.estado();
+      window.__U.apontar('right', window.__U.linha('reaparecer').centro);
+      await window.__A.espera(220);
+      await window.__U.clique('right');
+      await window.__A.espera(500);
+      const depois = window.__U.estado();
+      const out = {
+        modoAntes: antes.modo, idsAntes: antes.linhas.map(l => l.id),
+        started: G.state.started, dead: MP.player.dead, vida: MP.player.health,
+        modoDepois: depois.modo, abertoDepois: depois.aberto,
+      };
+      window.__BR_active = antesBR; window.__MP_active = antesMP;
+      return out;
+    });
+    assert.equal(r.modoAntes, 'morte', 'a morte de verdade não abriu o painel sozinha (game.js:3748)');
+    assert.ok(r.idsAntes.includes('reaparecer'), `painel de morte sem reaparecer: ${r.idsAntes.join(', ')}`);
+    assert.equal(r.started, true, 'clicar em JOGAR DE NOVO não reiniciou a partida (state.started)');
+    assert.equal(r.dead, false, 'clicar em JOGAR DE NOVO não reviveu o jogador');
+    assert.ok(r.vida > 0, `vida não foi restaurada depois de reaparecer: ${r.vida}`);
+    assert.equal(r.abertoDepois, false,
+      `o painel continuou aberto em modo "${r.modoDepois}" depois de reaparecer — beco sem saída`);
+  });
+
   it('SAIR DA PARTIDA acaba a partida e devolve o MENU dentro do mundo', async () => {
     /* ÚLTIMO da bateria de propósito: a ação é a do jogo e acaba a partida.
        Ela encerrava a SESSÃO junto (`XR.exit()`), porque o menu principal só

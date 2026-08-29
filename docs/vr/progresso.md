@@ -800,3 +800,79 @@ test:vr` completo: **762 pass, 0 fail, 1 skip, 763 testes, 145 suítes**
    o retículo indicou, 3 inimigos eliminados sem enxame, 5 min sem UI na
    frente, morte→jogar de novo→voltar ao menu dentro do VR — nenhum medido
    ainda nesta rodada de loop.
+
+---
+
+## Rodada 19 — morte→JOGAR DE NOVO medido de verdade (não só o botão) · 2026-08-29
+
+**P0 desta rodada:** dos itens do roteiro mínimo ainda não medidos (Rodada
+18), priorizei "morrer de forma controlada e escolher JOGAR DE NOVO dentro do
+VR" — a mira/B7 já estava verde por trabalho anterior a esta frente (18/18 em
+`xr-mira`+`xr-b7-*`, confirmado antes de escolher), e o hint de "historicamente
+frágil neste gênero" apontava pro fluxo de morte.
+
+### O que já existia, e o que faltava
+
+`js/xr/xrui.js` + `game.js` já tinham o painel de morte real dentro do mundo
+(`XRUI.abrir('morte')`, `reaparecer: () => restartMatch()`, `sair: () =>
+voltarAoMenu()`), com três casos em `test/xr-ui.test.js` cobrindo: o solo
+oferece "reaparecer", online não oferece, SAIR DA PARTIDA clicado de verdade
+devolve o menu no mundo. **Nenhum clicava em "reaparecer" e conferia que a
+partida volta** — as provas eram todas sobre o PAINEL (o botão existe, é o
+mesmo painel), nunca sobre a AÇÃO. Family 4 da lista do CLAUDE.md em miniatura:
+o botão podia estar morto e os 17 casos existentes não veriam.
+
+### Causa comprovada (do próprio processo de TDD, não do produto)
+
+Escrevi o caso matando o jogador de verdade (`playerDamage`, não
+`player.dead = true` na mão) **depois** do caso "SAIR DA PARTIDA acaba a
+partida". Morreu com `modo: "menu"` em vez de `"morte"` — óbvio depois de
+medido: aquele caso já tinha zerado `state.started`, e `playerDamage` recusa
+com `state.paused` true. Reordenado pra ANTES desse caso (o jogo ainda
+rodando), o painel abriu sozinho — mas `dead` continuou `true` depois do
+clique. Segunda causa, também do harness: `window.__MP_active` (ligado por
+`online: true`, o padrão do `bootEmVR`) não estava sendo zerado — só
+`__BR_active`. O painel oferece "reaparecer" olhando `!__BR_active`
+(`podeReaparecer`, game.js), mas `restartMatch()` recusa em `__MP_active ||
+__BR_active`: com um só zerado, o botão aparece e clicar não faz nada. Em
+produção os dois nascem e morrem juntos, sempre por `br-game.js` — **nenhum
+dos dois achados era bug de produto**, os dois eram harness montando um
+estado que o jogo real nunca produz.
+
+### Mudança
+
+`test/xr-ui.test.js`: novo caso "clicar em JOGAR DE NOVO reinicia a partida de
+verdade, não só mostra o botão", inserido ANTES de "SAIR DA PARTIDA" (ordem
+importa: aquele caso termina a partida). Mata o jogador pelo caminho real,
+espera o painel abrir sozinho (prova que game.js:3748 funciona sem
+intervenção), clica em "reaparecer" pela mesma mecânica de raio+gatilho dos
+outros casos do arquivo, e confere `state.started`, `player.dead`,
+`player.health` e o painel fechado — não só a presença do botão.
+
+### Teste (TDD) e verificação de que mede o produto, não o dublê
+
+Vermelho pelo motivo certo nas duas rodadas de causa acima (ordem errada:
+`modoAntes` vinha `"menu"`; flag meio-zerada: `dead` continuava `true`), verde
+depois das duas correções DE TESTE. Não houve mudança em `game.js`/`js/xr/` —
+o produto já fazia a coisa certa; a lacuna era só de cobertura.
+
+### Verificado
+
+`test/xr-ui.test.js` completo (18/18, era 17/17 antes do caso novo),
+`test/xr-menu.test.js` + `test/xr-social.test.js` (33/33 — vizinhos que também
+tocam `sair`/morte), `npm run lint` limpo. `npm run test:vr` completo: **763
+pass, 0 fail, 1 skip, 764 testes, 145 suítes** (1540 s — acima do ~2,5 min de
+referência, máquina com outras frentes/checagens rodando durante a medição:
+sinal de carga anotado, não regressão).
+
+### Próxima prioridade
+
+1. "Morrer de NOVO → VOLTAR AO MENU" (segundo ciclo): as duas metades já têm
+   prova independente (reaparecer restaura a partida — este relatório; sair
+   devolve o menu — Rodada anterior/`xr-ui` caso "SAIR DA PARTIDA"), mas
+   ninguém mediu as duas em SEQUÊNCIA no mesmo teste. Avaliar se vale a pena
+   antes de assumir coberto.
+2. "Eliminar 3 inimigos sem enxame" e "5 min sem UI na frente" do roteiro
+   mínimo — nenhum medido nesta frente ainda.
+3. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
+   ainda sem dono.
