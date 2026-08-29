@@ -121,7 +121,7 @@
    monta (`opcoes()`). Sem `menu`, `abrir('menu')` cai em `pausa` e este
    arquivo se comporta byte por byte como antes.
    ================================================================ */
-import { CHAVE } from './xrturn.js';
+import { CHAVE, MODOS } from './xrturn.js';
 import { createXrSocial } from './xrsocial.js';
 import { createXrMenu } from './xrmenu.js';
 
@@ -262,6 +262,12 @@ export function createXrUi({
      controle que não faz nada. */
   const prefsGiro = () => (giro && giro.prefs) || { modo: 'suave', velocidade: 180, passo: 45 };
 
+  /* O RÓTULO DE CADA MODO. A ORDEM em que a linha roda entre eles NÃO mora
+     aqui: vem de `MODOS`, em js/xr/xrturn.js, que é quem implementa a
+     política. Duas listas de modos divergem no dia em que alguém acrescentar o
+     quarto — e a que a tela mostrasse deixaria de ser a que o giro obedece. */
+  const ROTULO_GIRO = { suave: 'SUAVE', passos: 'EM PASSOS', desligado: 'DESLIGADO' };
+
   /* AS OPÇÕES DE CONFORTO, UMA LISTA SÓ. Extraídas porque o menu principal
      precisa das MESMAS: duas listas divergem no primeiro ajuste, e a ordem
      aqui é exatamente a que a pausa tinha antes (giro, ajuste do giro,
@@ -269,11 +275,16 @@ export function createXrUi({
   function opcoes() {
     const p = prefsGiro();
     const l = [
-      { id: 'giroModo', tipo: 'escolha', txt: 'GIRO', val: p.modo === 'passos' ? 'EM PASSOS' : 'SUAVE' },
+      { id: 'giroModo', tipo: 'escolha', txt: 'GIRO', val: ROTULO_GIRO[p.modo] || ROTULO_GIRO.suave },
     ];
+    /* O SLIDER DEPENDE DO MODO, E EM `desligado` NÃO EXISTE. Mostrar
+       "velocidade do giro" com o giro desligado é botão morto — a regra desta
+       base, paga caro (a tela de morte já ofereceu "JOGAR DE NOVO" numa
+       partida online e a ação recusava no console). O jogador que desligou o
+       giro não tem o que ajustar; se quiser ajustar, religa em um toque. */
     if (p.modo === 'passos') {
       l.push({ id: 'passo', tipo: 'valor', txt: 'ÂNGULO DO PASSO', val: Math.round(p.passo) + '°' });
-    } else {
+    } else if (p.modo !== 'desligado') {
       l.push({ id: 'velocidade', tipo: 'valor', txt: 'VELOCIDADE DO GIRO', val: Math.round(p.velocidade) + '°/s' });
     }
     /* VELOCIDADE DE LOCOMOÇÃO. Sem esta linha os três perfis existiam e nenhum
@@ -548,8 +559,14 @@ export function createXrUi({
     if (l.id === 'reaparecer') { fechar(); return chamar('reaparecer'); }
     if (l.id === 'recentrar') return chamar('recentrar');
     if (l.id === 'giroModo') {
-      const p = prefsGiro();
-      if (giro && giro.preferir) giro.preferir({ modo: p.modo === 'passos' ? 'suave' : 'passos' });
+      /* RODA PELOS TRÊS, NA ORDEM DO MÓDULO. Era um interruptor de dois
+         estados; virou ciclo porque o giro artificial ganhou `desligado` — que
+         o dono pediu ("o botão de virar o personagem não se faz necessário") e
+         que a loja não deixa ser o padrão (VRC.Quest.Tracking.1). Um modo
+         desconhecido no armazém cai no primeiro em vez de travar a linha. */
+      const i = MODOS.indexOf(prefsGiro().modo);
+      const proximo = MODOS[(i + 1) % MODOS.length];
+      if (giro && giro.preferir) giro.preferir({ modo: proximo });
       return true;
     }
     if (l.id === 'vinheta') {

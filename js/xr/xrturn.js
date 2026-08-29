@@ -54,6 +54,34 @@
       eventos separados — Rotation, Movement e Acceleration —, não só a
       andar.
 
+   E O TERCEIRO MODO: `desligado`
+   ------------------------------
+   O dono voltou do headset com o pedido oposto: "o botão de virar o
+   personagem não se faz necessário, pois ao movimentar a cabeça o corpo
+   deveria acompanhar... eu já consigo olhar ao redor sem enjoo".
+
+   Ele está certo sobre o jogo dele — virar a cabeça JÁ vira a direção de
+   andar, o `rotY` mandado ao servidor e o minimapa (medido:
+   docs/vr/referencia-corpo-cabeca.md §4.0). Mas o giro artificial NÃO PODE
+   SER REMOVIDO, e isso não é opinião:
+
+   - VRC.Quest.Tracking.1 é requisito OBRIGATÓRIO de loja: o app tem de ser
+     jogável sentado, e sentado não se pede pivô de mais de 90°.
+   - A página de preferências de conforto da Meta e o XAUR do W3C listam o
+     giro por controle como recurso de ACESSIBILIDADE — tirá-lo fecha o jogo
+     para quem não gira o pescoço à vontade nem a cadeira.
+
+   O caminho é o que a Half-Life: Alyx fez com a mesma queixa: não moveu o
+   giro para outro botão, ofereceu DESLIGÁ-LO ("Added option to disable
+   controller turning", update 1.1). Aqui isso é o modo `desligado`:
+   `atualizar()` devolve giro zero, o analógico direito para de mover o rig,
+   e o padrão de fábrica continua `suave` — quem joga em pé com espaço
+   desliga em um toque, no painel que o critério A2 já exige.
+
+   O modo é uma ESCOLHA DE POLÍTICA, e ela mora aqui: `MODOS` é a ordem em
+   que a tela roda entre eles, para que a UI não invente um quarto estado nem
+   inverta a sequência num arquivo distante deste.
+
    ZONA MORTA: a mesma de andar (js/xr/xrinput.js), DESCONTADA e não
    cortada — o analógico do Touch descansa em ±0,1 sozinho, e girar sem o
    jogador pedir é enjoo na veia.
@@ -65,8 +93,17 @@ import { DEADZONE } from './xrinput.js';
 
 export const CHAVE = 'callofai_vr';
 
+/* A ORDEM EM QUE A TELA RODA ENTRE OS MODOS. Fica aqui, e não no painel, para
+   a UI não poder inventar um quarto estado nem inverter a sequência: quem sabe
+   quais modos existem é quem os implementa. Os dois que GIRAM vêm juntos —
+   trocar entre suave e passos é a comparação que o jogador quer fazer — e
+   `desligado` fecha a volta. */
+export const MODOS = ['suave', 'passos', 'desligado'];
+
 export const PADRAO = {
-  modo: 'suave',      // 'suave' (contínuo) | 'passos' (snap)
+  /* 'suave' (contínuo) | 'passos' (snap) | 'desligado' (o analógico direito
+     não gira; ver o cabeçalho: é opção, nunca o padrão — VRC.Quest.Tracking.1) */
+  modo: 'suave',
   velocidade: 180,    // graus/s no modo suave (o default do Immersive Web SDK)
   passo: 45,          // graus por inclinada no modo passos (Meta sugere 30/45/90)
 };
@@ -136,7 +173,7 @@ function gravarPrefs(armazem, prefs) {
 
 function saneia(p, base) {
   const out = { ...base };
-  if (p.modo === 'suave' || p.modo === 'passos') out.modo = p.modo;
+  if (MODOS.includes(p.modo)) out.modo = p.modo;
   if (typeof p.velocidade === 'number' && Number.isFinite(p.velocidade)) {
     out.velocidade = trava(p.velocidade, LIMITES.velocidade);
   }
@@ -160,6 +197,17 @@ export function criarGiroXR({ armazem = null } = {}) {
     const cru = num(eixoX);
     const antes = yaw;
     let passo = false;
+
+    /* DESLIGADO SAI ANTES DOS DOIS CAMINHOS. Tem de vencer o contínuo E o
+       snap: bastaria o jogador ter escolhido `passos` antes para o giro voltar
+       sozinho se o corte fosse só no ramo suave. E o `armado` volta armado
+       porque desligar no meio de uma inclinada não pode deixar um passo
+       pendurado para disparar quando ele religar. */
+    if (prefs.modo === 'desligado') {
+      vel = 0;
+      armado = true;
+      return { delta: 0, passo: false, velocidade: 0, girando: false };
+    }
 
     if (prefs.modo === 'passos') {
       vel = 0;
