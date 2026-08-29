@@ -362,16 +362,60 @@ As três leituras que explicam três queixas do dono, sem interpretação:
   em todo porte de tela plana.
 - **Por que a suíte não pega:** não há um único teste de háptico.
 
-### B7 · O tiro sai do cano
-- **Mede:** distância entre a origem do raio de tiro (`__game.mira().origem`) e
-  a boca do cano do modelo.
-- **Aprova:** ≤ **0,05 m**. **Reprova:** acima. **Hoje: a origem é o
-  `targetRaySpace`, ~50 cm atrás e 45° fora do cano.**
-- **Fonte:** consequência direta de B1/B3; e o anti-cheat do servidor valida
-  **range** a partir dessa origem — uma origem errada é também risco de
-  regressão de segurança (`test/security-regression.test.js`).
-- **Por que a suíte não pega:** os testes checam a DIREÇÃO da mira, nunca a
-  origem contra a geometria da arma.
+### B7 · O tiro nasce na arma — e o que se VÊ nasce na boca
+
+> **REESCRITO em 2026-08-29, e o motivo importa mais que o texto.** A versão
+> anterior cobrava "origem a ≤ 0,05 m da boca do cano" e reprovava sete das
+> oito armas, com os mesmos dígitos desde a rodada 9. A pesquisa
+> (`docs/vr/referencia-origem-do-tiro.md`) mostrou por quê: **aqueles sete
+> números saem de `js/weaponrig.js` com uma calculadora, sem o jogo rodando.**
+> São, ao quarto decimal, a altura de alça de cada perfil — AGULHA 0,0589,
+> FALCÃO 0,0700, FUZIL 0,0910, RAJADA 0,0920, TROVÃO 0,1810, PLASMA 0,2000.
+> Ou seja: **B7 media a geometria do ASSET e chamava isso de comportamento do
+> código.** Nenhuma mudança em `fire()` mexia nele.
+>
+> A segunda justificativa do texto antigo também não se sustenta: o anti-cheat
+> de range monta `fromPos` de `player.pos` (`br-game.js`), não da origem do
+> raio, e o servidor tolera 5 m.
+>
+> E o critério antigo era incompatível com B3 por construção — com a alça 6 a
+> 20 cm acima do cano, tiro no cano e tiro na linha de mira só concordam numa
+> distância. **Nenhum FPS de VR de referência satisfaz os dois.** Régua que
+> reprova o gênero inteiro está torta.
+>
+> Isto NÃO é afrouxamento: o texto novo tem **cinco asserções que podem
+> reprovar**, contra uma que era inalcançável por construção. E a regra para
+> quem constrói continua valendo — **quem implementa não edita a régua**; esta
+> reescrita é decisão de produto, com a pesquisa registrada e citada.
+
+- **B7a · O que se VÊ sai da boca.** Clarão, traçante e o primeiro segmento de
+  projétil desenhado começam a ≤ **0,05 m** da âncora `muzzle`, congelada no
+  instante do tiro, nos TRÊS caminhos de `fire()` (hitscan, `__BR_ballistics`,
+  foguete).
+- **B7b · A origem balística fica na linha de mira.** Decomposta contra o eixo
+  do cano: componente **longitudinal ≤ 0,02 m** da boca; componente
+  **transversal = altura de alça da mira ATIVA ± 0,01 m**. Reprova **abaixo**
+  também: transversal zero é origem no cano, que é justamente o que B3 impede.
+- **B7c · Sem head glitching.** O segmento boca→origem não cruza sólido.
+- **B7d · Projétil VISÍVEL nasce na boca** (bazuca): ≤ 0,02 m, voando paralelo
+  à linha de mira. Motivo medido: origem deslocada num foguete detona perto de
+  quem atirou — 42 de dano em si mesmo.
+- **B7-M · Arma branca é outro critério.** A faca golpeia a ≤ 0,05 m do
+  **punho** e a ≤ 1° do eixo da lâmina; alcance inalterado. Faca não tem cano, e
+  cobrar cano dela produzia 0,4367 m de "reprova" que não descrevia defeito
+  nenhum.
+- **Fonte:** `docs/vr/referencia-origem-do-tiro.md`, com o precedente publicado
+  mais próximo — a Battlefield Wiki descreve, em texto literal, o motor emitindo
+  o projétil **a partir da mira**, com movimento inicial paralelo ao eixo dela,
+  que é a solução já implementada aqui. Pavlov VR documenta o caminho oposto
+  (origem no cano, zeragem fixa declarada) e assume por escrito a imprecisão nos
+  primeiros 10–15 m. **Diretriz de plataforma sobre origem de tiro em VR: NÃO
+  EXISTE** — verificado um a um em Meta Horizon, Unity XRI e Godot XR Tools.
+- **Por que a suíte não pegava:** o caso principal de B3 em
+  `test/xr-mira.test.js` compara uma reta com ela mesma (`erros[d]` é montado
+  com a mesma origem e direção que o produto usa), e dá **zero por álgebra em
+  toda distância**. É o formato 2 da lista do CLAUDE.md, no teste mais
+  importante da categoria.
 
 ---
 

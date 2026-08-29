@@ -182,8 +182,12 @@ separadas**, mais um validador independente medindo a **árvore principal**.
 - **A mira é geometria, não gosto.** A alça deste jogo fica **6 a 20 cm acima do
   cano** (é *sight height over bore*, aqui exagerada — um fuzil real tem ~4 cm).
   Com origem no cano e alvo na alça, os dois só concordam numa distância. A
-  solução é separar o que se VÊ do que ACERTA: traçante e clarão saem da boca
-  (sempre saíram), o raio balístico nasce **sobre a linha de mira**. Zeragem
+  solução é separar o que se VÊ do que ACERTA: clarão sai da boca, e o raio
+  balístico nasce **sobre a linha de mira**. **Correção de 2026-08-29:** a
+  afirmação de que "traçante e clarão saem da boca (sempre saíram)" era falsa
+  para o caminho do BR — `br-game.js` desenha o traçante a partir da ORIGEM
+  BALÍSTICA, 6 a 20 cm acima da boca, que é o modo em que o dono joga. Vale
+  para o hitscan e para o clarão, não para o BR. Zeragem
   dinâmica (convergir para o primeiro obstáculo) é proibida: ela faz o ponto de
   impacto **andar entre um tiro e o outro**, e aí não há como compensar na mão.
   **Exceção medida:** projétil VISÍVEL (o foguete) nasce na BOCA e voa paralelo à
@@ -361,6 +365,16 @@ mexer no repositório de outra pessoa — só com pedido explícito.
   quem coordenava, e foi a revisão independente que os achou: a mira que valia só
   metade do jogo, e o teste que devia prová-la e não podia falhar.
 
+- **Mas régua que mede a coisa errada se REESCREVE — com pesquisa e com o
+  motivo no arquivo.** B7 cobrava "origem do tiro a ≤ 5 cm da boca" e reprovava
+  sete das oito armas com os mesmos dígitos por cinco rodadas. Os sete números
+  saem de `js/weaponrig.js` com uma calculadora, sem o jogo rodando: são a
+  altura de alça de cada perfil ao quarto decimal. **O critério media o ASSET e
+  chamava de comportamento**, e nenhuma mudança em `fire()` mexia nele. A
+  distinção que vale: afrouxar é baixar o teto para caber; reescrever é trocar a
+  grandeza porque a antiga não descrevia defeito. O novo B7 tem cinco asserções
+  que podem reprovar contra uma que era inalcançável por construção. **Quem
+  constrói continua sem editar a régua** — isso é decisão de produto.
 - **Régua não se afrouxa para desbloquear a própria frente.** Quando B7 (origem a
   ≤ 5 cm do cano) e B3 (tiro na linha de mira) se mostraram geometricamente
   incompatíveis, o teto do TESTE foi afrouxado com o motivo escrito no arquivo, e
