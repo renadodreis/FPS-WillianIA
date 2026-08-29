@@ -52,9 +52,27 @@ describe('analógico de andar (mão esquerda)', () => {
   });
 
   it('descanso dentro da zona morta não anda', () => {
-    const r = entrada.ler([mao('left', [0, 0, DEADZONE * 0.9, -DEADZONE * 0.9])]);
+    /* A ZONA MORTA É RADIAL, e por isso o repouso se mede pela MAGNITUDE.
+       Este caso já usou `0,9 × DEADZONE` em CADA eixo, o que é um polegar a
+       1,27 × DEADZONE do centro — fora da zona morta de verdade. A conta por
+       eixo tinha um custo medido no jogo: encolhendo os dois eixos do mesmo
+       tanto em valor absoluto, a RAZÃO entre eles muda e a direção andada saía
+       9,79° da pedida com o polegar a 22,5°. O guarda que importa continua
+       inteiro, e mais forte: polegar em repouso (mesmo torto) não move o
+       jogador, e o primeiro passo fora da zona morta é pequeno, não um degrau. */
+    const d = DEADZONE * 0.9 / Math.SQRT2;        // magnitude 0,9 × DEADZONE, na diagonal
+    const r = entrada.ler([mao('left', [0, 0, d, -d])]);
     assert.deepEqual([r.andar.x, r.andar.y], [0, 0],
       'analógico em repouso faria o jogador andar sozinho — enjoo garantido');
+
+    /* E o outro lado do limiar, para o caso acima não passar por um zero que
+       vale para qualquer entrada: logo depois da borda o comando existe e é
+       PEQUENO. Sem esta metade, `andar` travado em zero passaria nos dois. */
+    const f = DEADZONE * 1.06 / Math.SQRT2;
+    const fora = entrada.ler([mao('left', [0, 0, f, -f])]);
+    const mag = Math.hypot(fora.andar.x, fora.andar.y);
+    assert.ok(mag > 0 && mag < 0.2,
+      `logo fora da zona morta o comando veio ${mag.toFixed(4)} — esperado pequeno e diferente de zero`);
   });
 
   it('empurrar pra frente anda pra frente', () => {

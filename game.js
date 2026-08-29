@@ -1722,6 +1722,10 @@ function soltarTeclasXR() { for (const c of [..._teclasXR]) teclaXR(c, false); }
    atraso, imperceptível, e é a leitura correta. */
 const _qVista = new THREE.Quaternion();
 const _eulerVista = new THREE.Euler(0, 0, 0, 'YXZ');
+/* Vetor de marcha do headset, publicado pelo bloco de XR e lido pelo
+   `playerUpdate`. Objeto simples e reusado: alocar por frame num Snapdragon é
+   lixo de GC dentro do orçamento de 13,9 ms. */
+const _xrAndar = { x: 0, y: 0, ativo: false };
 const vistaMundo = () => (XR.presenting ? camera.getWorldQuaternion(_qVista) : camera.quaternion);
 
 function playerUpdate(dt, t) {
@@ -1736,6 +1740,19 @@ function playerUpdate(dt, t) {
   let fwd = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
   let str = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
   if (tMove.active) { fwd += tMove.y; str += tMove.x; }
+  /* CANAL ANALÓGICO DO HEADSET — e ele SUBSTITUI, não soma. O bloco de XR
+     também escreve `KeyW/KeyA/KeyS/KeyD`, porque `js/car.js` e `js/heli.js`
+     dirigem por tecla e ficariam mudos no headset sem elas; somar contaria o
+     mesmo polegar duas vezes.
+
+     Por que o canal existe: a tradução em quatro booleanos dá OITO direções
+     (erro medido de 22,50° com o polegar a 22,5°), UMA velocidade só (meio
+     analógico e talo davam os mesmos 1,693 m/s) e uma zona morta efetiva de
+     0,2805 em vez dos 0,18 declarados — os dez pontos de curso que o jogador
+     sente como comando morto. `cmd.andar` já sai pronto de js/xr/xrinput.js,
+     com a curva e o `ANDAR_CHEIO` calculados; era o valor que se jogava fora.
+     É o MESMO canal que o toque do celular já usa. */
+  if (_xrAndar.ativo) { fwd = _xrAndar.y; str = _xrAndar.x; }
 
   const sliding = player.slideT > 0;
   player.crouchT = damp(player.crouchT, (crouchHeld || sliding) ? 1 : 0, 12, dt);
@@ -3551,6 +3568,11 @@ function tick(forceDt) {
      o código já testado, e não uma segunda física só pra VR. O giro é em
      PASSOS de 45° (js/xr/xrinput.js explica por quê) e mora no rig — girar a
      câmera do jogador é justamente o que não se pode fazer. */
+  /* Fora da sessão o canal do headset não existe: sem esta linha, sair do VR
+     com o polegar empurrado deixaria o vetor congelado e o jogador andando
+     sozinho no desktop — o mesmo defeito que `soltarTeclasXR()` evita nas
+     teclas. */
+  if (!xrOn) _xrAndar.ativo = false;
   if (xrOn) {
     const sessao = renderer.xr.getSession && renderer.xr.getSession();
     const fontes = sessao ? sessao.inputSources : null;
@@ -3658,12 +3680,17 @@ function tick(forceDt) {
        PARTIDA" dispara um tiro no mesmo frame, e o analógico do menu anda com o
        jogador no mundo. Soltar as teclas presas é parte do acordo: sair da
        tradução de entrada com botão apertado deixaria a tecla travada. */
-    if (ui3d.capturando) { if (_teclasXR.size) soltarTeclasXR(); mouse.shooting = false; }
+    if (ui3d.capturando) { if (_teclasXR.size) soltarTeclasXR(); mouse.shooting = false; _xrAndar.ativo = false; }
     else {
+      /* AS TECLAS CONTINUAM, e o vetor analógico VAI JUNTO. As teclas são o
+         que `js/car.js` e `js/heli.js` leem para dirigir e voar; o vetor é o
+         que o `playerUpdate` usa para andar a pé, onde ele SUBSTITUI as
+         teclas (ver o comentário lá). Tirar as teclas emudeceria o volante. */
       teclaXR('KeyW', cmd.andar.y > 0.15);
       teclaXR('KeyS', cmd.andar.y < -0.15);
       teclaXR('KeyD', cmd.andar.x > 0.15);
       teclaXR('KeyA', cmd.andar.x < -0.15);
+      _xrAndar.x = cmd.andar.x; _xrAndar.y = cmd.andar.y; _xrAndar.ativo = true;
       teclaXR('Space', cmd.pular);
       // agachar de verdade: baixar a cabeça vale tanto quanto o botão
       teclaXR('ControlLeft', cmd.agachar || XR.corpo.agachado);

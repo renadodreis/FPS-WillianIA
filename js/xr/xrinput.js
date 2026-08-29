@@ -246,9 +246,20 @@ export function criarEntradaXR() {
       /* enquanto escolhe — e até o polegar voltar ao centro depois de escolher —
          o analógico é do menu, não das pernas */
       const escolhendo = out.radial.aberto || !andarArmado;
-      const x = escolhendo ? 0 : semZonaMorta(e.x);
-      const y = escolhendo ? 0 : -semZonaMorta(e.y);   // eixo 3 negativo = frente
-      const m = Math.hypot(x, y);
+      /* ZONA MORTA RADIAL, e a diferença é medível. Descontando a zona morta
+         de CADA EIXO em separado, os dois eixos encolhem o mesmo tanto em
+         valor absoluto — o que muda a RAZÃO entre eles e, portanto, o ângulo.
+         Medido no jogo com o polegar a 22,5° do eixo: o jogador andava 9,79°
+         fora da direção pedida, e o erro trocava de sinal a cada octante (era
+         0° nos eixos e nas diagonais exatas, máximo no meio). Descontando da
+         MAGNITUDE e preservando o versor, o ângulo pedido é o ângulo andado.
+         Nos eixos e nas diagonais as duas contas coincidem, que é por que o
+         `test/xr-input.test.js` não via diferença. */
+      const ux = mCru > 1e-6 ? num(e.x) / mCru : 0;
+      const uy = mCru > 1e-6 ? -num(e.y) / mCru : 0;   // eixo 3 negativo = frente
+      const sz = escolhendo ? 0 : semZonaMorta(mCru);
+      const x = ux * sz, y = uy * sz;
+      const m = sz;
       /* BANDA MORTA QUE APARECEU NA INTEGRAÇÃO. Com `correr` no batente
          (CORRER_TILT), a caminhada normalizada só chegava a 100 % em m = 1 —
          que já é corrida. Na prática o jogador nunca andava a 100 %: travava em
