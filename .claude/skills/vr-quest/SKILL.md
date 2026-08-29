@@ -351,6 +351,38 @@ tempo é do aparelho.
 - **`bootEmVR` já começa a partida** (`emJogo: true` por padrão). Quem mede o
   MENU passa `emJogo: false`. Uma sonda que esquece isso mede o jogo; uma que
   assume o contrário mede o menu e acha que o tiro não funciona.
+- **Os controles emulados NÃO descem com o headset.** Baixar `dev.position`
+  para simular agachamento deixa `dev.controllers[*].position` onde estava: o
+  braço do boneco sobe atrás deles e **o vértice mais alto do corpo passa a ser
+  o DEDO** — medido, +0,3372 m acima do olho com o corpo inteiro correto.
+  Qualquer régua de "topo do boneco" tem de filtrar por osso (fora
+  `Sholder|Arm_|Hand|Finger`) ou descer os controles junto.
+- **`updateWorldMatrix(true, false)` não desce a árvore.** Mover
+  `bodyRoot.position` e atualizar só para CIMA deixa os ossos com a matriz do
+  frame anterior; uma busca que leia `osso.matrixWorld` mede a raiz na posição
+  ANTIGA. Custou uma bissecção inteira convergindo para ZERO em silêncio, com o
+  resultado parecendo "a correção não faz nada" — e o que ficava no lugar era
+  justamente o defeito que ela existia para evitar. Depois de mover a raiz:
+  `(true, true)`.
+- **Coordenada LOCAL medida na BIND não vale no frame.** `osso.worldToLocal(P)`
+  de um ponto parado MUDA quando o osso gira — e neste corpo o peito já carrega
+  a inclinação de agachamento. Guardar o ponto na bind e usá-lo com o osso
+  girado conta a inclinação DUAS vezes: medido, 0,0929 m de erro de âncora,
+  **constante em toda a faixa**. Offset constante é a assinatura desse engano;
+  erro de ÂNGULO varia com a profundidade.
+- **`FpBody.olhoMin` é varredura ROLANTE** (256 vértices por frame de 2 631):
+  uma amostra solta pode devolver número grande só porque a fatia daquele frame
+  não visitou o vértice mais perto. Serve para ACUSAR (número pequeno é
+  verdadeiro), nunca para absolver. Teste que precisa do mínimo real varre a
+  malha ele mesmo — é o mesmo laço que ele já faz para achar o vértice mais
+  baixo.
+- **Réguas que a DOBRA DO TRONCO contamina, e as três já foram tentadas.** Com
+  o tronco dobrado, nada acima da cintura guarda relação fixa com o olho:
+  osso da cabeça contra o olho anda 0,1825 m, distância olho↔ombro anda 0,15 m
+  (o corpo é posto `recuo` ATRÁS do visor de propósito, e esse vetor é de MUNDO
+  enquanto o ombro gira), topo da malha do peito anda 0,27 m — tudo isso com a
+  âncora PERFEITA. A régua que sobrevive é o CENTRO DA CABEÇA do boneco, com as
+  referências colhidas numa pose já agachada mas antes do engate da coluna.
 
 ## Contratos do código (js/xr/)
 

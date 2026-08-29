@@ -1661,7 +1661,18 @@ WeaponModels.ready.then(() => {
     catch (e) { console.warn('[rig] attachComplements falhou em', g.name, e); }
   }
 }).catch(e => console.warn('[rig] WeaponModels.ready rejeitou', e));
-const FpBody = createFpBody({ camera, player, state, getGun: () => gun, weaponRoot, arsenal });
+/* `apoiando` diz se a mão ESQUERDA do jogador está segurando o guarda-mão (o
+   engate de duas mãos de js/xr/xrweapon.js). É por causa dele que o punho
+   esquerdo do boneco troca de dono: apoiado, quem orienta a palma é a ARMA;
+   livre, é o `gripSpace` do controle. Chega por getter porque `XRArma` só
+   existe ~1400 linhas abaixo, e a leitura acontece dentro do frame — o
+   `FpBody.update` de XR roda DEPOIS do `XRArma.aplicar`, então o booleano é o
+   deste frame e não o do anterior. Fora de XR devolve false, que é o desktop
+   como sempre foi. */
+const FpBody = createFpBody({
+  camera, player, state, getGun: () => gun, weaponRoot, arsenal,
+  apoiando: () => XRArma.duasMaos(),
+});
 
 let fovCur = 75;
 let adsT = 0;          // 0 = hip, 1 = mirando

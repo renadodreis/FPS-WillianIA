@@ -25,6 +25,21 @@ export function createFpBody(deps) {
     yaw: Math.PI,          // modelo olha pra -Z da câmera
     rollR: 1.4,            // rolagem do punho direito em volta do eixo dos dedos
     rollL: -1.6,           // idem esquerdo (palma abraça o guarda-mão por baixo)
+    /* Quão rápido o punho esquerdo TROCA de dono: da arma (mão de apoio no
+       guarda-mão) para a mão do jogador (mão livre) e de volta. 1/s. O engate
+       das duas mãos tem histerese própria em js/xr/xrweapon.js (`APOIO_PEGA`
+       0,20 m / `APOIO_SOLTA` 0,32 m), então aqui não pode haver histerese
+       nenhuma — só a suavização, para o punho não estalar no frame em que o
+       jogador solta o guarda-mão. 12 /s é a mesma constante que a arma usa para
+       misturar a direção de uma para duas mãos (t95 ≈ 0,25 s). */
+    punhoSuaviza: 12,
+    /* FLEXÃO MÁXIMA DO TRONCO, em radianos, ACIMA da inclinação de descanso do
+       rig (12,16° medidos). A flexão toracolombar de um adulto vai a ~90–105°
+       (lombar ~60° + torácica ~35°); 80° somados aos 12° do rig dão 92°, dentro
+       da faixa e longe do boneco dobrado ao meio. É o teto do que a coluna
+       aceita pagar para tirar o quadril de dentro do chão — o que passar disso
+       vira dívida declarada (`colunaDivida`) em vez de pose impossível. */
+    flexaoMax: 80 * Math.PI / 180,
     // direção dos DEDOS no espaço da arma: direita envolve o grip do gatilho,
     // esquerda cruza por baixo do guarda-mão
     fingersR: [-0.8, -0.25, -0.45],
@@ -242,6 +257,43 @@ export function createFpBody(deps) {
   const _tp = new THREE.Vector3(), _pole = new THREE.Vector3(), _n = new THREE.Vector3();
   const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _tq = new THREE.Quaternion();
   const fingerAxis = { r: new THREE.Vector3(0, 0, -1), l: new THREE.Vector3(0, 0, -1) };
+  /* ================================================================
+     A POSE DO PUNHO DENTRO DA MÃO DO JOGADOR, DEDUZIDA DO PRÓPRIO RIG.
+
+     A spec do WebXR define os eixos do `gripSpace` pela ANATOMIA da mão, e não
+     por convenção arbitrária — é a mesma definição do `grip pose` do OpenXR:
+
+       −Z  "if the user was holding a straight rod in their hand, it would be
+            aligned with the negative Z axis" — o eixo do tubo formado pelos
+            dedos fechados, no sentido MINDINHO → POLEGAR;
+       +X   a normal da palma: PARA FORA da palma na mão esquerda, PARA DENTRO
+            na direita (é essa inversão que faz um mesmo vetor em coordenadas
+            de grip significar a mesma coisa ANATÔMICA nas duas mãos);
+       +Y   completa a base destra.
+
+     Disso sai uma identidade que vale para as duas mãos e que não depende de
+     eu ter lido a spec direito:
+
+         +X_grip = (direção dos DEDOS) × (direção do POLEGAR)
+
+     Confira com a mão esquerda aberta, dedos para a frente e polegar para
+     cima: (−Z) × (+Y) = +X, que aponta para fora da palma. Na direita, com a
+     palma virada para o outro lado, o mesmo produto aponta para dentro. É
+     exatamente o texto da spec.
+
+     E as duas direções saem do MODELO DESENHADO, não de calibração no olho: o
+     eixo dos dedos é a média das falanges base (já usado por `alignHand`) e o
+     POLEGAR é o osso de falange base que nasce mais perto do punho — neste rig
+     `Finger_1.L/R`, a 1,25 unidades do osso da mão contra 3,56–3,63 dos outros
+     quatro, e o único deslocado no eixo lateral (∓0,586 contra ~0,05). Ou
+     seja: quem decide a orientação é a geometria do GLB.
+
+     `qPunho` guarda a rotação que leva coordenadas da MÃO para coordenadas do
+     GRIP; com ela, `q_mundo_da_mão = q_mundo_do_grip · qPunho`, que é o punho
+     RÍGIDO na mão do jogador — a definição que `test/xr-punho-rotacao.test.js`
+     mede em graus.
+     ================================================================ */
+  const qPunho = { r: null, l: null };
   /* buffers DEDICADOS do rig (não podem ser _v/_v2/_v3: esses são
      consumidos entre a escrita e a leitura). update() roda todo frame —
      tudo aqui era `new THREE.Vector3()` ou `.clone()` por frame. */
@@ -607,12 +659,50 @@ export function createFpBody(deps) {
         l: { a: dist(B.upL, B.foL), b: dist(B.foL, B.haL) },
       };
       medirPernas();
+      medirColuna();
       // eixo real dos dedos no espaço LOCAL da mão (média das falanges base):
       // é ele que a gente alinha com a direção da empunhadura da arma
       for (const [key, hand, fingers] of [['r', B.haR, B.fingersR], ['l', B.haL, B.fingersL]]) {
         const acc = new THREE.Vector3();
-        for (const f of fingers) if (f.parent === hand) acc.add(f.position);
+        const base = [];
+        for (const f of fingers) if (f.parent === hand) { acc.add(f.position); base.push(f); }
         if (acc.lengthSq() > 1e-8) fingerAxis[key].copy(acc.normalize());
+        /* O POLEGAR É O QUE NASCE MAIS PERTO DO PUNHO. Anatomicamente o
+           metacarpo do polegar sai do carpo, não da fileira dos nós — neste rig
+           a diferença é grande (1,25 contra 3,56–3,63 ao longo do eixo dos
+           dedos), então "menor projeção no eixo dos dedos" identifica o osso
+           sem depender do NOME dele. E o polegar entra ortogonalizado contra os
+           dedos: o que interessa é para que LADO da palma ele fica.
+
+           E ISSO É ROBUSTO POR CONSTRUÇÃO, o que foi MEDIDO em vez de suposto:
+           trocando este critério para pegar o dedo mais LONGE do punho (o
+           indicador, `Finger_3`), a base deduzida gira só 34,4° — porque
+           polegar e indicador ficam do MESMO lado da palma, e quem decide a
+           orientação é o SINAL de `dedos × polegar`. O erro que importaria é
+           o de 180°, e esse tem caso próprio no teste: negar `gx` leva a
+           conferência contra a mão direita de 64,77° para 169,02°. */
+        if (base.length >= 3) {
+          let pol = base[0], min = Infinity;
+          for (const f of base) {
+            const d = f.position.dot(fingerAxis[key]);
+            if (d < min) { min = d; pol = f; }
+          }
+          const t = new THREE.Vector3().copy(pol.position);
+          t.addScaledVector(fingerAxis[key], -t.dot(fingerAxis[key]));
+          if (t.lengthSq() > 1e-8) {
+            t.normalize();
+            /* +X do grip = dedos × polegar (ver o bloco de `qPunho`), −Y = dedos,
+               e o terceiro eixo fecha a base destra. `makeBasis` põe os eixos
+               do GRIP em COLUNAS, ou seja, monta grip→mão; o que o runtime usa
+               é a inversa. */
+            const gx = new THREE.Vector3().crossVectors(fingerAxis[key], t).normalize();
+            const gy = new THREE.Vector3().copy(fingerAxis[key]).negate();
+            const gz = new THREE.Vector3().crossVectors(gx, gy).normalize();
+            qPunho[key] = new THREE.Quaternion()
+              .setFromRotationMatrix(new THREE.Matrix4().makeBasis(gx, gy, gz))
+              .invert();
+          }
+        }
       }
       readyFlag = true;
       // com o rig no lugar, as mãos-caixa procedurais somem de todas as armas
@@ -1044,6 +1134,222 @@ export function createFpBody(deps) {
     bodyRoot.userData.pernaDobra = pernaDobra;
   }
 
+  /* ================================================================
+     A COLUNA — o grau de liberdade que faltava para o jogador SENTADO NO CHÃO.
+
+     ONDE A PERNA ACABA. A raiz do boneco acompanha a CABEÇA até o fim (C5), e
+     o quadril mora 0,9414 unidades de raiz abaixo dela. Com a cabeça do jogador
+     abaixo disso, o quadril está DEBAIXO do piso e nenhuma pose de perna
+     resolve — medido no vértice skinado, no render:
+
+       cabeça 0,90 → malha −0,0588 (quadril −0,0412)
+       cabeça 0,80 → malha −0,1635 (quadril −0,1412)
+       cabeça 0,70 → malha −0,2626 (quadril −0,2412)
+
+     A perna responde por ~0,02 m disso; o resto é o TRONCO descendo junto com
+     a raiz.
+
+     POR QUE O CLAMP SOZINHO NÃO SERVE. Travar a raiz para o quadril não descer
+     é o `plantFeet` do VRIK, que já foi removido daqui com número: com a cabeça
+     a 0,95 m o ombro ia para +0,0521 m ACIMA do olho e o erro de âncora para
+     0,20 m, contra os 0,05 m de C5. O jogador via a própria vista sair do meio
+     do tórax.
+
+     O QUE ESTÁ AQUI. Clamp MAIS coluna, que é o que o VRIK faz no `Spine`
+     solver: a raiz sobe o tanto que o quadril precisa, e o TRONCO dobra o tanto
+     que a cabeça precisa para voltar exatamente ao lugar. O osso é o `Chest`
+     (a junta acima da pelve — `Torso_49` é a pelve e carrega as pernas, então
+     dobrar por ele deitaria o corpo inteiro em vez de o tronco). Resultado: o
+     quadril sai do chão E a cabeça do boneco continua onde o olho do jogador
+     está, que é o que C5 mede.
+
+     COMO O ÂNGULO É ACHADO. A altura do olho do modelo em função do ângulo é
+     `A + B·cos θ + C·sin θ` — monótona no trecho que interessa —, e o alvo é
+     conhecido. Em vez de derivar a fórmula (e errar um sinal), aqui se BUSCA:
+     `poeColuna` põe o ângulo e MEDE onde o olho do modelo caiu, e a bissecção
+     fecha em 14 passos (≈0,005° de resolução, ~1e-5 m de olho). Nenhuma
+     constante de gosto, e o sentido "para a frente" também é medido, no
+     carregamento, em vez de suposto.
+
+     O QUE ISSO CUSTA, DECLARADO: `colunaDivida` é o quanto o quadril AINDA
+     ficou abaixo do piso depois de a coluna gastar toda a flexão que tem. Com
+     `flexaoMax` de 80° ela cobre bem mais que o jogador sentado.
+     ================================================================ */
+  let colunaGeo = null;             // { quadril, sinal } — unidades da RAIZ
+  let colunaDobra = 0, colunaDivida = 0;
+  const _olhoNoPeito = new THREE.Vector3();   // pose de BIND
+  const _olhoUsar = new THREE.Vector3();     // ...reexpresso na pose deste frame
+  const _alvoOlho = new THREE.Vector3(), _olhoAtual = new THREE.Vector3();
+  const _pisoC = new THREE.Vector3(), _vCol = new THREE.Vector3();
+  const _qCol = new THREE.Quaternion(), _qColW = new THREE.Quaternion();
+  const _vxCol = new THREE.Vector3();
+
+  /* A inclinação do peito que o resto do módulo já aplicava (respiração +
+     agachamento). Vive aqui porque `ajustarColuna` precisa RESOLVER com ela
+     incluída: as duas rotações são em volta do MESMO eixo local, então somam —
+     e o bloco de sempre continua multiplicando a dele por cima. */
+  function inclinacaoDoPeito(t, k) {
+    return Math.sin(t * 1.6) * 0.014 + k * 0.25;
+  }
+
+  function medirColuna() {
+    if (!B.chest || !B.leg1R || !B.leg1L || !bind.get(B.chest)) return;
+    bodyRoot.updateWorldMatrix(true, true);
+    const inv = new THREE.Matrix4().copy(bodyRoot.matrixWorld).invert();
+    /* O OLHO DO MODELO É A ORIGEM DA RAIZ (js/xr/xrbody.js põe a raiz na altura
+       da cabeça do jogador). Guardado no espaço do PEITO, ele passa a ser um
+       ponto que a dobra CARREGA — e é por ele que se mede se a cabeça voltou. */
+    const olhoW = bodyRoot.getWorldPosition(new THREE.Vector3());
+    B.chest.updateWorldMatrix(true, false);
+    _olhoNoPeito.copy(olhoW);
+    B.chest.worldToLocal(_olhoNoPeito);
+
+    /* O QUADRIL, E A MALHA QUE DESCE ABAIXO DELE. O alvo do clamp é o osso do
+       quadril, mas quem o jogador vê entrar no chão é a malha da pelve — medida
+       aqui pelo VÉRTICE (nunca `Box3`: a caixa de um `SkinnedMesh` fica
+       congelada na primeira pose pedida, e este arquivo envenena esse cache de
+       propósito no boot). Na bind o skinning é a identidade por construção,
+       então o vértice bruto já é a posição de descanso. */
+    let quadril = Infinity;
+    for (const b of [B.leg1R, B.leg1L]) {
+      quadril = Math.min(quadril, b.getWorldPosition(new THREE.Vector3()).applyMatrix4(inv).y);
+    }
+    const alvo = new Set(['Torso', 'Pelvis']);
+    const _vv = new THREE.Vector3(), _mm = new THREE.Matrix4();
+    bodyRoot.traverse(o => {
+      if (!o.isSkinnedMesh || !o.geometry || !o.geometry.attributes.position) return;
+      const g = o.geometry, at = g.attributes.position;
+      const si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+      if (!si || !sw || !o.skeleton) return;
+      _mm.multiplyMatrices(inv, o.matrixWorld);
+      for (let v = 0; v < at.count; v++) {
+        let bi = si.getX(v), bw = sw.getX(v);
+        for (const par of [[si.getY(v), sw.getY(v)], [si.getZ(v), sw.getZ(v)],
+          [si.getW(v), sw.getW(v)]]) {
+          if (par[1] > bw) { bw = par[1]; bi = par[0]; }
+        }
+        const nome = (o.skeleton.bones[bi] && o.skeleton.bones[bi].name) || '';
+        let bate = false;
+        for (const a of alvo) if (nome.indexOf(a) === 0) bate = true;
+        if (!bate) continue;
+        _vv.fromBufferAttribute(at, v).applyMatrix4(_mm);
+        if (_vv.y < quadril) quadril = _vv.y;
+      }
+    });
+    if (!Number.isFinite(quadril) || quadril >= 0) return;
+
+    /* PARA QUE LADO É "PARA A FRENTE": medido, não suposto. Gira o peito um
+       pouco e olha para onde o olho do modelo andou no espaço da RAIZ — o
+       modelo olha para −Z dela. */
+    const bd = bind.get(B.chest);
+    const antes = new THREE.Vector3().copy(olhoW).applyMatrix4(inv);
+    B.chest.quaternion.copy(bd.q).multiply(
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.2));
+    B.chest.updateWorldMatrix(false, false);
+    const dep = new THREE.Vector3().copy(_olhoNoPeito)
+      .applyMatrix4(B.chest.matrixWorld).applyMatrix4(inv);
+    B.chest.quaternion.copy(bd.q);
+    B.chest.updateWorldMatrix(false, true);
+    colunaGeo = { quadril, sinal: dep.z - antes.z < 0 ? 1 : -1 };
+  }
+
+  /* Põe a coluna num ângulo TOTAL e devolve onde o olho do modelo foi parar.
+
+     O PONTO É `_olhoUsar`, NÃO `_olhoNoPeito`, e a diferença já custou 0,0929 m
+     de âncora — constante em toda a faixa, que é a assinatura de um offset e
+     não de um ângulo. `_olhoNoPeito` foi medido na pose de BIND; no frame o
+     peito já carrega a inclinação de respiração/agachamento (`lean`, até
+     0,25 rad), e coordenada LOCAL de um ponto que não se mexe MUDA quando o
+     osso gira. Usar o valor de bind fazia a dobra girar o olho a partir de uma
+     pose que não é a de partida — o `lean` entrava duas vezes. `_olhoUsar` é o
+     mesmo ponto reexpresso na pose deste frame. */
+  function poeColuna(ang) {
+    const bd = bind.get(B.chest);
+    _qCol.setFromAxisAngle(_vxCol.set(1, 0, 0), ang);
+    B.chest.quaternion.copy(bd.q).multiply(_qCol);
+    B.chest.updateWorldMatrix(false, false);
+    return _olhoAtual.copy(_olhoUsar).applyMatrix4(B.chest.matrixWorld);
+  }
+
+  function ajustarColuna(t) {
+    colunaDobra = 0; colunaDivida = 0;
+    const pai = bodyRoot.parent;
+    if (!colunaGeo || !pai || pai === camera) {
+      delete bodyRoot.userData.colunaDobra;
+      delete bodyRoot.userData.colunaDivida;
+      return;
+    }
+    const escala = bodyRoot.scale.x || 1;
+    pai.updateWorldMatrix(true, false);
+    const piso = _pisoC.setFromMatrixPosition(pai.matrixWorld).y;
+    bodyRoot.updateWorldMatrix(true, true);
+    _alvoOlho.setFromMatrixPosition(bodyRoot.matrixWorld);
+    const precisa = piso - (_alvoOlho.y + colunaGeo.quadril * escala);
+    bodyRoot.userData.colunaDobra = 0;
+    bodyRoot.userData.colunaDivida = 0;
+    if (!(precisa > 1e-4)) return;
+
+    /* `k` do agachamento pela MESMA conta de `resolverPernas` (que roda depois
+       e vai ler o `encurtar` já corrigido). Ele satura em 1 muito antes desta
+       faixa — a cabeça precisa estar abaixo de ~0,94 m para a coluna engatar, e
+       aí `encurtar` já passou de 0,90 contra os 0,58 de `crouchDrop` —, então
+       corrigir `encurtar` abaixo não muda `lean`. */
+    const kAg = Math.min(1, Math.max(0, (bodyRoot.userData.encurtar || 0) / escala)
+      / Math.max(TUNE.crouchDrop, 1e-4));
+    const lean = inclinacaoDoPeito(t, kAg);
+    const s = colunaGeo.sinal;
+    /* O ponto do olho na pose DESTE frame (ver `poeColuna`). */
+    _olhoUsar.copy(_olhoNoPeito).applyQuaternion(
+      _qCol.setFromAxisAngle(_vxCol.set(1, 0, 0), -lean));
+
+    /* Quanto de queda de olho a coluna consegue entregar com toda a flexão. */
+    const yBase = poeColuna(lean).y;
+    const podeCair = yBase - poeColuna(lean + s * TUNE.flexaoMax).y;
+    const usa = Math.min(precisa, Math.max(0, podeCair));
+    colunaDivida = precisa - usa;
+
+    const raizAntes = bodyRoot.position.y;
+    bodyRoot.position.y += usa;
+    /* `true, true` E NÃO `true, false`: `poeColuna` lê `B.chest.parent.matrixWorld`
+       para compor a matriz do peito, e o pai é o TRONCO — que é descendente da
+       raiz. Sem propagar para baixo, a busca media o olho na posição ANTIGA da
+       raiz, a primeira avaliação já batia no alvo e a bissecção fechava em
+       ZERO. Medido assim: quadril fora do chão (0,0273 a 0,70 m de cabeça) e
+       âncora em 0,2687 m — ou seja, exatamente o `plantFeet` que este bloco
+       existe para NÃO reintroduzir. */
+    bodyRoot.updateWorldMatrix(true, true);
+
+    /* BISSECÇÃO no ângulo: o alvo é a altura do olho do jogador, e quem mede é
+       o próprio olho do MODELO. 14 passos sobre 80° dão ~0,005°. */
+    let lo = 0, hi = TUNE.flexaoMax;
+    for (let i = 0; i < 14; i++) {
+      const mid = (lo + hi) * 0.5;
+      if (poeColuna(lean + s * mid).y > _alvoOlho.y) lo = mid; else hi = mid;
+    }
+    colunaDobra = (lo + hi) * 0.5;
+    const olhoAgora = poeColuna(lean + s * colunaDobra);
+    /* E O RESTO É TRANSLAÇÃO RÍGIDA: o que faltou (sobretudo o avanço
+       horizontal que a dobra produziu) sai movendo a raiz, e mover a raiz move
+       o olho do modelo o mesmo tanto — fecha em um passo. A posição da raiz é
+       local ao rig, então tira a rotação do rig antes de somar. */
+    _vCol.copy(_alvoOlho).sub(olhoAgora)
+      .applyQuaternion(pai.getWorldQuaternion(_qColW).invert());
+    bodyRoot.position.add(_vCol);
+    /* A COLUNA FICA SEM O `lean`: o bloco de sempre multiplica a inclinação de
+       respiração/agachamento por cima, no MESMO eixo local, e as duas somam. */
+    poeColuna(s * colunaDobra);
+    bodyRoot.updateWorldMatrix(true, true);
+
+    /* A PERNA TEM DE SABER. `encurtar` é "quanto a perna encurta para o pé
+       ficar parado no mundo", e a raiz acabou de subir: o pedido cresce
+       exatamente esse tanto. Sem isto o pé subiria junto com o quadril. */
+    if (Number.isFinite(bodyRoot.userData.encurtar)) {
+      bodyRoot.userData.encurtar += bodyRoot.position.y - raizAntes;
+    }
+    bodyRoot.userData.colunaDobra = colunaDobra;
+    bodyRoot.userData.colunaDivida = colunaDivida;
+  }
+
   function resolverPernas(stride, air) {
     if (!legLen || !pernaRepouso.r || !pernaRepouso.l) return 0;
     /* A RAIZ CARREGA A ESCALA DO AVATAR em VR (o boneco é dimensionado pelo
@@ -1297,6 +1603,11 @@ export function createFpBody(deps) {
     }
   }
 
+  /* 0 = punho na ARMA, 1 = punho na MÃO DO JOGADOR (ver o bloco no fim de
+     `update`). É estado de mistura, não de decisão: quem decide é
+     `XRArma.duasMaos()`. */
+  let punhoLivre = 0;
+  const _qMao = new THREE.Quaternion();
   let walkPh = 0, gunHiddenByPose = null;
   function update(dt, t) {
     if (!readyFlag || failed) return;
@@ -1318,12 +1629,16 @@ export function createFpBody(deps) {
     walkPh += dt * Math.min(spd, 9) * 1.35;
     const stride = Math.min(spd / 5.2, 1) * (player.onGround ? 0.55 : 0.1);
     const air = player.onGround ? 0 : 1;
+    /* ANTES DA PERNA, e é contrato: `ajustarColuna` levanta a RAIZ (para o
+       quadril sair de dentro do piso) e corrige `encurtar`; a perna resolve em
+       cima do resultado. Feito depois, o pé subiria junto com o quadril. */
+    ajustarColuna(t);
     const agacharK = resolverPernas(stride, air);
     /* respiração + capa balançando. O tronco inclina com a DOBRA REAL da perna
        e não com a tecla: em VR quem agacha é a cabeça do jogador, e usar
        `crouchT` deixaria o tronco fora de fase com a perna. */
     if (B.chest) {
-      _q.setFromAxisAngle(_v.set(1, 0, 0), Math.sin(t * 1.6) * 0.014 + agacharK * 0.25);
+      _q.setFromAxisAngle(_v.set(1, 0, 0), inclinacaoDoPeito(t, agacharK));
       B.chest.quaternion.multiply(_q);
     }
     for (let i = 0; i < B.cloak.length; i++) {
@@ -1398,6 +1713,45 @@ export function createFpBody(deps) {
       alvoDaMaoDoJogador ? TUNE.clavMao : TUNE.clavMax);
     alignHand(B.haR, fingerAxis.r, dirR, TUNE.rollR);
     alignHand(B.haL, fingerAxis.l, dirL, TUNE.rollL);
+    /* ================================================================
+       E O PUNHO ESQUERDO, QUANDO A MÃO ESTÁ LIVRE, É A MÃO DO JOGADOR.
+
+       A POSIÇÃO da mão esquerda já ia para o `gripSpace` do controle. A
+       ORIENTAÇÃO continuava saindo de `gun.group` (`TUNE.fingersL` +
+       `TUNE.rollL`), de modo que o jogador soltava o guarda-mão e o punho do
+       boneco ficava torcido abraçando um guarda-mão que não estava ali. Medido
+       no osso, no render, com a mão solta ao lado do corpo: girar o controle
+       75,00° girava o punho 0,27°; e girar a ARMA 28,94°, com a mão do jogador
+       PARADA, girava o punho 28,54°.
+
+       `alignHand` não serve para isto e o motivo é geométrico: ela alinha UM
+       eixo (os dedos) e rola em volta dele, então uma rotação do controle EM
+       VOLTA do próprio eixo dos dedos não mexeria no punho — o mesmo giro de
+       75° daria 0°. Punho rígido na mão é orientação COMPLETA:
+
+           q_mundo_da_mão = q_mundo_do_grip · qPunho
+
+       com `qPunho` deduzido da geometria do GLB (ver o bloco de `qPunho`).
+
+       DOIS DONOS, E A TROCA É SUAVE. Com a mão de apoio NA ARMA
+       (`XRArma.duasMaos()`), quem manda continua sendo a arma: o jogador está
+       segurando um guarda-mão, e girar o pulso em volta de um cilindro não gira
+       a mão que o segura. `punhoLivre` mistura os dois em `TUNE.punhoSuaviza`,
+       sem histerese própria — a histerese do engate mora em js/xr/xrweapon.js e
+       duplicá-la aqui criaria dois estados que discordam. ================ */
+    const qGrip = emXR ? bodyRoot.userData.maoEsqQ : null;
+    if (qGrip && qPunho.l) {
+      const apoiado = typeof deps.apoiando === 'function' && deps.apoiando();
+      const kp = dt > 0 ? 1 - Math.exp(-TUNE.punhoSuaviza * Math.min(dt, 0.1)) : 1;
+      punhoLivre += ((apoiado ? 0 : 1) - punhoLivre) * kp;
+      if (punhoLivre > 1e-3) {
+        _qMao.copy(qGrip).multiply(qPunho.l);
+        B.haL.getWorldQuaternion(_q2).slerp(_qMao, punhoLivre);
+        B.haL.parent.getWorldQuaternion(_q).invert();
+        B.haL.quaternion.copy(_q.multiply(_q2));
+        B.haL.updateWorldMatrix(true, true);
+      }
+    } else punhoLivre = 0;
 
     /* dedos: preset da arma; na recarga a mão que viaja abre um pouco */
     const g = gripFor(gun);
@@ -1446,12 +1800,31 @@ export function createFpBody(deps) {
        `peAFrente`— quanto o pé deslizou para a frente para o joelho não passar
                     do limite humano. */
     get afundou() { return afundou; },
+    /* QA da coluna, em radianos e metros de MUNDO:
+       `colunaDobra`   — flexão do tronco ACIMA da inclinação de descanso, gasta
+                         para tirar o quadril de dentro do piso (ver
+                         `ajustarColuna`). Zero em pé e no agachamento normal.
+       `colunaDivida`  — o que sobrou: quanto o quadril AINDA está abaixo do
+                         piso depois de a coluna gastar `flexaoMax`. É o preço
+                         declarado, e ele sai no QA em vez de ficar escondido. */
+    get colunaDobra() { return colunaDobra; },
+    get colunaDivida() { return colunaDivida; },
     get peErguido() { return peErguido; },
     get peAFrente() { return peAFrente; },
     /* QA do braço: metros de MUNDO que a clavícula transladou rumo ao alvo no
        último frame. É "o ombro viajando atrás da mão" com número — com o alvo
        na mão do jogador ele fica em zero, e o teto é `TUNE.clavMao`. */
     get clavicula() { return clavDelta; },
+    /* QA do punho esquerdo: 0 = orientado pela ARMA (mão de apoio no
+       guarda-mão), 1 = orientado pela MÃO DO JOGADOR (`gripSpace`). É o estado
+       de mistura, não a decisão — a decisão é `XRArma.duasMaos()`. */
+    get punhoLivre() { return punhoLivre; },
+    /* QA: a pose do punho DENTRO do `gripSpace`, deduzida da geometria do GLB
+       (ver o bloco de `qPunho`). Fica exposta porque é a única forma de um
+       teste conferir a dedução contra a mão DIREITA — que segura a arma por um
+       caminho de código completamente diferente (âncoras autorais da arma +
+       `fingersR`/`rollR`) e serve, por isso, de âncora independente. */
+    get punhoOffset() { return qPunho; },
     bones: B, TUNE, bodyRoot,
     /* inspeção: solta o corpo no mundo pra fotografar de fora (calibração) */
     debugDetach(x, y, z) {

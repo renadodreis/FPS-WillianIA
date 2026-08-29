@@ -48,11 +48,12 @@
      para trás, ou seja ajoelhar de costas em vez de agachar).
 
    ONDE ESTE ARQUIVO PARA, DECLARADO. A raiz do boneco é o OLHO e o quadril
-   mora ~0,94 unidades da raiz abaixo dela. Com a cabeça do jogador abaixo
-   disso (ele SENTADO NO CHÃO), o quadril está debaixo do piso e nenhuma pose
-   de perna resolve — o que falta é dobrar a COLUNA, que este rig não faz.
-   O último bloco mede essa faixa e cobra que o resíduo seja EXATAMENTE o
-   quadril abaixo do piso, e não perna mal resolvida.
+   mora 0,9414 unidades da raiz abaixo dela. Com a cabeça do jogador abaixo
+   disso (ele SENTADO NO CHÃO), nenhuma pose de PERNA resolve: quem tem de
+   dobrar é a COLUNA, e é o que `ajustarColuna` (js/fpbody.js) faz hoje. O
+   último bloco mede essa faixa e cobra o novo contrato — quadril NO piso e
+   perna resolvida por baixo dele. A âncora C5 e o limite anatômico da dobra
+   são cobrados em test/xr-corpo-coluna.test.js, que é onde eles moram.
 
    PORTA 3646 — faixa exclusiva desta frente.
    ================================================================ */
@@ -297,24 +298,58 @@ describe('em VR o boneco não fica enterrado em nenhuma altura de agachamento',
       assert.deepEqual(mentindo.map(m => `cabeca ${f4(m.alvoY)}: malha ${f4(m.folga)}, ` +
         `afundou ${f4(m.afundou)}`), [],
       'o produto publicou afundou≈0 com a malha dentro do chão');
-      const trabalhou = varredura.filter(m => m.peErguido > 0.001);
+      /* QUAL DAS DUAS GUARDAS DO PÉ ESTE ARQUIVO CONSEGUE COBRAR, E POR QUÊ.
+
+         Eram os 0,001 m de `peErguido`, e esse número vive NO RUÍDO: na
+         varredura inteira ele dá 0,0000–0,0010 m, ou seja o caso passava por
+         0,0 mm de margem. Qualquer coisa que mova o corpo uma fração de
+         milímetro — e o servo anti-olho (`recuoOlho`, teto 15 mm) move — troca
+         o veredito. Medido: com o punho esquerdo passando a seguir o controle
+         do jogador, a malha perto do olho muda, o servo responde e o pico de
+         `peErguido` foi de 0,0010 para 0,0004 m. Guarda que decide no quarto
+         decimal não guarda nada — é o formato 9 do CLAUDE.md ("cenário que não
+         exercita o limiar") com outra roupa.
+
+         A guarda que TRABALHA nesta faixa é a outra, e com sinal de sobra: o pé
+         desliza para a frente para o joelho não passar de `kneeMin`, e isso vale
+         0,0423 / 0,0364 / 0,0319 m nos degraus fundos — quarenta vezes o ruído.
+         Trocar o teto de 0,001 m num sinal de 0,001 por 0,02 m num sinal de
+         0,042 é APERTAR a régua, não afrouxá-la. `peErguido` continua impresso
+         degrau a degrau, como número de acompanhamento. */
+      const trabalhou = varredura.filter(m => m.peAFrente > 0.02);
+      const pico = Math.max(...varredura.map(m => m.peAFrente || 0));
       assert.ok(trabalhou.length > 0,
-        'a guarda do piso nunca precisou erguer o pé em degrau nenhum: ou a ' +
-        'varredura não agacha, ou o alvo do pé já vinha acima do chão e este ' +
-        'arquivo não está medindo o mecanismo que diz medir');
+        `nenhum degrau exigiu que o pé deslizasse para a frente (pico ` +
+        `${f4(pico)} m): ou a varredura não agacha, ou o joelho nunca chega ao ` +
+        'limite e este arquivo não está medindo o mecanismo que diz medir');
     });
   });
 
 /* ================================================================
-   O JOGADOR SENTADO NO CHÃO — onde a perna acaba e a COLUNA começaria.
+   O JOGADOR SENTADO NO CHÃO — onde a perna acaba e a COLUNA COMEÇA.
 
-   Separado de propósito: aqui o quadril do boneco está DEBAixo do piso porque
-   a raiz acompanha a cabeça (C5) e o quadril mora 0,94 abaixo dela. Nenhuma
-   pose de perna conserta isso. O que este bloco cobra é que o resíduo seja
-   exatamente esse — quadril abaixo do piso —, e não perna mal resolvida em
-   cima dele.
+   ESTE BLOCO MUDOU DE CONTRATO, e o motivo fica escrito. Ele nasceu medindo o
+   LIMITE conhecido: com a raiz acompanhando a cabeça (C5) e o quadril morando
+   0,94 abaixo dela, o quadril ficava DEBAIXO do piso e nenhuma pose de perna
+   consertava — o que faltava era dobrar a COLUNA. O que ele cobrava, então,
+   era que o resíduo fosse exatamente esse, e não perna mal resolvida em cima
+   dele.
+
+   A coluna passou a dobrar (`ajustarColuna` em js/fpbody.js, medido em
+   test/xr-corpo-coluna.test.js): a raiz sobe o tanto que o quadril precisa e o
+   tronco dobra o tanto que a cabeça precisa para voltar ao lugar. Medido:
+
+     cabeça | quadril ANTES | quadril DEPOIS | malha ANTES | malha DEPOIS
+     -------|---------------|----------------|-------------|--------------
+     0,90 m |   −0,0412 m   |   +0,0001 m    | −0,0588 m   |  −0,0194 m
+     0,80 m |   −0,1412 m   |   +0,0001 m    | −0,1635 m   |  −0,0196 m
+     0,70 m |   −0,2412 m   |   +0,0001 m    | −0,2626 m   |  −0,0117 m
+
+   O contrato aqui vira o novo: o quadril NÃO passa do piso nesta faixa, e a
+   perna continua resolvida por baixo dele. A âncora C5 e o limite anatômico da
+   dobra são cobrados no arquivo da coluna, que é onde eles moram.
    ================================================================ */
-describe('abaixo do quadril: o resíduo é a coluna, não a perna',
+describe('abaixo do quadril: a coluna dobra e a perna continua resolvida',
   { skip: !CHROME && 'Chrome não encontrado' }, () => {
     let h, fundo = [];
     before(async () => {
@@ -328,7 +363,7 @@ describe('abaixo do quadril: o resíduo é a coluna, não a perna',
         dev.position.set(0, 1.90, 0);
         await new Promise(r2 => setTimeout(r2, 4000));
       });
-      for (const y of [0.95, 0.90, 0.80, 0.70]) {
+      for (const y of [0.90, 0.85, 0.80, 0.70]) {
         fundo.push(await h.play(async (yy) => {
           window.__xrEmulado.position.set(0, yy, 0);
           await new Promise(r2 => setTimeout(r2, 1200));
@@ -344,17 +379,24 @@ describe('abaixo do quadril: o resíduo é a coluna, não a perna',
     });
     after(async () => { if (h) await h.close(); });
 
-    it('o quadril realmente passou do piso nesta faixa (senão o caso não mede nada)', () => {
-      const abaixo = fundo.filter(m => m.quadrilSobreOPiso < 0.01);
-      assert.ok(abaixo.length === fundo.length,
-        `só ${abaixo.length} de ${fundo.length} poses põem o quadril no piso ou abaixo: ` +
-        'a faixa escolhida não é a que este bloco diz medir');
+    it('a faixa medida é a que EXIGE a coluna (senão o caso não mede nada)', () => {
+      /* CONDIÇÃO DE MEDIDA. Sem a coluna, a raiz seguindo a cabeça põe o
+         quadril `0,9414 − altura da cabeça` abaixo do piso; a faixa deste bloco
+         é justamente a que passa disso. Se a varredura não chegar lá, tudo
+         abaixo passa sem exercitar nada. */
+      const exige = fundo.filter(m => m.altCabeca < 0.9414 - 0.01);
+      assert.ok(exige.length === fundo.length,
+        `só ${exige.length} de ${fundo.length} poses ficam abaixo dos 0,9414 m em que ` +
+        'o quadril passaria do piso: a faixa escolhida não é a que este bloco mede');
     });
 
-    it('o que sobra é o quadril, e a perna continua resolvida por baixo dele', () => {
+    it('o quadril NÃO passa do piso, e a perna continua resolvida por baixo dele', () => {
       for (const m of fundo) {
-        /* o enterro não pode ser MAIOR do que o quadril já está: se for, é a
-           perna piorando o que a âncora do tronco começou */
+        assert.ok(m.quadrilSobreOPiso > -0.02,
+          `com a cabeça a ${f4(m.alvoY)} m o quadril ficou ${f4(m.quadrilSobreOPiso)} m ` +
+          'em relação ao piso (medido antes da coluna: −0,2412 m a 0,70 m)');
+        /* e a perna não pode afundar ALÉM do quadril: se afundar, é a perna
+           piorando o que o tronco entregou resolvido */
         assert.ok(m.folga >= m.quadrilSobreOPiso - 0.03,
           `com a cabeça a ${f4(m.alvoY)} m o quadril está ${f4(m.quadrilSobreOPiso)} m do ` +
           `piso e a malha ${f4(m.folga)} m: a perna afundou ${f4(m.quadrilSobreOPiso - m.folga)} m ` +

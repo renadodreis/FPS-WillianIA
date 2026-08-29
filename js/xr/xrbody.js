@@ -107,6 +107,16 @@ export function criarCorpoXR({ THREE, camera }) {
      do boneco (ver `update`). Vector3 não tem `uuid` e não consome número do
      `Math.random` seedado; só `Object3D` consome. */
   const _maoEsq = new THREE.Vector3();
+  /* ...E A ROTAÇÃO DELE, pelo mesmo canal e pelo mesmo motivo. A POSIÇÃO da mão
+     já ia para o boneco; a ORIENTAÇÃO do punho continuava saindo do quaternion
+     de `gun.group`, então com a mão do jogador longe da arma o punho do boneco
+     ficava torcido como se ainda abraçasse o guarda-mão. Medido no osso, no
+     render: girar o controle 75,00° girava o punho 0,27°, e girar a ARMA 28,94°
+     (com a mão do jogador PARADA) girava o punho 28,54°.
+
+     `Quaternion` também não tem `uuid` — não consome número do `Math.random`
+     seedado, que é o contrato do worldgen. */
+  const _maoEsqQ = new THREE.Quaternion();
 
   /* Mede o modelo NO ESPAÇO DO PRÓPRIO CORPO. Traversar filho a filho (em vez
      de `Box3.setFromObject` seguido de uma inversão) evita inflar a caixa: uma
@@ -160,6 +170,7 @@ export function criarCorpoXR({ THREE, camera }) {
     delete corpo.userData.encurtar;
     delete corpo.userData.recuoOlho;
     delete corpo.userData.maoEsq;
+    delete corpo.userData.maoEsqQ;
     delete corpo.userData.afundou;
     if (salvo.pai) salvo.pai.add(corpo);
     else if (corpo.parent) corpo.parent.remove(corpo);
@@ -242,7 +253,11 @@ export function criarCorpoXR({ THREE, camera }) {
     if (punhoEsq) {
       punhoEsq.updateWorldMatrix(true, false);
       corpo.userData.maoEsq = _maoEsq.setFromMatrixPosition(punhoEsq.matrixWorld);
-    } else if (corpo.userData.maoEsq) delete corpo.userData.maoEsq;
+      corpo.userData.maoEsqQ = punhoEsq.getWorldQuaternion(_maoEsqQ);
+    } else if (corpo.userData.maoEsq) {
+      delete corpo.userData.maoEsq;
+      delete corpo.userData.maoEsqQ;
+    }
     if (olhoModelo <= 0 && !medirModelo()) return;   // GLB ainda não chegou
 
     escala = trava(alturaDePe / olhoModelo, ESCALA);
