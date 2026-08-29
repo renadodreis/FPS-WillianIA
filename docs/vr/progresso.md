@@ -876,3 +876,68 @@ sinal de carga anotado, não regressão).
    mínimo — nenhum medido nesta frente ainda.
 3. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
    ainda sem dono.
+
+---
+
+## Rodada 20 — a cadeia morte→JOGAR DE NOVO→morte→VOLTAR AO MENU, em sequência · 2026-08-29
+
+### Item atacado
+
+Os dois itens do roteiro da missão ("morrer... escolher JOGAR DE NOVO" e
+"morrer novamente e escolher VOLTAR AO MENU, ainda dentro do VR") já tinham
+prova ISOLADA (Rodada 19 e uma rodada anterior), mas nunca em SEQUÊNCIA no
+mesmo teste — exatamente o tipo de bug que teste isolado não pega (timer
+preso da primeira morte, índice de linha do painel, flag que não sobrevive a
+um ciclo completo).
+
+### Causa comprovada — de novo, lacuna de cobertura, não bug de produto
+
+Escrevi a cadeia completa (morte real via `playerDamage`, clica reaparecer,
+confere partida restaurada, morte real de novo, clica sair, confere volta ao
+menu) em `test/xr-ui.test.js`. Rodou verde de primeira. Para não aceitar isso
+sem prova (ver CLAUDE.md, formato "teste que passa por acidente"), reinjetei
+um mutante plausível em `game.js`: um guard que só deixa `Morte.mostrar()`
+disparar UMA vez na sessão inteira (`if (!window.__mutanteMorteJaArmou) {...}`),
+simulando a classe exata de bug que o teste existe para pegar (timer que não
+rearma na segunda morte). Vermelho confirmado — `1º JOGAR DE NOVO não reviveu
+o jogador` — porque o flag global já tinha sido consumido por um teste
+anterior do mesmo arquivo (efeito colateral do mutante que a suíte real não
+tem: sem ele, `resetarPartida()` restaura os dois ciclos de forma idêntica,
+porque não guarda nenhum "já mostrei uma vez"). Revertido, voltou 19/19 verde.
+`resetarPartida()` (chamada por `restartMatch()` e `voltarAoMenu()`) recompõe
+todo o estado do zero a partir de `__inicio` a cada chamada — não há bug de
+produto para corrigir aqui.
+
+### Mudança
+
+`test/xr-ui.test.js`: novo caso "a cadeia morte→JOGAR DE NOVO→morte→VOLTAR AO
+MENU não vaza estado entre as duas mortes", inserido depois de "a tela de
+MORTE é o mesmo painel..." e antes do guard de console (I2). Também prova, por
+construção, que nenhuma das duas transições faz `location.reload()` nem
+derruba a sessão XR: as duas mortes e as duas ações acontecem dentro do MESMO
+`h.play()`, e uma navegação real teria interrompido o script antes de devolver
+o resultado.
+
+### Verificado
+
+`test/xr-ui.test.js` completo (19/19, era 18/18), vermelho confirmado com
+mutante (motivo certo, revertido sem tocar `game.js`), `test/xr-menu.test.js`
++ `test/xr-session.test.js` + `test/xr-entrar-joga.test.js` (33/33), `npm run
+lint` limpo.
+
+`npm run test:vr`: 1ª rodada (logo após rodar `xr-ui`/mutante/vizinhos na
+mesma máquina) deu **3 cancelled** — nunca visto nas rodadas 16-19, sinal de
+interferência dos meus próprios testes manuais rodando por perto, não da
+mudança. 2ª rodada, limpa (nenhum outro processo de teste rodando):
+**763 pass, 1 fail, 0 cancelled, 1 skip** — a falha foi `security-regression.test.js`
+("Conexões — teto por IP", `servidor morreu cedo, código 1`), arquivo que esta
+rodada não tocou. Isolado 2× consecutivas: **9/9 as duas vezes** — flake
+confirmado pela regra do repo (duas passagens isoladas limpas), não regressão.
+
+### Próxima prioridade
+
+1. "Eliminar 3 inimigos sem enxame ou spawn injusto" e "jogar 5 minutos sem
+   UI na frente da visão" — os dois itens do roteiro mínimo ainda sem medição
+   nesta frente.
+2. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
+   ainda sem dono; é design novo, pesquisar referência antes de codar.

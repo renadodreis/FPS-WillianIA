@@ -544,6 +544,92 @@ describe('painel de sessão em VR (IWER, sessão imersiva real)', { skip: !CHROM
     assert.equal(r.aberto, true);
   });
 
+  it('a cadeia morte→JOGAR DE NOVO→morte→VOLTAR AO MENU não vaza estado entre as duas mortes', async () => {
+    /* As duas metades do roteiro da missão ("morrer... escolher JOGAR DE
+       NOVO" e "morrer novamente e escolher VOLTAR AO MENU, ainda dentro do
+       VR") já têm prova isolada: o caso "clicar em JOGAR DE NOVO..." acima, e
+       "SAIR DA PARTIDA acaba a partida..." antes dele. Nenhum dos dois prova
+       a SEQUÊNCIA — e é exatamente aí que mora o tipo de bug que teste
+       isolado não pega: timer de `Morte.mostrar()` da primeira morte ainda
+       armado quando a segunda chega, índice de linha do painel preso na
+       posição da primeira escolha, ou a flag de solo não sobrevivendo ao
+       primeiro ciclo de reaparição. Duas mortes reais (`playerDamage`, não
+       `player.dead = true` na mão) na mesma sessão, sem sair da página entre
+       elas — se alguma delas fizesse `location.reload()` ou derrubasse a
+       sessão XR, `h.play` na chamada seguinte teria estourado (o script
+       injetado não sobreviveria à navegação). */
+    const r = await h.play(async () => {
+      const G = window.__game, MP = window.__MP;
+      const antesBR = window.__BR_active, antesMP = window.__MP_active;
+      window.__BR_active = false; window.__MP_active = false;   // solo de verdade
+      // o caso anterior ("SAIR DA PARTIDA") pode ter deixado started=false
+      G.state.started = true; G.state.paused = false;
+      window.__UI.fechar();
+      await window.__A.espera(150);
+
+      // MORTE 1
+      MP.player.health = 100; MP.player.dead = false; MP.player.armor = 0;
+      MP.playerDamage(9999, null, { type: 'test' });
+      await window.__A.espera(950);
+      const morte1 = window.__U.estado();
+
+      // JOGAR DE NOVO
+      window.__U.apontar('right', window.__U.linha('reaparecer').centro);
+      await window.__A.espera(220);
+      await window.__U.clique('right');
+      await window.__A.espera(500);
+      const depois1 = window.__U.estado();
+      const pos1 = { started: G.state.started, dead: MP.player.dead, vida: MP.player.health,
+        modo: depois1.modo, aberto: depois1.aberto };
+
+      // MORTE 2 — na mesma sessão, sem reboot de nada entre as duas
+      MP.playerDamage(9999, null, { type: 'test' });
+      await window.__A.espera(950);
+      const morte2 = window.__U.estado();
+
+      // VOLTAR AO MENU pela linha "sair" DO PAINEL DE MORTE (não da pausa)
+      window.__U.apontar('right', window.__U.linha('sair').centro);
+      await window.__A.espera(220);
+      await window.__U.clique('right');
+      await window.__A.espera(700);
+      const pos2 = window.__U.estado();
+
+      const out = {
+        modoMorte1: morte1.modo, idsMorte1: morte1.linhas.map(l => l.id),
+        started1: pos1.started, dead1: pos1.dead, vida1: pos1.vida,
+        modoDepois1: pos1.modo, abertoDepois1: pos1.aberto,
+        modoMorte2: morte2.modo, idsMorte2: morte2.linhas.map(l => l.id),
+        startedFinal: G.state.started, presentingFinal: G.XR.presenting,
+        modoFinal: pos2.modo, abertoFinal: pos2.aberto,
+      };
+      window.__BR_active = antesBR; window.__MP_active = antesMP;
+      return out;
+    });
+
+    assert.equal(r.modoMorte1, 'morte', 'a 1ª morte não abriu o painel sozinha');
+    assert.ok(r.idsMorte1.includes('reaparecer'), `1ª morte sem reaparecer: ${r.idsMorte1.join(', ')}`);
+    assert.equal(r.started1, true, '1º JOGAR DE NOVO não reiniciou a partida');
+    assert.equal(r.dead1, false, '1º JOGAR DE NOVO não reviveu o jogador');
+    assert.ok(r.vida1 > 0, `vida não restaurada na 1ª reaparição: ${r.vida1}`);
+    assert.equal(r.abertoDepois1, false,
+      `painel continuou aberto (modo "${r.modoDepois1}") depois da 1ª reaparição`);
+
+    /* A PARTE QUE NENHUM TESTE ISOLADO PODE PEGAR: a segunda morte, em
+       cadeia, tem que se comportar EXATAMENTE como a primeira — nada do
+       primeiro ciclo pode ter ficado preso. */
+    assert.equal(r.modoMorte2, 'morte',
+      'a 2ª morte não abriu o painel sozinha — estado vazou do 1º ciclo (timer/listener preso)');
+    assert.ok(r.idsMorte2.includes('reaparecer'),
+      `2ª morte sem reaparecer: ${r.idsMorte2.join(', ')} — a flag de solo não sobreviveu ao 1º ciclo`);
+    assert.ok(r.idsMorte2.includes('sair'), `2ª morte sem sair: ${r.idsMorte2.join(', ')}`);
+
+    assert.equal(r.startedFinal, false, 'VOLTAR AO MENU não encerrou a partida');
+    assert.equal(r.presentingFinal, true,
+      'VOLTAR AO MENU encerrou a sessão imersiva — a saída é o menu no mundo, não tirar do VR');
+    assert.equal(r.abertoFinal, true, 'voltou ao menu e ficou sem tela nenhuma — o beco do I4');
+    assert.equal(r.modoFinal, 'menu', `voltar ao menu terminou em modo "${r.modoFinal}"`);
+  });
+
   it('sem erro de console durante a sessão inteira (I2)', async () => {
     assert.deepEqual(h.pageErrors, [], 'erro de página durante a sessão');
     assert.deepEqual(h.consoleErrors, [], 'erro de console durante a sessão');
