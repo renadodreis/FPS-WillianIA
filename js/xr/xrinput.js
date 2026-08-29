@@ -59,6 +59,118 @@
    Fontes, com link, em docs/vr/referencia-interacao.md.
    ================================================================ */
 
+/* ================================================================
+   O GRIP DIREITO SEGURA A ARMA — e é STICKY.
+
+   O dono do jogo pediu, verbatim: "precisamos de um botão, que segura e ele
+   mira". O botão existia e não fazia NADA que se visse: `out.mirar` acendia
+   `mouse.aiming`, que muda espalhamento e recuo, mas a POSE da arma é
+   reescrita logo depois por `XRArma.aplicar()` — o jogador apertava e a tela
+   não mudava. O verbo que ele pediu (SEGURAR) não tinha implementação nenhuma:
+   a arma era solda na mão, sem empunhar, sem soltar, sem coldre.
+
+   QUAL BOTÃO. VRC.Quest.Input.2 (requisito de publicação da Meta): "when
+   picking up objects within the app, use the Touch Controller's grip button
+   rather than the trigger button". Mesma escolha no Godot XR Tools
+   ("Pickup Axis Action ... usually the Grip axis").
+
+   QUAL MODO, e por que NÃO é hold. A Unity é a única fonte que nomeia e define
+   os modos (XR Interaction Toolkit, Select Action Trigger):
+     · "State: Unity will consider the input active while the button is pressed."
+     · "Sticky: The interaction starts on the frame the input is pressed and
+        remains engaged until the second time the input is RELEASED."
+   Numa partida de battle royale a arma fica na mão ~20 minutos seguidos, e a
+   Xbox Accessibility Guideline 107 trata exatamente esse caso como barreira:
+   "if a player must continuously activate an input to perform key game
+   actions ... and become fatigued". A mesma página manda a saída: "consider
+   allowing players to toggle this action on permanently". E o Half-Life: Alyx,
+   o jogo mais elogiado do gênero, prende a arma na mão SEM hold nenhum.
+   Por isso: STICKY é o padrão, `manter` (hold) é OPÇÃO — que é o "provide
+   alternatives" das duas fontes de acessibilidade, e o Onward faz igual
+   ("There are two grip options. Proximity and clicking.").
+
+   O QUE SOBRA PARA O `mirar`. Mirar em VR é FÍSICO: em oito de oito FPS de VR
+   pesquisados, mirar é trazer a arma ao olho — nenhum tem botão de ADS, e a
+   régua deste projeto proíbe teleportar a arma no botão (B4). Então `mirar`
+   deixa de ser o grip e vira MIRA ASSISTIDA: acessibilidade para quem não
+   consegue levantar o braço, DESLIGADA por padrão, e que mesmo ligada não move
+   a arma um milímetro — só vale espalhamento e retículo. Com ela desligada
+   `out.mirar` é sempre `false`, e a linha do game.js que lê
+   `cmd.mirar || XRArma.mirando()` passa a valer o gesto, que é o que o gênero
+   inteiro faz.
+
+   Fontes e citações literais em docs/vr/referencia-empunhadura-recarga.md §1.1,
+   §1.2, §1.3 e §4.1.
+   ================================================================ */
+export const EMPUNHADURA_MODOS = ['apertar', 'manter'];
+
+/* Quanto tempo o grip precisa ficar apertado para a MIRA ASSISTIDA acender.
+   Não é zero de propósito: o mesmo botão empunha, e empunhar é um toque. */
+export const MIRA_ASSISTIDA_MS = 300;
+
+/* A MÁQUINA DA EMPUNHADURA, isolada porque é o que decide se o jogador está
+   com a arma na mão — e porque um `if` disso espalhado pelo `ler()` seria
+   impossível de conferir sem headset. `apertar` implementa o Sticky do XRI ao
+   pé da letra (solta na SEGUNDA soltura, não na segunda apertada): um toque
+   engata, e quem prefere segurar pode segurar e soltar, que também solta. */
+export function criarEmpunhadura(modo = 'apertar') {
+  let atual = EMPUNHADURA_MODOS.includes(modo) ? modo : 'apertar';
+  /* NASCE EMPUNHADA, e isso não é detalhe: a arma sempre esteve na mão neste
+     jogo, e um porte que começa com o jogador desarmado troca um defeito por
+     outro pior. `solturas = 1` é o que faz UM clique valer UM alternar — sem
+     ele o estado inicial (engatado sem nenhuma apertada antes) precisaria de
+     dois cliques para soltar, e o primeiro clique do jogador não faria nada
+     visível, que é literalmente a queixa que este trabalho veio consertar. */
+  let engatado = true;
+  let apertadoAntes = false;
+  let solturas = 1;         // desde o engate (só o modo `apertar` conta)
+
+  function passo(apertado) {
+    const antes = engatado;
+    if (atual === 'manter') {
+      engatado = !!apertado;
+    } else {
+      if (apertado && !apertadoAntes) {
+        // borda de subida: engata na hora ("starts on the frame the input is pressed")
+        if (!engatado) { engatado = true; solturas = 0; }
+      } else if (!apertado && apertadoAntes && engatado) {
+        // "remains engaged until the SECOND time the input is released"
+        solturas += 1;
+        if (solturas >= 2) { engatado = false; solturas = 0; }
+      }
+    }
+    apertadoAntes = !!apertado;
+    return { engatado, evento: engatado === antes ? null : (engatado ? 'pegou' : 'soltou') };
+  }
+
+  /* Controle sumindo NÃO pode soltar a arma. Perder o rastreamento por um frame
+     (mão fora do campo das câmeras, controle dormindo) é comum, e largar a arma
+     por causa disso é perder a partida por defeito de hardware. O estado é
+     CONGELADO: volta exatamente como estava quando a mão reaparecer. */
+  function semControle() {
+    apertadoAntes = false;
+    return { engatado, evento: null };
+  }
+
+  return {
+    passo, semControle,
+    get engatado() { return engatado; },
+    get modo() { return atual; },
+    set modo(v) {
+      if (!EMPUNHADURA_MODOS.includes(v) || v === atual) return;
+      atual = v;
+      /* Trocar de modo com a arma na mão não pode DERRUBAR a arma: em `manter`
+         o estado passa a valer o botão no próximo frame, e o botão está solto.
+         Então a troca preserva o engate e zera só a contagem. */
+      solturas = 0; apertadoAntes = false;
+    },
+    /* Sair da sessão com o botão apertado: a próxima sessão nasce empunhando
+       (é o estado que o jogador espera ao voltar), sem uma soltura fantasma
+       pendurada da sessão anterior. */
+    reset(empunhando = true) { engatado = !!empunhando; solturas = engatado ? 1 : 0; apertadoAntes = false; },
+  };
+}
+
 export const DEADZONE = 0.18;      // acima do repouso típico (~0,1) com folga
 export const SNAP_RAD = Math.PI / 4;   // 45°: o passo padrão de conforto
 const SNAP_ON = 0.7;               // inclinada que dispara o passo
@@ -200,11 +312,19 @@ export function criarRadialXR() {
   return { passo, ler: fontes => passo(maoDe(fontes, 'left')) };
 }
 
-export function criarEntradaXR() {
+export function criarEntradaXR({
+  empunhadura = 'apertar',
+  miraAssistida = false,
+  agora = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+} = {}) {
   let girarArmado = true;   // rearma quando o analógico volta pro centro
   let gatilhoAntes = false; // pra separar APERTAR de ESTAR SEGURANDO
   let trocaAntes = false;   // idem pra troca de arma: ciclar em rajada é inútil
   const radial = criarRadialXR();   // seletor dos quatro verbos que não têm botão
+  const empunha = criarEmpunhadura(empunhadura);
+  let assistida = !!miraAssistida;
+  let gripDesde = 0;        // quando o grip direito começou a ser mantido
+  let apoioBotao = false;   // grip ESQUERDO: a mão de apoio na arma
   /* REARME DA LOCOMOÇÃO. O analógico que escolhe a fatia é o mesmo de andar, e
      o jogador solta o gatilho com o polegar AINDA na direção que escolheu. Sem
      este rearme ele confirma "granada" e sai correndo para a frente no mesmo
@@ -215,10 +335,26 @@ export function criarEntradaXR() {
   function ler(fontes) {
     const out = {
       andar: { x: 0, y: 0 },
+      /* `girar` NÃO É AUTORIDADE, e fiar nele é um defeito esperando acontecer.
+         Quem gira a vista é js/xr/xrturn.js, que lê as fontes direto e é o
+         único que conhece o modo `desligado` das preferências e a suspensão do
+         giro enquanto o radial está aberto. Este campo é o cálculo VELHO, que
+         sobrevive só porque `test/xr-input.test.js` o cobre em 14 asserções —
+         arquivo que não é meu. Ligar `cmd.girar` no game.js contornaria as
+         DUAS proteções de uma vez: o jogador que desligou o giro giraria, e
+         escolher uma fatia do radial daria um passo de 45° de brinde.
+         RECOMENDAÇÃO: apagar o campo e as asserções na MESMA mudança, por quem
+         é dono daquele teste. Até lá, ninguém deve ler isto. */
       girar: 0,
       atirar: false, atirarAgora: false,
       mirar: false, pular: false, agachar: false, recarregar: false, usar: false,
       correr: false, trocarArma: false, agarrar: false,
+      /* SEGURAR A ARMA. `empunhar` é o ESTADO (a arma está na mão?) e
+         `empunharEvento` é a BORDA ('pegou' / 'soltou' / null), que é o que o
+         háptico e o som precisam — emitir por estado a 72 Hz seria vibração
+         contínua, que é o "avoid long or overlapping" da Meta. */
+      empunhar: true, empunharEvento: null,
+      apoio: false,
       radial: { aberto: false, fatia: -1, code: null, rotulo: null, confirmou: null },
     };
     const lista = comoLista(fontes);
@@ -276,6 +412,14 @@ export function criarEntradaXR() {
          (js/xr/xrinteract.js): aqui sai o ESTADO, porque o agarre à distância
          precisa saber quanto tempo o grip está sendo mantido. */
       out.agarrar = botao(esquerda, 1);
+      /* O MESMO BOTÃO, LIDO POR OUTRO DONO. O grip esquerdo é contextual
+         (referência §4.3): apoiar a arma, buscar o pente, ou agarrar o mundo.
+         Quem sabe DISTINGUIR os três é quem tem a geometria (js/xr/xrweapon.js
+         mede a distância da mão à âncora do guarda-mão); aqui sai só o estado
+         cru, com nome próprio, para que o módulo da arma não precise reabrir a
+         semântica de `agarrar` — que é do js/xr/xrinteract.js e não é minha. */
+      out.apoio = out.agarrar;
+      apoioBotao = out.apoio;
       out.agachar = botao(esquerda, 3);
       /* CORRER NO BATENTE — e a fatia do radial É o batente, então correr entra
          na mesma suspensão do andar. Sem isso, escolher qualquer fatia mandava
@@ -302,11 +446,32 @@ export function criarEntradaXR() {
         girarArmado = true;
       }
       out.atirar = botao(direita, 0);
-      out.mirar = botao(direita, 1);
       out.pular = botao(direita, 4);
+
+      /* O GRIP DIREITO SEGURA A ARMA (ver o bloco no topo do arquivo). */
+      const grip = botao(direita, 1);
+      const r = empunha.passo(grip);
+      out.empunhar = r.engatado;
+      out.empunharEvento = r.evento;
+
+      /* MIRA ASSISTIDA — desligada por padrão, e mesmo ligada NÃO move a arma.
+         O tempo mínimo separa "empunhar" (um toque) de "mirar" (manter), para
+         que o mesmo botão possa fazer as duas coisas sem ambiguidade. */
+      if (grip) { if (!gripDesde) gripDesde = agora(); } else gripDesde = 0;
+      out.mirar = assistida && grip && gripDesde > 0 && (agora() - gripDesde) >= MIRA_ASSISTIDA_MS;
     } else {
       girarArmado = true;   // controle sumiu: não deixa o giro travado armado errado
+      /* CONTROLE SUMINDO NÃO LARGA A ARMA. Ver `semControle()`: o estado é
+         congelado, não zerado. Largar a arma porque a mão saiu do campo das
+         câmeras por um frame é perder a partida por defeito de hardware — e
+         `out.mirar` cai porque o botão deixou de ser observável, o que é o
+         oposto: continuar mirando sem controle seria travar o espalhamento. */
+      const r = empunha.semControle();
+      out.empunhar = r.engatado;
+      out.empunharEvento = null;
+      gripDesde = 0;
     }
+    if (!esquerda) { apoioBotao = false; out.apoio = false; }
 
     /* APERTAR não é SEGURAR. Arma automática lê o estado contínuo; a
        semi-automática lê o CLIQUE (`gun.auto ? mouse.shooting : mouse.clicked`
@@ -328,5 +493,28 @@ export function criarEntradaXR() {
     return out;
   }
 
-  return { ler, get girarArmado() { return girarArmado; } };
+  /* OS DOIS ESTADOS QUE O MÓDULO DA ARMA PRECISA, LEGÍVEIS DE FORA.
+
+     Por que getter e não parâmetro: `XRArma.aplicar()` é chamado no fim do
+     frame do game.js, num escopo em que o `cmd` deste `ler()` já saiu de vista.
+     Passar o `cmd` até lá obrigaria uma variável de módulo no game.js — o
+     arquivo mais quente do repo — só para carregar dois booleanos. O dono do
+     estado é este módulo; quem quiser que pergunte. */
+  return {
+    ler,
+    get girarArmado() { return girarArmado; },
+    empunhando: () => empunha.engatado,
+    apoiando: () => apoioBotao,
+    /* Sessão nova nasce com a arma na mão: é o que o jogador espera ao voltar,
+       e é o comportamento de hoje (a arma era solda). Chamado pelo `onExit`. */
+    reset: () => { empunha.reset(true); gripDesde = 0; apoioBotao = false; },
+    /* Preferências do menu de VR. `apertar` (sticky) é o padrão; `manter` é a
+       alternativa que a XAG 107 e o Game Accessibility Guidelines pedem. */
+    prefs: {
+      get empunhadura() { return empunha.modo; },
+      set empunhadura(v) { empunha.modo = v; },
+      get miraAssistida() { return assistida; },
+      set miraAssistida(v) { assistida = !!v; },
+    },
+  };
 }

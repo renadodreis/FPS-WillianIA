@@ -75,7 +75,10 @@ export const PRIORIDADE = {
   'recarga-pronta': 16,
   recarga: 12,
   pegar: 10,
+  coldre: 10,
+  vazio: 9,
   'ui-toque': 6,
+  mira: 4,
   'ui-foco': 2,
 };
 
@@ -162,6 +165,26 @@ export function planoDePulso(evento, ctx = {}) {
       return [pulso('left', i, ms, 'dano'), pulso('right', i, ms, 'dano')];
     }
     case 'pegar': return [pulso(mao, 0.45, 40, 'pegar')];
+    /* COLDREAR é o gesto do Body Holsters do Alyx: "move your hand to one of the
+       seven holster slots on your body until you feel a vibration". Mais longo e
+       mais forte que `pegar` porque guardar a arma é a ação com consequência —
+       o jogador precisa saber que ficou de mãos vazias sem tirar os olhos do
+       inimigo. */
+    case 'coldre': return [pulso(mao, 0.55, 55, 'coldre')];
+    /* GATILHO SECO. Fraco e curtíssimo DE PROPÓSITO, e o número tem de ficar
+       abaixo do pulso de tiro mais leve do arsenal: `tiro` sai em
+       0,25 + peso·1,25, ou seja NUNCA abaixo de 0,25 (js/hitfeel-core.js
+       garante `peso ≥ TRAUMA_MIN > 0`). Confundir "acabou a munição" com
+       "saiu tiro" é o pior erro que este vocabulário pode cometer — o jogador
+       continuaria puxando o gatilho achando que está atirando. */
+    case 'vazio': return [pulso(mao, 0.20, 12, 'vazio')];
+    /* ENTRAR NA JANELA DE MIRA. A Meta manda "avoid long or overlapping haptic
+       effects", e a mira entra e sai da janela dezenas de vezes por minuto —
+       por isso este é o pulso mais fraco e mais curto do vocabulário inteiro,
+       e quem chama (js/xr/xrweapon.js) só o emite na BORDA de entrada, com
+       carência. Sozinho ele seria ruído; com a affordance visual junto ele é o
+       "synchronize multimodal feedback" da mesma página. */
+    case 'mira': return [pulso(mao, 0.18, 12, 'mira')];
     case 'ui-foco': return [pulso(mao, 0.15, 10, 'ui-foco')];
     case 'ui-toque': return [pulso(mao, 0.50, 18, 'ui-toque')];
     default: return [];

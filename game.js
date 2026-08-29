@@ -423,7 +423,7 @@ const XR = createXrBoot({ THREE, renderer, scene, camera,
      pausado e sem nenhum caminho de fechar. E o gatilho era a própria pausa
      por perda de foco: tirar o aparelho abria o painel sozinho. */
   onEnter: () => { XRAndar.aplicar(); aoMudarSessaoXr(); },
-  onExit: () => { XRAndar.restaurar(); XRArma.exit(); XRInterage.exit(); XRUI.exit(); XRHud.exit(); aoMudarSessaoXr(); } });
+  onExit: () => { XRAndar.restaurar(); XRArma.exit(); XRInterage.exit(); XRUI.exit(); XRHud.exit(); entradaXR.reset(); aoMudarSessaoXr(); } });
 /* FOVEAÇÃO: o three nasce em 1.0 — o MÁXIMO ("Set default foveation to
    maximum", WebXRManager.js:46). Foveação máxima manda o compositor renderizar
    a PERIFERIA em resolução baixa; no Quest isso é um borrão que acompanha a
@@ -2224,7 +2224,9 @@ function updateAmmoHUD() {
   ui.weaponName.textContent = gun.name;
 }
 function reloadBlocked() { // mesma condição do gate de tiro: morto/dirigindo/pausado/nave/cinemática
-  return player.dead || state.driving || state.paused || window.__BR_freeze || state.cinematic;
+  return player.dead || state.driving || state.paused || window.__BR_freeze || state.cinematic
+    // arma no coldre não recarrega: não há mão na arma para começar nem para terminar
+    || (XR.presenting && !XRArma.empunhada());
 }
 function startReload(t) {
   if (reloadBlocked()) return; // R dirigindo/morto não toca SFX nem recarrega
@@ -2251,6 +2253,12 @@ function finishReload() {
 // avança a recarga a cada frame: ESCOPETA carrega 1 cartucho por vez (cancelável
 // mantendo o parcial); as demais enchem o pente de uma vez no fim.
 function updateReload(t) {
+  /* GUARDAR A ARMA NO MEIO DA RECARGA ABORTA A RECARGA — e não come munição
+     nenhuma, porque o débito de `reserve` só acontece em `finishReload`. Não
+     basta BLOQUEAR (o `reloadBlocked` acima já faz isso): sem zerar a bandeira
+     a recarga ficaria pendurada e retomaria de onde parou ao sacar de novo, e
+     retomar esconde do jogador quanto falta. Ele recomeça, e sabe o que espera. */
+  if (gun.reloading && XR.presenting && !XRArma.empunhada()) { gun.reloading = false; return; }
   if (!gun.reloading || reloadBlocked()) return;
   if (gun.parts.pump) {
     if (t >= (gun.nextShellT || Infinity) && gun.mag < gun.magSize && gun.reserve > 0) {
@@ -2715,7 +2723,11 @@ function shootUpdate(dt, t) {
         gun.lastShot = t;
         fire(t);
       } else if (t - gun.lastShot > 0.25) {
-        gun.lastShot = t; SFX.empty(); startReload(t);
+        /* GATILHO SECO. Zero `fire()`, zero mensagem ao servidor — e um pulso
+           fraco e curto, abaixo do pulso de tiro mais leve do arsenal, porque
+           confundir "acabou a munição" com "saiu tiro" faria o jogador
+           continuar puxando o gatilho achando que está atirando. */
+        gun.lastShot = t; SFX.empty(); XRTato.emitir('vazio', { mao: 'right' }); startReload(t);
       }
     }
   }
@@ -3722,7 +3734,12 @@ function tick(forceDt) {
           if (!arsenal[alvo].locked) { switchWeapon(alvo); break; }
         }
       }
-      teclaXR('KeyR', cmd.recarregar);
+      /* TRÊS CAMINHOS, UMA TECLA. Botão (Y esquerdo) e GESTO (a mão de apoio
+         indo ao peito buscar o pente) chegam pelo MESMO `KeyR` do teclado, e
+         por isso gastam o mesmo `gun.reloadTime`: num jogo multiplayer, dar
+         vantagem a quem alcança o gesto seria transformar acessibilidade em
+         desvantagem competitiva, que é o oposto do que a XAG 107 pede. */
+      teclaXR('KeyR', cmd.recarregar || XRArma.pedeRecarga());
       teclaXR('KeyE', cmd.usar);
       /* OS QUATRO VERBOS DO RADIAL (js/xr/xrinput.js). Granada, kit médico,
          comer e trocar acessório de mira não tinham botão nenhum no Touch — o
@@ -3882,7 +3899,16 @@ function tick(forceDt) {
   if (xrOn) XRArma.aplicar({
     gun, weaponRoot, punho: XR.punho('right'), raio: XR.mao('right'),
     apoio: XR.punho('left') || XR.mao('left'),
-    cabeca: camera.getWorldPosition(_xrCabeca), dt,
+    cabeca: camera.getWorldPosition(_xrCabeca), dt, t,
+    /* O YAW DA VISTA, e não `camera.quaternion`: o coldre e a zona do peito
+       moram no espaço do CORPO, e em XR a pose da câmera é relativa ao rig —
+       ler direto dá erro de até 180°. */
+    vista: vistaMundo(),
+    /* SEGURAR e APOIAR vêm da entrada, por getter: o `cmd` deste frame já saiu
+       de escopo aqui, e carregá-lo até este ponto pediria uma variável de
+       módulo no arquivo mais quente do repo só para dois booleanos. */
+    empunhar: entradaXR.empunhando(), apoioBotao: entradaXR.apoiando(),
+    tato: XRTato,
     oculto: state.driving || state.flying,
   });
   /* E O CORPO DEPOIS DA ARMA, que é o outro lado do mesmo contrato: em XR a
@@ -4571,6 +4597,10 @@ window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   XRArma, XRInterage, XRUI, XRHud, XRTato, XRTaxa, XRAndar,
+  /* QA + menu de VR: as preferências de empunhadura (`apertar`/`manter`) e de
+     mira assistida. Sem isto não há como um teste — nem o jogador — trocar o
+     modo que a Xbox Accessibility Guideline 107 exige que seja trocável. */
+  entradaXR,
   MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
   // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como
   // verificar de fora que a troca de arma do headset chegou a trocar alguma coisa.
