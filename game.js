@@ -3865,6 +3865,15 @@ function tick(forceDt) {
        Sem isto os dois emitem, e quem escuta `keydown` recebe o verbo duas
        vezes — usar dois kits médicos com um gesto só. */
     radial: null,
+    /* A MÃO DE APOIO NÃO AGARRA O MUNDO. O grip esquerdo apoia a arma E
+       agarra, e sem esta porta firmar a arma no guarda-mão por `HOLD_LONGE`
+       com a mão apontada para um baú ABRE o baú no meio do tiroteio.
+
+       O valor é do frame ANTERIOR, e isso é intencional: `XRArma.aplicar`
+       roda depois desta chamada, e mover a interação para depois dela
+       mexeria numa ordem de frame que virou contrato nesta rodada. Um frame
+       de atraso (13,9 ms) contra um gesto de 300 ms não muda a decisão. */
+    apoiando: XRArma.duasMaos(),
   });
   Interact.update(dt, t);
   if (Cannon) Cannon.update(dt, t);

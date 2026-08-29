@@ -648,7 +648,8 @@ export function createXrInteract({
   }
 
   /* ---------------------------------------------------------------- */
-  function update({ maoRaio, maoPunho, fontes, usar = false, dt = 0, radial: radialEst } = {}) {
+  function update({ maoRaio, maoPunho, fontes, usar = false, dt = 0, radial: radialEst,
+    apoiando = false } = {}) {
     const mao = maoPunho || maoRaio;
     if (mao) {
       mao.updateWorldMatrix(true, false);
@@ -689,7 +690,27 @@ export function createXrInteract({
        pedindo, e pedir é o começo de qualquer vetor de trapaça. */
     const perto = alvoAtual && aCasca(alvoAtual) <= RAIO_AGARRE;
     let modo = null;
-    if (alvoAtual && alvoAtual.acionavel && grip) {
+    /* A MÃO QUE APOIA A ARMA NÃO AGARRA O MUNDO. O grip esquerdo tem três
+       trabalhos que disputam o mesmo botão — buscar o pente, apoiar a arma e
+       agarrar coisa —, e este módulo lê a empunhadura direto das fontes, sem
+       saber dos outros dois. Sem esta porta, firmar a arma no guarda-mão e
+       segurar por `HOLD_LONGE` com a mão apontada para um baú ABRE o baú no
+       meio do tiroteio: um agarre que dispara enquanto o jogador faz outra
+       coisa é o "comando de proximidade" que o critério D3 reprova, com outro
+       nome.
+
+       A porta fecha os DOIS caminhos, e isso não é excesso: o direto dispara
+       no primeiro frame do grip, então um bloqueio posto só no ramo de longe
+       deixaria passar justo o mais rápido — e a mão de apoio vive no
+       guarda-mão, que passa perto de tudo que o jogador contorna.
+
+       Ela não deixa resíduo: `apoiando` é lido por frame, então soltar o
+       guarda-mão devolve o agarre no aperto seguinte, sem precisar de um
+       aperto extra para destravar.
+
+       O parâmetro é OPCIONAL de propósito — quem chama sem ele se comporta
+       exatamente como antes. */
+    if (alvoAtual && alvoAtual.acionavel && grip && !apoiando) {
       if (perto) { if (bordaGrip) modo = 'direto'; }
       else if (alvoAtual.porMao && !agarrouNesteAperto &&
         (puxao(dt) >= FLICK_VEL || gripSeguraT >= HOLD_LONGE)) modo = 'distancia';
