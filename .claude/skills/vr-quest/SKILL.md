@@ -348,6 +348,15 @@ tempo é do aparelho.
   `CABECA_RAIO` (0,12) que faz a arma sumir de propósito. Resultado: ads
   0,000 e a conclusão errada de que a mira não funciona. Com o alvo no meio
   da janela (0,22 m), ads 1,000 no mesmo produto.
+- **Teleportar `dev.position` entre casos NÃO zera o acumulado do rig.** O salto
+  passa de `PASSO_HUMANO_MAX` e é DESCARTADO, mas o caso seguinte herda metros
+  de passo pendente — medido: `fora máx 0,5590 m` num caso que nunca encostou
+  em parede. Para reposicionar a cabeça entre casos, ela tem de voltar
+  **andando**, a pé e em campo aberto.
+- **`brTick` roda por `requestAnimationFrame` mesmo em partida SOLO**, e a fase
+  `SPECT` escreve `MP.player.pos` todo frame. Numa bancada que mata o jogador
+  duas vezes, isso teleportou o colisor **3873,7723 m num frame**. Blinde o
+  teste conferindo a fase e pondo guarda de salto por frame.
 - **`bootEmVR` já começa a partida** (`emJogo: true` por padrão). Quem mede o
   MENU passa `emJogo: false`. Uma sonda que esquece isso mede o jogo; uma que
   assume o contrário mede o menu e acha que o tiro não funciona.

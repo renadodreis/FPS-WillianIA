@@ -363,11 +363,45 @@ const clamp01 = v => Math.min(1, Math.max(0, v));
      separação: é o parapeito;
    · o SEGUNDO é o batente de distância, que fecha a tela AO chegar no teto de
      `js/xr/xrrig.js`. Ele não é vetado pela sonda de propósito: é ele que
-     garante que a vista só congela com a tela preta, inclusive debruçado. */
-function alvoDaCortina(separacaoM, sondaM, temSonda) {
+     garante que a vista só congela com a tela preta, inclusive debruçado.
+
+   ---------------------------------------------------------------
+   OS DOIS TERMOS COMEM DISTÂNCIAS DIFERENTES, e essa separação é a correção
+   desta rodada.
+
+   `separacaoM` é a separação cabeça↔corpo GEOMÉTRICA (`XR.separacao`, de
+   js/xr/xrrig.js): onde a cabeça está, ponto. `foraM` é a parcela dela que o
+   MUNDO RECUSOU (`XR.foraDoCorpo`) — e as duas só coincidem quando existe
+   alguém para recusar. Nos três estados em que o jogo não drena o passo
+   físico (morto, dirigindo, voando) NINGUÉM recusa nada: `foraM` fica em
+   0,0000 enquanto a cabeça anda para dentro do prédio. Medido pela validação
+   independente (§2.5 de docs/vr/validacao-4855d57.md): 0,9800 m de separação
+   com cortina 0,000, num jogo com outros jogadores.
+
+   Por isso:
+
+   · o termo `perto` — "a cabeça está dentro de sólido" — come a separação
+     GEOMÉTRICA. Ele é o que impede espiar-parede, e espiar-parede não
+     pergunta como a cabeça chegou lá. Quem o mantém honesto é a PORTA DA
+     SONDA, não a origem do número: cabeça no ar segue não escurecendo nada,
+     e é isso que separa debruçar-se da janela do carro de enfiar a cabeça no
+     prédio (a mesma faixa de separação, mundos diferentes);
+   · o termo `teto` continua comendo `foraM`, e tem de continuar: ele existe
+     para garantir que a vista só PARA DE RESPONDER com a tela preta, e quem
+     tem clamp — quem faz a vista parar — é `fora` (`FORA_TETO` de
+     js/xr/xrrig.js). O passo físico acumulado não tem teto nenhum: alimentar
+     este termo com a separação geométrica escureceria a tela de quem anda
+     1 m pelo quarto dirigindo em campo aberto, que é a vista respondendo
+     certo.
+
+   `foraM` default = `separacaoM` mantém idêntico o comportamento de quem
+   chama com um número só (os testes de unidade deste módulo e qualquer
+   chamador antigo): nesse caso os dois termos comem a mesma distância, que
+   era o desenho anterior. */
+function alvoDaCortina(separacaoM, sondaM, temSonda, foraM = separacaoM) {
   const porta = temSonda ? clamp01(sondaM / SONDA_ABRE) : 1;
   const perto = clamp01((separacaoM - FORA_MIN) / (FORA_MAX - FORA_MIN)) * porta;
-  const teto = clamp01((separacaoM - (FORA_TETO - TETO_RAMPA)) / TETO_RAMPA);
+  const teto = clamp01((foraM - (FORA_TETO - TETO_RAMPA)) / TETO_RAMPA);
   return Math.max(perto, teto);
 }
 
@@ -579,15 +613,22 @@ export function createXrComfort({ THREE, camera }) {
     uni.escuro.value = piscada;
   }
 
-  /* A CABEÇA ENTROU NO SÓLIDO — `metros` é a separação entre a cabeça e o
-     corpo do jogador que o mundo recusou (`foraDoCorpoM` de js/xr/xrrig.js).
+  /* A CABEÇA ENTROU NO SÓLIDO — `metros` é a separação cabeça↔corpo
+     GEOMÉTRICA, em metros (`XR.separacao`, de js/xr/xrrig.js): onde a cabeça
+     está em relação ao corpo, seja qual for o motivo.
+
+     `foraM` é a parcela dela que o MUNDO RECUSOU (`XR.foraDoCorpo`), e serve
+     só ao termo do TETO. Omitir `foraM` faz os dois termos comerem o mesmo
+     número, que é o desenho anterior — ver o cabeçalho de `alvoDaCortina`
+     para por que eles precisam ser dois.
 
      Chamado TODO FRAME, inclusive com a vinheta desligada no painel: ver o
      comentário de `soltar()`. Cria a malha se ela ainda não existir, porque o
      jogador pode ter desligado a vinheta antes de encostar na primeira
      parede — e aí não haveria nada para escurecer. */
-  function intrusao(dt, metros, sonda) {
+  function intrusao(dt, metros, sonda, foraM) {
     const m = Number.isFinite(metros) ? Math.max(0, metros) : 0;
+    const f = Number.isFinite(foraM) ? Math.max(0, foraM) : m;
     /* A SONDA pode vir como número (só a proximidade) ou como
        `{ m, x, z }` (proximidade + direção do sólido, em MUNDO). Ausente =
        não há consulta, e aí a cortina cai no comportamento por separação. */
@@ -599,7 +640,7 @@ export function createXrComfort({ THREE, camera }) {
       sx = Number.isFinite(sonda.x) ? sonda.x : 0;
       sz = Number.isFinite(sonda.z) ? sonda.z : 0;
     }
-    const alvo = alvoDaCortina(m, sondaM, temSonda);
+    const alvo = alvoDaCortina(m, sondaM, temSonda, f);
     const passoDt = Number.isFinite(dt) && dt > 0 ? dt : 0;
     /* FECHA NO MESMO FRAME, ABRE COM FREIO — e a assimetria é o conserto.
 

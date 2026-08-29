@@ -3162,12 +3162,20 @@ function resolverPassoSemFisicaXR() {
    direção dele). A fatia de 0,24 m centrada no olho é o que faz o `collide`
    ignorar parapeito — a linha `pos.y >= by1 - 0.12` dele.
 
-   SÓ RODA COM O MUNDO RECUSANDO PASSO (`foraDoCorpo >= 0,10 m`): abaixo disso a
+   SÓ RODA COM A CABEÇA JÁ SEPARADA DO CORPO (`>= 0,10 m`): abaixo disso a
    cortina é zero de qualquer jeito (ela só começa em 0,16 m), então a varredura
-   de paredes não acontece em jogo normal. */
+   de paredes não acontece em jogo normal — medido, 0,0000 m de separação nos
+   831 frames do passeio canônico de C2, e 0,00122 ms quando roda.
+
+   E A PORTA É O MÁXIMO ENTRE AS DUAS RÉGUAS, não `foraDoCorpo` sozinho.
+   `foraDoCorpo` é o que o mundo RECUSOU, e nos estados sem dreno (morto,
+   dirigindo, voando) ele fica em 0,0000 enquanto a cabeça anda metros para
+   dentro do prédio: a sonda nunca rodava, `temSonda` ficava falso, e sem
+   consulta de sólido a cortina não teria como distinguir debruçar de invadir.
+   Com o máximo, a consulta acontece sempre que há separação para explicar. */
 const _cabSondaXR = new THREE.Vector3();
 function sondaDeSolidoXR() {
-  if (!XR.presenting || XR.foraDoCorpo < 0.10) return undefined;
+  if (!XR.presenting || Math.max(XR.foraDoCorpo, XR.separacao) < 0.10) return undefined;
   XR.headWorldPosition(_cabSondaXR);
   const x0 = _cabSondaXR.x, z0 = _cabSondaXR.z;
   _cabSondaXR.y -= 0.12;
@@ -3732,7 +3740,25 @@ function tick(forceDt) {
        resolvido do lado certo: `consumirPasso` tem teto por frame e devolve o
        excedente ao acumulado, então o que ficou guardado escoa em alguns frames
        em vez de teleportar o colisor de uma vez. */
-    if (!state.driving && !state.flying && !player.dead) {
+    /* MORTO DRENA; DIRIGINDO E VOANDO NÃO — e os três motivos são medidos.
+
+       MORTO saiu daqui porque nada sobrescreve `player.pos` nesse estado: o
+       passo drenado FICA, e o corpo volta a andar debaixo da cabeça. Enquanto
+       ele estava nesta lista, 1 m de caminhada física dava colisor 0,0000 m,
+       separação 1,0000 m (teto de C2: 0,10) e cortina 0,000 — a mesma forma do
+       defeito que a rodada 17 consertou, sobrevivendo onde a correção não
+       chegou. Com a mudança: colisor 0,9800 m e separação 0,0000 m.
+
+       DIRIGINDO e VOANDO FICAM, e não por conservadorismo: `carCameraUpdate`
+       faz `player.pos.copy(Car.group.position)` e `Heli.update` faz
+       `player.pos.set(group.position…)` TODO FRAME, e os dois rodam DEPOIS de
+       `devolverRejeicaoXR()` no tick. O passo drenado seria apagado por eles
+       sem que a rejeição fosse vista sequer uma vez — passo saindo do
+       acumulado sem entrar em lugar nenhum, que é a versão errada nº 2 de
+       `consumirPasso` ("descartar o excedente → a cabeça era ARRASTADA de
+       volta"). Nesses dois quem responde é a CORTINA, que passa a entrar pela
+       separação GEOMÉTRICA (ver a chamada de `XR.conforto.intrusao`). */
+    if (!state.driving && !state.flying) {
       XR.consumirPasso(_passoXR);
       player.pos.x += _passoXR.x;
       player.pos.z += _passoXR.z;
@@ -3748,8 +3774,14 @@ function tick(forceDt) {
          parede na frente do passo. A lista tem de casar com o guarda do
          `playerUpdate` (e com o `return` do ramo de menu/pausa, que sai do
          tick antes dele): quem sair daqui atravessa parede andando de
-         verdade. Ver `resolverPassoSemFisicaXR`. */
-      if (!state.started || state.paused || window.__BR_freeze || state.cinematic) {
+         verdade. Ver `resolverPassoSemFisicaXR`.
+         `player.dead` entra aqui pelo mesmo motivo que entrou no guarda do
+         `playerUpdate`: morto o jogo não simula o corpo, então sem esta linha
+         o colisor caminharia através de prédio. Medido: com ela, 1,68 m de
+         caminhada física contra parede param o colisor em 0,7800 m e a cortina
+         fecha em 1,000; sem ela, colisor 1,6800 m e cortina 0,000. */
+      if (!state.started || state.paused || window.__BR_freeze || state.cinematic
+        || player.dead) {
         resolverPassoSemFisicaXR();
       }
     } else _alvoPassoXR.pedido = 0;
@@ -3792,7 +3824,16 @@ function tick(forceDt) {
        seria espiar por parede). O colisor agora PARA na parede (js/xr/xrrig.js);
        sem este escurecimento o jogador ficaria com a vista do lado de lá sem
        sinal nenhum. */
-    XR.conforto.intrusao(dt, XR.foraDoCorpo, sondaDeSolidoXR());
+    /* A CORTINA COME A SEPARAÇÃO GEOMÉTRICA, e `foraDoCorpo` fica só com o
+       termo do TETO. `foraDoCorpo` é o que o MUNDO RECUSOU, e existe separação
+       que o mundo nunca viu: dirigindo e voando ninguém recusa nada, e a
+       cabeça andava para dentro do prédio com a cortina em 0,000 (medido:
+       2,4600 m de separação dirigindo, 3,5000 m voando). Quem impede a troca
+       de um defeito por outro pior continua sendo a SONDA de sólido — cabeça
+       no ar não escurece nada, e é isso que separa debruçar-se da janela do
+       carro de enfiar a cabeça no prédio. Ver `alvoDaCortina` em
+       js/xr/xrcomfort.js. */
+    XR.conforto.intrusao(dt, XR.separacao, sondaDeSolidoXR(), XR.foraDoCorpo);
     /* PAINEL ABERTO NÃO JOGA. Sem esta guarda, o gatilho que escolhe "SAIR DA
        PARTIDA" dispara um tiro no mesmo frame, e o analógico do menu anda com o
        jogador no mundo. Soltar as teclas presas é parte do acordo: sair da
