@@ -58,6 +58,52 @@
    compõe `rig(N)` com `pose(N−1)` e os dois erros se cancelam
    exatamente — já aconteceu nesta base.
 
+   ================================================================
+   A REPRODUÇÃO — QUAL MUTANTE DE PRODUTO MATA CADA ASSERÇÃO, HOJE.
+
+   Reprodução de laudo envelhece junto com a arquitetura, e reprodução que não
+   reproduz é pior que reprodução nenhuma: a rodada seguinte tenta, não
+   consegue, e conclui a coisa errada. Estes números foram medidos NESTA
+   bancada, na worktree em `4855d57`, máquina ociosa (load ~0,5).
+
+   | asserção | mutante de PRODUTO | intacto → mutado |
+   |---|---|---|
+   | `colisor >= passo × 0,96` (a pé) | dreno desligado¹ | 0,9800 → **0,0000 m** |
+   | `sepMax <= 0,10` (a pé) | `place()` morto² | 0,0000 → **397,0041 m** |
+   | `colisor`/`sepMax` (painel) | defeito ORIGINAL³ | 0,9800 → **0,0000 m** / 0,0000 → **1,0000 m** |
+   | `salto <= 0,02` ao fechar | defeito ORIGINAL³ | 0,0000 → **1,0000 m/frame** |
+   | `colisor`/`sepMax`/`salto` (cinemática) | defeito ORIGINAL³ | 0,9800 → **0,0000 m** · 0,0000 → **1,0000 m** · 0,0000 → **1,0000 m/frame** |
+   | `atrasoFrames < 0,5` (contrato de frame) | `rastrear()` fora do `sync()`⁴ | 0,0000 → **1,0000 frame** (0,0200 m) |
+   | `erroChaoMax <= 0,10` (encosta) | cota não reassentada⁵ | 0,0000 → **0,7009 m** |
+   | `saltoY <= 0,02` (encosta) | os dois `XR.place()` do game.js⁶ | 0,0000 → **0,7009 m/frame** |
+   | `colisor < passo × 0,9` (parede) | sem física nos estados sem tick⁷ | 0,5600 → **0,9800 m** de 0,9800 m |
+   | `foraMax > 0,15` (parede) | defeito ORIGINAL³ | 0,4200 → **0,0000 m** |
+   | `escuroMax > 0,9` (parede) | cortina de intrusão cega⁸ | 1,000 → **0,000** |
+
+   ¹ `XR.consumirPasso(_passoXR);` do `game.js` → `_passoXR.x = 0; _passoXR.z = 0;`
+   ² `js/xr/xrrig.js`, primeira linha de `place()` → `if (true) return;`
+   ³ `git checkout 18a231e -- game.js js/xr/xrrig.js js/xr/xrboot.js`. Ao
+     desfazer, use `git checkout HEAD -- …`: `git checkout <commit> -- <caminho>`
+     escreve no ÍNDICE também, e um `git checkout -- <caminho>` depois disso
+     restaura do índice sujo e deixa o defeito na árvore.
+   ⁴ `js/xr/xrboot.js`, `sync()`: `rig.atualizarPose(); rig.rastrear();` →
+     `rig.atualizarPose();`. Antes deste arquivo ganhar o caso do contrato de
+     frame, este mutante deixava os 14 casos da frente VERDES.
+   ⁵ `game.js`, `resolverPassoSemFisicaXR`: `player.pos.y = gy;` desligado.
+   ⁶ as duas linhas `if (xrOn) XR.place(…)` que a rodada 17 acrescentou aos
+     ramos do menu/pausa e da cinemática.
+   ⁷ `game.js`: a chamada de `resolverPassoSemFisicaXR();` arrancada. Fecha a
+     única asserção que o laudo `validacao-4855d57.md` §4.8 registrou sem
+     mutante conhecido — o corpo atravessa a parede inteira, 0,9800 m de
+     0,9800 m de passo.
+   ⁸ `game.js`: `XR.conforto.intrusao(dt, XR.foraDoCorpo, sondaDeSolidoXR())` →
+     `XR.conforto.intrusao(dt, 0, undefined)`.
+
+   OS DOIS CASOS DE ENCOSTA FICAM VERDES COM O DEFEITO ORIGINAL (`erroChaoMax`
+   0,0000 e `saltoY` 0,0000, porque com o colisor congelado o chão sob ele nunca
+   muda). Eles guardam a regressão que a CORREÇÃO pode criar, não o defeito que
+   ela consertou — está declarado para ninguém confundir.
+
    PORTA 3740 (só deste arquivo).
    ================================================================ */
 'use strict';
@@ -191,7 +237,7 @@ async function instalarSonda() {
        vier depois de `depois()` tem a cabeça PARADA, e é lá que o salto é
        medido. */
     async caminhada({ degrau, degraus, esperaMs = 20, antes = null, depois = null,
-      assentaMs = 500, fechaMs = 700 }) {
+      assentaMs = 500, fechaMs = 700, pausaInicialMs = 0 }) {
       const A = window.__A, dev = window.__xrEmulado;
       A.solta();
       dev.position.set(0, 1.7, 0);
@@ -199,6 +245,17 @@ async function instalarSonda() {
       if (antes) antes();
       await A.espera(400);
       S.tr.length = 0; S.frames = 0; S.on = true;
+      /* FRAMES PARADOS DENTRO DA JANELA, e eles não são enfeite: a dívida de
+         frame (ver `atrasoM`) é uma diferença ABSOLUTA entre duas réguas de
+         origens diferentes — a pose do headset no quarto e o colisor no mundo.
+         O zero comum entre as duas só existe num instante em que sabemos que
+         não há dívida, e esse instante é a cabeça PARADA. Sem esses frames a
+         referência seria o primeiro frame da caminhada, que já carrega o
+         atraso, e a subtração o cancelaria: foi exatamente isso que fez o
+         colisor publicar 1,0000 m para 0,9800 m de passo sob o mutante em vez
+         de publicar a dívida. */
+      if (pausaInicialMs) await A.espera(pausaInicialMs);
+      const iRef = Math.max(0, S.tr.length - 1);
       for (let i = 1; i <= degraus; i++) {
         dev.position.set(i * degrau, 1.7, 0);
         await A.espera(esperaMs);
@@ -230,15 +287,37 @@ async function instalarSonda() {
         const dy = Math.abs(fecha[i].ey - fecha[i - 1].ey);
         if (dy > saltoY) saltoY = dy;
       }
+      /* A DÍVIDA DE FRAME — quanto a cabeça ficou à frente do corpo em relação
+         ao instante parado, com a régua independente de um lado e o colisor do
+         outro. Ela é a assinatura de QUANDO o passo é medido, não de QUANTO: um
+         produto que mede o passo tarde no tick (dentro de quem posiciona, em
+         vez de no contrato de frame) entrega ao dreno o passo do frame ANTERIOR,
+         e o corpo caminha o metro inteiro atrasado de um frame o tempo todo. */
+      let atrasoM = 0;
+      for (let i = iRef + 1; i < iCorte; i++) {
+        const dv = d2(S.tr[iRef], S.tr[i], 'hx', 'hz') - d2(S.tr[iRef], S.tr[i], 'px', 'pz');
+        if (dv > atrasoM) atrasoM = dv;
+      }
+      const maiorPasso = maiorDelta(anda, 'hx', 'hz');
+      /* quanto a cabeça andou entre o primeiro frame da janela e a referência:
+         zero é a condição para a referência valer como zero comum */
+      const mexeuAntes = d2(S.tr[0], S.tr[iRef], 'hx', 'hz');
       return {
         frames: S.frames, n, iCorte,
+        iRef, framesParado: iRef, mexeuAntes,
+        atrasoM,
+        /* A DÍVIDA EM FRAMES, que é o número que não depende da velocidade da
+           bancada nem da taxa de quadros da máquina: dívida dividida pelo maior
+           passo de um frame. Zero = o corpo absorve no MESMO frame; 1 = um
+           frame inteiro de atraso. */
+        atrasoFrames: maiorPasso > 1e-9 ? atrasoM / maiorPasso : 0,
         passo: d2(a0, a1, 'hx', 'hz'),
         vista: d2(a0, a1, 'ex', 'ez'),
         colisor: d2(a0, a1, 'px', 'pz'),
         sepIni: a0.sep,
         sepMax: Math.max(...anda.map(t => t.sep)),
         sepFim: a1.sep,
-        maiorDeltaPose: maiorDelta(anda, 'hx', 'hz'),
+        maiorDeltaPose: maiorPasso,
         salto, saltoI, saltoY,
         saltoFrames: fecha.length,
         /* quanto a cota do colisor divergiu do terreno sob ele durante a
@@ -371,6 +450,111 @@ describe('o corpo segue a cabeça em TODOS os estados (C2/A6, sessão imersiva r
       assert.ok(r.salto <= SALTO_TETO,
         `ao SAIR da cinemática a vista andou ${r.salto.toFixed(4)} m num frame com a cabeça imóvel`);
     });
+
+    /* ================================================================
+       O CONTRATO DE FRAME — MEDIR O PASSO É OBRIGAÇÃO DE TODO FRAME, E NÃO
+       TAREFA DE QUEM POSICIONA.
+
+       POR QUE ESTE CASO EXISTE. A correção da rodada 17 tem DUAS linhas: o
+       `rig.rastrear()` que o `sync()` de js/xr/xrboot.js passou a chamar todo
+       frame, e os dois `XR.place()` que o `game.js` ganhou nos ramos do
+       menu/pausa e da cinemática. A validação independente arrancou SÓ a
+       primeira e os 14 casos da frente continuaram VERDES (§2.2 de
+       docs/vr/validacao-4855d57.md): quem segurava tudo era o `place()`, e a
+       linha que a mensagem do commit vende como *a* causa não tinha guarda
+       nenhum.
+
+       O QUE MUDA SEM ELA, e é a única coisa que muda: com `rastrear()` fora do
+       `sync()`, a marca `rastreado` de js/xr/xrrig.js nunca acende e quem passa
+       a medir o passo é o `place()` — que roda TARDE no tick. O dreno
+       (`XR.consumirPasso`, game.js) roda ANTES dele. Resultado: o corpo recebe
+       em cada frame o passo do frame ANTERIOR e caminha o metro inteiro um
+       frame atrás da cabeça. Medido: dívida 0,0200 m, que é exatamente um
+       degrau da bancada — 1,0000 frame de atraso.
+
+       POR QUE OS OUTROS CASOS NÃO VEEM ISSO. O teto de separação de C2 é
+       0,10 m (é critério de CONFORTO, e 2 cm passam nele com folga — e não é
+       para ele apertar); e o deslocamento total é medido dentro de uma janela,
+       onde o atraso se cancela na subtração: por isso o colisor publica
+       1,0000 m para 0,9800 m de passo em vez de publicar a dívida. A dívida só
+       aparece contra uma referência TOMADA COM A CABEÇA PARADA, que é o que
+       `pausaInicialMs` põe dentro da janela.
+
+       A RÉGUA É INDEPENDENTE dos dois lados: a pose que este arquivo escreve
+       no headset emulado (`dev.position`) contra `player.pos`. Nenhuma das
+       duas passa por `js/xr/xrrig.js`, e nenhuma é a vista — `sep`, que é
+       vista contra colisor, lê 0,0000 quando as duas congelam juntas (é o que
+       a correção proibida faz), e por isso não serve sozinha.
+
+       O QUE ESTE CASO NÃO PROVA, e não vou vender o que não mede: ele não
+       exercita um estado FUTURO que deixe de chamar `place()` — hoje os cinco
+       estados do jogo chamam. O que ele mede é a consequência OBSERVÁVEL de a
+       medição estar acoplada a quem posiciona, que é a razão de o contrato
+       existir. O dia em que alguém acoplar de novo, este caso fica vermelho
+       antes de o estado novo nascer.
+       ================================================================ */
+    it('CONTRATO DE FRAME: o corpo absorve o passo no MESMO frame, e não no seguinte',
+      async () => {
+        /* Os dois ramos de `place()` do game.js, para o caso não depender de um
+           só: a pé (dentro do `applyFpsCamera`) e com o painel aberto (a linha
+           do ramo de menu/pausa). */
+        const casos = [];
+        for (const nome of ['A PÉ', 'PAINEL']) {
+          const r = await h.play(([d, n, cp]) => window.__PC.caminhada({
+            degrau: d, degraus: n, pausaInicialMs: 200,
+            antes: cp ? () => window.__PC.ligarEstado('painel', true) : null,
+            depois: cp ? () => window.__PC.ligarEstado('painel', false) : null,
+          }), [DEGRAU, DEGRAUS, nome === 'PAINEL']);
+          casos.push([nome, r]);
+        }
+        for (const [nome, r] of casos) {
+          assert.ok(!r.vazio && r.frames > 40, `${nome}: só ${r.frames} frames — a sonda está cega`);
+          console.log(`      CONTRATO/${nome}: dívida ${r.atrasoM.toFixed(4)} m = ` +
+            `${r.atrasoFrames.toFixed(4)} frame(s) de atraso · maior passo/frame ` +
+            `${r.maiorDeltaPose.toFixed(4)} m · ${r.framesParado} frames de referência ` +
+            `parada (cabeça andou ${r.mexeuAntes.toFixed(4)} m neles) · ` +
+            `passo ${r.passo.toFixed(4)} m · COLISOR ${r.colisor.toFixed(4)} m`);
+        }
+
+        /* CONDIÇÃO DA MEDIDA, e ela é o que separa este caso de um que passa
+           por acidente. Três coisas têm de ser verdade ANTES de a dívida
+           significar alguma coisa:
+             1. a referência é PARADA — senão ela já carrega o atraso e a
+                subtração o apaga (é o formato "a condição que valida o caso é
+                a que esconde o defeito");
+             2. o cenário aconteceu — a cabeça andou e o corpo andou junto,
+                senão "sem dívida" seria satisfeito por "nada se mexeu";
+             3. a bancada RESOLVE um frame de atraso — se o passo por frame
+                fosse pequeno demais, um frame de atraso caberia dentro do erro
+                de leitura e o caso passaria sem poder falhar. */
+        for (const [nome, r] of casos) {
+          assert.ok(r.framesParado >= 4 && r.mexeuAntes < 1e-6,
+            `${nome}: a referência tem ${r.framesParado} frames e a cabeça andou ` +
+            `${r.mexeuAntes.toFixed(4)} m dentro deles — sem um instante PARADO as duas ` +
+            'réguas não têm zero comum e a dívida medida não é dívida');
+          assert.ok(r.passo > DIST * 0.9,
+            `${nome}: o headset andou ${r.passo.toFixed(4)} m — o cenário não aconteceu`);
+          assert.ok(r.colisor >= r.passo * COLISOR_MIN,
+            `${nome}: o colisor andou ${r.colisor.toFixed(4)} m de ${r.passo.toFixed(4)} m — ` +
+            'sem o corpo caminhando não há atraso a medir');
+          assert.ok(r.maiorDeltaPose > 0.01,
+            `${nome}: o maior passo de um frame foi ${r.maiorDeltaPose.toFixed(4)} m — abaixo de ` +
+            '1 cm um frame de atraso não é distinguível do erro de leitura, e este caso não ' +
+            'poderia ficar vermelho');
+        }
+
+        /* A MEDIDA. Meio frame de atraso já é vermelho: o produto certo entrega
+           ZERO, e um acoplamento entre medir e posicionar entrega UM. */
+        const atrasados = casos.filter(([, r]) => r.atrasoFrames >= 0.5)
+          .map(([nome, r]) => `${nome}: ${r.atrasoFrames.toFixed(4)} frame(s) ` +
+            `(${r.atrasoM.toFixed(4)} m de dívida para ${r.maiorDeltaPose.toFixed(4)} m de passo/frame)`);
+        assert.deepEqual(atrasados, [],
+          `o corpo do jogador anda ATRASADO em relação à cabeça — ${atrasados.join(' | ')}. ` +
+          'Medir o passo saiu do contrato de frame (o `rig.rastrear()` do `sync()`, ' +
+          'js/xr/xrboot.js) e voltou para dentro de quem posiciona, que roda depois do dreno. ' +
+          'A separação resultante passa despercebida pelo teto de conforto de C2 e reaparece ' +
+          'inteira no dia em que um estado novo do jogo deixar de chamar `place()`.');
+      });
 
     /* A6 NÃO DISTINGUE EIXO, e este caso nasceu de um defeito que a própria
        correção criou: com o colisor caminhando durante a pausa, a COTA dele

@@ -60,15 +60,65 @@
    as duas razões deixam de ser tautologia:
      · `vista / comando` — a vista seguiu a cabeça? (guarda o invariante nº 1
        pelo lado da tela; fica vermelho se alguém passar a arrastar a vista)
-     · `colisor / comando` — o CORPO seguiu a cabeça? É a única grandeza deste
-       arquivo que morre com o `place()` morto: medida, ela vai de 1,0000 para
-       0,0000 e o caso A PÉ fica vermelho.
+     · `colisor / comando` — o CORPO seguiu a cabeça? É a régua que denunciou o
+       congelamento do corpo com o painel aberto e na cinemática, e é ela que o
+       guarda contra a volta dele.
 
-   E É ELA QUE DENUNCIA O VERMELHO ABERTO: com o painel de pausa ou a
-   cinemática ligados, `applyFpsCamera` não roda, `place()` não é chamado, e o
-   colisor fica em 0,0000 m nos dois. Ver o último caso deste arquivo, que fica
-   marcado `todo` até o produto ser consertado — §2.2 de
-   docs/vr/validacao-18a231e.md.
+   ================================================================
+   A REPRODUÇÃO — QUAL MUTANTE DE PRODUTO MATA CADA CASO, HOJE.
+
+   ESTA SEÇÃO JÁ ESTEVE ERRADA, e o erro foi o mais caro que um teste pode
+   carregar: uma prova publicada que não prova. O texto anterior afirmava que
+   `razaoCorpo` *"é a única grandeza deste arquivo que morre com o `place()`
+   morto: medida, ela vai de 1,0000 para 0,0000 e o caso A PÉ fica vermelho"*,
+   e a mensagem do commit `4855d57` repetia a frase. Medido com `place()`
+   inteiro arrancado (`js/xr/xrrig.js`, primeira linha de `place()` →
+   `if (true) return;`): **colisor/comando 1,0000 · 1,0000 · 1,0000, os seis
+   primeiros casos VERDES.** A frase foi copiada de um laudo em que era
+   verdadeira e envelheceu junto com a arquitetura: medir o passo saiu de
+   dentro do `place()` e virou contrato de frame (`rig.rastrear()` no `sync()`
+   de js/xr/xrboot.js), e o dreno que move o colisor mora no `game.js`. Com o
+   `place()` morto o RIG para — a separação vista↔colisor vai a 397,0041 m, que
+   `test/xr-painel-corpo.test.js` cobra — mas o colisor continua andando.
+   Quem reproduzisse a frase não conseguiria, e concluiria a coisa errada.
+
+   Medido nesta bancada, na worktree em `4855d57`, máquina ociosa (load ~0,5):
+
+   | caso | asserção | mutante de PRODUTO que o mata | intacto → mutado |
+   |---|---|---|---|
+   | 1 A PÉ | `razaoVista` na faixa | correção proibida¹ | 1,0000 → **0,0000** |
+   | 1 A PÉ | `razaoCorpo` na faixa | dreno desligado² | 1,0000 → **0,0000** |
+   | 2 CINEMÁTICA | `razaoVista` na faixa | correção proibida¹ | 1,0000 → **0,0000** |
+   | 3 PAINEL | `razaoVista` na faixa | correção proibida¹ | 1,0000 → **0,0000** |
+   | 4 assimetria | âncora (cada estado anda) | correção proibida¹ | 1,0000 → **0,0000** nos três |
+   | 4 assimetria | âncora (cada estado anda) | defeito ORIGINAL³ | corpo 1,0000 → **0,0000 / 0,0000** |
+   | 4 assimetria | espalhamento do CORPO | defeito ORIGINAL³ | 0,0000 → **1,0000** |
+   | 5 CORPO nos três | `razaoCorpo` nos 3 estados | defeito ORIGINAL³ | 1,0000 → **1,0000 / 0,0000 / 0,0000** |
+   | 6 andado × saltado | vista do SALTO < 0,05 m | limiar solto⁴ | 0,0000 → **0,5000 m** |
+   | 6 andado × saltado | vista do SALTO < 0,05 m | `place()` morto | 0,0000 → **0,5000 m** |
+   | 7 sem erro (I2) | — | (ver abaixo) | — |
+
+   ¹ a CORREÇÃO PROIBIDA: a vista colada no colisor — `js/xr/xrrig.js` sem
+     `passoX/foraX` no `rig.position.set` do `place()`, mais o dreno
+     (`XR.consumirPasso`, game.js) desligado. É a "correção" que alguém tentaria
+     para o congelamento do corpo, e é a que este arquivo existe para proibir.
+   ² dreno desligado: `XR.consumirPasso(_passoXR);` do `game.js` trocado por
+     `_passoXR.x = 0; _passoXR.z = 0;`. O passo continua sendo medido e nunca
+     chega ao `player.pos`.
+   ³ defeito ORIGINAL: o produto de `18a231e` —
+     `git checkout 18a231e -- game.js js/xr/xrrig.js js/xr/xrboot.js`. ATENÇÃO
+     ao desfazer: `git checkout <commit> -- <caminho>` também escreve no ÍNDICE,
+     e um `git checkout -- <caminho>` depois disso restaura do índice sujo e
+     DEIXA o defeito na árvore. Use `git checkout HEAD -- …`.
+   ⁴ limiar solto: `PASSO_HUMANO_MAX` de `js/xr/xrrig.js`, 0.35 → 5.0.
+
+   O CASO 7 (I2) É UM ARAME DE TROPEÇO, e nenhum mutante plausível DESTA área
+   o mata: os guardas que tentei arrancar (`if (XR.rig)` antes de anexar o
+   boneco, o `typeof esp.addEventListener !== 'function'` do ouvinte de reset)
+   não lançam nesta plataforma. Ele fica vermelho com qualquer exceção não
+   tratada no caminho do frame de XR — provado com uma injetada de propósito em
+   `atualizarPose`: `error: "Cannot read properties of undefined (reading
+   'toFixed')"`, 7 de 7 vermelhos. Vale pelo que é: um arame, e ele está ligado.
    ================================================================
 
    OS TRÊS ESTADOS, e por que estes três: o `XR.place()` do jogo mora
@@ -322,14 +372,19 @@ describe('o passo físico chega inteiro à vista (A6, sessão imersiva real)',
         `andando a pé, a vista seguiu ${(r.razaoVista * 100).toFixed(1)} % do passo físico ` +
         `(${r.vista.toFixed(4)} m de ${r.passoDev.toFixed(4)} m comandados) — A6 exige 1:1`);
       /* ================================================================
-         E O CORPO. Esta é a asserção que faltava ao arquivo inteiro, e é a
-         única dele que morre quando `place()` morre: com o posicionamento do
-         rig arrancado (`js/xr/xrrig.js`, primeira linha de `place()` →
-         `if (true) return;`) a vista continua seguindo a cabeça 1:1 — ela
-         segue porque a câmera é filha do rig e o rig parou, não porque o jogo
-         fez alguma coisa — e o COLISOR fica em 0,0000 m.
+         E O CORPO. Esta é a asserção que faltava ao arquivo inteiro, e ela
+         pergunta uma coisa que `razaoVista` não pode responder: a vista segue
+         a cabeça DE GRAÇA, porque a câmera é filha do rig — se o rig congelar,
+         a vista continua 1:1 e o jogo não fez nada. Quem move o CORPO é o
+         dreno do passo (`XR.consumirPasso`, game.js). Com o dreno desligado
+         ela vai de 1,0000 para 0,0000 e este caso fica vermelho.
 
-         É por isso que a razão antiga não podia falhar: ela era
+         E ela NÃO é a grandeza que morre com o `place()` morto — essa frase
+         esteve escrita aqui e é falsa desde que medir o passo virou contrato
+         de frame. Medido: com `place()` arrancado, colisor/comando 1,0000 nos
+         três estados. Ver a tabela de reprodução no cabeçalho.
+
+         É por isso que a razão ANTIGA não podia falhar: ela era
          `|Δ(mundo)| / |Δ(pose local)|`, e com o rig parado no intervalo isso é
          `|R·v| / |v|`, que rotação nenhuma muda. Validação independente
          arrancou `place()` e 5 dos 6 casos continuaram VERDES.
@@ -399,46 +454,94 @@ describe('o passo físico chega inteiro à vista (A6, sessão imersiva real)',
 
          O espalhamento é medido sobre `razaoVista` (vista contra o comando do
          headset), não sobre a razão antiga: aquela era 1,0000 nos três estados
-         por álgebra, e o espalhamento dela era 0,0000 para qualquer produto. */
+         por álgebra, e o espalhamento dela era 0,0000 para qualquer produto.
+
+         ================================================================
+         POR QUE O ESPALHAMENTO SOZINHO NÃO PODE FALHAR — o furo que a
+         validação independente achou neste caso (§5.1 de
+         docs/vr/validacao-4855d57.md), e a âncora que o fecha.
+
+         Espalhamento é uma comparação dos estados ENTRE SI, e "os três iguais"
+         é satisfeito tanto por "os três certos" quanto por "os três parados".
+         Medido em cinco produtos diferentes, o espalhamento deu 0,0000 em
+         todos — inclusive na CORREÇÃO PROIBIDA (a vista colada no colisor),
+         onde os três estados leem 0,0000: a vista não segue a cabeça em estado
+         NENHUM e o caso ficava verde. É o formato 1 da lista do CLAUDE.md,
+         asserção que não pode falhar.
+
+         A âncora é esta: antes de comparar, cada estado tem de provar
+         SOZINHO, contra a régua independente, que andou. Com ela a correção
+         proibida mata este caso pelos três estados em 0,0000, e não pelo
+         espalhamento.
+
+         E O SEGUNDO EIXO, `razaoCorpo`: o espalhamento da VISTA é 0,0000
+         também no defeito ORIGINAL (a vista sempre seguiu — ela segue de graça,
+         porque a câmera é filha do rig). Quem varia entre estados no defeito
+         original é o CORPO: 1,0000 a pé contra 0,0000 nos dois estados em que
+         `applyFpsCamera` sai do caminho, espalhamento 1,0000. Sem esta segunda
+         régua, "a assimetria sumiu" seria uma afirmação sobre metade do
+         relato.
+         ================================================================ */
       const tres = await colherOsTres();
+      const nomes = ['a pé', 'cinemática', 'painel'];
       const rs = tres.map(x => x.razaoVista);
+      const rc = tres.map(x => x.razaoCorpo);
       const espalho = Math.max(...rs) - Math.min(...rs);
+      const espalhoCorpo = Math.max(...rc) - Math.min(...rc);
       console.log(`      vista/comando: a pé ${rs[0].toFixed(4)} · cinemática ` +
         `${rs[1].toFixed(4)} · painel ${rs[2].toFixed(4)} · espalhamento ` +
-        `${espalho.toFixed(4)}`);
+        `${espalho.toFixed(4)}  ·  colisor/comando: ${rc.map(x => x.toFixed(4)).join(' / ')} ` +
+        `· espalhamento ${espalhoCorpo.toFixed(4)}`);
       for (const x of tres) condicaoDeCaminhada(x);
+      /* A ÂNCORA. Sem ela as duas asserções de espalhamento abaixo não podem
+         ficar vermelhas por um produto que congela tudo por igual. */
+      const parados = nomes
+        .map((nome, i) => [nome, rs[i], rc[i]])
+        .filter(([, v, c]) => v < RAZAO_MIN || v > RAZAO_MAX || c < RAZAO_MIN || c > RAZAO_MAX)
+        .map(([nome, v, c]) => `${nome}: vista ${v.toFixed(4)} · colisor ${c.toFixed(4)}`);
+      assert.deepEqual(parados, [],
+        `estados que não responderam ao passo físico — ${parados.join(' | ')}. Comparar ` +
+        'estados entre si só diz alguma coisa depois que cada um provou, sozinho e contra a ' +
+        'régua independente, que a vista E o corpo andaram o que a cabeça andou: "os três ' +
+        'iguais" também é verdade quando os três estão parados.');
       assert.ok(espalho < 0.03,
         `a resposta da VISTA ao passo físico varia ${(espalho * 100).toFixed(1)} % entre ` +
         `estados (${rs.map(x => x.toFixed(4)).join(' / ')})`);
+      assert.ok(espalhoCorpo < 0.03,
+        `a resposta do CORPO ao passo físico varia ${(espalhoCorpo * 100).toFixed(1)} % entre ` +
+        `estados (${rc.map(x => x.toFixed(4)).join(' / ')}) — é a assimetria que o relato ` +
+        'original descreveu, no eixo em que a vista não a mostra');
     });
 
     /* ================================================================
-       O CORPO NOS TRÊS ESTADOS — VERMELHO CONHECIDO E ABERTO (§2.2 do laudo
-       `docs/vr/validacao-18a231e.md`).
+       O CORPO NOS TRÊS ESTADOS — o vermelho que este arquivo abriu (§2.2 do
+       laudo `docs/vr/validacao-18a231e.md`) e que a rodada 17 fechou.
 
-       Marcado `todo` DE PROPÓSITO, e a marca é a única coisa aqui que pode
-       sair: a asserção está em força total e o número aparece em toda
-       execução. O defeito é do PRODUTO e não deste arquivo — com
-       `state.paused` ou `state.cinematic`, `applyFpsCamera` não roda, logo
-       `XR.place()` não é chamado e o passo físico não chega ao colisor. Medido
-       pela validação independente: vista 0,5000 m nos três estados, colisor
-       0,5000 / 0,0000 / 0,0000 m; e ao FECHAR o painel a vista dá um salto de
-       1,0000 m num frame com a cabeça parada, porque `place()` recebe o metro
-       inteiro de uma vez e o classifica como recentrar.
+       O defeito era do PRODUTO e não deste arquivo: com `state.paused` ou
+       `state.cinematic`, `applyFpsCamera` não rodava, logo `XR.place()` não era
+       chamado e o passo físico não chegava ao colisor. Medido: vista 0,5000 m
+       nos três estados, colisor 0,5000 / 0,0000 / 0,0000 m; e ao FECHAR o
+       painel a vista dava um salto de 1,0000 m num frame com a cabeça parada,
+       porque `place()` recebia o metro inteiro de uma vez e o classificava como
+       recentrar.
 
-       Por que este caso existiu vermelho por uma rodada: a entrega anterior
-       AFIRMOU "passo físico 1:1 nos três estados" e escreveu um teste que não
-       podia falhar para prová-lo. A afirmação era verdadeira para a vista e
-       falsa para o corpo. Aqui ela ficou escrita inteira, com a régua certa,
-       marcada `todo` enquanto o produto estava quebrado.
+       Por que o caso nasceu assim: a entrega anterior AFIRMOU "passo físico 1:1
+       nos três estados" e escreveu um teste que não podia falhar para prová-lo.
+       A afirmação era verdadeira para a vista e falsa para o corpo. Aqui ela
+       ficou escrita inteira, com a régua certa, e em força total desde o
+       primeiro commit — este caso NUNCA esteve marcado `todo`, ao contrário do
+       que o cabeçalho e a mensagem do commit `4855d57` diziam.
 
-       CONSERTADO na rodada seguinte: medir o passo saiu de dentro do `place()`
-       e virou contrato de frame (`rig.rastrear()`, chamado pelo `sync()` de
-       js/xr/xrboot.js, que é o único ponto que roda em TODO estado). O colisor
-       passou a andar 0,9800 m de 0,9800 m nos três estados, a separação
-       cabeça↔corpo caiu de 1,0000 para 0,0000 m e o salto ao fechar o painel,
-       de 1,0000 m/frame para 0,0000. A marca `todo` saiu junto, que era o
-       combinado.
+       CONSERTADO na rodada 17, e são DUAS linhas, não uma: medir o passo saiu
+       de dentro do `place()` e virou contrato de frame (`rig.rastrear()`,
+       chamado pelo `sync()` de js/xr/xrboot.js, que é o único ponto que roda em
+       TODO estado), E o `game.js` ganhou `XR.place()` nos ramos do menu/pausa e
+       da cinemática. Quem sustenta ESTE caso é a segunda: arrancando só o
+       `rastrear()`, ele continua verde (o guarda dessa linha é o caso
+       CONTRATO DE FRAME de `test/xr-painel-corpo.test.js`). O colisor passou a
+       andar 0,5000 m de 0,5000 m nos três estados, a separação cabeça↔corpo
+       caiu de 1,0000 para 0,0000 m e o salto ao fechar o painel, de
+       1,0000 m/frame para 0,0000.
        ================================================================ */
     it('o CORPO também tem de andar nos três estados (A6/C2)', async () => {
         const [aPe, cine, painel] = await colherOsTres();
