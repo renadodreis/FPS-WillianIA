@@ -420,3 +420,78 @@ SERVIDOR (`br-game.js`), o placar lê o roster que o servidor manda, e o painel
 precisa ganhar ABAS em `js/xr/xrui.js`. É integração de rede em três arquivos de
 donos diferentes — exatamente o tipo de coisa que, feita com pressa no fim de
 uma rodada, vira o defeito que a rodada seguinte gasta o dia consertando.
+
+---
+
+## Rodada 15 — os três relatos do dono, medidos · 2026-08-28
+
+O dono deu três relatos em uma frase cada. Esta rodada existiu para
+transformar cada um em número antes de mexer no código — e um deles não
+existia.
+
+### 1. "O movimento não parece natural" — era a FORMA do vetor
+
+O headset traduzia o analógico esquerdo em `KeyW/KeyA/KeyS/KeyD`.
+
+| | antes | depois |
+|---|--:|--:|
+| erro de direção, polegar a 22,5° do eixo | 22,50° | **0,00°** |
+| meio analógico | 1,693 m/s | **0,809 m/s** |
+| analógico quase no talo | 1,693 m/s | 1,668 m/s |
+| polegar em 0,22 | 0,000 m/s | 0,101 m/s |
+| zona morta efetiva | 0,2805 | 0,18 (a declarada) |
+
+O canal analógico já existia pronto em `js/xr/xrinput.js` e era descartado.
+As teclas continuam sendo escritas: `js/car.js` e `js/heli.js` dirigem por
+tecla. Junto foi a zona morta RADIAL — por eixo, os dois encolhem o mesmo
+tanto em valor absoluto, a razão entre eles muda e a diagonal torce (9,79°
+de resto depois do canal analógico).
+
+### 2. "O boneco está travado e preciso virar com a alavanca" — REFUTADO, e atendido por outro caminho
+
+Medido em seis ângulos, virando a cabeça fisicamente, com o giro artificial
+em zero: vista, minimapa e direção de marcha erram **0,00°**, rig em 0,000°.
+O corpo em primeira pessoa acompanha com a folga de 25° do `maxRootAngle`
+do VRIK. **Nada estava travado.** O que o dono não conseguia era virar ALÉM
+do alcance físico sem a alavanca.
+
+Remover o giro não é opção: VRC.Quest.Tracking.1 é requisito obrigatório de
+loja e o XAUR do W3C o trata como acessibilidade. Entregue como o Half-Life:
+Alyx fez — um terceiro modo `desligado`, escolhido no painel dentro do
+mundo, com o padrão continuando `suave` a 180°/s.
+
+### 3. "O boneco parece enterrado" e "segurar a arma está bugado" — os dois eram reais
+
+| | antes | depois |
+|---|--:|--:|
+| vértice mais baixo, agachando 0,75 m | −0,1147 m | pior caso da faixa inteira: **−0,0051 m** |
+| vértice mais baixo, agachando 0,90 m | −0,2647 m | idem |
+| mão direita → empunhadura (no render) | 0,4805 m | **0,0000 m** |
+| mão esquerda → mão do jogador | 0,52 a 0,93 m | **0,0000 m** |
+| cotovelo esquerdo | 176,0° | 103–143° |
+
+Duas causas independentes: o IK resolvia contra a pose de DESKTOP da arma
+(ordem de frame) e a mão esquerda mirava uma âncora da ARMA a 0,94–1,07 m do
+ombro contra 0,5881 m de braço. Custo da correção: +0,035 ms no pior caso.
+
+### Medido e NÃO consertado
+
+- **Abaixo de ~0,95 m de cabeça o QUADRIL fica sob o piso** (−0,2626 m a
+  0,70 m). A raiz acompanha a cabeça (C5) e o grau de liberdade que falta é a
+  coluna, que este rig não modela. A perna contribui com 0,02 m disso.
+- **A âncora `supportHand` da arma é inalcançável**: 0,94–1,07 m do ombro. Com
+  `APOIO_PEGA` em 0,20 m, B5 (segunda mão) não engata por geometria, não por
+  bug de estado. Foi para a frente da arma.
+- **A rotação do punho esquerdo do boneco ainda vem da arma.** Posição e
+  cotovelo corrigidos; a orientação não. Não foi mexida porque não há como
+  verificar aparência com número, e trocar correção medida por não medida é o
+  padrão que este repo já pagou caro.
+
+### O décimo formato de "teste que passa por acidente"
+
+**A condição que valida o caso é a que esconde o defeito.** O teste de "a
+cabeça manda no jogo" exige giro artificial em zero para régua e leitura
+viverem no mesmo espaço — e com o rig em zero `camera.quaternion` É a pose de
+mundo, então o mutante que troca `yawDaVista()` por ele passa verde nos seis
+ângulos. A saída foi ACRESCENTAR o caso complementar, com giro ≠ 0 e régua
+independente: pega o mesmo mutante a 156,29°.
