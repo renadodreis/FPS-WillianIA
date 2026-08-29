@@ -323,7 +323,12 @@ describe('giro artificial desligável (runtime emulado IWER)',
 
     /* ------------------------------------------------------------------ */
     /* O que dependia do giro e não pode ter quebrado. */
-    it('o radial continua suspendendo o giro — com o giro LIGADO de volta', async () => {
+    /* SUSPENSO EM 2026-08-29: o gatilho esquerdo virou ADS (pedido do dono),
+       js/xr/xrinput.js passa `null` para o radial e `cmd.radial.aberto`
+       nunca mais fica true — a suspensão de giro em game.js:3850 continua
+       escrita, mas não há mais controle que a exercite. Reabilitar quando o
+       radial ganhar outro caminho (docs/vr/progresso.md, próxima prioridade). */
+    it.skip('o radial continua suspendendo o giro — com o giro LIGADO de volta', async () => {
       /* Com o giro desligado este caso passaria por acidente (não há giro para
          suspender): o modo tem de voltar para `suave` antes. */
       await h.play(p => window.__GD.preferir(p), { modo: 'suave', velocidade: 180 });

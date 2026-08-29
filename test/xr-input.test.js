@@ -232,7 +232,14 @@ describe('borda do gatilho — semi-automática precisa do APERTO, não do segur
   });
 });
 
-describe('radial do analógico direito — os quatro verbos que ficaram sem botão', () => {
+describe('radial do analógico direito — os quatro verbos que ficaram sem botão', { skip:
+  'APOSENTADO em 2026-08-29: o gatilho da mão de apoio (esquerda, índice 0) ' +
+  'virou ADS por botão (pedido do dono, js/xr/xrinput.js). `ler()` agora passa ' +
+  '`null` para `criarRadialXR`, então este bloco todo mede um caminho que não ' +
+  'existe mais — não é regressão, é a troca de dono do botão. Repor granada/' +
+  'kit médico/comer/troca de mira em outro binding é a próxima prioridade ' +
+  '(docs/vr/progresso.md); quando isso acontecer, estes casos são o ponto de ' +
+  'partida (trocar só o gerador de entrada pelo botão novo).' }, () => {
   /* D1. Granada, kit médico, comer e troca de acessório de mira não tinham
      mapeamento NENHUM. E não é descuido: o Touch entrega 5 botões pressionáveis
      por mão e todos já têm dono — sobrou UM, o clique do analógico direito.

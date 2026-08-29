@@ -762,7 +762,16 @@ export function createXrInteract({
        dizem a mesma coisa — o que continua valendo é a divisão de quem
        DESPACHA, que é o parágrafo acima. */
     if (!radialLocal) radialLocal = criarRadialXR();
-    const radialLido = radialLocal.ler(fontes);
+    /* O GATILHO ESQUERDO VIROU ADS (2026-08-29, js/xr/xrinput.js) — a máquina
+       de lá já ignora esse botão para o radial, mas esta é uma SEGUNDA
+       instância de `criarRadialXR`, lendo as MESMAS fontes por conta própria
+       (ver o parágrafo acima: "a máquina local existia só no caso sem
+       ponte... agora ela roda todo frame"). Sem este `null`, apertar o
+       gatilho para mirar continuava fazendo o DISCO nascer na tela — a chave
+       nunca disparava (a ponte manda `radial: null` e é dona do despacho),
+       mas o jogador via um menu fantasma cobrindo a mira no meio do combate.
+       `passo(null)` é o mesmo "controle sumiu": fecha, não confirma nada. */
+    const radialLido = radialLocal.ler(null);
     let verbo;
     if (radialEst !== undefined) verbo = null;   // a ponte é a dona do despacho
     else verbo = radialLido.confirmou;

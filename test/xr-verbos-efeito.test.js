@@ -61,7 +61,14 @@ async function instalarSondas() {
   return true;
 }
 
-describe('o radial de verbos mexe no inventário (fiação do game.js)', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+/* SUSPENSO EM 2026-08-29: mesma causa de test/xr-verbos.test.js — o gatilho
+   esquerdo virou ADS por pedido do dono e o radial (js/xr/xrinput.js,
+   js/xr/xrinteract.js) recebe `null` sempre, então nunca abre. O gesto que
+   este arquivo mede não existe mais em nenhum controle. Próxima prioridade
+   em docs/vr/progresso.md: repor granada/kit médico/comer/troca de mira por
+   outro caminho. */
+describe('o radial de verbos mexe no inventário (fiação do game.js)', { skip: (!CHROME && 'Chrome não encontrado') ||
+  'radial sem botão: gatilho esquerdo virou ADS em 2026-08-29 (ver docs/vr/progresso.md)' }, () => {
   let h;
   before(async () => {
     h = await bootEmVR(bootGame, { port: PORT });

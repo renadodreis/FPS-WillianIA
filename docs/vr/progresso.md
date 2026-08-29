@@ -495,3 +495,113 @@ viverem no mesmo espaço — e com o rig em zero `camera.quaternion` É a pose d
 mundo, então o mutante que troca `yawDaVista()` por ele passa verde nos seis
 ângulos. A saída foi ACRESCENTAR o caso complementar, com giro ≠ 0 e régua
 independente: pega o mesmo mutante a 156,29°.
+
+---
+
+## Rodada 16 — ADS por botão (P0 do dono, vertical slice) · 2026-08-29
+
+**Missão desta frente:** vertical slice VR onboarding — menu único, spawn no
+chão, arma/mira/ADS, HUD limpo, sobrevivência inicial, nessa ordem. O dono
+revogou explicitamente a decisão antiga "ADS em VR é só gesto físico"
+(`docs/vr/referencia-arma-mira.md` item 5) e pediu botão dedicado, hold, sem
+conflito, preferindo o gatilho esquerdo.
+
+### Defeito atacado
+
+`out.mirar` (`js/xr/xrinput.js`) só acendia via MIRA ASSISTIDA (grip direito,
+acessibilidade, desligada por padrão) ou pelo gesto físico
+(`XRArma.mirando()`). Não existia botão de ADS incondicional — exatamente a
+decisão revogada.
+
+### Causa e conflito descoberto
+
+O gatilho esquerdo já tinha dono: abria o radial de quatro fatias (granada/kit
+médico/comer/troca de mira). Órgão fechado (5 botões por mão, todos com dono
+justificado) — não dá para ADS incondicional (aperta liga, solta desliga, sem
+atraso) conviver com um radial que decide no MESMO aperto. Direita (grip) foi
+descartado por colidir com o modo `manter` da empunhadura (soltar para sair da
+mira soltaria a arma); grip esquerdo foi descartado por já ser contextual
+(apoio/pente/agarrar-mundo por distância).
+
+**Decisão:** gatilho esquerdo vira ADS puro (sem máquina de estado). O radial
+perde o binding — `RADIAL_FATIAS`/`criarRadialXR` continuam existindo, sem
+lar. Os quatro verbos (granada/kit médico/comer/troca de mira) não fazem parte
+do roteiro mínimo "já dá para jogar" desta frente.
+
+**Achado durante o TDD, pelo próprio teste:** havia DUAS instâncias
+independentes de `criarRadialXR` lendo o MESMO gatilho — a de `js/xr/xrinput.js`
+(dono da intenção/despacho) e uma segunda, local, em `js/xr/xrinteract.js`
+(dona só do DESENHO do disco, porque `game.js` sempre chama
+`XRInterage.update({ radial: null, ... })` para a ponte ser dona do despacho).
+Corrigir só a primeira deixava o disco nascer na tela — um menu fantasma
+cobrindo a mira, sem nenhum verbo funcionando atrás dele. É o padrão "duas
+coisas conduzem o mesmo produto" da skill `vr-quest`, com um detalhe novo: a
+segunda instância não veio de fiação esquecida, veio de uma feature JÁ EM
+PRODUÇÃO perdendo sincronia com uma decisão nova em outro arquivo.
+
+### Mudança
+
+- `js/xr/xrinput.js`: `out.mirar = botao(esquerda, 0) || miraAssistida` (a
+  assistida some por `||`, não substitui); `radial.passo(esquerda)` virou
+  `radial.passo(null)`. Comentários de topo corrigidos (a frase "nenhum FPS de
+  VR tem botão de ADS" ficava contradizendo o código).
+- `js/xr/xrinteract.js`: `radialLocal.ler(fontes)` virou `radialLocal.ler(null)`
+  — fecha a segunda instância do radial.
+
+### Teste (TDD, IWER real, Quest 3)
+
+`test/xr-ads-gatilho.test.js` (porta 3862, nova). Dois casos: (1) apertar o
+gatilho esquerdo liga `mouse.aiming` — o mesmo campo que espalhamento/sway/
+retículo já leem, não proxy — com a mão direita longe do olho (isola botão de
+gesto) e sem mover a arma em relação à palma (B4); soltar desliga; (2)
+segurando o gatilho para mirar, `XRInterage.estado().radial.{aberto,visivel}`
+continuam `false` — guarda de regressão do conflito acima.
+
+Vermelho confirmado nos dois casos ANTES do fix (motivo certo: `aiming` nunca
+liga; radial abre) e depois de reinjetar o defeito antigo via `git stash`
+(mesmos dois vermelhos). Verde depois do fix, nos dois casos, nas duas vezes.
+
+### Fallout de teste, tratado (não deixado vermelho)
+
+O gatilho esquerdo tinha dois arquivos de teste inteiros medindo o radial:
+`test/xr-input.test.js` (describe "radial do analógico direito", 9 casos
+unitários) e `test/xr-radial.test.js` (arquivo inteiro, sonda visual do disco
+no headset). Os dois foram para `{ skip: '...' }` com o motivo escrito e
+apontando para esta rodada e para a próxima prioridade — não é teste morto
+esquecido, é teste de uma feature que perdeu o botão por decisão de produto.
+
+**Fallout adicional, achado só na suíte cheia** (`npm run test:vr` rodado após
+o fix acima ainda deu 10 vermelhos): mais três arquivos dependiam do mesmo
+gatilho e não tinham sido tocados —
+`test/xr-verbos.test.js` (describe D1 inteiro, os quatro verbos sem botão),
+`test/xr-verbos-efeito.test.js` (describe inteiro, o radial mexendo no
+inventário de verdade) e um único caso em `test/xr-giro-desligado.test.js`
+("o radial continua suspendendo o giro"). Mesma causa, mesmo tratamento:
+`describe`/`it` com `skip` e motivo escrito, sem apagar o arquivo — a
+geometria e a lógica que eles mediam continuam válidas para quando o radial
+ganhar um novo gatilho. Nenhuma asserção foi afrouxada; o mecanismo é que
+ficou, por decisão do dono, sem controle que o acione.
+
+### Verificado
+
+`test/xr-ads-gatilho.test.js` focado (2/2), os 6 arquivos tocados pelo fallout
+juntos (`xr-giro-desligado`, `xr-verbos`, `xr-verbos-efeito`, `xr-ads-gatilho`,
+`xr-input`, `xr-radial`: 45 pass, 0 fail, 1 skip explícito),
+`test/xr-empunhadura-botao.test.js` + `test/xr-empunhadura-grip.test.js`
+(19/19 — a mira assistida continua funcionando, o `||` não quebrou nada),
+`test/xr-mira.test.js` + `test/xr-weapon.test.js` (23/23 — B3/B7 intactos),
+`npm run lint` limpo, `npm run test:vr` completo depois de todos os fixes:
+**758 pass, 0 fail, 1 skip, 759 testes, 143 suítes** (1346,9 s — bem acima do
+~2,5 min de referência da skill `vr-quest`; máquina com Chrome pessoal e
+outras suítes rodando durante a medição, sinal de carga, não de regressão).
+
+### Próxima prioridade
+
+1. **Repor granada/kit médico/comer/troca de mira** em outro caminho de
+   entrada (o botão físico não tem mais órgão livre; considerar gesto de
+   pulso ou menu wrist-mounted, como a maioria dos FPS de VR de referência já
+   usa em vez de botão — pesquisar antes de codar, por regra do porte).
+2. Seguir o roteiro P0: com ADS resolvido, o próximo item vermelho do "já dá
+   para jogar" é o item 4 (campo de visão limpo) ou 5 (onboarding/
+   sobrevivência) — medir qual dos dois ainda está quebrado no produto real
+   antes de escolher.

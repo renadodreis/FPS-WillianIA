@@ -38,7 +38,7 @@
 'use strict';
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { CHROME, bootGame } = require('./helpers/harness');
+const { bootGame } = require('./helpers/harness');
 const { bootEmVR } = require('./helpers/iwer');
 
 const PORT = 3580;
@@ -154,7 +154,16 @@ function instalarFerramentas() {
   return true;
 }
 
-describe('o radial que se vê (IWER, sessão imersiva real)', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+describe('o radial que se vê (IWER, sessão imersiva real)', { skip:
+  'APOSENTADO em 2026-08-29: o gatilho da mão de apoio (esquerda) que abria ' +
+  'este disco virou ADS por botão (pedido do dono, js/xr/xrinput.js e ' +
+  'js/xr/xrinteract.js). Nenhum caminho de entrada chega mais a este menu — ' +
+  'o disco não nasce por construção, e todo caso aqui mediria o vazio, não um ' +
+  'defeito. Repor granada/kit médico/comer/troca de mira em outro binding é a ' +
+  'próxima prioridade (docs/vr/progresso.md); a geometria medida aqui (ângulo ' +
+  'de nascimento, estabilidade contra pulso/cabeça, leitura de pixel da fatia) ' +
+  'continua válida como roteiro para quando o disco ganhar um novo gatilho.' },
+  () => {
   let h, K;   // K = constantes REAIS do módulo, não números mágicos do teste
   before(async () => {
     h = await bootEmVR(bootGame, { port: PORT });

@@ -47,14 +47,28 @@
    gênero e não custa botão nenhum. Agachar continua tendo a via física
    (a cabeça baixando), então ninguém fica sem ele.
 
-   E O QUE NÃO CABE VIRA FATIA. Granada, kit médico, comer e troca de acessório
-   de mira são quatro verbos, e a mudança acima liberou UM botão: o gatilho
-   esquerdo. Um botão para quatro só fecha com um seletor: segurar o gatilho da
-   mão de apoio abre um radial, o analógico DA MESMA MÃO escolhe a direção,
-   soltar confirma. Quatro fatias é teto de ergonomia, não preguiça ("keep the
-   number of buttons small… the attentional cone of vision is roughly 10
-   degrees"). Os detalhes de por que NÃO é o clique do analógico direito estão
-   em `criarRadialXR`, e cada um deles é uma colisão medida, não suposta.
+   E O QUE NÃO CABE VIRAVA FATIA — ATÉ 2026-08-29. Granada, kit médico, comer e
+   troca de acessório de mira são quatro verbos, e a mudança acima liberou UM
+   botão: o gatilho esquerdo. Um botão para quatro fechava com um seletor:
+   segurar o gatilho da mão de apoio abria um radial, o analógico DA MESMA MÃO
+   escolhia a direção, soltar confirmava. Quatro fatias é teto de ergonomia,
+   não preguiça ("keep the number of buttons small… the attentional cone of
+   vision is roughly 10 degrees"). Os detalhes de por que NÃO era o clique do
+   analógico direito estão em `criarRadialXR`, e cada um deles é uma colisão
+   medida, não suposta — isso continua valendo para quem for repor o radial.
+
+   O GATILHO ESQUERDO MUDOU DE DONO DE NOVO, agora para o ADS por botão (pedido
+   do dono, ver o bloco de `mirar` acima). Não sobrou órgão para as duas coisas:
+   o pedido é "aperta liga, solta desliga" sem atraso nenhum, e o radial também
+   decide no MESMO aperto — as duas leituras do mesmo frame colidiriam toda vez
+   que o jogador quisesse só mirar. Dos outros nove botões, nenhum é candidato
+   melhor (o grip direito tem a máquina STICKY e colide com o modo `manter`; o
+   grip esquerdo já é contextual entre apoio/pente/agarrar-mundo por distância,
+   e ganhar um quarto significado por cima seria a mesma colisão de novo). O
+   radial FICA SEM BOTÃO por ora: `RADIAL_FATIAS` e `criarRadialXR` continuam
+   existindo (não é sobra esquecida, é peça sem lar), e `ler()` passa `null`
+   para a fábrica — repor granada/kit médico/comer/troca de mira em outro
+   caminho é a próxima prioridade registrada em `docs/vr/progresso.md`.
 
    Fontes, com link, em docs/vr/referencia-interacao.md.
    ================================================================ */
@@ -89,15 +103,21 @@
    alternatives" das duas fontes de acessibilidade, e o Onward faz igual
    ("There are two grip options. Proximity and clicking.").
 
-   O QUE SOBRA PARA O `mirar`. Mirar em VR é FÍSICO: em oito de oito FPS de VR
-   pesquisados, mirar é trazer a arma ao olho — nenhum tem botão de ADS, e a
-   régua deste projeto proíbe teleportar a arma no botão (B4). Então `mirar`
-   deixa de ser o grip e vira MIRA ASSISTIDA: acessibilidade para quem não
-   consegue levantar o braço, DESLIGADA por padrão, e que mesmo ligada não move
-   a arma um milímetro — só vale espalhamento e retículo. Com ela desligada
-   `out.mirar` é sempre `false`, e a linha do game.js que lê
-   `cmd.mirar || XRArma.mirando()` passa a valer o gesto, que é o que o gênero
-   inteiro faz.
+   O QUE SOBRAVA PARA O `mirar` — e a CORREÇÃO de 2026-08-29, pedida pelo dono.
+   Mirar em VR é FÍSICO: em oito de oito FPS de VR pesquisados, mirar é trazer
+   a arma ao olho, e a régua deste projeto proíbe teleportar a arma no botão
+   (B4). Isso continua valendo — o gesto físico não some. Mas o dono pediu,
+   verbatim, um BOTÃO dedicado por cima do gesto: "o ADS em VR agora deve ser
+   acionado por botão enquanto estiver pressionado e desligado ao soltar",
+   revogando a frase antiga deste comentário ("nenhum tem botão de ADS") PARA
+   ESTA FRENTE. O botão é o GATILHO ESQUERDO (ver o bloco de `criarRadialXR`
+   mais abaixo para o motivo de ser esse e não outro), lido puro — sem máquina
+   de estado, sem atraso: aperta liga, solta desliga. `out.mirar` passa a valer
+   `gatilhoEsquerdo || miraAssistida`, e a mira assistida (grip direito, 300 ms,
+   acessibilidade para quem não levanta o braço) continua existindo do jeito
+   que já era. A linha do game.js que lê `cmd.mirar || XRArma.mirando()` não
+   mudou: o botão só acrescenta uma fonte a mais para `cmd.mirar`, e o gesto
+   segue sendo a segunda opção do `||`.
 
    Fontes e citações literais em docs/vr/referencia-empunhadura-recarga.md §1.1,
    §1.2, §1.3 e §4.1.
@@ -367,9 +387,11 @@ export function criarEntradaXR({
       // se anda ou se gira, e chutar seria mover o jogador sem ele pedir
     }
 
-    /* RADIAL PRIMEIRO: o analógico esquerdo é o mesmo de andar, e é o radial
-       que decide de quem ele é neste frame. */
-    out.radial = radial.passo(esquerda);
+    /* O RADIAL FICOU SEM BOTÃO (2026-08-29): o gatilho esquerdo virou ADS, e
+       os dois não podem ler o mesmo aperto (ver o bloco no topo do arquivo).
+       `passo(null)` é o mesmo caminho que já existia para "controle sumiu" —
+       fecha e não confirma fatia sozinho. */
+    out.radial = radial.passo(null);
 
     if (out.radial.aberto) andarArmado = false;
 
@@ -427,6 +449,10 @@ export function criarEntradaXR({
       out.correr = !escolhendo && mCru >= CORRER_TILT;
       out.usar = botao(esquerda, 4);
       out.recarregar = botao(esquerda, 5);
+      /* ADS POR BOTÃO (pedido do dono, 2026-08-29): leitura pura, sem máquina
+         de estado — aperta liga, solta desliga, no mesmo frame. Combinada com
+         a mira assistida logo abaixo, no bloco da mão direita. */
+      out.mirar = botao(esquerda, 0);
     }
 
     if (direita) {
@@ -456,16 +482,21 @@ export function criarEntradaXR({
 
       /* MIRA ASSISTIDA — desligada por padrão, e mesmo ligada NÃO move a arma.
          O tempo mínimo separa "empunhar" (um toque) de "mirar" (manter), para
-         que o mesmo botão possa fazer as duas coisas sem ambiguidade. */
+         que o mesmo botão possa fazer as duas coisas sem ambiguidade. É uma
+         SEGUNDA fonte para `out.mirar`, somada por `||` ao gatilho esquerdo
+         (bloco da mão esquerda, acima) — nenhuma desliga a outra. */
       if (grip) { if (!gripDesde) gripDesde = agora(); } else gripDesde = 0;
-      out.mirar = assistida && grip && gripDesde > 0 && (agora() - gripDesde) >= MIRA_ASSISTIDA_MS;
+      out.mirar = out.mirar
+        || (assistida && grip && gripDesde > 0 && (agora() - gripDesde) >= MIRA_ASSISTIDA_MS);
     } else {
       girarArmado = true;   // controle sumiu: não deixa o giro travado armado errado
       /* CONTROLE SUMINDO NÃO LARGA A ARMA. Ver `semControle()`: o estado é
          congelado, não zerado. Largar a arma porque a mão saiu do campo das
-         câmeras por um frame é perder a partida por defeito de hardware — e
-         `out.mirar` cai porque o botão deixou de ser observável, o que é o
-         oposto: continuar mirando sem controle seria travar o espalhamento. */
+         câmeras por um frame é perder a partida por defeito de hardware.
+         `out.mirar` não é zerado aqui: a fonte da mão ESQUERDA (gatilho) é
+         independente da direita e continua valendo — perder o rastreio da mão
+         que segura a arma não pode travar o espalhamento de quem só queria
+         soltar o gatilho de apoio. */
       const r = empunha.semControle();
       out.empunhar = r.engatado;
       out.empunharEvento = null;
