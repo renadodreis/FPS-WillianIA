@@ -57,6 +57,53 @@ export function createFpBody(deps) {
        translação (subir e cruzar o esterno), não o tamanho dela — ver
        `clavUp`/`clavCross` logo abaixo. */
     clavMax: 0.45,
+    /* ...MAS QUANDO O ALVO É A MÃO DO JOGADOR, O TETO É ANATÔMICO.
+
+       `clavMax` é grande porque a âncora `supportHand` da ARMA fica a
+       0,89–1,03 m do ombro esquerdo — fora do alcance por construção, e sem a
+       translação o úmero varria o rosto (medido: 0,0158 m do olho). Em VR essa
+       âncora deixou de ser o alvo: quem manda é o `gripSpace`, que é a MÃO DO
+       JOGADOR (MDN, XRInputSource.gripSpace: a origem fica "at the centroid —
+       the center of mass — of the user's fist"). E a mão do jogador está,
+       por construção, ao alcance do braço DELE — logo ao alcance do braço do
+       avatar, que é escalado pela altura dele.
+
+       Com o alvo alcançável, `need` fica em zero na esmagadora maioria das
+       poses e o teto não é exercido. Quando é (o jogador estica o braço mais
+       do que o avatar alcança), meio metro de clavícula seria o tronco
+       viajando atrás da mão: a protração da escápula humana é de ~2–6 cm.
+       6 cm é o teto, e o preço é a mão parar curta em vez de o ombro sair do
+       lugar — que é o defeito visível. */
+    clavMao: 0.06,
+    /* ...E A ESCÁPULA ABDUZ QUANDO O BRAÇO SOBE. Este é o custo, medido, de
+       consertar a mão: enquanto o braço mirava uma âncora inalcançável 0,9 m à
+       frente, o úmero apontava PARA A FRENTE e passava longe da cara. Com a
+       mão indo para onde a mão do jogador está de verdade, o jogador que
+       levanta o controle ao lado da cabeça faz o boneco levantar o braço ao
+       lado da cabeça — e o braço fica ESTICADO (o alvo cai a 0,767 m de um
+       ombro que alcança 0,588 m), o que prende o úmero na reta ombro→mão.
+       Medido nas dez poses do laudo: a malha do `Arm_1.L` foi de 0,1750 m para
+       **0,1029 m** do olho na pose "braço para cima", contra os 0,15 m do
+       critério I3. Reta presa não se conserta girando: o único jeito de tirar
+       o úmero da cara é mover o OMBRO.
+
+       E mover o ombro para o lado é o que o corpo faz. Levantar o braço abduz
+       a escápula 2–6 cm lateralmente (é o mesmo movimento que `clavMax` já
+       modela para a frente); o que faltava era a DIREÇÃO. Aqui o ombro é
+       empurrado para longe do olho, na perpendicular da reta ombro→alvo, só o
+       tanto que falta para o braço limpar a bolha do olho, com teto de 8 cm.
+       Continua passando por `limitarClavicula`, então segue proibido SUBIR e
+       CRUZAR o esterno — o acrômio não faz nem uma coisa nem outra. */
+    clavAbduz: 0.08,
+    /* E A RÉGUA DA ABDUÇÃO É MAIS LARGA QUE `olhoLivre`, porque ela mede coisa
+       diferente: `olhoLivre` (0,19) é a régua da MALHA, e o guarda da escápula
+       mede a RETA DO OSSO, que mora dentro da malha. Medido: com a reta a
+       0,21 m do centro da cabeça a malha do úmero já estava a 0,174 m — ~0,04
+       de raio de braço — e o guarda nem disparava, porque 0,21 > 0,19. Aqui
+       vale 0,19 + o raio do úmero, arredondado para 0,26. Fica separado de
+       `olhoLivre` de propósito: são duas medidas de coisas diferentes, e
+       fundi-las é como o guarda deixou de disparar em primeiro lugar. */
+    bracoLivre: 0.26,
     /* ...E A CLAVÍCULA TEM JUNTA: ELA NÃO PASSA POR DENTRO DA CABEÇA.
        Medido em sessão, com a arma trazida ao rosto: a clavícula ESQUERDA
        terminava em (0,225; −0,195; −0,337) no espaço da raiz, tendo saído de
@@ -179,6 +226,10 @@ export function createFpBody(deps) {
        passou a furar o piso em 0,11 m. Recolher 0,46 m de bainha virou
        recolher ~0,51 m, e o número volta para dentro do teto. */
     cloakLift: 0.42,
+    /* teto de `agacharCru` (ver `resolverPernas`): 3 agachamentos de projeto
+       é mais fundo do que qualquer jogador consegue, e segura a capa se a
+       leitura de altura da cabeça enlouquecer */
+    cloakMax: 3,
     kneeOut: 0.25,         // joelhos abrem um pouco para fora ao dobrar
   };
 
@@ -201,6 +252,11 @@ export function createFpBody(deps) {
   /* buffers da perna (não podem dividir com o braço: o alvo do pé é montado
      antes do solver e lido depois de aimBone mexer nos registradores) */
   const _alvo = new THREE.Vector3(), _poloP = new THREE.Vector3(), _poloA = new THREE.Vector3();
+  /* buffers do PISO (ver `resolverPernas`): quadril em mundo, delta quadril→pé
+     e a frente horizontal do corpo. Nenhum deles pode dividir com `_alvo` nem
+     com `_poloP`, que atravessam o cálculo inteiro até o solver. */
+  const _hipP = new THREE.Vector3(), _dlP = new THREE.Vector3(), _fwP = new THREE.Vector3();
+  const _pisoV = new THREE.Vector3(), _polX = new THREE.Vector3();
   const _qf = new THREE.Quaternion(), _qf2 = new THREE.Quaternion();
   const _lenP = { a: 0, b: 0 };   // coxa/canela já na ESCALA DO MUNDO deste frame
   /* BRAÇO E ANTEBRAÇO NA ESCALA DO MUNDO DESTE FRAME — e, ao mesmo tempo, a
@@ -216,6 +272,16 @@ export function createFpBody(deps) {
   let sentinelas = [];    // todos os vértices da malha, para a varredura rolante
   const suspeitos = [];   // os que já violaram: verificados todo frame (ver recuarDoOlho)
   let recuoOlho = 0;      // quanto o corpo recuou neste frame (m) — QA
+  /* QA da perna: quanto o ponto mais baixo do corpo passou do piso e quanto o
+     alvo do pé teve de ser ERGUIDO até ele (metros de mundo). Ver
+     `resolverPernas`. */
+  let afundou = 0, peErguido = 0, peAFrente = 0;
+  /* profundidade do agachamento SEM teto (`k` satura em 1): é ela que a capa
+     usa para continuar recolhendo a bainha depois do agachamento de projeto */
+  let agacharCru = 0;
+  /* QA do braço: metros de MUNDO que a clavícula transladou rumo ao alvo neste
+     frame. É o "ombro viajando atrás da mão" com número. */
+  const clavDelta = { r: 0, l: 0 };
   /* Caixa (espaço da RAIZ) do que o recorte do olho tirou da malha. É o número
      que diz quanto do DESKTOP mudou: lá o corpo é filho da câmera e a raiz É o
      olho, então esta caixa é exatamente a região que o jogador de monitor
@@ -719,8 +785,59 @@ export function createFpBody(deps) {
     return _alvoLivre.copy(alvo).sub(_olhoW).multiplyScalar(TUNE.maoLivre / d).add(_olhoW);
   }
 
+  /* ================================================================
+     A ESCÁPULA ABDUZ PARA O BRAÇO NÃO PASSAR NA CARA.
+
+     Só em VR (mesmo portão do resto do módulo). O braço esticado prende o
+     úmero na reta OMBRO→MÃO, e reta presa não sai da frente do olho por
+     rotação nenhuma — quem tem de sair do lugar é o ombro. Aqui mede-se a
+     distância do olho a ESSA RETA (o segmento, não a ponta: o que encosta na
+     cara é o meio do úmero) e o ombro é empurrado na perpendicular, para
+     longe do olho, o tanto que falta e no máximo `clavAbduz`.
+
+     Passa por `limitarClavicula` como todo movimento de clavícula deste
+     módulo: continua proibido SUBIR e CRUZAR o esterno. Sobra o que o corpo
+     realmente faz ao levantar o braço — abrir o ombro para o lado.
+     ================================================================ */
+  const _segA = new THREE.Vector3(), _segB = new THREE.Vector3(), _segC = new THREE.Vector3();
+  function abduzirDoOlho(sh, up, alvo, clavLado) {
+    if (!bodyRoot.parent || bodyRoot.parent === camera) return;
+    camera.getWorldPosition(_olhoW);
+    up.getWorldPosition(_segA);                    // raiz do braço (ombro)
+    _segB.copy(alvo).sub(_segA);                   // ombro → alvo
+    const L2 = _segB.lengthSq();
+    if (L2 < 1e-8) return;
+    /* ponto do SEGMENTO mais perto do olho */
+    let t = _segC.copy(_olhoW).sub(_segA).dot(_segB) / L2;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    _segC.copy(_segA).addScaledVector(_segB, t).sub(_olhoW);   // olho → reta
+    const d = _segC.length();
+    if (d >= TUNE.bracoLivre || d < 1e-4) return;
+    _segC.multiplyScalar((TUNE.bracoLivre - d) / d);            // o que falta, na fuga
+    /* NÃO PASSA POR `limitarClavicula`, e o motivo é o vetor, não a junta:
+       aquele limitador existe para impedir que a clavícula SUBA e CRUZE o
+       esterno indo atrás de uma âncora à frente, e a regra de cruzamento é uma
+       trava de SINAL em x. Este empurrão aponta, por construção, para LONGE do
+       olho — ele não tem como levar o ombro para a cara. Aplicado, o limitador
+       zerava justamente a abdução (medido: com teto de 0,30 m o pior vértice
+       andou de 0,1028 para 0,0979 m, ou seja não andou).
+
+       O que continua valendo é a outra metade da junta: o acrômio NÃO SOBE.
+       Encolher os ombros aproxima a gola do olho, e isso está medido no
+       comentário de `clavUp` (0,1304 m com 2 cm de folga contra 0,1442 m com
+       zero). Aqui a componente para cima é simplesmente descartada. */
+    if (_segC.y > 0) _segC.y = 0;
+    if (_segC.lengthSq() < 1e-8) return;
+    if (_segC.length() > TUNE.clavAbduz) _segC.setLength(TUNE.clavAbduz);
+    clavDelta[clavLado] += _segC.length();
+    sh.parent.getWorldQuaternion(_q).invert();
+    _segC.applyQuaternion(_q).divide(sh.parent.getWorldScale(_v3));
+    sh.position.add(_segC);
+    up.updateWorldMatrix(true, true);
+  }
+
   /* IK analítico de 2 ossos com dobra guiada por "pole" (cotovelo) */
-  function solveArm(sh, up, fore, hand, len, targetPos, sideSign) {
+  function solveArm(sh, up, fore, hand, len, targetPos, sideSign, tetoClav) {
     /* O COMPRIMENTO QUE ENTRA NO SOLVER É O DESTE FRAME, não o do
        carregamento. `armLen` foi medido com a raiz em escala 1; em VR a raiz
        carrega a escala do avatar (js/xr/xrbody.js dimensiona o boneco pelo
@@ -737,17 +854,22 @@ export function createFpBody(deps) {
        alvo, e mirar em pontos diferentes deixaria o ombro indo para um lugar
        onde a mão não vai */
     const alvo = foraDoOlho(targetPos);
+    const clavLado = sideSign > 0 ? 'r' : 'l';
+    clavDelta[clavLado] = 0;
     if (sh) {
+      const teto = Number.isFinite(tetoClav) ? tetoClav : TUNE.clavMax;
       _v.copy(alvo).sub(up.getWorldPosition(_v2));
       const need = Math.min(
-        Math.max(_v.length() - (L.a + L.b) * TUNE.reachBend, 0), TUNE.clavMax);
+        Math.max(_v.length() - (L.a + L.b) * TUNE.reachBend, 0), teto);
       if (need > 1e-4) {
         _v.normalize().multiplyScalar(need);                 // delta em mundo
         limitarClavicula(sh, _v, sideSign);                  // junta, não elástico
+        clavDelta[clavLado] = _v.length();                   // QA: ombro viajou tanto
         sh.parent.getWorldQuaternion(_q).invert();
         _v.applyQuaternion(_q).divide(sh.parent.getWorldScale(_v3));
         sh.position.add(_v);
       }
+      abduzirDoOlho(sh, up, alvo, clavLado);
     }
     /* POLE: O COTOVELO ABRE EM RELAÇÃO AO TRONCO, NÃO À CABEÇA.
 
@@ -854,6 +976,35 @@ export function createFpBody(deps) {
        UUID), e nada disso roda por frame. */
     const inv = new THREE.Matrix4().copy(bodyRoot.matrixWorld).invert();
     const qRaiz = bodyRoot.getWorldQuaternion(new THREE.Quaternion()).invert();
+
+    /* A SOLA DA BOTA, MEDIDA NO VÉRTICE — e é ela, não o tornozelo, que o
+       jogador vê entrar no chão.
+
+       O alvo do IK da perna é um OSSO (o `Boot`), e a malha da bota desce
+       0,165 unidades da raiz ABAIXO dele. Pôr o osso no piso enterra a bota
+       inteira; pôr a bota no piso é o que se quer, e para isso é preciso saber
+       essa distância. Ela é medida UMA VEZ, na pose de descanso, no espaço da
+       RAIZ — na bind o skinning é a identidade por construção (`boneInverse` é
+       a inversa do osso na bind), então o vértice bruto do atributo já é a
+       posição de descanso na malha; subir daí até a raiz é uma multiplicação
+       de matrizes. É o mesmo raciocínio de `recortarOlho`.
+
+       CAIXA NÃO SERVE AQUI: `Box3.setFromObject` num `SkinnedMesh` grava em
+       `mesh.boundingBox` e o three nunca invalida esse campo (CLAUDE.md) — e
+       este arquivo ENVENENA esse cache de propósito no boot. Vértice. */
+    const _vv = new THREE.Vector3(), _mm = new THREE.Matrix4();
+    let sola = Infinity;
+    bodyRoot.traverse(o => {
+      if (!o.isSkinnedMesh || !o.geometry || !o.geometry.attributes.position) return;
+      const at = o.geometry.attributes.position;
+      _mm.multiplyMatrices(inv, o.matrixWorld);
+      for (let v = 0; v < at.count; v++) {
+        _vv.fromBufferAttribute(at, v).applyMatrix4(_mm);
+        if (_vv.y < sola) sola = _vv.y;
+      }
+    });
+    if (!Number.isFinite(sola)) sola = 0;
+
     let dobra = Infinity;
     for (const [k, quadril, joelho, pe] of pares) {
       const hip = quadril.getWorldPosition(new THREE.Vector3());
@@ -872,15 +1023,19 @@ export function createFpBody(deps) {
       if (polo.lengthSq() < 1e-8) polo.set(0, 0, -1);   // rig reto: joelho pra frente
       polo.normalize();
       const peRaiz = tor.clone().applyMatrix4(inv);
+      const { a, b } = legLen[k];
+      const dMin = Math.sqrt(Math.max(0, a * a + b * b - 2 * a * b * Math.cos(TUNE.kneeMin)));
       pernaRepouso[k] = {
         pe: peRaiz,
         polo: polo.clone().transformDirection(inv),
         quat: qRaiz.clone().multiply(pe.getWorldQuaternion(new THREE.Quaternion())),
         lado: Math.sign(peRaiz.x) || 1,
         L0,
+        /* altura do TORNOZELO acima da sola, em unidades da raiz */
+        sola: peRaiz.y - sola,
+        /* menor distância quadril→tornozelo que o joelho permite (raiz) */
+        dMin,
       };
-      const { a, b } = legLen[k];
-      const dMin = Math.sqrt(Math.max(0, a * a + b * b - 2 * a * b * Math.cos(TUNE.kneeMin)));
       dobra = Math.min(dobra, Math.max(0, L0 - dMin));
     }
     pernaDobra = Number.isFinite(dobra) ? dobra : 0;
@@ -898,7 +1053,36 @@ export function createFpBody(deps) {
     const pedido = Number.isFinite(bodyRoot.userData.encurtar)
       ? bodyRoot.userData.encurtar / escala
       : TUNE.crouchDrop * player.crouchT;
-    const enc = Math.min(Math.max(pedido, 0), pernaDobra);
+    /* ================================================================
+       O TETO DE `pernaDobra` SAI DO CAMINHO EM VR — ELE ERA O ENTERRO.
+
+       `pernaDobra` (0,6411 na raiz) é quanto a perna encurta com o pé subindo
+       EM LINHA RETA pelo eixo quadril→tornozelo. Ele nunca foi o limite real,
+       porque o pé também anda para a FRENTE (`footFwd`): medido, com
+       `enc` batendo nesse teto o joelho ainda estava a 27,1°, com 5,1° de
+       folga até o limite de 22°. Ou seja, o teto parava a perna ANTES do
+       joelho — e o que sobrava do agachamento virava bota dentro do chão.
+
+       Medido no vértice skinado, com o jogador agachando 0,75 m: a bota ficou
+       **0,1087 m ABAIXO do piso**. O relato do dono ("o boneco parece
+       enterrado") é este número.
+
+       Em VR o pedido passa inteiro, e quem segura a perna deixa de ser um
+       escalar pré-calculado e passa a ser a GEOMETRIA do frame, em duas
+       guardas aplicadas ao alvo já em MUNDO, logo abaixo:
+         1. a sola não passa do piso;
+         2. o joelho não passa do limite humano — e quando a conta pede mais,
+            quem cede é a posição do PÉ (ele desliza para a frente), que é o
+            que um corpo faz ao agachar fundo, não o piso.
+
+       No DESKTOP o teto fica: lá `pedido` vale no máximo `crouchDrop` (0,58),
+       que já é menor que `pernaDobra`, então a linha nunca morde — e o que
+       está no ar não muda por causa de uma correção de VR. */
+    const paiCorpo = bodyRoot.parent;
+    const emXR = !!(paiCorpo && paiCorpo !== camera);
+    const enc = emXR
+      ? Math.max(pedido, 0)
+      : Math.min(Math.max(pedido, 0), pernaDobra);
     /* `k` É A PROFUNDIDADE DO AGACHAMENTO, NÃO A FRAÇÃO DA PERNA USADA — e a
        diferença entre as duas custou quatro casos de teste.
 
@@ -914,9 +1098,36 @@ export function createFpBody(deps) {
        `crouchDrop` é a régua certa: é o agachamento de projeto do jogo, em
        unidades da raiz, e não se mexe quando o limite do joelho se mexe. */
     const k = Math.min(1, enc / Math.max(TUNE.crouchDrop, 1e-4));
+    /* ...MAS A CAPA PRECISA DO NÚMERO SEM TETO, e o motivo é o mesmo de
+       `pernaDobra`: quem satura para de responder e o corpo continua descendo.
+       `k` satura em 1 no agachamento de projeto (0,58 m); o jogador de headset
+       agacha MAIS que isso, e a partir dali a bainha parava de subir enquanto
+       o corpo seguia. Medido na varredura: com a cabeça a 1,20 m a bainha
+       ficou 0,0463 m DENTRO do piso, com a bota certinha no lugar.
+       `agacharCru` é a mesma razão sem o `min`, então vale exatamente `k` em
+       todo o alcance do DESKTOP (onde `enc ≤ crouchDrop` sempre) e só passa de
+       1 no agachamento fundo de VR. O teto existe para a capa não virar
+       guarda-chuva se a leitura de altura enlouquecer. */
+    agacharCru = Math.min(enc / Math.max(TUNE.crouchDrop, 1e-4), TUNE.cloakMax);
     if (!legPairs) {
       legPairs = [['l', B.leg1L, B.leg2L, B.footL, 1], ['r', B.leg1R, B.leg2R, B.footR, -1]];
     }
+    /* O PISO, EM MUNDO. Em VR a raiz do boneco é filha do RIG, e o rig É o
+       espaço de referência `local-floor` posto no mapa: y = 0 dentro dele é o
+       chão em que o jogador está pisando (js/xr/xrrig.js). O rig só guina, de
+       modo que a altura do piso em mundo é a origem dele. No desktop não há
+       piso nenhum a consultar aqui — o corpo é filho da CÂMERA — e as duas
+       guardas abaixo ficam desligadas. */
+    let piso = null;
+    if (emXR) {
+      paiCorpo.updateWorldMatrix(true, false);
+      piso = _pisoV.setFromMatrixPosition(paiCorpo.matrixWorld).y;
+      /* frente HORIZONTAL do corpo (o modelo olha para −Z da raiz) */
+      _fwP.set(0, 0, -1).transformDirection(bodyRoot.matrixWorld);
+      _fwP.y = 0;
+      if (_fwP.lengthSq() < 1e-8) _fwP.set(0, 0, -1); else _fwP.normalize();
+    }
+    peErguido = 0; peAFrente = 0;
     for (const [lado, quadril, joelho, pe, s] of legPairs) {
       const rep = pernaRepouso[lado];
       const sw = Math.sin(walkPh) * s * stride;
@@ -926,9 +1137,101 @@ export function createFpBody(deps) {
       _alvo.z -= sw * TUNE.stepLen;                       // passada (−Z é a frente do corpo)
       _alvo.y += Math.max(0, sw) * TUNE.stepLift + air * TUNE.airTuck;
       bodyRoot.localToWorld(_alvo);
+      /* ================================================================
+         AS DUAS GUARDAS DO PÉ, EM MUNDO E NESTA ORDEM.
+
+         1) A SOLA NÃO PASSA DO PISO. O alvo é o osso do tornozelo; a bota
+            desce `rep.sola` (unidades da raiz, medida no vértice em
+            `medirPernas`) abaixo dele. É um MÍNIMO, não uma igualdade: a
+            passada levanta o pé e tem de continuar levantando.
+
+         2) O JOELHO NÃO PASSA DO LIMITE HUMANO, E QUEM CEDE É O PÉ. Se, com a
+            sola no piso, o quadril chegou perto demais do tornozelo, não há
+            triângulo com o joelho dentro de `kneeMin` — e a saída NÃO é
+            afundar o pé nem dobrar o joelho ao contrário: é o pé deslizar
+            para a FRENTE, que é o que um corpo faz agachando fundo (com o
+            quadril preso debaixo da cabeça, "quadril para trás" e "pé para a
+            frente" são o mesmo movimento visto do outro osso — é o
+            `moveBodyBackWhenCrouching` do VRIK). Andar na horizontal aumenta
+            a distância quadril→pé sem tirar a sola do chão, que é exatamente
+            a variável livre que faltava.
+
+            O deslize sai da equação, não de um fator de gosto:
+              |d + t·f|² = dMin²  →  t = −(d·f) + √((d·f)² + dMin² − |d|²)
+            com `f` a frente horizontal do corpo. É o menor avanço que fecha o
+            triângulo, então o pé nunca anda mais do que o necessário. E é
+            limitado por construção: t ≤ dMin (0,161 na raiz).
+         ================================================================ */
+      if (piso !== null) {
+        const minY = piso + rep.sola * escala;
+        if (_alvo.y < minY) {
+          peErguido = Math.max(peErguido, minY - _alvo.y);
+          _alvo.y = minY;
+        }
+        quadril.getWorldPosition(_hipP);
+        _dlP.copy(_alvo).sub(_hipP);
+        const dm = rep.dMin * escala;
+        const d2 = _dlP.lengthSq();
+        if (d2 < dm * dm) {
+          const bd = _dlP.dot(_fwP);
+          const t = -bd + Math.sqrt(Math.max(0, bd * bd + dm * dm - d2));
+          _alvo.addScaledVector(_fwP, t);
+          peAFrente = Math.max(peAFrente, t);
+        }
+      }
       _poloP.copy(rep.polo);
       _poloP.x += rep.lado * TUNE.kneeOut * k;            // joelhos abrem ao dobrar
       _poloP.transformDirection(bodyRoot.matrixWorld);
+      /* ================================================================
+         O JOELHO SOBE. ELE NUNCA MERGULHA.
+
+         O polo diz de que lado da linha quadril→pé o joelho sai, e o solver o
+         REPROJETA perpendicular a essa linha. Enquanto o pé está ABAIXO do
+         quadril, um polo horizontal-para-a-frente reprojetado continua para a
+         frente e tudo funciona. Num agachamento fundo o pé fica ACIMA do
+         quadril (a sola está travada no piso e o quadril desceu junto com a
+         cabeça), a linha inverte de sentido — e a MESMA reprojeção vira o polo
+         PARA BAIXO. O joelho, que está a 0,376 m dessa linha, desce esse tanto
+         em vez de subir.
+
+         Medido na varredura, degrau a degrau: com a cabeça a 1,15 m o polo
+         real era (0,84; +0,54; 0,08) e estava tudo certo; a 1,10 m ele virou
+         (0,72; −0,68; 0,14) e a COXA foi para 0,155 m abaixo do piso, com o
+         joelho 0,25 m abaixo do próprio tornozelo. É o mesmo defeito que o
+         comentário de `footFwd` descreve ("o joelho mergulha"), aqui pelo
+         outro gatilho: não é o pé atrás do quadril, é o pé acima dele.
+
+         A regra é anatômica e vale sempre: agachar leva o joelho para CIMA e
+         para a frente. Então a componente vertical do polo é refletida em vez
+         de aceita; se a reflexão ainda apontar para baixo (a linha
+         quadril→pé quase vertical torna a reprojeção instável), o polo passa a
+         ser o "para cima" reprojetado, cuja componente vertical vale 1 − n_y²
+         e portanto NUNCA é negativa. */
+      _dlP.copy(_alvo).sub(quadril.getWorldPosition(_hipP));
+      if (piso !== null && _dlP.lengthSq() > 1e-9) {
+        _dlP.normalize();
+        _poloP.addScaledVector(_dlP, -_poloP.dot(_dlP));  // como o solver fará
+        if (_poloP.y < 0) {                               // reflete e reprojeta
+          _poloP.y = -_poloP.y;
+          _poloP.addScaledVector(_dlP, -_poloP.dot(_dlP));
+        }
+        if (_poloP.y < 0 || _poloP.lengthSq() < 1e-8) {
+          /* "para cima" reprojetado: a componente vertical dele vale 1 − n_y²,
+             que nunca é negativa */
+          _polX.set(0, 1, 0).addScaledVector(_dlP, -_dlP.y);
+          /* ...e ela é ZERO quando a linha quadril→pé é vertical, que é o
+             jogador sentado no chão com o pé à frente. Aí não existe "para
+             cima" perpendicular — e não precisa: com a linha vertical QUALQUER
+             polo horizontal põe o joelho acima do quadril, então vale a frente
+             do corpo. Sem esta segunda rede o polo refletido continuava
+             valendo e o joelho voltava a mergulhar (medido: 0,062 m abaixo do
+             próprio tornozelo com a cabeça a 0,70 m). */
+          if (_polX.lengthSq() < 1e-6) {
+            _polX.copy(_fwP).addScaledVector(_dlP, -_fwP.dot(_dlP));
+          }
+          if (_polX.lengthSq() > 1e-8) _poloP.copy(_polX);
+        }
+      }
       /* O SOLVER TRABALHA EM MUNDO, e em VR o boneco é dimensionado pelo
          jogador: `legLen` foi medido com a raiz em escala 1, então a coxa e a
          canela precisam entrar na escala DESTE frame. Sem isto o IK pede uma
@@ -944,6 +1247,30 @@ export function createFpBody(deps) {
       pe.parent.getWorldQuaternion(_qf2).invert();
       pe.quaternion.copy(_qf2.multiply(_qf));
       pe.updateWorldMatrix(false, true);
+    }
+    /* O PREÇO QUE SOBROU, MEDIDO NO OSSO DEPOIS DE RESOLVER — não previsto por
+       fórmula. Com a sola travada no piso, o que ainda pode ficar abaixo dele é
+       o QUADRIL: a raiz do boneco acompanha a cabeça até o fim (js/xr/xrbody.js,
+       critério C5), e o quadril mora ~0,94 unidades da raiz abaixo dela. Cabeça
+       abaixo disso é o jogador SENTADO NO CHÃO, e aí nenhuma pose de perna
+       salva — o que falta é dobrar a COLUNA, que este rig não faz.
+
+       `afundou` era uma PREVISÃO (`olho − pernaDobra − tolerância`) feita em
+       js/xr/xrbody.js, e com as guardas acima ela passou a prever enterro que
+       não acontece mais. Aqui é medida: o menor entre sola, quadril e joelho,
+       contra o piso. Vai pelo mesmo `userData` que `pernaDobra` e `encurtar`. */
+    if (piso !== null) {
+      let baixo = Infinity;
+      for (const [lado, quadril, joelho, pe] of legPairs) {
+        const sol = pernaRepouso[lado].sola * escala;
+        baixo = Math.min(baixo, pe.getWorldPosition(_hipP).y - sol,
+          quadril.getWorldPosition(_hipP).y, joelho.getWorldPosition(_hipP).y);
+      }
+      afundou = Math.max(0, piso - baixo);
+      bodyRoot.userData.afundou = afundou;
+    } else {
+      afundou = 0;
+      delete bodyRoot.userData.afundou;
     }
     return k;
   }
@@ -1003,11 +1330,13 @@ export function createFpBody(deps) {
       const c = B.cloak[i];
       _q.setFromAxisAngle(_v.set(1, 0, 0),
         Math.sin(t * 1.9 + i) * 0.05 + Math.min(spd / 8, 1) * 0.3
-        + Math.sqrt(agacharK) * TUNE.cloakLift);
+        + Math.sqrt(agacharCru) * TUNE.cloakLift);
       c.quaternion.multiply(_q);
     }
 
     /* alvos das mãos (posição) + direção dos dedos (empunhadura) */
+    const emXR = !!(bodyRoot.parent && bodyRoot.parent !== camera);
+    let alvoDaMaoDoJogador = false;
     const pose = window.__FP_pose;
     camera.getWorldQuaternion(_tq);
     const camPos = camera.getWorldPosition(_camPos);
@@ -1030,10 +1359,43 @@ export function createFpBody(deps) {
         gun.parts.handL.getWorldPosition(lp);
         dirL.set(TUNE.fingersL[0], TUNE.fingersL[1], TUNE.fingersL[2]).applyQuaternion(_q2);
       }
+      /* ================================================================
+         EM VR A MÃO ESQUERDA DO BONECO É A MÃO ESQUERDA DO JOGADOR.
+
+         A spec do WebXR define o `gripSpace` como o espaço que "tracks the
+         pose used to render virtual objects so they appear to be held in (or
+         part of) the user's hand", com a origem "located at the centroid —
+         the center of mass — of the user's fist" (MDN,
+         XRInputSource.gripSpace). Ou seja: o punho É a mão. O que fica
+         pendurado nela é a ARMA — e é isso que js/xr/xrweapon.js faz com a
+         mão direita, pondo a âncora `gripR` EM CIMA da palma.
+
+         Do lado esquerdo esta base fazia o contrário: o IK mirava a âncora
+         `supportHand` DA ARMA, que é um ponto do guarda-mão a 0,5508 m da
+         empunhadura no fuzil (0,6015 na escopeta, 0,6412 no DMR). Duas
+         consequências medidas, no render, com o controle esquerdo onde um
+         humano põe a mão de apoio:
+           · ombro→âncora 0,6682 m contra 0,6573 m de braço — fora de alcance
+             POR CONSTRUÇÃO, o cotovelo travando em 176,0° (esticado);
+           · a mão do boneco a **0,5244 m** da mão do jogador; e com a mão
+             dele solta ao lado do corpo, a **0,9259 m**.
+         O jogador soltava o guarda-mão e o boneco continuava agarrado nele.
+
+         O alvo chega pelo `userData` que js/xr/xrbody.js já usa para
+         `encurtar`/`pernaDobra`/`recuoOlho` — mesmo canal, sem passar pelo
+         game.js e sem criar `Object3D` (contrato do worldgen). No desktop o
+         campo não existe e a âncora da arma continua mandando: lá não há
+         controle nenhum, e o que está no ar não pode regredir.
+
+         VALE TAMBÉM PARA A FACA: com o alvo escrito à mão ao lado do corpo, o
+         jogador movia o braço esquerdo e o do boneco ficava parado. */
+      const maoJog = emXR ? bodyRoot.userData.maoEsq : null;
+      if (maoJog) { lp.copy(maoJog); alvoDaMaoDoJogador = true; }
     } else return;
 
-    solveArm(B.shR, B.upR, B.foR, B.haR, armLen.r, rp, 1);
-    solveArm(B.shL, B.upL, B.foL, B.haL, armLen.l, lp, -1);
+    solveArm(B.shR, B.upR, B.foR, B.haR, armLen.r, rp, 1, TUNE.clavMax);
+    solveArm(B.shL, B.upL, B.foL, B.haL, armLen.l, lp, -1,
+      alvoDaMaoDoJogador ? TUNE.clavMao : TUNE.clavMax);
     alignHand(B.haR, fingerAxis.r, dirR, TUNE.rollR);
     alignHand(B.haL, fingerAxis.l, dirL, TUNE.rollL);
 
@@ -1075,6 +1437,21 @@ export function createFpBody(deps) {
        e a mão param; comparar com a distância real entre os ossos é o que
        separa "o IK acertou" de "o IK pediu um braço que não existe". */
     get alcanceDoIK() { return alcanceUsado; },
+    /* QA da perna, em metros de MUNDO e todos medidos DEPOIS de resolver:
+       `afundou`  — quanto o ponto mais baixo (sola, quadril ou joelho) passou
+                    do piso. Zero é o contrato; o que sobra é o jogador
+                    sentado no chão, onde falta dobrar a coluna e não a perna.
+       `peErguido`— quanto o alvo do pé teve de ser puxado até o piso, ou seja
+                    o tanto de enterro que a guarda evitou neste frame.
+       `peAFrente`— quanto o pé deslizou para a frente para o joelho não passar
+                    do limite humano. */
+    get afundou() { return afundou; },
+    get peErguido() { return peErguido; },
+    get peAFrente() { return peAFrente; },
+    /* QA do braço: metros de MUNDO que a clavícula transladou rumo ao alvo no
+       último frame. É "o ombro viajando atrás da mão" com número — com o alvo
+       na mão do jogador ele fica em zero, e o teto é `TUNE.clavMao`. */
+    get clavicula() { return clavDelta; },
     bones: B, TUNE, bodyRoot,
     /* inspeção: solta o corpo no mundo pra fotografar de fora (calibração) */
     debugDetach(x, y, z) {

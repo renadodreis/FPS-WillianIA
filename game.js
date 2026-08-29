@@ -2133,7 +2133,14 @@ function applyFpsCamera(dt, t) {
   // modelos GLB: animações embutidas da arma + rig de miras/mecanismos + IK
   WeaponModels.update(dt);
   WeaponRig.update(dt, t, gun, adsT);
-  FpBody.update(dt, t);
+  /* EM XR O CORPO É RESOLVIDO DEPOIS DA ARMA, NÃO AQUI — ver o segundo
+     `FpBody.update` logo depois do `XRArma.aplicar`, no tick. Aqui a arma
+     ainda está na pose de DESKTOP: o IK resolvia a mão contra ela e a arma era
+     movida para o controle em seguida, no mesmo frame. Medido no render, com o
+     headset a 1,70 m: a mão direita do boneco a 0,4805 m da empunhadura que
+     aparece na tela — e 0,0000 m se medida aqui dentro, que é a mesma reta
+     comparada consigo mesma. */
+  if (!XR.presenting) FpBody.update(dt, t);
 
   // ---- flash do cano ----
   muzzleT = Math.max(0, muzzleT - dt);
@@ -3605,7 +3612,12 @@ function tick(forceDt) {
        olho, −0,65 m a 1,25 m) e tomba junto com o pescoço ao olhar pra baixo.
        Anexar por frame porque o rig só nasce no XR.sync (anexar é idempotente). */
     if (XR.rig) XR.corpo.anexar(XR.rig, FpBody.bodyRoot);
-    XR.corpo.update(dt);
+    /* O PUNHO ESQUERDO VAI JUNTO: é o alvo do braço esquerdo do boneco. O
+       `gripSpace` do WebXR É a mão do jogador ("the centroid — the center of
+       mass — of the user's fist"), e o boneco mirava a âncora do guarda-mão da
+       ARMA, a 0,55–0,64 m dali e fora do alcance do braço. XR.corpo repassa por
+       `userData` para js/fpbody.js (mesmo canal de `encurtar`/`pernaDobra`). */
+    XR.corpo.update(dt, XR.punho('left') || XR.mao('left'));
 
     /* O COLISOR SEGUE A CABEÇA. Andar pelo cômodo movia a vista e deixava a
        cápsula parada: o jogador atravessava parede andando de verdade e a cota
@@ -3873,6 +3885,13 @@ function tick(forceDt) {
     cabeca: camera.getWorldPosition(_xrCabeca), dt,
     oculto: state.driving || state.flying,
   });
+  /* E O CORPO DEPOIS DA ARMA, que é o outro lado do mesmo contrato: em XR a
+     arma só chega ao punho do jogador na linha acima, e o IK do braço tem de
+     resolver contra a pose que vai para a TELA. Resolvido antes (dentro do
+     `applyFpsCamera`, onde o desktop continua resolvendo), o braço mirava a
+     arma na pose de mouse e a arma era movida logo em seguida: 0,4805 m de mão
+     fora da empunhadura, constante nas três armas longas. */
+  if (xrOn) FpBody.update(dt, t);
   /* DEPOIS da arma, e isso é contrato: o painel de munição é filho do
      `weaponRoot`, e ler antes deixaria o número um frame atrás da arma. */
   if (xrOn) XRHud.update({

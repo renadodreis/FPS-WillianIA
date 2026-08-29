@@ -320,6 +320,38 @@ tempo é do aparelho.
   suspenso não expõe socket nem desenha. Confirmar limite de segurança é tarefa
   humana, dentro do headset.
 
+- **Worktree de agente pode nascer num commit VELHO.** Aconteceu com QUATRO
+  agentes seguidos nesta frente, todos no mesmo commit pré-porte (`a3aeb33`):
+  a worktree não tinha `js/xr/` nem `docs/vr/`, e o agente ia estudar um jogo
+  que não existe mais. Sintoma: o briefing cita arquivos que o `ls` não acha.
+  Conferir `git log --oneline -1` na worktree ANTES de ler código; se estiver
+  atrás, `git reset --hard <dev>` na branch isolada dela (que é descartável).
+  `node_modules` também não vem — e **não está no `.gitignore` deste repo**, o
+  que torna um `git add -A` com worktree suja um acidente pronto.
+- **Sonda de mão: `dev.controllers[mao].position` e `.quaternion` são
+  escrevíveis**, e é assim que se põe a mão do jogador onde um humano poria.
+  Os ids de botão do kit são os do config oficial da Meta (`trigger`,
+  `squeeze`, `thumbstick`, `x-button`/`y-button` à esquerda, `a-button`/
+  `b-button` à direita), e batem com os índices `xr-standard` 0/1/3/4/5.
+- **Amostrar no RENDER é embrulhar `renderer.render`,** e só funciona dentro
+  de XR: fora da sessão o jogo chama `composer.render` e o embrulho nunca
+  dispara (medido: 0 chamadas contra 78). Um bloco de controle "desktop" que
+  amostre por ali mede `null` e passa achando que mediu.
+- **Sonda que escreve campo INEXISTENTE mente sem erro.** Uma sonda desta
+  frente escrevia `gun.ammo` para "gastar bala"; o campo é `gun.mag` (e
+  `gun.magSize` é a capacidade). O pente continuava cheio, `startReload`
+  recusava com razão, e a leitura quase virou o laudo "a recarga não
+  funciona". Antes de publicar defeito, confira que a sonda mexeu no campo
+  que o produto lê.
+- **Perseguir uma janela exige mirar DENTRO dela.** Ao caçar o ADS físico,
+  mirei 0,08 m à frente do olho: é abaixo de `RECUO_MIN` (0,14) e dentro do
+  `CABECA_RAIO` (0,12) que faz a arma sumir de propósito. Resultado: ads
+  0,000 e a conclusão errada de que a mira não funciona. Com o alvo no meio
+  da janela (0,22 m), ads 1,000 no mesmo produto.
+- **`bootEmVR` já começa a partida** (`emJogo: true` por padrão). Quem mede o
+  MENU passa `emJogo: false`. Uma sonda que esquece isso mede o jogo; uma que
+  assume o contrário mede o menu e acha que o tiro não funciona.
+
 ## Contratos do código (js/xr/)
 
 - **`scene > xrRig > camera`.** Em XR o three SOBRESCREVE `camera.position`,

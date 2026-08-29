@@ -130,6 +130,44 @@ separadas**, mais um validador independente medindo a **árvore principal**.
 
 ### O que a régua já cobrou, e que vale saber antes de mexer
 
+- **Traduzir analógico em TECLA custa três coisas, e todas se medem.** O
+  headset entregava o polegar como `KeyW/KeyA/KeyS/KeyD`: dava OITO direções
+  (erro de 22,50° com o polegar a 22,5° do eixo, trocando de sinal a cada
+  octante), UMA velocidade só (meio analógico e talo davam os mesmos
+  1,693 m/s) e zona morta efetiva de 0,2805 contra os 0,18 declarados. O
+  canal analógico já existia pronto em `js/xr/xrinput.js` e era descartado.
+  Ao consertar: o canal **substitui** as teclas a pé e as MANTÉM escritas —
+  `js/car.js` e `js/heli.js` dirigem por tecla e emudecem sem elas.
+- **Zona morta por EIXO torce a diagonal.** Descontando a zona morta de cada
+  eixo em separado, os dois encolhem o mesmo tanto em valor absoluto: a razão
+  entre eles muda e o ângulo andado sai do pedido (medido: 9,79°). Radial —
+  descontar da magnitude e preservar o versor — dá 0,00°. Nos eixos e nas
+  diagonais exatas as duas contas coincidem, que é por que o teste de unidade
+  não via diferença.
+- **Em XR o corpo resolve DEPOIS da arma, e isso virou contrato de frame.**
+  `FpBody.update` morava dentro do `applyFpsCamera`; `XRArma.aplicar` roda
+  ~1 700 linhas depois. O IK do braço resolvia contra a pose de DESKTOP da
+  arma, e a arma ia para o controle em seguida: 0,4805 m de mão fora da
+  empunhadura na tela — e 0,0000 m se medida lá dentro, que é a mesma reta
+  comparada consigo mesma. Hoje o desktop resolve onde sempre resolveu e o XR
+  resolve depois do `XRArma.aplicar`.
+- **O `gripSpace` do WebXR É a mão do jogador**, não um lugar perto dela
+  ("the centroid — the center of mass — of the user's fist", MDN). O braço do
+  boneco mira o controle; a ARMA é que se acomoda às mãos. Mirando a âncora
+  `supportHand` da arma, o alvo ficava a 0,94–1,07 m do ombro contra 0,5881 m
+  de braço — fora de alcance por construção, com o cotovelo travado em 176°.
+- **O giro artificial não pode ser removido**, por mais que ele incomode:
+  VRC.Quest.Tracking.1 é requisito obrigatório de loja (sentado não pode
+  exigir pivô > 90°) e o XAUR do W3C o trata como acessibilidade. O que se
+  faz é oferecer DESLIGAR — é o que o Half-Life: Alyx fez. E ao desligar,
+  a saída tem de vir ANTES dos dois ramos: cortar só o contínuo devolve o
+  giro de graça a quem escolheu passos (medido: −45,000°).
+- **Em VR não existe botão de ADS.** Oito de oito FPS de VR de referência
+  medem a mira pelo gesto de trazer a arma ao olho. O botão pode ganhar
+  trabalho VISÍVEL (empunhar, coldrear); o que não pode é ligar uma bandeira
+  que muda espalhamento e não muda a tela — o jogador aperta e não vê nada,
+  e foi exatamente esse o relato do dono.
+
 - **A mira é geometria, não gosto.** A alça deste jogo fica **6 a 20 cm acima do
   cano** (é *sight height over bore*, aqui exagerada — um fuzil real tem ~4 cm).
   Com origem no cano e alvo na alça, os dois só concordam numa distância. A
@@ -253,7 +291,7 @@ mexer no repositório de outra pessoa — só com pedido explícito.
 - **Monitor com `pgrep` casa com a própria linha de comando.** `until ! pgrep -f
   "run-tests"` nunca termina, porque o shell que o executa contém `run-tests`.
 
-- **"Teste que passa por acidente" já apareceu NOVE vezes nesta base, e é a
+- **"Teste que passa por acidente" já apareceu DEZ vezes nesta base, e é a
   família de defeito mais cara que ela tem.** Não é falta de cobertura: é teste
   verde sobre produto quebrado. Os formatos vistos até agora, todos reais:
   1. **Asserção que não pode falhar** — `|dir| ≈ 1` depois de `.normalize()`;
@@ -282,6 +320,15 @@ mexer no repositório de outra pessoa — só com pedido explícito.
      imune a dublê.
   9. **Cenário que não exercita o limiar** — com a sonda ligada, "encostar de
      leve" nunca chegava a testar o limiar, porque a porta fechava antes.
+
+  10. **A condição que valida o caso é a que esconde o defeito** — o teste de
+     "a cabeça manda no jogo" precisa do giro artificial em ZERO para que
+     régua e leitura vivam no mesmo espaço; e com o rig em zero
+     `camera.quaternion` **é** a pose de mundo, então o mutante que troca
+     `yawDaVista()` por `camera.quaternion` passa verde nos seis ângulos. A
+     saída não foi enfraquecer o caso: foi ACRESCENTAR o complementar, com
+     giro artificial diferente de zero e régua independente (transformada do
+     rig + ângulo comandado). Ele pega o mesmo mutante a 156,29°.
 
   **A defesa que funciona é uma só: reinjete o defeito e veja o teste ficar
   vermelho, com número.** Se não muda de cor, não testa nada. E ancore a medida

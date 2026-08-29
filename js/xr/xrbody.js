@@ -103,6 +103,10 @@ export function criarCorpoXR({ THREE, camera }) {
   const _cx = new THREE.Box3(), _cx2 = new THREE.Box3();
   const _f = new THREE.Vector3(), _u = new THREE.Vector3();
   const _qr = new THREE.Quaternion();
+  /* posição de MUNDO do punho esquerdo do jogador — o alvo do braço esquerdo
+     do boneco (ver `update`). Vector3 não tem `uuid` e não consome número do
+     `Math.random` seedado; só `Object3D` consome. */
+  const _maoEsq = new THREE.Vector3();
 
   /* Mede o modelo NO ESPAÇO DO PRÓPRIO CORPO. Traversar filho a filho (em vez
      de `Box3.setFromObject` seguido de uma inversão) evita inflar a caixa: uma
@@ -155,6 +159,8 @@ export function criarCorpoXR({ THREE, camera }) {
        agachamento do teclado quando este campo NÃO existe. */
     delete corpo.userData.encurtar;
     delete corpo.userData.recuoOlho;
+    delete corpo.userData.maoEsq;
+    delete corpo.userData.afundou;
     if (salvo.pai) salvo.pai.add(corpo);
     else if (corpo.parent) corpo.parent.remove(corpo);
     corpo.position.copy(salvo.position);
@@ -184,7 +190,14 @@ export function criarCorpoXR({ THREE, camera }) {
     return Math.atan2(-_f.x, -_f.z);
   }
 
-  function update(dt) {
+  /* `punhoEsq` é o `gripSpace` do controle esquerdo (js/xr/xrhands.js). Ele
+     entra aqui, e não no game.js, porque este módulo já é o dono do contrato
+     por `userData` com js/fpbody.js (`encurtar`, `pernaDobra`, `recuoOlho`) —
+     e porque a spec do WebXR diz que o gripSpace É a mão: a origem dele fica
+     "at the centroid — the center of mass — of the user's fist". O braço
+     esquerdo do boneco mira ESSE ponto, não a âncora do guarda-mão da arma
+     (ver o bloco correspondente em js/fpbody.js). */
+  function update(dt, punhoEsq) {
     const passo = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.1) : 0;
     const y = camera.position.y;
 
@@ -221,6 +234,15 @@ export function criarCorpoXR({ THREE, camera }) {
     else if (queda <= AGACHA_SAI) agachado = false;
 
     if (!corpo || !rig) return;
+    /* A MÃO DO JOGADOR VAI PARA O BONECO POR AQUI, e antes de qualquer saída
+       antecipada por GLB: quem lê é js/fpbody.js, no mesmo frame. A pose do
+       controle é escrita pelo three no início do `onAnimationFrame` (bem antes
+       desta chamada), então `updateWorldMatrix` aqui dá a pose DESTE frame —
+       ao contrário da câmera, cuja pose só é escrita dentro do `render()`. */
+    if (punhoEsq) {
+      punhoEsq.updateWorldMatrix(true, false);
+      corpo.userData.maoEsq = _maoEsq.setFromMatrixPosition(punhoEsq.matrixWorld);
+    } else if (corpo.userData.maoEsq) delete corpo.userData.maoEsq;
     if (olhoModelo <= 0 && !medirModelo()) return;   // GLB ainda não chegou
 
     escala = trava(alturaDePe / olhoModelo, ESCALA);
@@ -316,9 +338,21 @@ export function criarCorpoXR({ THREE, camera }) {
     get alturaCabeca() { return alturaCabeca; },
     get alturaDePe() { return alturaDePe; },
     get escala() { return escala; },
-    /* QA: metros que o pé passa do chão porque a perna acabou de dobrar. É o
-       preço declarado de a cabeça mandar até o fim (ver `update`). */
-    get afundou() { return afundou; },
+    /* QA: metros que o corpo passa do chão porque a cabeça manda até o fim
+       (ver `update`).
+
+       PREFERE O MEDIDO AO PREVISTO, e a diferença é a entrega desta rodada.
+       A conta local abaixo é uma PREVISÃO — `olho − pernaDobra − tolerância` —
+       e ela ficou obsoleta quando js/fpbody.js passou a travar a SOLA no piso
+       e a deslizar o pé para a frente em vez de parar a perna num escalar
+       pré-calculado: a previsão anuncia enterro que não acontece mais. Quem
+       resolve a perna agora mede o resultado e publica em `userData.afundou`
+       (menor entre sola, quadril e joelho, contra o piso). A previsão fica
+       como piso do número enquanto o GLB não chegou. */
+    get afundou() {
+      const m = corpo && corpo.userData ? corpo.userData.afundou : null;
+      return Number.isFinite(m) ? m : afundou;
+    },
     get olhoModelo() { return olhoModelo; },
     get alturaModelo() { return alturaModelo; },
     get referenciaSuspeita() { return suspeita; },
