@@ -425,11 +425,34 @@
         }
       }
     };
+    /* O QUE SE VÊ SAI DA BOCA; O QUE ACERTA NASCE NA LINHA DE MIRA.
+       O `game.js` entrega aqui, em XR, a origem BALÍSTICA — a que fica sobre a
+       linha de mira, de 6 a 20 cm ACIMA do cano (é a "sight height over bore"
+       das armas deste jogo). Isso está CERTO para o que acerta: origem no cano
+       com direção da alça dá paralaxe constante em toda distância, e é
+       exatamente o que o critério B3 existe para impedir.
+       O que estava errado era o DESENHO. `b.p` era usado como início do
+       traçante, então o risco de luz nascia no ar, acima do cano — medido:
+       5,89 cm na AGULHA, 20,00 cm no PLASMA, em XR. O `CLAUDE.md` afirmava que
+       "traçante e clarão saem da boca (sempre saíram)": era verdade para o
+       hitscan e para o clarão, e falso justamente para este ramo, que é o modo
+       em que o jogo é jogado.
+       `vis` separa as duas coisas: é o ponto de onde o PRÓXIMO segmento
+       desenhado parte. Nasce na BOCA congelada no instante do tiro e, depois
+       do primeiro passo, passa a seguir a bala — o desvio é UM só, de um
+       frame, e some. A bala (`p`) não é tocada.
+       Fora de XR nada muda: lá o `game.js` já passa a própria boca como
+       `origin`, e `vis` cai no mesmo ponto. */
     window.__BR_ballistics = function (origin, dir, gun) {
+      /* CONGELADA, não viva: `canoPosDoTiro()` é a boca no instante do
+         disparo. A viva já viu o coice quando o primeiro passo da bala roda,
+         um frame depois. */
+      const boca = new THREE.Vector3().fromArray(G.canoPosDoTiro());
       bullets.push({
         p: origin.clone(), v: dir.clone().multiplyScalar(gun.projSpeed),
         drop: gun.projDrop || 6, life: 1.7, dmg: gun.dmg, laser: !!gun.laser,
-        from: origin.clone(), weapon: localWeaponCode(), // p/ replicar o erro
+        vis: boca.clone(),                                // início do desenho
+        from: boca, weapon: localWeaponCode(), // p/ replicar o erro (e o traçante remoto)
       });
     };
 
@@ -520,7 +543,7 @@
         const col = b.laser ? 0x52ffe6 : 0xffe9a8;
         if (blockD < Math.min(segLen, bestD)) { // terreno/parede
           _bv.copy(b.p).addScaledVector(_bp, blockD);
-          MP.FX.spawnTracer(b.p, _bv, col);
+          MP.FX.spawnTracer(b.vis, _bv, col);   // DESENHO: parte da boca no 1º passo
           MP.FX.burst(_bv, _bp.clone().negate(), 'dirt');
           window.__BR_shotMiss(b.from, _bv, b.weapon);
           bullets.splice(i, 1);
@@ -528,7 +551,7 @@
         }
         if (bestMeta && bestD <= segLen) { // acertou alguém
           _bv.copy(b.p).addScaledVector(_bp, bestD);
-          MP.FX.spawnTracer(b.p, _bv, col);
+          MP.FX.spawnTracer(b.vis, _bv, col);   // DESENHO: parte da boca no 1º passo
           const head = bestPart === 'head' || bestPart === 'core';
           const dmg = b.dmg * (head ? 1.75 : 1);
           MP.FX.burst(_bv, _bp.clone().negate(), bestMeta.boss ? 'spark' : 'blood');
@@ -550,8 +573,9 @@
           continue;
         }
         _bv.copy(b.p).addScaledVector(_bp, segLen);
-        MP.FX.spawnTracer(b.p, _bv, col);
+        MP.FX.spawnTracer(b.vis, _bv, col);   // DESENHO: parte da boca no 1º passo
         b.p.copy(_bv);
+        b.vis.copy(_bv);                      // e passa a seguir a bala daqui em diante
         if (b.life <= 0 || b.p.y < -60) {
           window.__BR_shotMiss(b.from, b.p, b.weapon);
           bullets.splice(i, 1);

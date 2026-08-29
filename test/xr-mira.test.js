@@ -42,6 +42,38 @@
    gira junto e a comparação contra ele continua dando zero — mas o cano não
    gira, porque ele é o que o jogador vê na mão. É essa a âncora.
 
+   ================================================================
+   SEGUNDA VEZ, E NO CASO PRINCIPAL — corrigido em 2026-08-29.
+   ================================================================
+   O conserto acima entrou de fato, mas SÓ em `grausDoCano`, que é afirmado
+   apenas nos casos do PROJÉTIL e da BAZUCA. O caso principal — "o raio
+   disparado passa pelo ponto que a alça indica" — continuou montando o ponto
+   de prova com `miraDoTiro()`:
+
+     erros[d] = aoRaio(mO + mD·d, O, D)
+
+   e o `game.js`, dentro do MESMO `fire()` síncrono, faz
+   `O := mO + avanco·mD` e `D := mD`. Ou seja: **o ponto está na reta e a
+   direção É a direção** — zero por álgebra, para todo `d`, em XR e no
+   desktop. O caso central do B3 não podia ficar vermelho, e a asserção
+   `naLinha < 0,002` do caso da origem era a mesma armadilha.
+
+   A LINHA DE MIRA AGORA É CONSTRUÍDA DO MODELO, não lida do disparo:
+     · a BOCA e o EIXO do cano vêm congelados do tiro (`canoPosDoTiro`,
+       `canoDoTiro`) — geometria do modelo desenhado;
+     · a ALTURA DE ALÇA vem das constantes de `js/weaponrig.js` (o `eye` da
+       mira ATIVA contra a âncora `muzzle`), que o código de tiro não escreve;
+     · a linha de mira do modelo é `boca + alça·û`, na direção do CANO.
+   O ponto de prova a `d` metros passa a sair dessa linha. Reinjetando o
+   mesmo mutante de 6° no eixo óptico, o número sai de 1,86e-15 m para a casa
+   de 1 m a 10 m. Detalhe do raciocínio em `docs/vr/referencia-origem-do-tiro.md`
+   §10.6, e o critério B7 mede as outras componentes em `test/xr-b7-origem.test.js`.
+
+   O QUE ESTE CASO CONTINUA NÃO PEGANDO: arrancar a projeção do `avanco` leva
+   a origem para a ocular, que ESTÁ sobre a mesma reta — o erro fica zero aqui
+   e aparece como −0,65 m no longitudinal do B7b. Os dois casos são
+   complementares de propósito.
+
    E COBRE OS DOIS CAMINHOS QUE FALTAVAM, ambos achados pela mesma validação:
    · a BAZUCA ficou com a zeragem dinâmica que o hitscan perdeu — zeragem
      variando de 5,60 a 120,00 m entre dois tiros, ângulo de até 2,4172°;
@@ -79,6 +111,26 @@ async function instalarSondas() {
   window.__MIRA = {
     arma: () => (G.arsenal[G.gunIndex] || {}).name || '?',
     destravadas: () => G.arsenal.filter(a => !a.locked).length,
+    /* A ALTURA DE ALÇA DO MODELO — a âncora que o código de tiro não escreve.
+       Sai das constantes do perfil de `js/weaponrig.js` (o `eye` da mira
+       ATIVA, com a mesma regra GLB/fallback do `sightCoords` interno de lá) e
+       da âncora `muzzle` do modelo desenhado. É invariante à pose, então pode
+       ser lida antes ou depois do disparo sem medir recuo. */
+    alcaDoModelo() {
+      const idx = G.gunIndex, gun = G.arsenal[idx];
+      const WR = G.WeaponRig;
+      const perfil = WR.inspect(idx);
+      const sight = WR.activeSight(gun);
+      const c = sight ? ((gun.modelStatus === 'fallback' && sight.fb) ? sight.fb : sight) : null;
+      const olho = c ? c.eye : ((perfil && perfil.anchors.gripR) || [0, 0, 0]);
+      const mz = gun.muzzleAnchor.position;
+      gun.group.updateWorldMatrix(true, false);
+      const escala = gun.group.getWorldScale(new T.Vector3()).x;
+      return {
+        alca: Math.hypot(olho[0] - mz.x, olho[1] - mz.y) * escala,
+        mira: sight ? sight.id : null,
+      };
+    },
     /* CAPTURA O PROJÉTIL DO BR NO PRÓPRIO PONTO DE ENTRADA. Em partida, as
        armas com `projSpeed` não são hitscan: saem por `__BR_ballistics`, que
        o br-game.js instala. O teste instala o MESMO gancho e registra o que o
@@ -112,31 +164,49 @@ async function instalarSondas() {
     async tiro() {
       const g = G.arsenal[G.gunIndex];
       if (g) { g.mag = Math.max(g.mag, 5); g.reloading = false; }
+      const modelo = window.__MIRA.alcaDoModelo();
       const antes = G.origemDoTiro().join(',');
       window.__A.botao('right', 'trigger', 1);
       await window.__A.espera(200);
       window.__A.botao('right', 'trigger', 0);
       await window.__A.espera(260);
-      const O = vec(G.origemDoTiro()), D = vec(G.direcaoDoTiro());
+      const O = vec(G.origemDoTiro()), D = vec(G.direcaoDoTiro()).normalize();
       const cano = vec(G.canoDoTiro()).normalize();   // congelado no tiro: o outro já viu o recuo
-      /* a linha de mira DO INSTANTE DO TIRO. Ler `G.mira()` agora mediria o
-         recuo: numa automática o cano já subiu graus quando a sonda chega. */
+      const boca = vec(G.canoPosDoTiro());            // idem: a viva já viu o coice
+      /* a ocular DO INSTANTE DO TIRO. Ela entra aqui só para dizer de que LADO
+         do cano a alça fica; o TAMANHO do afastamento vem do modelo. */
       const m = G.miraDoTiro();
-      const mO = vec(m.origem), mD = vec(m.direcao).normalize();
+      const mO = vec(m.origem);
       const saiu = G.origemDoTiro().join(',') !== antes || O.lengthSq() > 0;
+
+      /* A LINHA DE MIRA DO MODELO. `boca + alça·û`, na direção do CANO — as
+         três grandezas fora do código de tiro. É contra ESTA reta que o raio
+         é medido; medir contra `miraDoTiro()` dá zero por álgebra, porque o
+         `fire()` monta a origem e a direção do raio a partir dela. */
+      const vE = new T.Vector3().subVectors(mO, boca);
+      const perpE = vE.clone().addScaledVector(cano, -vE.dot(cano));
+      const semLado = perpE.length() < 1e-3;
+      const u = semLado ? new T.Vector3(0, 1, 0) : perpE.clone().normalize();
+      const linha = boca.clone().addScaledVector(u, modelo.alca);
+
+      /* a origem do tiro, decomposta contra o eixo do cano */
+      const v = new T.Vector3().subVectors(O, boca);
+      const longitudinal = v.dot(cano);
+      const transversal = v.clone().addScaledVector(cano, -longitudinal).length();
+
       const erros = {};
       for (const d of [2, 5, 10, 25, 50]) {
-        erros[d] = aoRaio(mO.clone().addScaledVector(mD, d), O, D.clone().normalize());
+        erros[d] = aoRaio(linha.clone().addScaledVector(cano, d), O, D);
       }
       return {
         arma: (G.arsenal[G.gunIndex] || {}).name || '?',
+        mira: modelo.mira, alcaDoModelo: modelo.alca, semLado,
         saiu,
-        aoCano: O.distanceTo(vec(G.canoPosDoTiro())),   // boca CONGELADA no tiro: a outra já viu o coice
-        canoY: vec(G.canoDoTiro()).y,
-        naLinha: aoRaio(O, mO, mD),
-        /* ÂNGULO CONTRA O CANO — a única medida deste arquivo que não vem do
-           código de mira. Sem zeragem, o tiro tem de sair PARALELO ao cano. */
-        grausDoCano: Math.acos(Math.max(-1, Math.min(1, D.clone().normalize().dot(cano)))) * 180 / Math.PI,
+        aoCano: O.distanceTo(boca),   // boca CONGELADA no tiro: a outra já viu o coice
+        canoY: cano.y,
+        longitudinal, transversal,
+        /* ÂNGULO CONTRA O CANO — sem zeragem, o tiro tem de sair PARALELO. */
+        grausDoCano: Math.acos(Math.max(-1, Math.min(1, D.dot(cano)))) * 180 / Math.PI,
         erros,
       };
     },
@@ -164,13 +234,23 @@ describe('o tiro sai onde a mira aponta, em VR (B3)', { skip: !CHROME && 'Chrome
       return out;
     });
     assert.ok(r.length > 0, 'nenhum tiro medido');
-    const ruins = [];
+    const ruins = [], semLado = [];
     for (const t of r) {
+      console.log('      [B3] %s (%s): erro a 10 m %s cm · alça do modelo %s m',
+        t.arma, t.mira, (t.erros[10] * 100).toFixed(3), t.alcaDoModelo.toFixed(4));
       assert.equal(t.saiu, true, `o gatilho não virou tiro na ${t.arma}`);
+      /* a linha de mira do modelo só existe se a alça estiver FORA do eixo do
+         cano — com alça de altura zero ela seria o próprio cano, e o caso
+         deixaria de separar "origem na mira" de "origem no cano" */
+      if (t.semLado || t.alcaDoModelo < 0.02) {
+        semLado.push(`${t.arma}: alça a ${t.alcaDoModelo.toFixed(4)} m do eixo do cano`);
+      }
       for (const d of DISTS) {
         if (t.erros[d] > TETO) ruins.push(`${t.arma} a ${d} m: ${(t.erros[d] * 100).toFixed(2)} cm`);
       }
     }
+    assert.equal(semLado.length, 0,
+      `a alça está em cima do cano e a linha de mira do modelo colapsa nele:\n  ${semLado.join('\n  ')}`);
     assert.equal(ruins.length, 0,
       `o tiro não passa onde a alça aponta:\n  ${ruins.join('\n  ')}\n(teto ${TETO * 100} cm; erro assim é a diferença entre acertar e errar uma cabeça de 16 cm)`);
   });
@@ -185,12 +265,26 @@ describe('o tiro sai onde a mira aponta, em VR (B3)', { skip: !CHROME && 'Chrome
      acertar onde a alça aponta. Este caso trava o número para que ninguém
      confunda "6 a 20 cm de altura de alça" com uma volta dos 67 cm do defeito
      original, e para que a decisão fique medida e não implícita. */
+  /* A ASSERÇÃO ANTIGA DESTE CASO ERA `naLinha < 0,002`, E ELA NÃO PODIA
+     FALHAR: `naLinha` media a distância de `origemDoTiro()` até a reta de
+     `miraDoTiro()`, e o `fire()` MONTA a origem avançando ao longo dessa
+     mesma reta. Zero por álgebra, o mesmo formato 2 do caso principal.
+     Trocada pela decomposição contra o eixo do CANO, com o valor esperado
+     saindo do modelo: é o que o B7b cobra, e agora pode reprovar dos dois
+     lados — transversal zero é origem no cano (a paralaxe que o B3 impede) e
+     transversal sobrando é origem fora da linha de mira. */
   it('a origem balística está SOBRE a linha de mira, e o afastamento do cano é a altura da alça', async () => {
     const r = await h.play(() => window.__MIRA.tiro());
-    assert.ok(r.naLinha < 0.002,
-      `a origem do raio está a ${(r.naLinha * 100).toFixed(2)} cm da linha de mira — ela tem que estar EM CIMA dela`);
-    assert.ok(r.aoCano < 0.25,
-      `a origem balística ficou a ${(r.aoCano * 100).toFixed(1)} cm do cano; altura de alça deste jogo vai até 20 cm, acima disso é outro defeito`);
+    console.log('      [B3/origem] %s (%s): long %s m · transv %s m · alça do modelo %s m',
+      r.arma, r.mira, r.longitudinal.toFixed(4), r.transversal.toFixed(4), r.alcaDoModelo.toFixed(4));
+    assert.ok(r.alcaDoModelo > 0.02,
+      `a alça desta arma está a só ${r.alcaDoModelo.toFixed(4)} m do cano — o caso não separa nada`);
+    assert.ok(Math.abs(r.longitudinal) < 0.02,
+      `a origem do raio está ${r.longitudinal.toFixed(4)} m à frente/atrás da boca; ` +
+      'ela tem que ficar na estação da boca (a ocular fica −0,65 a −0,78 m)');
+    assert.ok(Math.abs(r.transversal - r.alcaDoModelo) < 0.01,
+      `o afastamento da origem ao cano deu ${r.transversal.toFixed(4)} m contra ` +
+      `${r.alcaDoModelo.toFixed(4)} m de altura de alça do modelo`);
   });
 
   /* A BAZUCA FICOU PARA TRÁS, e foi validação independente que viu. O conserto
@@ -302,21 +396,35 @@ describe('o tiro sai onde a mira aponta, em VR (B3)', { skip: !CHROME && 'Chrome
          que ela deve. O que este caso cobra é a decisão de mira; a origem,
          essa é medida no vetor real. */
       const D = new T.Vector3().fromArray(G.direcaoDoTiro()).normalize();
-      const m = G.miraDoTiro();
-      const mO = new T.Vector3().fromArray(m.origem);
-      const mD = new T.Vector3().fromArray(m.direcao).normalize();
       const cano = new T.Vector3().fromArray(G.canoDoTiro()).normalize();
-      const w = new T.Vector3().subVectors(O, mO);
+      const boca = new T.Vector3().fromArray(G.canoPosDoTiro());
+      /* A MEDIDA É A DECOMPOSIÇÃO CONTRA O CANO, com o valor esperado saindo
+         do MODELO. A versão anterior media a distância da origem até a reta de
+         `miraDoTiro()` — e a origem do BR é a MESMA `_rayOrig` que gerou essa
+         reta, então dava zero por álgebra, do mesmo jeito que o caso
+         principal. Aqui, origem no cano dá transversal 0 contra uma alça de
+         0,0910 m e reprova. */
+      const v = new T.Vector3().subVectors(O, boca);
+      const lo = v.dot(cano);
       return {
         arma: g.name,
-        naLinha: w.clone().sub(mD.clone().multiplyScalar(w.dot(mD))).length(),
+        alcaDoModelo: window.__MIRA.alcaDoModelo().alca,
+        longitudinal: lo,
+        transversal: v.clone().addScaledVector(cano, -lo).length(),
         grausDoCano: Math.acos(Math.max(-1, Math.min(1, D.dot(cano)))) * 180 / Math.PI,
       };
     });
     assert.ok(!r.semTiro, `o gatilho não gerou projétil na ${r.arma} — o caso não mediu nada`);
-    assert.ok(r.naLinha < 0.02,
-      `o projétil da ${r.arma} nasce a ${(r.naLinha * 100).toFixed(2)} cm da linha de mira (teto 2 cm). ` +
+    console.log('      [B3/BR] %s: long %s m · transv %s m · alça do modelo %s m',
+      r.arma, r.longitudinal.toFixed(4), r.transversal.toFixed(4), r.alcaDoModelo.toFixed(4));
+    assert.ok(r.alcaDoModelo > 0.02,
+      `a alça da ${r.arma} está a só ${r.alcaDoModelo.toFixed(4)} m do cano — o caso não separa nada`);
+    assert.ok(Math.abs(r.transversal - r.alcaDoModelo) < 0.02,
+      `o projétil da ${r.arma} nasce a ${r.transversal.toFixed(4)} m do cano contra ` +
+      `${r.alcaDoModelo.toFixed(4)} m de altura de alça (teto 2 cm). ` +
       'Erro de origem em projétil é CONSTANTE em toda distância — não dá para compensar mirando mais alto');
+    assert.ok(Math.abs(r.longitudinal) < 0.02,
+      `o projétil da ${r.arma} nasce a ${r.longitudinal.toFixed(4)} m da estação da boca`);
     assert.ok(r.grausDoCano < 0.5,
       `o projétil da ${r.arma} sai a ${r.grausDoCano.toFixed(3)}° do cano`);
   });
