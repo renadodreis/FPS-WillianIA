@@ -605,3 +605,96 @@ outras suítes rodando durante a medição, sinal de carga, não de regressão).
    para jogar" é o item 4 (campo de visão limpo) ou 5 (onboarding/
    sobrevivência) — medir qual dos dois ainda está quebrado no produto real
    antes de escolher.
+
+---
+
+## Rodada 17 — onboarding de sobrevivência, só em solo VR (P0 item 5) · 2026-08-29
+
+### Decisão: item 5 antes do item 4
+
+Inspecionei código real antes de escolher. Item 4 (HUD dentro do mundo) já
+tem `js/xr/xrhud.js` maduro (819 linhas, painel de arma/pulso/mapa/aviso em
+espaço de mundo, distâncias corrigidas em commits anteriores — H2 fechado em
+`e7c380a`). Item 5 (onboarding) não tinha NADA: `grep -rln "onboarding"
+js/ game.js` não achava um arquivo sequer. `js/skeletons.js` (os inimigos
+"esqueleto" do mundo livre, não os "soldados" de `js/enemies.js`) persegue o
+jogador de QUALQUER distância desde o frame 1, sem teto de quantos
+perseguem ao mesmo tempo — e isso é intencional para o jogo normal
+(`test/skeletons.test.js`: "um esqueleto longe, então ele caça o player sem
+desistir"). O pedido da missão não é consertar essa IA — é acrescentar um
+modo opt-in que só liga em solo dentro de VR.
+
+### Causa
+
+`Skeletons.update()` não tinha noção de "onboarding": todo esqueleto vivo
+persegue (`dP>1.5`) e ataca (`dP<MELEE_RANGE`) sem cooldown de entrada. Sem
+teto, um jogador novo que nasça perto de vários esqueletos (ou que eles
+convirjam) pode enfrentar mais de 2 ao mesmo tempo bem antes de aprender os
+controles.
+
+### Mudança
+
+- `js/skeletons.js`: `iniciarOnboarding()` novo (exportado no `api`), liga
+  `onboardingAtivo`. Durante os primeiros 15s (`ONBOARD_GRACE`) nenhum ataque
+  COMEÇA — logo nenhum dano sai, sem tocar `playerDamage`. Durante os
+  primeiros 60s (`ONBOARD_JANELA`) só os 2 esqueletos mais PRÓXIMOS do
+  jogador (`ONBOARD_MAX_ATIVOS`) podem se mover/atacar; o resto fica parado
+  (`passivo`) — não morrem, não somem, só não perseguem ainda. Fora do
+  onboarding (`onboardingAtivo===false`, o padrão) o comportamento é
+  bit-a-bit o de sempre.
+- `game.js` (`startGame`): `if (XR.presenting && !window.__MP_active &&
+  !window.__BR_active) Skeletons.iniciarOnboarding();` logo após
+  `state.started = true`. Isolamento por construção: só o único call site
+  decide, e ele exige VR + solo + fora de partida de BR.
+
+### Teste (TDD)
+
+`test/xr-onboarding-inimigos.test.js`, novo, duas suítes:
+1. **Comportamento** (`Skeletons.update()` chamado DIRETO, sem `G.tick()` —
+   `G.tick()` acorda os 12 soldados de `js/enemies.js` e contamina a medição
+   de dano, armadilha já documentada em `test/skeletons.test.js`). Cenário:
+   os 7 esqueletos são teleportados para 2m do jogador (pior caso, construção
+   de cenário — não é medir a distância de spawn, que sozinha já dá ~29s de
+   folga e esconderia o defeito por acidente). Com `iniciarOnboarding()`: 0
+   dano nos primeiros 15s e no máx 2 "ativos" (atacando OU a <1,6m) ao mesmo
+   tempo nos primeiros 60s simulados. Sem `iniciarOnboarding()`: mais de 2
+   ativos ao mesmo tempo — prova que o teto é opt-in, não permanente.
+2. **Fiação**: espiona `Skeletons.iniciarOnboarding` e roda `forceStart()`
+   três vezes (resetando `state.started` manualmente, sem reboot de página)
+   variando XR/`__MP_active`: só chama em VR+solo; 0 chamadas em desktop e em
+   multiplayer.
+
+Vermelho confirmado nas duas suítes antes do fix (motivo certo: função
+inexistente / game.js nunca chama). Armadilha de setup pega no caminho: o
+teste de fiação dava `soloVR: 0` mesmo depois do fix, porque
+`bootGame({autoStart:false})` nasce com `online:true` → `window.__BR_active
+= true` por padrão (documentado em `js/xr/xrinput.js` e no próprio
+`harness.js`) — precisa `online:false` explícito pra simular solo de
+verdade. Sem essa correção de setup o teste ficaria falso-vermelho para
+sempre, mascarando o fix real.
+
+### Verificado
+
+`test/xr-onboarding-inimigos.test.js` (3/3), `test/skeletons.test.js`
+(15/15 — comportamento padrão intacto), `npm run lint` limpo. `npm run
+test:vr` completo rodado DUAS vezes: 1ª vez 759 pass/**2 fail**/1 skip; 2ª
+vez, máquina menos carregada (sem os polls de background da 1ª medição
+disputando CPU), **761 pass, 0 fail, 1 skip, 762 testes, 145 suítes** (1438s).
+As 2 falhas da 1ª rodada não apareceram na 2ª nem tinham arquivo identificável
+(log da 1ª foi truncado pelo próprio `tail -120` do comando — lição:
+nunca canalizar `npm run test:vr` por `| tail -N` quando o resultado importa,
+capturar em arquivo com `>` puro) — tratado como flake sob carga, não
+regressão, seguindo o critério já registrado nesta base (N≥2 rodadas, com a
+carga da máquina anotada).
+
+### Próxima prioridade
+
+1. Item 4 (campo de visão limpo): medir no produto real se algum painel do
+   `xrhud.js` ainda invade o centro da visão durante combate — H1/H2 já
+   avançaram bastante em rodadas anteriores, então o vermelho remanescente
+   pode ser mais estreito que o item 5 era.
+2. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) em
+   outro caminho de entrada — ainda sem dono.
+3. Se item 4 fechar, seguir o roteiro mínimo "já dá para jogar" (medir tiro
+   acertando 10/15 onde o retículo indicou, 3 inimigos eliminados sem enxame,
+   5 min sem UI na frente, morte→jogar de novo→voltar ao menu dentro do VR).

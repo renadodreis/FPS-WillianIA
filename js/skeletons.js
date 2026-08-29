@@ -229,7 +229,25 @@ export function createSkeletons(deps) {
   const MIN_SPAWN_SEPARATION = 24;
   const list = [];
   let enabled = true;
-  const api = { list, update, setEnabled, modelReady: false };
+
+  /* ONBOARDING (P0 item 5 da missão) — SÓ liga quando o game.js chama
+     `iniciarOnboarding()`, e ele só faz isso em solo dentro de sessão XR
+     (ver o call site em `startGame`/`restartMatch`). Fora daí este bloco
+     inteiro é `onboardingAtivo === false` e o comportamento é IDÊNTICO ao
+     de sempre — os 7 perseguem de qualquer distância desde o frame 1, que é
+     o que test/skeletons.test.js já tranca como intencional.
+
+     GRAÇA (15s): nenhum ataque começa, então nenhum dano sai — sem tocar em
+     `playerDamage` nem no dano de outra fonte.
+     JANELA (60s): só os `ONBOARD_MAX_ATIVOS` esqueletos mais PRÓXIMOS podem
+     perseguir; o resto fica parado (passivo) até a janela fechar ou até um
+     dos ativos morrer e abrir vaga no próximo frame. É "entrada gradual",
+     não "menos esqueletos" — os 7 continuam existindo e vivos. */
+  const ONBOARD_GRACE = 15, ONBOARD_JANELA = 60, ONBOARD_MAX_ATIVOS = 2;
+  let onboardingAtivo = false, onboardingT = 0;
+  function iniciarOnboarding() { onboardingAtivo = true; onboardingT = 0; }
+
+  const api = { list, update, setEnabled, iniciarOnboarding, modelReady: false };
 
   function setEnabled(value) {
     enabled = !!value;
@@ -396,7 +414,24 @@ export function createSkeletons(deps) {
 
   function update(dt, t) {
     if (!enabled) return;
+    if (onboardingAtivo) onboardingT += dt;
+    const emGraca = onboardingAtivo && onboardingT < ONBOARD_GRACE;
+    /* Só recalcula "quem tem vaga pra perseguir" enquanto a janela vale —
+       fora do onboarding isto fica `null` e ninguém é passivo, que é o
+       comportamento de sempre. */
+    let ativosPermitidos = null;
+    if (onboardingAtivo && onboardingT < ONBOARD_JANELA) {
+      ativosPermitidos = new Set(
+        list.filter(sk => sk.alive)
+          .sort((a, b) => {
+            const da = (player.pos.x - a.group.position.x) ** 2 + (player.pos.z - a.group.position.z) ** 2;
+            const db = (player.pos.x - b.group.position.x) ** 2 + (player.pos.z - b.group.position.z) ** 2;
+            return da - db;
+          })
+          .slice(0, ONBOARD_MAX_ATIVOS));
+    }
     for (const sk of list) {
+      const passivo = !!(ativosPermitidos && !ativosPermitidos.has(sk));
       const g = sk.group;
       if (!sk.alive) {
         if (!api.modelReady) continue;
@@ -419,7 +454,7 @@ export function createSkeletons(deps) {
       const dP = Math.hypot(dx, dz);
       sk.targetDistance = dP;
       const moveStartX = g.position.x, moveStartZ = g.position.z;
-      if (dP > 1.5 && !player.dead && !sk.attacking) {
+      if (!passivo && dP > 1.5 && !player.dead && !sk.attacking) {
         g.position.x += dx / dP * SPEED * dt;
         g.position.z += dz / dP * SPEED * dt;
         sk.yaw = Math.atan2(dx, dz);
@@ -460,7 +495,7 @@ export function createSkeletons(deps) {
           sk.attackT = 0;
           sk.attackHit = false;
         }
-      } else if (dP < MELEE_RANGE && sk.hitT <= 0 && !player.dead &&
+      } else if (!passivo && !emGraca && dP < MELEE_RANGE && sk.hitT <= 0 && !player.dead &&
                  !meleeBlocked(sk.group, player.pos, Structures, obstaclesNear)) {
         sk.attacking = true;
         sk.attackT = 0;

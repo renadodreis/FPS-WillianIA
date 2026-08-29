@@ -4203,6 +4203,13 @@ function startGame(trusted) {
   camera.updateProjectionMatrix();
   csmDirty = true;
   state.started = true;
+  /* ONBOARDING DE SOBREVIVÊNCIA (P0 item 5 da missão) — só em solo dentro de
+     sessão XR. `!__MP_active` é solo (br-game.js já usa essa bandeira pra
+     decidir se a morte é do servidor) e `!__BR_active` mantém o balanceamento
+     de partida de batalha real intocado. Fora daqui os esqueletos continuam
+     perseguindo de qualquer distância desde o frame 1 — comportamento de
+     sempre, tranca em test/skeletons.test.js. */
+  if (XR.presenting && !window.__MP_active && !window.__BR_active) Skeletons.iniciarOnboarding();
   updateHealthHUD(); updateAmmoHUD(); updateInvHUD(); updateSlotsHUD(); updateArmorHUD();
   // banner de boas-vindas é do modo solo; no BR o lobby já anuncia a partida
   setTimeout(() => { if (!window.__BR_active) showBanner('CALL OF AI<small>siga as missões · cuidado com a noite</small>', 5200); }, 700);
