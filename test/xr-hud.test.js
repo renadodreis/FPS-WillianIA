@@ -135,9 +135,52 @@ async function instalarFerramentas() {
       window.__A.botao('right', 'trigger', 0);
       await window.__A.espera(280);
     },
+    /* MIRAR É O GESTO, e desde a rodada da empunhadura o grip direito
+       SEGURA/GUARDA a arma em vez de mirar (js/xr/xrinput.js: em oito de oito
+       FPS de VR pesquisados não existe botão de ADS). Dirigir por `squeeze`
+       aqui teria um efeito colateral que faria este arquivo passar pelo
+       motivo ERRADO: o primeiro aperto COLDREIA a arma, e o painel de munição
+       some junto com ela — verde, sem ADS nenhum ter acontecido.
+
+       Então a mira é feita como o jogador faz: a mão vai levando a ocular até
+       o olho. A cada passo lê onde a ocular está de verdade e move o controle
+       pelo que falta, mirando no MEIO da janela do produto (`RECUO_MIN` 0,14 ·
+       `RECUO_MAX` 0,45): 0,08 m ficaria abaixo dela e ainda dentro do
+       `CABECA_RAIO` que faz a arma sumir de propósito. */
     async ads(on) {
-      window.__A.botao('right', 'squeeze', on ? 1 : 0);
-      await window.__A.espera(900);
+      const G = window.__game, MP = window.__MP, T = MP.THREE;
+      const dev = window.__xrEmulado;
+      if (!on) {
+        dev.controllers.right.position.set(0.25, 1.15, -0.20);
+        dev.controllers.right.quaternion.set(0, 0, 0, 1);
+        await window.__A.espera(700);
+        return;
+      }
+      /* PARTE SEMPRE DO MESMO LUGAR. Rodando o arquivo inteiro, a mão chegava
+         aqui de onde o caso anterior a deixou, e oito passos não bastavam para
+         convergir — o caso ficava vermelho apontando para o produto quando o
+         defeito era da régua. Isolado, com a mão no lugar de fábrica, o mesmo
+         código media ads 1,000. */
+      dev.position.set(0, 1.70, 0);
+      dev.quaternion.set(0, 0, 0, 1);
+      dev.controllers.right.quaternion.set(0, 0, 0, 1);
+      dev.controllers.right.position.set(0.25, 1.15, -0.20);
+      await window.__A.espera(250);
+      for (let i = 0; i < 20 && !G.XRArma.mirando(); i++) {
+        const e = G.XRArma.estado();
+        const olho = new T.Vector3().setFromMatrixPosition(MP.camera.matrixWorld);
+        const oc = new T.Vector3().fromArray(e.ocular);
+        const eixo = new T.Vector3().fromArray(e.eixo).normalize();
+        /* GANHO < 1. A arma segue a mão com amortecimento, então o alvo se
+           mexe entre uma leitura e a outra: corrigindo o déficit INTEIRO a
+           perseguição passa do ponto e oscila — medido, ela parou com o olho
+           0,057 m à FRENTE da ocular (recuo negativo, arma dentro da cara). */
+        const falta = olho.clone().addScaledVector(eixo, 0.22).sub(oc).multiplyScalar(0.6);
+        const p = dev.controllers.right.position;
+        dev.controllers.right.position.set(p.x + falta.x, p.y + falta.y, p.z + falta.z);
+        await window.__A.espera(180);
+      }
+      await window.__A.espera(300);
     },
     /* CUSTO EM DRAW CALLS, POR DIFERENÇA PAREADA. A cena está viva (grama,
        animais, partículas, tracer do tiro anterior) e a contagem oscila vários
@@ -307,12 +350,16 @@ describe('HUD dentro do mundo em VR (IWER, sessão imersiva real)', { skip: !CHR
   it('mirando, o painel da arma SAI da frente — nada atravessa o olho (I3)', async () => {
     const r = await h.play(async () => {
       await window.__H.ads(true);
-      const mirando = { e: window.__H.estado(), ads: window.__H.ler().ads };
+      const st = window.__game.XRArma.estado();
+      const mirando = { e: window.__H.estado(), ads: window.__H.ler().ads,
+        diag: { ads: st.ads, recuo: st.recuo, desvio: st.desvio, naCara: st.naCara, ativo: st.ativo } };
       await window.__H.ads(false);
       await window.__A.espera(400);
       return { mirando, solto: window.__H.estado() };
     });
-    assert.equal(r.mirando.ads, true, 'o botão de mira não acendeu o ADS — o cenário não aconteceu');
+    console.log(`      gesto → ads ${r.mirando.diag.ads.toFixed(3)} recuo ${r.mirando.diag.recuo.toFixed(3)} ` +
+      `desvio ${r.mirando.diag.desvio.toFixed(3)} naCara ${r.mirando.diag.naCara} ativo ${r.mirando.diag.ativo}`);
+    assert.equal(r.mirando.ads, true, 'o gesto de levar a arma ao olho não acendeu o ADS — o cenário não aconteceu');
     assert.equal(r.mirando.e.visivel.arma, false,
       'o painel de munição continuou aceso com a arma no rosto — geometria dentro do olho (I3)');
     assert.equal(r.solto.visivel.arma, true, 'soltar a mira não devolveu o painel de munição');
@@ -330,11 +377,10 @@ describe('HUD dentro do mundo em VR (IWER, sessão imersiva real)', { skip: !CHR
          está medindo outra coisa. */
       const visDe = () => window.__H.estado().visivel;
       const antesADS = visDe();
-      window.__A.botao('right', 'squeeze', 1);
-      await window.__A.espera(400);
+      /* pelo GESTO, não pelo grip — ver o comentário de `__H.ads` */
+      await window.__H.ads(true);
       const durADS = visDe();
-      window.__A.solta();
-      await window.__A.espera(400);
+      await window.__H.ads(false);
       const foraDaCena = !!antesADS.arma && !durADS.arma;
       return { dif, foraDaCena, antesADS, durADS };
     });

@@ -389,8 +389,46 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
        agachado ficaria mais rápido que andando. */
     const ag = await h.play(() => window.__VEL.perfil(
       [['stick', 'left', 0, -0.88], ['botao', 'left', 'thumbstick', 1]], 1800));
-    const mi = await h.play(() => window.__VEL.perfil(
-      [['stick', 'left', 0, -0.88], ['botao', 'right', 'squeeze', 1]], 1800));
+    /* MIRAR É O GESTO. Desde a rodada da empunhadura o grip direito SEGURA e
+       GUARDA a arma (js/xr/xrinput.js) — não mira. Dirigir por `squeeze` aqui
+       media 1,693 m/s, que é a velocidade de ANDAR: o `mouse.aiming` nunca
+       acendia. E não bastaria trocar o botão: com o grip a arma iria para o
+       coldre, e a velocidade medida continuaria sendo a de andar.
+       A mão leva a ocular até o olho, mirando no MEIO da janela do produto
+       (`RECUO_MIN` 0,14 · `RECUO_MAX` 0,45), e SÓ ENTÃO o analógico anda. */
+    const mi = await h.play(async () => {
+      const G = window.__game, MP = window.__MP, T = MP.THREE, A = window.__A;
+      const dev = window.__xrEmulado;
+      A.solta();
+      dev.position.set(0, 1.70, 0);
+      dev.quaternion.set(0, 0, 0, 1);
+      dev.controllers.right.quaternion.set(0, 0, 0, 1);
+      dev.controllers.right.position.set(0.25, 1.15, -0.20);
+      await A.espera(350);
+      for (let i = 0; i < 20 && !G.XRArma.mirando(); i++) {
+        const e = G.XRArma.estado();
+        const olho = new T.Vector3().setFromMatrixPosition(MP.camera.matrixWorld);
+        const oc = new T.Vector3().fromArray(e.ocular);
+        const eixo = new T.Vector3().fromArray(e.eixo).normalize();
+        /* GANHO < 1. A arma segue a mão com amortecimento, então o alvo se
+           mexe entre uma leitura e a outra: corrigindo o déficit INTEIRO a
+           perseguição passa do ponto e oscila — medido, ela parou com o olho
+           0,057 m à FRENTE da ocular (recuo negativo, arma dentro da cara). */
+        const falta = olho.clone().addScaledVector(eixo, 0.22).sub(oc).multiplyScalar(0.6);
+        const p = dev.controllers.right.position;
+        dev.controllers.right.position.set(p.x + falta.x, p.y + falta.y, p.z + falta.z);
+        await A.espera(180);
+      }
+      /* o cenário só vale se o ADS acendeu de verdade */
+      if (!G.XRArma.mirando()) return { erro: 'o gesto não acendeu o ADS', ads: G.XRArma.ads() };
+      MP.player.vel.x = 0; MP.player.vel.z = 0;
+      A.stick('left', 0, -0.88);
+      const am = await window.__VEL.amostrar(1800);
+      A.solta();
+      dev.controllers.right.position.set(0.25, 1.15, -0.20);
+      return am;
+    });
+    assert.ok(!mi.erro, `${mi.erro} (ads ${mi.ads === undefined ? '?' : mi.ads.toFixed(3)}) — sem ADS não há o que medir`);
     const vAg = regime(ag), vMi = regime(mi);
     console.log(`      agachado: ${vAg.toFixed(3)} m/s · mirando: ${vMi.toFixed(3)} m/s`);
     assert.ok(Math.abs(vAg - 0.846) < 0.05,
