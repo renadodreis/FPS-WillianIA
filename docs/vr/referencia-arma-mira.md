@@ -253,9 +253,29 @@ Regras que viraram requisito aqui:
    quão perto o olho está da linha de mira, e a que distância da ocular. O que
    ele controla continua sendo o que já controlava (espalhamento, recuo,
    retículo) — menos a POSE da arma, que passa a ser da mão.
-6. **A arma não entra na cara.** Quando a culatra chega perto demais da cabeça,
-   ela é empurrada para a frente ao longo do cano. Sem isso, encostar a arma no
-   rosto mostra o interior do modelo.
+6. **A arma não entra na cara — e a saída é ela SUMIR, não ser empurrada.**
+   Dentro de `CABECA_RAIO = 0,12 m` entre a culatra e a cabeça, `weaponRoot`
+   deixa de ser desenhado (`js/xr/xrweapon.js`). Sem alguma saída, encostar a
+   arma no rosto mostra o interior do modelo.
+
+   > **Correção de 2026-08-29.** Até esta data este item dizia que a arma "é
+   > empurrada para a frente ao longo do cano". **O código faz o contrário, de
+   > propósito, e o documento é que estava errado** — a versão empurrada nunca
+   > existiu em `js/xr/xrweapon.js`. Empurrar é a correção intuitiva e é a
+   > errada: ela desgruda a arma da mão, que é exatamente o defeito que o
+   > módulo veio consertar (B1), e o jogador sente a arma escorregando do
+   > punho. O que o gênero faz é não deixar o jogador ver o interior do
+   > modelo; o plano próximo da câmera (0,08 m) já corta quase tudo, e
+   > `CABECA_RAIO` é a margem em cima dele. É rede de segurança, não mecânica:
+   > com o controle na bochecha a ocular fica a ~0,20 m do olho, bem fora
+   > desse raio.
+   >
+   > E o raio tem um INVARIANTE amarrado: `RECUO_MIN` (0,14 m) tem de ser
+   > MAIOR que `CABECA_RAIO`, senão as duas janelas se sobrepõem e o jogador
+   > que faz o gesto de mirar vê a arma DESAPARECER. Já aconteceu: com
+   > `CABECA_RAIO` em 0,06 a sobreposição era de 6 cm e um recuo medido de
+   > 0,1004 m dava `mirando: true` **e** `naCara: true` ao mesmo tempo.
+   > `JANELAS_SEPARADAS` trava isso no próprio módulo.
 7. **Interação com marcação 3D obrigatória:** anel no chão do alvo (com o raio
    real da regra de gameplay) + rótulo, porque o HUD 2D não existe em VR.
 8. **Nenhum alcance de gameplay muda.** Os raios de `js/interact.js` e do BR

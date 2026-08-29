@@ -674,7 +674,15 @@ export function createXrInteract({
     /* Retenção do grip: zera no aperto e cresce enquanto ele fica apertado. É
        o relógio do agarre à distância, e ele mora fora do `if` do alvo porque
        trocar de alvo no meio não pode reiniciar a contagem. */
-    if (bordaGrip) gripSeguraT = 0;
+    /* ZERADO **E** TRAVADO ENQUANTO A MÃO APOIA, e o "e" custou um defeito.
+       Fechar só a porta do agarre (abaixo) deixava este relógio CRESCENDO por
+       baixo dela: medido, com o apoio ligado e o grip segurado 0,500 s
+       apontado para um baú, o primeiro frame em que o apoio cai — no MESMO
+       aperto — dispara o agarre à distância, porque a contagem já passou de
+       `HOLD_LONGE` faz tempo. Na prática é o gesto mais comum do jogo: firmar
+       a arma para atirar e depois soltar o guarda-mão; o jogador larga o apoio
+       e um baú abre. */
+    if (bordaGrip || apoiando) gripSeguraT = 0;
     else if (grip) gripSeguraT += Math.max(0, dt);
     else gripSeguraT = 0;
 

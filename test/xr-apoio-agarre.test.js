@@ -147,6 +147,39 @@ describe('a mão que APOIA a arma não agarra o mundo (D3: o agarre é explícit
       'depois de soltar o apoio, o próximo aperto continuou sem agarrar — o bloqueio deixou resíduo');
   });
 
+  it('o relógio do agarre NÃO acumula enquanto a mão apoia', () => {
+    /* O DEFEITO, achado pela frente da arma medindo o próprio vizinho: a porta
+       fechava o agarre, mas `gripSeguraT` continuava CRESCENDO por baixo dela.
+       Resultado medido: segurando o grip 0,500 s apontado para um baú com o
+       apoio ligado (zero agarres, correto), o PRIMEIRO frame em que o apoio cai
+       — no MESMO aperto — dispara `modo: 'distancia'`, porque o relógio já
+       passou de `HOLD_LONGE` faz tempo.
+
+       Na prática é o gesto mais comum do jogo: firmar a arma para atirar e
+       depois soltar o guarda-mão. O jogador larga o apoio e um baú abre.
+
+       O que a §4.3 da referência pede é "zerado E travado", não só travado. */
+    apontandoDeLonge();
+    const frames = Math.ceil((HOLD_LONGE + 0.20) / DT);
+    C.inter.update({ maoRaio: C.mao, fontes: [fonte('left')], dt: DT, apoiando: true });
+    for (let i = 0; i < frames; i++) {
+      C.inter.update({ maoRaio: C.mao, fontes: [fonte('left', { grip: true })], dt: DT, apoiando: true });
+    }
+    /* MESMO APERTO, apoio cai: o grip nunca foi solto */
+    const r = C.inter.update({ maoRaio: C.mao, fontes: [fonte('left', { grip: true })], dt: DT, apoiando: false });
+    assert.equal(r.gesto, false,
+      `soltar o apoio no meio do aperto agarrou na hora, pelo modo "${r.modo}" — o relógio do agarre ` +
+      `acumulou os ${(frames * DT).toFixed(3)} s em que a mão estava apoiando`);
+  });
+
+  it('e o COMPLEMENTAR: sem apoiar em momento nenhum, o relógio conta e agarra', () => {
+    /* sem este caso o de cima passaria com o relógio zerado para sempre */
+    apontandoDeLonge();
+    const solto = segurar(C.inter, C.mao, false);
+    assert.ok(solto && solto.gesto === true,
+      'o relógio parou de contar mesmo sem apoio — o conserto comeu o agarre à distância');
+  });
+
   it('o parâmetro é OPCIONAL: quem não o passa continua agarrando como antes', () => {
     /* Contrato com o resto da base: `js/xr/xrinteract.js` é chamado de mais de
        um lugar, e um parâmetro novo que mude o padrão quebraria os chamadores

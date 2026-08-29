@@ -138,6 +138,20 @@ export const JANELAS_SEPARADAS = RECUO_MIN > CABECA_RAIO;
      tempo) gastam o MESMO `gun.reloadTime` — transformar acessibilidade em
      desvantagem competitiva num jogo multiplayer é o oposto do que a
      Xbox Accessibility Guideline 107 pede.
+   · E A ESCOPETA CARREGA CARTUCHO A CARTUCHO, COM A MÃO. Ela tinha ficado de
+     fora: `gun.reloadPerShell` distribui os cartuchos ao longo de
+     `gun.reloadTime` no relógio, e no headset isso é um pente-fantasma numa
+     arma que não tem pente — medido antes desta rodada, CINCO cartuchos
+     entraram sozinhos com a mão de apoio parada a 1,000 m da arma. Agora cada
+     chegada da mão à PORTA DE CARREGAMENTO (a âncora `ejection` do perfil) vale
+     um cartucho, com rearme por histerese e piso de cadência em
+     `gun.reloadPerShell` — o gesto nunca é mais rápido que o relógio. O
+     cancelamento e o parcial continuam sendo do game.js: uma regra só para
+     desktop e VR.
+   · O GRIP ESQUERDO GANHA ORDEM: PENTE → APOIO → AGARRAR, decidida na borda de
+     subida e TRAVADA até soltar. A ordem resolve o empate (as duas zonas se
+     sobrepõem de verdade) e a trava fecha a porta do agarre à distância, que
+     ficava aberta durante o gesto do pente.
 
    NADA AQUI NASCE NO BOOT. Aro, ponto e pente-fantasma são criados no primeiro
    frame DENTRO da sessão, pelo mesmo motivo do `miraNo`: todo `Object3D` — e
@@ -170,6 +184,24 @@ export const GUIA_APAGA_ADS = 0.6;
 export const MAGWELL_MAX = 0.12;
 export const PEITO_OFF = [0, -0.45, -0.15];
 export const PEITO_RAIO = 0.25;
+
+/* A ESCOPETA, CARTUCHO A CARTUCHO. `PORTA_MAX` é a mesma grandeza do
+   `MAGWELL_MAX` — "a mão chegou ao ponto em que a arma recebe munição" — e por
+   isso é o mesmo número: um significado, uma medida. `PORTA_REARME` é a
+   histerese que transforma FICAR na porta em CHEGAR à porta; sem ela, a mão
+   parada na porta pediria um cartucho por frame, que a 72 Hz enche a escopeta
+   em 83 ms. É o mesmo rearme do `peitoArmado` e do giro em passos.
+   Os dois são ergonomia SEM LASTRO EXTERNO — nenhum jogo publicou o próprio
+   limiar (referência §3, item 9) — e ficam marcados como tal. */
+export const PORTA_MAX = 0.12;
+export const PORTA_REARME = 0.22;
+/* Quanto tempo o pedido de recarga feito no PEITO continua valendo como
+   "origem: gesto". O game.js só transforma o pulso em `KeyR` no frame
+   SEGUINTE, e só chama `startReload` depois disso: quando `gun.reloading`
+   acende aqui já se passaram 2–3 frames. A janela é folgada o bastante para
+   cobrir isso com carga e curta o bastante para não confundir um gesto que não
+   pegou com um aperto de botão feito meio segundo depois. */
+export const PEDIDO_JANELA = 0.35;
 /* Fases da recarga em fração de `gun.reloadTime`, para que arma lenta e arma
    rápida tenham a MESMA coreografia esticada no tempo certo. */
 export const FASE_PENTE_FORA = 0.18;
@@ -219,6 +251,7 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
   const _qPai = new THREE.Quaternion();
   const _coldre = new THREE.Vector3(), _peito = new THREE.Vector3();
   const _magwell = new THREE.Vector3(), _eixoLocal = new THREE.Vector3();
+  const _porta = new THREE.Vector3();   // a porta de carregamento da escopeta
   const _qVista = new THREE.Quaternion();
 
   let adsT = 0;
@@ -245,6 +278,23 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
   let penteFantasma = null;
   let pedeRecargaPulso = false;
   let peitoArmado = true;     // a mão precisa SAIR do peito para pedir de novo
+  let pedidoT = -1e9;         // quando o peito pediu: decide a ORIGEM da recarga
+
+  /* ---- recarga CARTUCHO A CARTUCHO (escopeta) ---- */
+  let recPorCartucho = false;
+  let recOrigem = null;       // 'gesto' (a mão manda) | 'botao' (o relógio manda)
+  let recCartuchos = 0;
+  let recUltimoCartuchoT = -1e9;
+  let portaArmada = true;     // a mão precisa SAIR da porta para o próximo cartucho
+  let cartuchoPulso = false;  // UM frame: há um cartucho a creditar agora
+  let recEventoCartucho = null;   // CONGELADO no frame do crédito
+
+  /* ---- prioridade do grip ESQUERDO (referência §4.3) ---- */
+  let gripModo = 'livre';     // 'livre' | 'pente' | 'apoio' | 'agarrar'
+  let gripAntes = false;
+  let gripDesdeT = 0;
+  let gripDPeito = Infinity;  // mão de apoio ↔ zona do carregador, em metros
+  let gripDApoio = Infinity;  // mão de apoio ↔ linha do cano, em metros
 
   /* Um relógio de jogo só é confiável enquanto o jogo o passa; guardamos o
      último para que `recarga()` responda coerente entre frames. */
@@ -307,6 +357,15 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
          apoio é a projeção da mão sobre `gripR → muzzle`, LIMITADA ao segmento.
          O controle real pode estar dois metros fora; o boneco não sai da arma. */
       muzzle: anchors.muzzle ? new THREE.Vector3().fromArray(anchors.muzzle) : null,
+      /* A PORTA DE CARREGAMENTO. É a âncora `ejection` do perfil — na escopeta
+         procedural ela cai exatamente sobre a caixinha que `buildShotgun`
+         desenha e chama de "porta de carregamento" (0.04, -0.01, 0.04), e nas
+         armas de ferrolho é a janela de ejeção. Numa escopeta as duas são o
+         mesmo lado do mesmo receptor, e reusar a âncora existente evita
+         inventar um número novo para uma coisa que o modelo já marca. Sem
+         `ejection` (bazuca, plasma, faca) o campo é nulo e o caminho por
+         cartucho nem existe — nenhuma dessas arma tem `parts.pump`. */
+      porta: anchors.ejection ? new THREE.Vector3().fromArray(anchors.ejection) : null,
       temMira: !!c,
     };
   }
@@ -440,12 +499,107 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
     if (tato) tato.emitir('recarga-pronta', { mao: 'right' });
   }
 
+  /* Tudo que a recarga guarda entre frames, de volta ao repouso. Existe como
+     função porque são NOVE campos e esquecer um deixa a próxima recarga
+     nascendo com metade do estado da anterior — o tipo de resíduo que só
+     aparece na segunda recarga da partida. */
+  function zerarRecarga() {
+    recEstado = 'ociosa'; recVia = null; recPenteNaMao = false;
+    recPorCartucho = false; recOrigem = null; recCartuchos = 0;
+    portaArmada = true; cartuchoPulso = false; recEventoCartucho = null;
+  }
+
+  /* ================================================================
+     A ESCOPETA: UM CARTUCHO POR CHEGADA DA MÃO À PORTA.
+
+     POR QUE ELA NÃO CABE NA MÁQUINA DO PENTE. A recarga por pente tem um FIM
+     declarado (`gun.reloadEnd`) e o pente é UM objeto; a da escopeta não tem
+     fim — ela acaba quando o tubo enche, quando a reserva acaba ou quando o
+     jogador desiste, e cada cartucho é um evento independente que já credita
+     munição sozinho (o game.js faz isso desde sempre, e o desktop depende
+     disso: "cancelável mantendo o parcial"). Enfiar isso nas fases de
+     `FASE_PENTE_FORA`/`FASE_LIMITE_GESTO` produziria um pente-fantasma numa
+     arma que não tem pente — que é literalmente o defeito que esta rodada veio
+     consertar, só que ao contrário.
+
+     O QUE ESTA MÁQUINA FAZ, e o que ela DEIXA no game.js: ela decide QUANDO um
+     cartucho pode entrar; quem credita `mag`/`reserve` continua sendo o
+     `updateReload`. Assim o cancelamento, o estorno e o parcial continuam com
+     uma regra só para desktop e VR — a referência §4.6 é explícita em não
+     inventar uma segunda regra para o headset.
+
+     DUAS TRAVAS, e as duas se medem:
+       · REARME — a mão tem de SAIR da porta (`PORTA_REARME`) para o próximo
+         cartucho valer. Sem isso, a mão parada na porta pede um cartucho por
+         frame e a 72 Hz a escopeta enche em 83 ms.
+       · PISO DE CADÊNCIA — nunca mais rápido que `gun.reloadPerShell`, que é o
+         MESMO relógio do desktop. Referência §4.1 D5: os três caminhos gastam
+         o mesmo tempo, porque transformar VR em vantagem competitiva num jogo
+         multiplayer é o oposto do que a Xbox Accessibility Guideline 107 pede.
+
+     E QUEM COMEÇOU MANDA ATÉ O FIM. Se a recarga nasceu do BOTÃO (Y esquerdo,
+     ou o `KeyR` do teclado), `recOrigem` é `'botao'` e esta máquina não toca em
+     nada: `consumirCartucho()` devolve `null` e o relógio do game.js segue como
+     sempre. É a acessibilidade do Firewall Ultra — quem não consegue fazer o
+     gesto aperta o botão e carrega na mesma cadência, sem modo separado.
+     ================================================================ */
+  function passoCartucho(gun, t, apoioMao, tato) {
+    if (recEstado === 'ociosa') {
+      recPorCartucho = true;
+      recCartuchos = 0;
+      recUltimoCartuchoT = t;
+      portaArmada = true;
+      cartuchoPulso = false;
+      recEvento = null; recEventoCartucho = null;
+      recOrigem = (tAgora - pedidoT) <= PEDIDO_JANELA ? 'gesto' : 'botao';
+      recVia = recOrigem;
+      recEstado = recOrigem === 'gesto' ? 'cartucho-espera' : 'cartucho-relogio';
+    }
+    if (recOrigem !== 'gesto') return;
+
+    let d = Infinity;
+    if (apoioMao) { apoioMao.getWorldPosition(_v4); d = _v4.distanceTo(_porta); }
+    if (d >= PORTA_REARME) {
+      portaArmada = true;
+      if (recEstado === 'cartucho-entrando') recEstado = 'cartucho-espera';
+    }
+    /* O piso vem de `gun.reloadPerShell`, que é escrito pelo `startReload` do
+       game.js — de propósito: a régua da cadência é a do desktop, e não um
+       número que este módulo escolha para si. O fallback só existe para a arma
+       que chegar aqui sem ter passado pelo `startReload`. */
+    const piso = gun.reloadPerShell > 0
+      ? gun.reloadPerShell
+      : (gun.reloadTime || 0) / Math.max(1, (gun.magSize || 1) - (gun.mag || 0));
+    if (recEstado === 'cartucho-espera' && portaArmada
+        && d <= PORTA_MAX && (t - recUltimoCartuchoT) >= piso) {
+      portaArmada = false;
+      recEstado = 'cartucho-entrando';
+      recCartuchos += 1;
+      recUltimoCartuchoT = t;
+      cartuchoPulso = true;
+      /* CONGELADO no frame do crédito: a 72 Hz o instante em que a mão chega à
+         porta escapa de qualquer amostragem de fora, e um teste que amostra
+         mede outra coisa. */
+      recEventoCartucho = { n: recCartuchos, distancia: d, t: tAgora, via: 'gesto' };
+      /* A mão de APOIO sente o cartucho sair dela (`cartucho` sai na outra mão
+         da que é pedida — ver a tabela de js/xr/xrhaptics.js); a mão da ARMA
+         sente ele assentar, e esse pulso é o `recarga-pronta` que o game.js já
+         emite ao creditar. Duas mãos, um evento. */
+      if (tato) tato.emitir('cartucho', { mao: 'right' });
+    }
+  }
+
   function passoRecarga(gun, t, apoioMao, tato) {
     const k = fracaoRecarga(gun, t);
     if (k < 0) {
-      recEstado = 'ociosa'; recVia = null; recPenteNaMao = false;
+      zerarRecarga();
       return -1;
     }
+    /* A ESCOPETA TEM CAMINHO PRÓPRIO. `parts.pump` é a mesma condição que o
+       `startReload`/`updateReload` do game.js usa para escolher a recarga por
+       cartucho: uma pergunta, uma resposta, nos dois lados. */
+    if (gun.parts && gun.parts.pump) { passoCartucho(gun, t, apoioMao, tato); return k; }
+    if (recPorCartucho) zerarRecarga();   // trocou de arma no meio: sem resíduo
     if (recEstado === 'ociosa') {
       /* Recarga COMEÇOU. O crédito de munição acontece só em `finishReload`, e
          é por isso que abortar no meio (coldrear) não come bala nenhuma. */
@@ -543,8 +697,21 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
        pose) prendia a mão do boneco ao guarda-mão no meio da recarga, e o
        gesto do pente voltava a ser mentira. Medido: a mão do modelo ficava a
        0,259 m do controle real em vez de 0,089 m. */
-    const podeApoiar = coldreK < 0.5 && !recPenteNaMao;
-    if (apoio && temSegmento && podeApoiar) {
+    /* A ESCOPETA CARREGANDO TAMBÉM OCUPA A MÃO. É a mesma regra do pente, e
+       pelo mesmo motivo: a mão que leva cartucho à porta não está segurando o
+       guarda-mão. Sem esta condição há ainda um efeito pior que o boneco
+       mentindo — o apoio muda a direção do cano, o cano move a arma, a arma
+       move a PORTA, e a mão persegue um alvo que foge dela. */
+    const carregandoCartucho = recPorCartucho && recOrigem === 'gesto'
+      && (recEstado === 'cartucho-espera' || recEstado === 'cartucho-entrando');
+    const podeApoiar = coldreK < 0.5 && !recPenteNaMao && !carregandoCartucho;
+    /* A DISTÂNCIA À LINHA DO CANO É MEDIDA SEMPRE, mesmo quando o apoio não
+       pode engatar: é ela que a máquina de prioridade do grip esquerdo lê na
+       borda de subida, e medir só quando o apoio está liberado deixaria a
+       decisão cega justamente durante a recarga. Medir não engata nada — quem
+       engata é o `if` de baixo. */
+    gripDApoio = Infinity;
+    if (apoio && temSegmento) {
       apoio.updateWorldMatrix(true, false);
       apoio.getWorldPosition(_apoioMao);
       _eixoLocal.copy(_muzzleMundo).sub(_gripMundo);
@@ -553,7 +720,10 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
       const s = Math.max(0, Math.min(comp,
         _v5.copy(_apoioMao).sub(_gripMundo).dot(_eixoLocal)));
       _apoioMundo.copy(_gripMundo).addScaledVector(_eixoLocal, s);
-      const d = _apoioMao.distanceTo(_apoioMundo);
+      gripDApoio = _apoioMao.distanceTo(_apoioMundo);
+    }
+    if (apoio && temSegmento && podeApoiar) {
+      const d = gripDApoio;
       if (!engatado && d <= APOIO_PEGA) engatado = true;
       else if (engatado && d >= APOIO_SOLTA) engatado = false;
       temApoio = engatado;
@@ -687,6 +857,15 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
     else _magwell.copy(geo.grip).applyQuaternion(weaponRoot.quaternion).add(weaponRoot.position)
       .applyMatrix4(weaponRoot.parent.matrixWorld);
 
+    /* ---- a porta de carregamento, no mundo ----
+       Mesma regra do poço: a âncora `ejection` é do PERFIL da arma, calibrada
+       contra o modelo desenhado, e não é gerada aqui. `gun.group` já está com a
+       matriz de mundo em dia (o `updateWorldMatrix` logo acima desceu por ele),
+       então basta transformar — `localToWorld` não atualiza matriz nenhuma, e
+       chamá-lo sem a atualização mediria a pose do frame passado. */
+    if (geo.porta) _porta.copy(geo.porta).applyMatrix4(gun.group.matrixWorld);
+    else _porta.copy(_magwell);
+
     /* ---- A JANELA DE MIRA DEIXA DE SER INVISÍVEL ---- */
     const mostraGuia = !oculto && !naCara && coldreK < 0.5 && geo.temMira && weaponRoot.visible;
     guiaPerto = mostraGuia ? proximidadeDaJanela(medida.recuo, medida.desvio) : 0;
@@ -723,19 +902,91 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
     const maoApoio = apoio || null;
     passoRecarga(gun, t, maoApoio, tato);
 
+    /* A ZONA DO PEITO É MEDIDA SEMPRE, e isso mudou nesta rodada. Ela vivia
+       DENTRO do `if (recEstado === 'ociosa')` abaixo, então a distância só
+       existia quando não havia recarga rolando — e a máquina de prioridade do
+       grip esquerdo, que precisa dela em TODO frame para decidir na borda,
+       lia `Infinity` justamente durante a recarga, que é quando a decisão
+       importa. */
+    gripDPeito = Infinity;
+    if (maoApoio && cabeca) {
+      let yaw = 0;
+      if (vista) { _eYaw.setFromQuaternion(_qVista.copy(vista), 'YXZ'); yaw = _eYaw.y; }
+      _peito.fromArray(PEITO_OFF).applyAxisAngle(_v5.set(0, 1, 0), yaw).add(cabeca);
+      maoApoio.getWorldPosition(_v4);
+      gripDPeito = _v4.distanceTo(_peito);
+    }
+
     /* PEDIDO DE RECARGA POR GESTO: a mão de apoio no peito, com o grip. O
        rearme (`peitoArmado`) existe pelo mesmo motivo do giro em passos —
        manter a mão no peito a 72 Hz pediria uma recarga por frame. */
     pedeRecargaPulso = false;
     if (maoApoio && cabeca && recEstado === 'ociosa' && coldreK < 0.5) {
-      let yaw = 0;
-      if (vista) { _eYaw.setFromQuaternion(_qVista.copy(vista), 'YXZ'); yaw = _eYaw.y; }
-      _peito.fromArray(PEITO_OFF).applyAxisAngle(_v5.set(0, 1, 0), yaw).add(cabeca);
-      maoApoio.getWorldPosition(_v4);
-      const noPeito = _v4.distanceTo(_peito) <= PEITO_RAIO;
+      const noPeito = gripDPeito <= PEITO_RAIO;
       if (!noPeito) peitoArmado = true;
-      else if (peitoArmado && apoioBotao) { pedeRecargaPulso = true; peitoArmado = false; }
+      else if (peitoArmado && apoioBotao) {
+        pedeRecargaPulso = true; peitoArmado = false;
+        /* CARIMBO DA ORIGEM. O game.js só transforma este pulso em `KeyR` no
+           frame seguinte; quando `gun.reloading` acende aqui, o pulso já
+           morreu. Sem o carimbo não há como a recarga saber se nasceu do GESTO
+           ou do BOTÃO — e na escopeta essa é a diferença entre "a mão manda"
+           e "o relógio manda". */
+        pedidoT = tAgora;
+      }
     }
+
+    /* ================================================================
+       O GRIP ESQUERDO TEM TRÊS TRABALHOS E UMA ORDEM (referência §4.3).
+
+       PENTE → APOIO → AGARRAR, avaliada UMA vez na borda de subida, e o modo
+       escolhido vale ATÉ SOLTAR. As duas metades dessa frase são o conserto, e
+       cada uma paga uma dívida diferente:
+
+       · A ORDEM paga o EMPATE. Buscar o pente e apoiar a arma decidiam cada um
+         por conta, por frame, e as duas zonas se sobrepõem de verdade — basta o
+         jogador atravessar a arma no peito para a mão estar a menos de
+         `PEITO_RAIO` do carregador E a menos de `APOIO_PEGA` da linha do cano
+         ao mesmo tempo. Sem ordem declarada, quem ganhava era quem o código
+         testasse primeiro, o que é uma decisão de projeto tomada por acidente
+         de digitação.
+
+       · A TRAVA paga a PORTA DO AGARRE. `js/xr/xrinteract.js` acumula
+         `gripSeguraT` enquanto o grip está apertado e dispara o agarre à
+         distância em `HOLD_LONGE`; o bloqueio que ele recebe (`apoiando`) é
+         lido por frame, mas o TEMPORIZADOR não é zerado enquanto bloqueia. Um
+         modo que troca no meio do aperto faz o bloqueio cair com o
+         temporizador já estourado, e o agarre dispara no frame seguinte —
+         medido antes desta rodada: buscando o pente com a mão a 0,000 m do
+         peito, a porta chegou fechada em 0,0 % de 36 frames de aperto, ou seja,
+         recarregar apontado para um baú abria o baú. Travando o modo na borda,
+         `gripOcupado()` não pode cair enquanto o dedo não subir.
+
+       `livre` é estado de primeira classe, e não "nenhum": ele é o que o
+       game.js precisa ler para NÃO fechar a porta com o botão solto.
+       ================================================================ */
+    const gripAgora = !!apoioBotao;
+    if (gripAgora && !gripAntes) {
+      const naZonaDoPente = gripDPeito <= PEITO_RAIO;
+      /* "Há trabalho de carregador" é `mag < magSize && reserve > 0` — a MESMA
+         pergunta que o `startReload` do game.js faz antes de aceitar a recarga.
+         Repetida e não importada porque lá ela é local; se um dia virar função
+         exportada, esta some. Sem ela, levar a mão ao peito com o pente cheio
+         travaria o agarre por nada. */
+      const temTrabalho = gun.mag < gun.magSize && gun.reserve > 0;
+      const buscandoPente = recEstado === 'aguardando-pente' || recEstado === 'cartucho-espera';
+      const empunhada2 = coldreK < 0.5;
+      if (empunhada2 && naZonaDoPente && (buscandoPente || (recEstado === 'ociosa' && temTrabalho))) {
+        gripModo = 'pente';
+      } else if (empunhada2 && gripDApoio <= APOIO_PEGA) {
+        gripModo = 'apoio';
+      } else {
+        gripModo = 'agarrar';
+      }
+      gripDesdeT = tAgora;
+    } else if (!gripAgora) {
+      gripModo = 'livre';
+    }
+    gripAntes = gripAgora;
 
     /* O PENTE-FANTASMA na mão de apoio, e a MÃO DO MODELO parando de mentir.
        Enquanto o jogador carrega o pente, a mão esquerda do boneco vai para
@@ -769,7 +1020,11 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
         _eixoLocal.multiplyScalar(1 / comp);
         const s = Math.max(0, Math.min(comp, _v5.copy(_v4).sub(geo.grip).dot(_eixoLocal)));
         gun.parts.handL.position.copy(geo.grip).addScaledVector(_eixoLocal, s);
-      } else if (recPenteNaMao && maoApoio) {
+      } else if ((recPenteNaMao || carregandoCartucho) && maoApoio) {
+        /* A MÃO DO MODELO SEGUE A MÃO DO JOGADOR — no gesto do pente E no da
+           escopeta. Sem o segundo termo, o jogador leva a mão à porta de
+           carregamento e a mão do boneco fica plantada no guarda-mão: o gesto
+           que o jogo COBRA é o único que a tela não mostra. */
         gun.parts.handL.parent.updateWorldMatrix(true, false);
         _mInv.copy(gun.parts.handL.parent.matrixWorld).invert();
         maoApoio.getWorldPosition(_v4);
@@ -804,8 +1059,14 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
     adsT = 0; mistura = 0; engatado = false; temApoio = false; naCara = false;
     coldreK = 0; empunhadaAntes = true; temSegmento = false;
     guiaOpac = 0; guiaPerto = 0; miraDentroAntes = false; miraUltimoPulso = -1e9;
-    recEstado = 'ociosa'; recVia = null; recEvento = null; recPenteNaMao = false;
-    pedeRecargaPulso = false; peitoArmado = true;
+    recEvento = null;
+    zerarRecarga();
+    pedeRecargaPulso = false; peitoArmado = true; pedidoT = -1e9;
+    recUltimoCartuchoT = -1e9;
+    /* O grip esquerdo volta a `livre`: a próxima sessão não pode nascer com o
+       modo travado pelo aperto em que o jogador tirou o headset. */
+    gripModo = 'livre'; gripAntes = false; gripDesdeT = 0;
+    gripDPeito = Infinity; gripDApoio = Infinity;
   }
 
   return {
@@ -830,10 +1091,62 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
        teste que amostra mede outra coisa. */
     recarga: () => ({
       estado: recEstado, via: recVia, penteNaMao: recPenteNaMao,
+      /* A ESCOPETA, LEGÍVEL DE FORA. `porCartucho` diz que esta recarga é a de
+         cartucho a cartucho; `origem` diz QUEM manda nela (o gesto ou o
+         relógio); `cartuchos` é quantos o gesto já pediu. Sem `origem` não há
+         como um teste distinguir "o gesto foi exigido" de "o botão salvou o
+         jogador", que é a diferença entre a mecânica funcionar e ela ser
+         enfeite. */
+      porCartucho: recPorCartucho, origem: recOrigem, cartuchos: recCartuchos,
       mag: gunAtual ? gunAtual.mag : null,
       reserve: gunAtual ? gunAtual.reserve : null,
     }),
     recargaEventos: () => (recEvento ? { ...recEvento } : null),
+    /* O ÚLTIMO CARTUCHO, CONGELADO no frame do crédito: número de ordem,
+       distância da mão à porta e o instante. A 72 Hz o frame em que a mão chega
+       à porta escapa de qualquer `poll`, e um teste que amostra mede outra
+       coisa — é o mesmo motivo do `recargaEventos`. */
+    cartuchoEventos: () => (recEventoCartucho ? { ...recEventoCartucho } : null),
+    /* ================================================================
+       O PORTÃO DO CARTUCHO, EM TRÊS ESTADOS — e o terceiro é o que importa.
+
+       `null` = ESTE MÓDULO NÃO MANDA neste cartucho: fora de sessão, arma de
+       pente, ou recarga que nasceu do botão. O game.js então segue com o
+       relógio de `nextShellT`, exatamente como sempre — o desktop não muda uma
+       linha e a acessibilidade não perde cadência.
+       `true` = há um cartucho a creditar AGORA (borda, consumida na leitura).
+       `false` = a mão ainda não chegou à porta.
+
+       Consumir na leitura é intencional: o game.js chama isto uma vez por
+       frame dentro do `updateReload`, e um pulso que sobrevivesse à leitura
+       creditaria dois cartuchos com uma chegada só. O atraso é de UM frame
+       (13,9 ms a 72 Hz), porque `updateReload` roda antes de `aplicar` no
+       mesmo tick — a mesma folga já aceita no `apoiando` da interação, e
+       irrelevante contra um piso de cadência de centenas de ms.
+       ================================================================ */
+    consumirCartucho: () => {
+      if (!vivo || !recPorCartucho || recOrigem !== 'gesto') return null;
+      const v = cartuchoPulso;
+      cartuchoPulso = false;
+      return v;
+    },
+    /* ================================================================
+       QUAL DOS TRÊS TRABALHOS O GRIP ESQUERDO ESTÁ FAZENDO NESTE FRAME.
+
+       `gripOcupado()` é o que o game.js passa como `apoiando` para
+       js/xr/xrinteract.js: quando o botão está buscando pente ou apoiando a
+       arma, ele NÃO agarra o mundo. E `gripEsquerdo()` publica a decisão
+       inteira com as duas distâncias que a produziram, para que um teste possa
+       provar que o caso exercitava mesmo o empate (as duas dentro dos
+       limiares) em vez de só ter caído no ramo certo por sorte de geometria.
+       ================================================================ */
+    gripOcupado: () => vivo && (gripModo === 'pente' || gripModo === 'apoio'),
+    gripEsquerdo: () => ({
+      modo: gripModo,
+      desde: gripDesdeT,
+      dPeito: gripDPeito,
+      dApoio: gripDApoio,
+    }),
     /* A affordance da janela, medível de fora: a proximidade CONTÍNUA (que é o
        que a torna um guia e não um carimbo), a opacidade que saiu dela, e os
        dois objetos para o teste poder subir por `.parent` até a cena — ler
@@ -851,6 +1164,11 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
       empunhada: coldreK < 0.5,
       recarga: recEstado,
       recargaVia: recVia,
+      recargaOrigem: recOrigem,
+      cartuchos: recCartuchos,
+      gripModo,
+      gripDPeito,
+      gripDApoio,
       guiaPerto,
       guiaOpacidade: guiaOpac,
       recuo: medida.recuo,

@@ -2261,7 +2261,16 @@ function updateReload(t) {
   if (gun.reloading && XR.presenting && !XRArma.empunhada()) { gun.reloading = false; return; }
   if (!gun.reloading || reloadBlocked()) return;
   if (gun.parts.pump) {
-    if (t >= (gun.nextShellT || Infinity) && gun.mag < gun.magSize && gun.reserve > 0) {
+    /* EM VR A ESCOPETA CARREGA COM A MÃO, UM CARTUCHO POR CHEGADA À PORTA.
+       `consumirCartucho()` devolve `null` quando o módulo NÃO manda (fora de
+       sessão, ou recarga iniciada pelo botão/teclado), e aí o relógio de
+       `nextShellT` decide como sempre — o desktop não muda, e quem aperta Y em
+       vez de fazer o gesto carrega na mesma cadência. Quem credita munição
+       continua sendo esta função: o cancelamento, o parcial e o estorno têm uma
+       regra só nos dois modos. */
+    const xrCartucho = XRArma.consumirCartucho();
+    const passaCartucho = xrCartucho === null ? t >= (gun.nextShellT || Infinity) : xrCartucho;
+    if (passaCartucho && gun.mag < gun.magSize && gun.reserve > 0) {
       gun.mag += 1; gun.reserve -= 1; updateAmmoHUD(); SFX.reload();
       XRTato.emitir('recarga-pronta', { mao: 'right' });   // escopeta, cartucho a cartucho
       gun.nextShellT = t + (gun.reloadPerShell || gun.reloadTime);
@@ -3872,8 +3881,16 @@ function tick(forceDt) {
        O valor é do frame ANTERIOR, e isso é intencional: `XRArma.aplicar`
        roda depois desta chamada, e mover a interação para depois dela
        mexeria numa ordem de frame que virou contrato nesta rodada. Um frame
-       de atraso (13,9 ms) contra um gesto de 300 ms não muda a decisão. */
-    apoiando: XRArma.duasMaos(),
+       de atraso (13,9 ms) contra um gesto de 300 ms não muda a decisão.
+
+       E `gripOcupado()` é a OUTRA metade: `duasMaos()` só sabe do apoio
+       engatado por proximidade, e o grip esquerdo tem TRÊS trabalhos. Buscar o
+       pente no peito não engata apoio nenhum, então a porta ficava aberta
+       durante a recarga — medido: fechada em 0,0 % de 36 frames de aperto. O
+       modo é decidido na borda e travado até soltar, então este valor não pode
+       cair no meio do aperto (é a queda que dispara o agarre, porque o
+       `gripSeguraT` do módulo de interação já passou de `HOLD_LONGE`). */
+    apoiando: XRArma.duasMaos() || XRArma.gripOcupado(),
   });
   Interact.update(dt, t);
   if (Cannon) Cannon.update(dt, t);

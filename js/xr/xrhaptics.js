@@ -74,6 +74,11 @@ export const PRIORIDADE = {
   tiro: 20,
   'recarga-pronta': 16,
   recarga: 12,
+  /* UM CARTUCHO DE ESCOPETA. Mesma prioridade da `recarga` porque é a mesma
+     família de evento — e prioridade IGUAL já cede o atuador (a comparação em
+     `emitir` é `<`), que é o que se quer numa sequência: o quinto cartucho não
+     pode ser engolido pelo quarto. */
+  cartucho: 12,
   pegar: 10,
   coldre: 10,
   vazio: 9,
@@ -156,6 +161,14 @@ export function planoDePulso(evento, ctx = {}) {
        fraco e longo é o que "saiu o carregador" parece. */
     case 'recarga': return [pulso(outraMao(mao), 0.40, 45, 'recarga')];
     case 'recarga-pronta': return [pulso(mao, 0.75, 30, 'recarga-pronta')];
+    /* CARTUCHO DE ESCOPETA, um por vez. Mesma mão que a `recarga` (a de APOIO,
+       que é quem leva o cartucho à porta de carregamento) e MAIS CURTO que
+       ela — de propósito: a escopeta deste jogo mete CINCO cartuchos num
+       carregamento, e cinco pulsos de 45 ms encostados viram o "long or
+       overlapping effect" que a Meta manda evitar. Quem confirma o assentamento
+       é o `recarga-pronta` na mão da ARMA, no mesmo evento: uma mão solta, a
+       outra recebe, que é o que a mão sente numa escopeta de verdade. */
+    case 'cartucho': return [pulso(outraMao(mao), 0.35, 25, 'cartucho')];
     case 'dano': {
       const dano = Number.isFinite(c.dano) ? Math.max(0, c.dano) : 10;
       const letal = !!c.letal;

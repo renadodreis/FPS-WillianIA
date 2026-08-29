@@ -669,9 +669,16 @@ cabeça, ela é empurrada para a frente ao longo do cano."* **O código faz o
 contrário** e explica por quê no cabeçalho de `js/xr/xrweapon.js`: a arma
 **some** (`weaponRoot.visible = false` dentro de `CABECA_RAIO = 0,12 m`), porque
 empurrar desgruda a arma da mão — que é o defeito que o módulo veio consertar.
-**O código está certo e o documento envelheceu.** Registro aqui em vez de
-corrigir lá, porque não é meu arquivo e a regra da casa é não contradizer em
-silêncio.
+**O código está certo e o documento envelheceu.** Registrado aqui em vez de
+corrigido lá, porque não era o arquivo daquela frente e a regra da casa é não
+contradizer em silêncio.
+
+> **RESOLVIDO em 2026-08-29.** `referencia-arma-mira.md` §4 item 6 foi
+> corrigido: a arma SOME por `CABECA_RAIO`, e o parágrafo agora explica por que
+> empurrar seria errado (desgruda a arma da mão, contra B1) e registra o
+> invariante `RECUO_MIN > CABECA_RAIO`, que impede a janela de mira e o raio
+> que esconde a arma de se sobreporem. Esta seção fica como histórico da
+> divergência, não como divergência aberta.
 
 ### 4.8 O conflito B7 × B3 — REGISTRO, sem decisão
 
