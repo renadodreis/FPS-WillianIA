@@ -319,3 +319,51 @@ salva o projeto — e é melhor descobrir isso na sessão 5 do que na 40.
 Conta de desenvolvedor verificada + dados fiscais para payout costumam ser o
 gargalo real de uma publicação, e não dependem de nenhuma linha deste repo.
 Começar isso agora, em paralelo, é o que evita ter APK pronto e não poder vender.
+
+
+---
+
+## PRIMEIRA MEDIÇÃO NO APARELHO, EM SESSÃO IMERSIVA · 2026-08-29
+
+Quest 3 por cabo, `adb reverse`, sessão `immersive-vr` de verdade,
+`npm run vr:baseline -- --target=quest --immersive=1`, telemetria do runtime
+(`VrApi`, 56 amostras). Adreno 740, buffer 3360×1760, foveação 0,2,
+`pixelRatio` 1. Truque de proximidade ligado durante a medição e **restaurado
+ao fim** (`automation_disable`).
+
+| pose | fps/modo | app ms | cpu+gpu ms | gpu% | stale | °C | calls | tris |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| spawn | 52/72 | 15,84 | 34,64 | 0,96 | 23 | 45 | 126 | 637 802 |
+| **cidade** | **12/72** | **80,2** | 100 | 0,99 | 72 | 46 | **586** | 1 234 748 |
+| castelo | 33/72 | 27,98 | 49,31 | 0,97 | 45 | 46 | 187 | 900 644 |
+| canhão | 40/72 | 22,94 | 42,58 | 0,98 | 35 | 48 | 158 | 744 655 |
+
+Boot: html 405 ms · `__game` 6 941 ms · **1º frame 8 335 ms**.
+
+### O que isto decide
+
+1. **E1 reprova, e é o critério que manda.** Nenhuma pose chega a 72. A cidade
+   roda a **12 fps** com 80 ms de tempo de aplicação — seis vezes o orçamento
+   de 13,89 ms. `stale` 72 quer dizer que o compositor reaproveitou 72 frames
+   por segundo: o jogador vê o SpaceWarp, não o jogo.
+2. **O gargalo é GPU, medido.** `gpu%` fica entre **0,96 e 0,99 em TODAS as
+   poses**, com `cpu%` entre 0,14 e 0,39. Cinco rodadas perseguiram draw call
+   por proxy; o aparelho diz que a submissão não é o limite — o preenchimento é.
+3. **F1 reprova.** Primeiro frame em **8,3 s** contra o teto de 4 s da loja. No
+   desktop a mediana era 2,28 s; o aparelho é 3,7× mais lento no boot, e isso
+   nunca tinha sido medido.
+4. **A contagem do emulado NÃO bate com a do aparelho.** A validação emulada
+   mediu a cidade em 183–185 calls por olho (≈370 por frame); o aparelho mede
+   **586**. A afirmação de que "contagem o emulado mede igual ao aparelho" é
+   falsa para esta pose, e a diferença (216 calls) é maior que o orçamento
+   inteiro de um olho. Toda decisão de corte tomada só com o emulado precisa ser
+   reconferida aqui.
+5. **Térmica sobe durante a varredura** (45 → 48 °C em ~4 min). E5 pede 30 min
+   sem degradar; com a GPU saturada desde o primeiro minuto, esse critério não
+   tem chance sem consertar o item 2 antes.
+
+### O que NÃO foi medido
+
+Captura de tela (o navegador do Quest não respondeu — é armadilha conhecida),
+os critérios que dependem de um humano de headset, e o comportamento em partida
+multijogador real.
