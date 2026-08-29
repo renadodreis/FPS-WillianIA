@@ -61,8 +61,23 @@ describe('controles de VR no runtime emulado (IWER)', { skip: !CHROME && 'Chrome
   after(async () => { if (h) await h.close(); });
 
   it('a sessão entrega DOIS controles Touch, com o perfil do Quest', async () => {
-    const r = await h.play(() => {
+    /* ESPERA PELA CONDIÇÃO, NÃO POR TEMPO. `bootEmVR` devolve assim que
+       `XR.presenting` fica verdadeiro, e o runtime emulado registra as fontes
+       de entrada logo DEPOIS disso — não junto. Numa máquina ociosa a
+       diferença é de um frame e ninguém vê; rodando depois de 350 arquivos, a
+       leitura caiu no meio: "a sessão trouxe 0 fontes de entrada, não duas", e
+       o runner promoveu isso a REGRESSÃO REAL. Isolado, o mesmo arquivo passa
+       32 de 32.
+
+       A afirmação não foi enfraquecida — continua exigindo DUAS fontes com o
+       perfil do Quest 3. O que mudou é que a espera é pelo fato. Sessão que
+       nunca entrega controle nenhum continua reprovando, com o número de
+       fontes que ela entregou. */
+    const r = await h.play(async () => {
       const s = window.__MP.renderer.xr.getSession();
+      for (let i = 0; i < 100 && Array.from(s.inputSources).length < 2; i++) {
+        await new Promise(r2 => setTimeout(r2, 100));
+      }
       return Array.from(s.inputSources).map(f => ({
         mao: f.handedness,
         perfil: f.profiles[0],
@@ -71,7 +86,7 @@ describe('controles de VR no runtime emulado (IWER)', { skip: !CHROME && 'Chrome
         botoes: f.gamepad ? f.gamepad.buttons.length : 0,
       })).sort((a, b) => a.mao.localeCompare(b.mao));
     });
-    assert.equal(r.length, 2, `a sessão trouxe ${r.length} fontes de entrada, não duas`);
+    assert.equal(r.length, 2, `em 10 s a sessão trouxe ${r.length} fontes de entrada, não duas`);
     assert.deepEqual(r.map(x => x.mao), ['left', 'right']);
     for (const c of r) {
       /* O Quest 3 anuncia `meta-quest-touch-plus` — NÃO `oculus-touch-v3`, que
