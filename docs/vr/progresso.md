@@ -1380,3 +1380,110 @@ fail, 1 skip, 775 testes, 146 suítes** (1450s).
 3. Validar por medição própria (headset) se as novas posições ombro/quadril
    continuam alcançáveis sem esforço — mover os centros pode ter piorado o
    conforto de alcance que a Rodada 25 também não tinha lastro pra garantir.
+
+---
+
+## Rodada 27 — os 4 critérios "não medido" (C4, D6, G2, I4) · 2026-08-29
+
+Nenhum dos quatro depende de aparelho — mas nenhum tinha sido MEDIDO ainda
+(nem verde nem vermelho no laudo `validacao-d59830e.md`). Sem defeito novo
+corrigido nesta rodada; o trabalho foi medir e registrar honestamente, e um
+achado por critério mudou o que se sabia sobre ele.
+
+### G2 · antialiasing em XR — MEDIDO, mas a régua descreve a via ERRADA
+
+`test/xr-criterio-g2-antialias.test.js` (porta 3870), IWER real. Ler
+`renderer.xr.getRenderTarget()` — o método que `criterio-aaa.md` manda usar —
+**não existe no three r0.185** (zero ocorrência em
+`WebXRManager.js`; confirmado lendo o pacote instalado). Substituí por
+`renderer.getRenderTarget()` (do próprio `WebGLRenderer`) dentro de um hook
+de `render()` real: `samples=0` medido, com `antialias:true` no contexto.
+
+**Mas o número não pode ser lido com confiança.** `WebXRManager.js:397-499`
+tem DOIS caminhos: o clássico (`XRWebGLLayer`/`session.renderState.baseLayer`)
+manda `antialias:true` direto pro construtor NATIVO do layer (o navegador
+decide MSAA de verdade ali, fora da visão do three) mas **não copia esse
+número pro `WebGLRenderTarget` espelho** — `samples` fica 0 SEMPRE nesse
+caminho, com ou sem MSAA real acontecendo. Só o caminho moderno (Layers API,
+`createProjectionLayer`) tem `samples: attributes.antialias ? 4 : 0` de
+verdade. Medido: esta sessão (IWER) usa o caminho CLÁSSICO
+(`temBaseLayer=true, temLayers=false`) — **G2 fica "não medido com
+confiança"**, não "reprova": o teste detecta o caminho e registra isso em vez
+de forçar um veredito. Fechar de verdade exige aparelho físico (captura de
+frame) ou pesquisar se o navegador do Quest 3 oferece a Layers API.
+**AGUARDANDO APARELHO/PESQUISA.**
+
+Nota à parte, sem medir: ligar MSAA de verdade custaria 0,5-1,5 ms/frame
+(Meta) num orçamento já apertado — decisão de trade-off do dono quando o
+caminho real for confirmado, não decisão de quem testa.
+
+### C4 · escala 1:1 — achado no esqueleto, resto NÃO investigado a fundo
+
+Lendo `js/skeletons.js:326`: `const s = 2.25 / size.y; // esqueleto de
+2,25m — maior que o player: dá medo` — **é decisão de design deliberada e
+documentada**, não bug. O critério C4 compara "altura de um inimigo" contra
+"humano ≈ 1,75 m" — não bate com o esqueleto por CONSTRUÇÃO. Isso não é uma
+reprovação: é a régua medindo a referência errada para este inimigo
+específico. A referência certa seria um inimigo humano (`js/enemies.js`,
+soldados) — não investigado a fundo nesta rodada por tempo. Porta da cidade,
+carro, degrau e altura do baú **não foram medidos**: a geometria da cidade
+funde tudo em meshes grandes por otimização de draw call
+(`js/structures.js`, `sbox`/`trimBox`), sem nó isolado por objeto pra um
+`Box3.setFromObject` simples — extrair uma medida confiável exigiria mapear
+a malha fundida ou instrumentar a função de construção, trabalho maior que o
+resto desta rodada. **C4 fica parcialmente investigado, não fechado.**
+
+### D6 · tudo alcançável sentado — REPROVA por herança de D1, sem sessão nova
+
+D6 exige o roteiro D1 inteiro (19 ações) alcançável com `dev.position`
+travado. D1 já reprova hoje (comer/trocar mira inalcançáveis por QUALQUER
+posição, Rodada 16). Um requisito estritamente mais forte que outro já
+falso é falso por construção — não precisou de sessão IWER nova para
+confirmar isso, é lógica, e está registrado como tal (não fabricar medição
+onde a resposta já está provada). Checagem extra, essa sim rápida: nenhuma
+das 17 ações que FUNCIONAM depende de andar fisicamente — locomoção é
+100% por analógico (existe por causa do VRC.Quest.Tracking.1, já documentado
+no repo), então a parte NOVA que D6 acrescentaria sobre D1 (andar importa?)
+já está satisfeita por desenho. **D6 reprova pela mesma causa de D1.**
+
+### I4 · nenhum estado sem saída — 6 de 10 estados com prova de clique real
+
+Auditoria da cobertura existente (sem escrever teste novo, só conferir o que
+já prova o quê): `test/xr-ui.test.js` já prova, com clique real e
+verificação de estado, retorno ao menu partindo de **jogando** (pausar →
+despausar), **pausado**, **morto** (JOGAR DE NOVO e VOLTAR AO MENU, inclusive
+em cadeia), e **fim de partida**; `test/xr-menu.test.js` prova que MULTIJOGADOR
+leva ao **lobby** (aba "sala") sem começar partida sozinho. Isso são 5 estados
+com prova direta + lobby = 6. **Não têm prova de retorno ao menu**: `nave`,
+`queda` (fases de início de partida BR), `dirigindo` (carro/heli — existem
+`test/xr-heli-piloto.test.js` e testes de carro, mas nenhum verifica
+alcançar o menu a partir de lá) e `espectador` (`test/xr-spect-passo.test.js`
+mede o acompanhamento, não a saída). Como o jogo afirma UMA máquina de
+estados única (não divergente por plataforma/contexto) e o mecanismo de
+pausa já provado é um overlay global (`ui3d.capturando`, que barra o tick do
+jogo por igual em qualquer estado), a expectativa é que os 4 também
+funcionem — mas **expectativa não é medição**, e o próprio CLAUDE.md deste
+repo lista "teste que passa por acidente" como a família de defeito mais
+cara já vista aqui. **I4 fica com 6/10 estados PROVADOS e 4/10 sem prova
+(nave, queda, dirigindo, espectador)** — não reprovado, não fechado.
+
+### Verificado
+
+Só `npm run lint` (limpo) — nenhum outro `.js` de produto foi tocado nesta
+rodada (só teste novo + doc). `npm run test:vr` não precisou rodar de novo:
+nenhuma mudança de comportamento de produto, só instrumentação de medição.
+
+### Próxima prioridade
+
+1. **I4**: escrever os 4 testes que faltam (nave→menu, queda→menu,
+   dirigindo→menu, espectador→menu) — é o item mais barato e mais concreto
+   desta lista, e cada um É um roteiro de reprodução pronto.
+2. **G2**: pesquisar se o Quest 3/OculusBrowser oferece a WebXR Layers API
+   (`XRWebGLBinding.createProjectionLayer`) — se sim, o three pode migrar pro
+   caminho onde `samples` é confiável; se não, medir MSAA real exige captura
+   de frame no aparelho.
+3. **C4**: medir o soldado humano (`js/enemies.js`) contra 1,75 m, e decidir
+   se carro/porta/degrau/baú valem a instrumentação da malha fundida ou se
+   viram exceção documentada (como C5 aceita "sem corpo").
+4. Itens já registrados: D1 (decisão do dono), item 8 (10/15 tiros) e item 10
+   (soak 5min) seguem gap honesto.
