@@ -33,12 +33,18 @@
       `fonteDaMira()` para ele e o tiro passa a sair pelas miras: alinhar o
       ferro vira a mecânica, não a decoração.
 
-   4. ADS DE BOTÃO. Em VR não existe "aim down sights" animado: o jogador
-      ENCOSTA a arma no olho (é para isso que existe a indústria de gunstock).
-      Aqui `adsT` deixa de vir do botão e passa a ser MEDIDO — o quanto o olho
-      está perto da linha de mira e a que distância da ocular. O que ele
-      controla continua sendo o mesmo (espalhamento, recuo, retículo); o que
-      sai é mover a arma na frente do jogador, que é enjoo e não game feel.
+   4. ADS FÍSICO, E DEPOIS ADS DE BOTÃO TAMBÉM (2026-08-29). Em VR não existe
+      "aim down sights" animado por padrão: o jogador ENCOSTA a arma no olho
+      (é para isso que existe a indústria de gunstock), e por isso `adsT`
+      nasceu MEDIDO — o quanto o olho está perto da linha de mira e a que
+      distância da ocular. O dono revogou depois "ADS só por gesto físico"
+      para esta frente: segurar o gatilho esquerdo agora FORÇA o mesmo `alvo`
+      que o gesto físico produziria (`mirarBotao`, thread por `xrinput.js` →
+      `game.js` → aqui), sem trocar o mecanismo de transição — é o MESMO
+      `damp` suave de sempre que decide a velocidade, só a origem do alvo que
+      ganhou uma segunda fonte. Sem essa fonte, o botão só mexia
+      `mouse.aiming` (espalhamento) e a arma nunca saía da pose de quadril —
+      medido, 0,00 m de deslocamento segurando o gatilho.
 
    DUAS MÃOS (Onward/Pavlov): quando a mão de apoio chega perto da âncora
    `supportHand`, a direção do cano passa a ser a LINHA ENTRE AS MÃOS. A
@@ -277,6 +283,15 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
   let chaveCache = '';
 
   const _v4 = new THREE.Vector3(), _v5 = new THREE.Vector3();
+  const _v6 = new THREE.Vector3(), _v7 = new THREE.Vector3();
+  const _v8 = new THREE.Vector3(), _v9 = new THREE.Vector3();
+  /* Distância da ocular ao olho quando o botão puxa a arma — dentro da
+     janela [RECUO_MIN, RECUO_MAX] que o ADS físico já considera "mirando",
+     perto do meio dela: longe o bastante de RECUO_MIN para não starta a
+     regra de `naCara` (arma soma quando fica perto DEMAIS do olho — ver
+     `CABECA_RAIO`), perto o bastante do olho pra ser a mesma sensação do
+     gesto físico bem-feito. */
+  const RECUO_ALVO_BOTAO = 0.20;
   const _qCant = new THREE.Quaternion(), _eCant = new THREE.Euler(), _eYaw = new THREE.Euler();
   const _qPai = new THREE.Quaternion();
   const _coldre = new THREE.Vector3(), _peito = new THREE.Vector3();
@@ -663,7 +678,7 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
     /* NOVOS, e todos OPCIONAIS de propósito: sem a fiação do game.js este
        módulo se comporta exatamente como antes (arma sempre na mão, sem guia,
        sem coreografia de recarga). Fiação pela metade não pode piorar o jogo. */
-    t = 0, vista = null, empunhar, apoioBotao, tato = null,
+    t = 0, vista = null, empunhar, apoioBotao, mirarBotao = false, tato = null,
   } = {}) {
     const mao = punho || raio;
     if (!gun || !gun.group || !weaponRoot || !weaponRoot.parent || !mao || !raio) return null;
@@ -872,10 +887,58 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
     } else if (cabeca) {
       medida = { recuo: 0, desvio: cabeca.distanceTo(_ocular) };
     }
+    /* ADS POR BOTÃO (pedido do dono, 2026-08-29, revogando "ADS só por
+       gesto físico" — ver o item 4 do cabeçalho deste arquivo, que descrevia
+       a decisão ANTERIOR). Sem esta linha o botão só mexia `mouse.aiming`
+       (espalhamento/retículo) e a arma ficava PARADA na pose de quadril —
+       medido: 0,00 m de deslocamento segurando o gatilho, a mesma queixa que
+       este módulo inteiro existe para resolver ("não consigo ver o buraco da
+       mira da arma"). O botão força o mesmo alvo que o gesto físico chegaria
+       a produzir sozinho — a transição continua sendo o MESMO `damp` suave
+       de sempre, então "curta, estável e confortável" não muda, só o que a
+       destrava. */
+    if (mirarBotao) alvo = 1;
     /* Arma guardada não mira: o ADS é uma medida do olho contra a ocular, e com
        a arma nas costas essa medida existe mas não significa nada. */
     if (coldreK > 0.5) alvo = 0;
     adsT = damp(adsT, alvo, SUAVIZA_ADS, dt);
+
+    /* O PUXÃO DE VERDADE (2026-08-30) — sem isto, `adsT` só alimentava a
+       opacidade do guia e o retículo; a arma em si nunca saía da pose de
+       quadril, seja o ADS medido pelo gesto físico OU pelo botão. Medido:
+       0,00 m de deslocamento com o gatilho segurado, produto sem essa linha
+       — relato do dono no aparelho: "eu deveria ver a MIRA da arma, não a
+       arma". Aplicado AGORA, depois de `alvo`/`adsT` já medidos contra a
+       pose NATURAL: se o puxão viesse antes, a medida do PRÓXIMO frame
+       compararia o olho contra uma ocular que o próprio puxão moveu — um
+       raio perseguindo o próprio rabo. E antes do `updateWorldMatrix` de
+       baixo, para que poço do carregador, porta e o tiro (por
+       `fonteDaMira`, item 3 do cabeçalho) leiam a pose JÁ puxada — mira e
+       tiro continuam na mesma reta.
+       Só desloca em linha reta: da ocular NATURAL até um ponto a
+       `RECUO_ALVO_BOTAO` do olho, na direção que o cano já aponta (o mesmo
+       eixo que `_muzzleMundo`/`_gripMundo` descrevem, calculado pelo padrão
+       de posição já usado no arquivo — não o `_eixo` da medida acima, que
+       vive noutro espaço). Nunca converge NO olho (ficaria `naCara`, que
+       SOME a arma — o oposto do pedido).
+       SÓ COM `mirarBotao`, NUNCA só por `adsT > 0`. O gesto físico sozinho já
+       mede a mão de verdade contra a ocular; empurrar a arma TAMBÉM nesse
+       caso desalinha a posição real do controle da posição medida, e a
+       medida do PRÓXIMO frame passa a comparar o olho contra uma ocular que
+       o puxão do frame anterior moveu — corrompeu exatamente o teste do
+       gesto físico puro (`test/xr-weapon.test.js`, "mirar é FÍSICO"), que
+       não aperta botão nenhum. */
+    if (mirarBotao && temSegmento && cabeca && adsT > 0.001) {
+      _v6.copy(_muzzleMundo).sub(_gripMundo);
+      if (_v6.lengthSq() > 1e-6) {
+        _v6.normalize();
+        _v7.copy(cabeca).addScaledVector(_v6, RECUO_ALVO_BOTAO);   // ocular ALVO, no mundo
+        _v8.copy(_ocular);                    // ocular NATURAL (calculada linhas acima), no mundo
+        weaponRoot.parent.worldToLocal(_v8);  // ambas convertidas pro espaço do PAI de
+        weaponRoot.parent.worldToLocal(_v7);  // weaponRoot — o mesmo espaço de weaponRoot.position
+        weaponRoot.position.addScaledVector(_v9.copy(_v7).sub(_v8), adsT);
+      }
+    }
 
     /* As matrizes de mundo da arma acabaram de ficar velhas (mudamos a pose do
        `weaponRoot` nesta função). Tudo daqui para baixo lê nós FILHOS — a mira,

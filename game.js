@@ -4113,6 +4113,7 @@ function tick(forceDt) {
        de escopo aqui, e carregá-lo até este ponto pediria uma variável de
        módulo no arquivo mais quente do repo só para dois booleanos. */
     empunhar: entradaXR.empunhando(), apoioBotao: entradaXR.apoiando(),
+    mirarBotao: entradaXR.mirando(),
     tato: XRTato,
     oculto: state.driving || state.flying,
   });

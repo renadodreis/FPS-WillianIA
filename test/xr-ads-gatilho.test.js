@@ -29,15 +29,29 @@
    mira é a PRÓXIMA prioridade registrada em docs/vr/progresso.md — os quatro
    verbos não fazem parte do roteiro mínimo "já dá para jogar" desta frente.
 
-   O QUE ESTE ARQUIVO MEDE:
-   · `mouse.aiming` (o mesmo campo que espalhamento, sway, bob e retículo já
-     leem — não um proxy) liga no aperto e desliga na soltura, com a mão
-     direita LONGE do olho (isola o caminho do BOTÃO do caminho do GESTO);
-   · o `ads` FÍSICO de `XRArma` (o gunstock — recuo da arma até o olho)
-     continua baixo o tempo todo: o botão não pode empurrar a arma, só o
-     espalhamento/retículo (é o mesmo B4 que já vale para a mira assistida);
-   · a pose da arma RELATIVA À PALMA não pula ao apertar (B4: botão não
-     teleporta a arma);
+   CORREÇÃO DE 2026-08-30 — A VERSÃO ANTERIOR DESTE ARQUIVO MEDIA A COISA
+   ERRADA, E O DONO PROVOU ISSO NO APARELHO: "o modo mira que você está
+   colocando é o modo normal de segurar a arma, eu deveria ver a MIRA da
+   arma, não a arma". O teste original citava **B4** para proibir a arma de
+   se mover com o gatilho esquerdo segurado — mas B4 (`docs/vr/criterio-aaa.md`)
+   mede o botão **`right`/`squeeze`**, que é a MIRA ASSISTIDA (acessibilidade,
+   correta em não mover a arma por design). O gatilho esquerdo é outro botão,
+   com outro pedido: "acionado por botão enquanto estiver pressionado", que
+   só faz sentido se a arma for ONDE o gesto físico a levaria — senão o botão
+   liga só um número invisível (`mouse.aiming`, espalhamento/retículo) e o
+   jogador nunca vê a mira de verdade, exatamente o relato acima. Confirmado
+   em `js/xr/xrweapon.js`: sem `mirarBotao` forçando o `alvo` do `damp` de
+   `adsT`, a arma media 0,00 m de deslocamento com o gatilho segurado.
+
+   O QUE ESTE ARQUIVO MEDE, AGORA:
+   · `mouse.aiming` liga no aperto e desliga na soltura, com a mão direita
+     LONGE do olho (isola o caminho do BOTÃO do caminho do GESTO);
+   · o `ads` FÍSICO de `XRArma` SOBE de verdade com o botão (o gunstock virtual
+     se move) — é a mesma transição suave (`damp`, `SUAVIZA_ADS`) que o gesto
+     físico já usa, não um valor congelado em zero;
+   · a transição NÃO é instantânea (isso sim é B4, e continua valendo: nenhum
+     botão pode TELEPORTAR a arma) — medido bem cedo, antes do `damp`
+     terminar, o avanço é parcial, não um salto completo num frame;
    · segurando o gatilho esquerdo para mirar, o radial de itens NÃO abre —
      guarda de regressão do conflito que motivou a troca de dono do botão.
 
@@ -111,11 +125,20 @@ describe('ADS por botão — gatilho esquerdo (P0 do dono)',
     });
     after(async () => { if (h) await h.close(); });
 
-    it('apertar o gatilho esquerdo liga a mira do jogo; soltar desliga — sem gesto físico', async () => {
+    it('apertar o gatilho esquerdo TRAZ A ARMA AO OLHO de verdade — não só liga um número invisível', async () => {
       const antes = await h.play(() => window.__ADS.ler());
-      const dur = await h.play(async () => {
+      /* amostra bem cedo (1-2 frames a 72Hz): só para EVIDÊNCIA de que a
+         transição é suave (o `damp` de SUAVIZA_ADS), não um teleporte
+         completo no mesmo frame — não é asserção travada em timing exato
+         (janela curta demais para não flakar sob máquina carregada), é
+         log para quem for investigar uma regressão futura. */
+      const cedo = await h.play(async () => {
         window.__A.botao('left', 'trigger', 1);
-        await window.__ADS.espera(250);
+        await window.__ADS.espera(20);
+        return window.__ADS.ler();
+      });
+      const dur = await h.play(async () => {
+        await window.__ADS.espera(230);
         return window.__ADS.ler();
       });
       const dep = await h.play(async () => {
@@ -124,7 +147,8 @@ describe('ADS por botão — gatilho esquerdo (P0 do dono)',
         return window.__ADS.ler();
       });
       console.log(`      antes: aiming=${antes.aiming} ads_fisico=${f3(antes.adsFisico)}`);
-      console.log(`      apertado: aiming=${dur.aiming} ads_fisico=${f3(dur.adsFisico)}`);
+      console.log(`      cedo (~20ms): ads_fisico=${f3(cedo.adsFisico)}`);
+      console.log(`      apertado (~250ms): aiming=${dur.aiming} ads_fisico=${f3(dur.adsFisico)}`);
       console.log(`      solto: aiming=${dep.aiming} ads_fisico=${f3(dep.adsFisico)}`);
 
       assert.equal(antes.aiming, false, 'nasceu mirando sem apertar nada');
@@ -133,16 +157,20 @@ describe('ADS por botão — gatilho esquerdo (P0 do dono)',
       assert.equal(dep.aiming, false,
         'soltar o gatilho esquerdo tinha de desligar mouse.aiming imediatamente');
 
-      assert.ok(dur.adsFisico < 0.10,
-        `o botão acendeu o ADS FÍSICO (${f3(dur.adsFisico)}) com a mão longe do olho — ` +
-        'isso é o caminho do GESTO vazando, não o do botão (B4)');
+      /* O PEDIDO DO DONO, medido no aparelho: "eu deveria ver a MIRA da
+         arma, não a arma" — com a mão DIREITA longe do olho (isola o
+         caminho do BOTÃO do caminho do GESTO), o ADS físico tem de subir
+         de verdade, não ficar preso em zero. */
+      assert.ok(dur.adsFisico > 0.85,
+        `o botão não trouxe a arma pro olho (ads_fisico=${f3(dur.adsFisico)} depois de 250 ms) — ` +
+        'o jogador continua vendo a arma na pose normal, não a mira');
 
       const dP = Math.hypot(
         dur.locP[0] - antes.locP[0], dur.locP[1] - antes.locP[1], dur.locP[2] - antes.locP[2]);
       const dA = await h.play((a, b) => window.__ADS.angulo(a, b), antes.locQ, dur.locQ);
       console.log(`      arma vs palma: andou ${f3(dP)} m, girou ${f3(dA)}°`);
-      assert.ok(dP <= 0.01, `B4: o botão moveu a arma ${f3(dP)} m em relação à palma (teto 0,010)`);
-      assert.ok(dA <= 1.0, `B4: o botão girou a arma ${f3(dA)}° em relação à palma (teto 1,0°)`);
+      assert.ok(dP > 0.02,
+        `a arma não saiu visivelmente da pose de quadril em relação à palma (só ${f3(dP)} m)`);
     });
 
     it('segurando o gatilho esquerdo para mirar, o radial de itens NÃO abre', async () => {

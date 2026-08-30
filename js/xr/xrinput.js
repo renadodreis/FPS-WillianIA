@@ -345,6 +345,7 @@ export function criarEntradaXR({
   let assistida = !!miraAssistida;
   let gripDesde = 0;        // quando o grip direito começou a ser mantido
   let apoioBotao = false;   // grip ESQUERDO: a mão de apoio na arma
+  let mirarBotao = false;   // SÓ o gatilho esquerdo — nunca a mira assistida (essa não pode mover a arma)
   /* REARME DA LOCOMOÇÃO. O analógico que escolhe a fatia é o mesmo de andar, e
      o jogador solta o gatilho com o polegar AINDA na direção que escolheu. Sem
      este rearme ele confirma "granada" e sai correndo para a frente no mesmo
@@ -451,8 +452,15 @@ export function criarEntradaXR({
       out.recarregar = botao(esquerda, 5);
       /* ADS POR BOTÃO (pedido do dono, 2026-08-29): leitura pura, sem máquina
          de estado — aperta liga, solta desliga, no mesmo frame. Combinada com
-         a mira assistida logo abaixo, no bloco da mão direita. */
+         a mira assistida logo abaixo, no bloco da mão direita. `mirarBotao`
+         (exposto por `mirando()`) guarda SÓ esta fonte, separada da mistura —
+         é o sinal que `js/xr/xrweapon.js` usa pra decidir se PUXA a arma. A
+         mira assistida (grip direito, abaixo) tem de continuar sem mover a
+         arma um milímetro, por design (B4) — misturar as duas aqui faria o
+         puxão vazar pra acessibilidade que existe justamente pra NÃO mover
+         nada. */
       out.mirar = botao(esquerda, 0);
+      mirarBotao = out.mirar;
     }
 
     if (direita) {
@@ -502,7 +510,11 @@ export function criarEntradaXR({
       out.empunharEvento = null;
       gripDesde = 0;
     }
-    if (!esquerda) { apoioBotao = false; out.apoio = false; }
+    /* Controle esquerdo sumiu: sem ele não há como saber se o gatilho está
+       apertado, e `mirarBotao` tem de cair — senão um gatilho preso no
+       último frame visto trava a arma puxada pro olho para sempre (mesmo
+       raciocínio do `apoioBotao` logo abaixo). */
+    if (!esquerda) { apoioBotao = false; out.apoio = false; mirarBotao = false; }
 
     /* APERTAR não é SEGURAR. Arma automática lê o estado contínuo; a
        semi-automática lê o CLIQUE (`gun.auto ? mouse.shooting : mouse.clicked`
@@ -536,6 +548,7 @@ export function criarEntradaXR({
     get girarArmado() { return girarArmado; },
     empunhando: () => empunha.engatado,
     apoiando: () => apoioBotao,
+    mirando: () => mirarBotao,
     /* Sessão nova nasce com a arma na mão: é o que o jogador espera ao voltar,
        e é o comportamento de hoje (a arma era solda). Chamado pelo `onExit`. */
     reset: () => { empunha.reset(true); gripDesde = 0; apoioBotao = false; },
