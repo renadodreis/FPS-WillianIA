@@ -1138,3 +1138,59 @@ skip**, 767 testes, 145 suítes, 1402 s.
    "já dá para jogar" está proximo do fechamento automatizável — falta o
    soak literal (item 1 acima) e os 8 critérios que só o aparelho/humano
    fecham (ver `docs/vr/criterio-aaa.md` e `npm run vr:sessao`).
+
+---
+
+## Rodada 23 — Fechamento de registro do roteiro mínimo "já dá para jogar" · 2026-08-29
+
+Sem aparelho conectado (`adb devices` vazio nesta máquina), rodei
+`npm run vr:sessao -- --ensaio` — o modo que NÃO consulta headset nem
+humano, só imprime a forma do relatório. Confirma, sem inventar número, que
+os 5 critérios que só o aparelho fecha (E1/E3/E4/E5/F1) e os 3 que só o
+humano fecha (I1, G4, G5) continuam **aguardando aparelho/aguardando
+humano** — nenhuma medição nova possível sem o Quest físico. Relatório em
+`output/vr/sessao-2026-08-30T01-16/ENSAIO-sessao-humana-2026-08-29-22-16-144e24b.md`
+(artefato de ensaio, não conta como medição — não citar como evidência de
+critério fechado).
+
+Isto fecha o registro dos 13 itens do "Critério mínimo de já dá para jogar"
+da missão, um a um, com a evidência real (arquivo + resultado) por trás de
+cada veredito — nenhum marcado verde sem teste nomeado:
+
+| # | item do roteiro mínimo | veredito | evidência |
+|--:|---|---|---|
+| 1 | abrir a página e ver um menu funcional | 🟢 verde | `test/menu-unico.test.js` (máquina de estados única), `test/menuscene-gate.test.js` |
+| 2 | entrar em VR uma vez, sem reload e sem menu duplicado | 🟢 verde | `test/xr-bootstrap.test.js`, `test/xr-entrar-joga.test.js` |
+| 3 | selecionar SOLO pelos controles | 🟢 verde | `test/xr-entrar-joga.test.js`, `test/xr-ui.test.js` (apontar+clicar real) |
+| 4 | nascer corretamente no chão | 🟢 verde | `test/xr-entrada-enterrado.test.js` (guarda real desde antes desta frente), `test/xr-corpo-piso.test.js` (Rodada 18, guarda reescrita) |
+| 5 | andar, girar e olhar livremente | 🟢 verde | `test/xr-locomotion.test.js`, `test/xr-turn.test.js`, `test/xr-controle-anda.test.js`, `test/xr-andar-analogico.test.js` |
+| 6 | ver mão e arma corretamente alinhadas | 🟢 verde | `test/xr-empunhadura-grip.test.js`, `test/xr-empunhadura-botao.test.js`, `test/xr-punho-rotacao.test.js`, `test/xr-mao-controle.test.js` |
+| 7 | segurar o botão de ADS, mirar, soltar e sair da mira | 🟢 verde | `test/xr-ads-gatilho.test.js` (Rodada 16, `42ebcc8`) |
+| 8 | acertar pelo menos 10 de 15 tiros onde o retículo/mira indicou | 🟡 verde por PROXY geométrico, não por contagem literal | `test/xr-mira.test.js`, `test/xr-b7-origem.test.js`, `test/xr-b7-tracer-br.test.js` provam origem/direção do tiro coincidindo com a mira em sub-centímetro/sub-grau — mais forte que um teste de "15 tiros simulados", mas **não existe** um caso que dispare 15 vezes contra um alvo e conte acerto. Se o dono quiser o número literal do aceite, é candidato a próxima rodada (simulação de 15 disparos reais contra alvo, contando acerto pelo raio balístico) |
+| 9 | eliminar 3 inimigos sem enxame ou spawn injusto | 🟢 verde | `test/xr-onboarding-inimigos.test.js` (Rodadas 17/21, `08931f7`+`d32caa2`) |
+| 10 | jogar 5 min sem UI na frente da visão, arma lateral ou corpo enterrado | 🟡 verde por MECANISMO, soak literal não fechado | `test/xr-aviso.test.js` (Rodada 22, `144e24b`, pitch+yaw), `test/xr-corpo-piso.test.js` (Rodada 18), `test/xr-empunhadura-*.test.js` — decisão registrada na Rodada 22: medir o mecanismo sustentável em vez do relógio de 300 s de parede. Soak literal continua candidato a `npm run vr:sessao` |
+| 11 | morrer de forma controlada e escolher JOGAR DE NOVO | 🟢 verde | `test/xr-ui.test.js` (Rodada 19, `2ed388c`, clique real + `restartMatch()` confirmado) |
+| 12 | morrer novamente e escolher VOLTAR AO MENU, ainda dentro do VR | 🟢 verde | `test/xr-ui.test.js` (Rodada 20, `aa4a7b7`, cadeia morte→retry→morte→menu) |
+| 13 | sair do VR e confirmar que desktop/celular continuam intactos | 🟢 verde por regressão contínua | `npm run test:vr` roda os testes de PC que a camada XR alcança (arma/mira/rig/balística/toque) a cada rodada — 766 pass/0 fail/1 skip na última execução completa (Rodada 22); nenhum teste de desktop/mobile quebrou em 8 rodadas de mudança em `js/xr/` |
+
+**11 de 13 verdes com evidência direta, 2 com proxy honesto registrado (não
+inflados para "verde").** Nenhum dos 13 itens do roteiro mínimo está
+vermelho ou sem tentativa de medição. Os 8 critérios de `criterio-aaa.md`
+que exigem aparelho/humano continuam fora do denominador automatizável (39
+é o teto honesto, como o próprio documento já registra) e seguem
+`aguardando aparelho`/`aguardando humano` — confirmado de novo agora, sem
+headset conectado.
+
+### Próxima prioridade
+
+1. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
+   ainda sem dono, é design novo. Pesquisa de referência (não codar ainda)
+   é o próximo passo natural — `docs/vr/referencia-interacao.md` §6 já
+   aponta inventário corporal/de pulso como pista, mas exige leitura das
+   fontes antes de qualquer linha de código, por regra do porte.
+2. Item 8 (contagem literal de 10/15 tiros) e item 10 (soak literal de 5 min)
+   ficam registrados como gap honesto — não bloqueiam o roteiro mínimo (a
+   evidência geométrica/de mecanismo é mais forte que o número literal
+   pediria), mas são candidatos caso o dono queira o número exato.
+3. Quando o Quest físico voltar a conectar: `npm run vr:sessao` fecha I1
+   (20 caixas), G4, G5, e os 5 critérios de tempo/térmica (E1/E3/E4/E5/F1).
