@@ -246,7 +246,17 @@ describe('segurar e guardar a arma, medido no headset',
       assert.equal(r.empunhada, true, 'a arma tem de nascer empunhada');
     });
 
-    it('UM CLIQUE GUARDA a arma: ela sai da palma e vai para o ombro', async () => {
+    /* SUBSTITUÍDO em 2026-08-30 — o dono revogou o coldre por clique,
+       testando no aparelho: "no grip direito tem um botão onde você
+       seleciona e solta a arma... qual o objetivo de ficar sem arma? ele
+       deveria ser o botão de mira... armas sempre a mão". Antes, um clique
+       aqui mandava a arma pro ombro (gripR↔palma ≥0,25m, empunhada=false);
+       o pedido inverte a régua: a arma NUNCA sai da palma, por clique nenhum
+       — nem um, nem seis. `js/xr/xrinput.js` parou de chamar
+       `empunha.passo()`; a máquina STICKY (`criarEmpunhadura`, describe pura
+       acima) continua existindo e testada em isolamento, só não decide mais
+       o estado real do jogo. */
+    it('CLIQUE NENHUM guarda a arma — ela fica na palma sempre (pedido do dono, 2026-08-30)', async () => {
       const antes = await h.play(async () => {
         window.__AR.cabeca(1.70);
         window.__AR.mao(0.25, 1.20, -0.25);
@@ -254,34 +264,18 @@ describe('segurar e guardar a arma, medido no headset',
         return window.__AR.ler();
       });
       const dep = await h.play(async () => {
-        await window.__AR.clique();
-        await window.__AR.espera(500);     // COLDRE_ANIM é 0,20 s
-        return window.__AR.ler();
-      });
-      /* O ombro direito, a partir do olho medido: é a referência do CORPO, e
-         ela é construída aqui, não lida do módulo. */
-      const ombro = [dep.olho[0] + 0.22, dep.olho[1] - 0.28, dep.olho[2] + 0.16];
-      const dOmbro = Math.hypot(dep.gripR[0] - ombro[0], dep.gripR[1] - ombro[1], dep.gripR[2] - ombro[2]);
-      console.log(`  antes  → gripR↔palma ${f3(antes.gripNaPalma)} m · coldre ${f3(antes.coldre)}`);
-      console.log(`  clique → gripR↔palma ${f3(dep.gripNaPalma)} m · gripR↔ombro ${f3(dOmbro)} m` +
-        ` · coldre ${f3(dep.coldre)} · empunhada ${dep.empunhada}`);
-      assert.ok(dep.gripNaPalma >= 0.25,
-        `guardada, a arma tinha de SAIR da palma: gripR↔palma deu ${f3(dep.gripNaPalma)} m (piso 0,250)`);
-      assert.ok(dOmbro <= 0.25,
-        `guardada, a arma tinha de chegar ao ombro: gripR↔ombro deu ${f3(dOmbro)} m (teto 0,250)`);
-      assert.equal(dep.empunhada, false, 'o estado tinha de dizer que a arma saiu da mão');
-    });
-
-    it('O CLIQUE SEGUINTE devolve a arma à palma', async () => {
-      const r = await h.play(async () => {
-        await window.__AR.clique();
+        for (let i = 0; i < 6; i++) await window.__AR.clique();   // seis cliques, de propósito
         await window.__AR.espera(500);
         return window.__AR.ler();
       });
-      console.log(`  saca   → gripR↔palma ${f3(r.gripNaPalma)} m · coldre ${f3(r.coldre)}`);
-      assert.ok(r.gripNaPalma <= 0.03,
-        `sacar tinha de trazer a arma de volta à palma: deu ${f3(r.gripNaPalma)} m (teto 0,030)`);
-      assert.equal(r.empunhada, true, 'a arma tinha de voltar à mão');
+      console.log(`  antes     → gripR↔palma ${f3(antes.gripNaPalma)} m · empunhada ${antes.empunhada}`);
+      console.log(`  6 cliques → gripR↔palma ${f3(dep.gripNaPalma)} m · empunhada ${dep.empunhada}`);
+      assert.equal(antes.empunhada, true, 'a arma tem de nascer na mão');
+      assert.ok(antes.gripNaPalma <= 0.03, `nasceu fora da palma: ${f3(antes.gripNaPalma)} m`);
+      assert.equal(dep.empunhada, true,
+        'depois de 6 cliques a arma saiu da mão — o pedido "armas sempre a mão" quebrou');
+      assert.ok(dep.gripNaPalma <= 0.03,
+        `depois de 6 cliques a arma se afastou da palma: ${f3(dep.gripNaPalma)} m (teto 0,030)`);
     });
 
     it('B4 — a MIRA ASSISTIDA acende o ADS do jogo e NÃO move a arma', async () => {
@@ -362,7 +356,12 @@ describe('segurar e guardar a arma, medido no headset',
         'com a mão longe da linha do cano o apoio tinha de DESENGATAR');
     });
 
-    it('CASO RUIM — guardar a arma NO MEIO da recarga não come munição', async () => {
+    /* SUSPENSO EM 2026-08-30: a arma nunca mais holstera (ver o teste acima,
+       "CLIQUE NENHUM guarda a arma"), então o cenário que este caso guardava
+       — coldrear NO MEIO da recarga — ficou inalcançável no jogo real.
+       Mantido em `skip`, não apagado: se o coldre por clique voltar por
+       outro caminho, este é o primeiro guarda a reativar. */
+    it.skip('CASO RUIM — guardar a arma NO MEIO da recarga não come munição', async () => {
       const r = await h.play(async () => {
         window.__AR.cabeca(1.70);
         window.__AR.mao(0.25, 1.20, -0.25);
@@ -396,7 +395,9 @@ describe('segurar e guardar a arma, medido no headset',
         `o pente mudou de ${r.antes.mag} para ${r.fim.mag} guardando a arma no meio da recarga`);
     });
 
-    it('CASO RUIM — guardada, a arma não mira nem que o gesto seja perfeito', async () => {
+    /* SUSPENSO EM 2026-08-30: mesma causa do caso acima — sem coldre
+       alcançável, "arma guardada não mira" não tem mais cenário real. */
+    it.skip('CASO RUIM — guardada, a arma não mira nem que o gesto seja perfeito', async () => {
       const r = await h.play(async () => {
         window.__AR.cabeca(1.70);
         window.__AR.mao(0.25, 1.20, -0.25);

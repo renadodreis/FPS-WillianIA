@@ -482,11 +482,18 @@ export function criarEntradaXR({
       out.atirar = botao(direita, 0);
       out.pular = botao(direita, 4);
 
-      /* O GRIP DIREITO SEGURA A ARMA (ver o bloco no topo do arquivo). */
+      /* ARMA SEMPRE NA MÃO (pedido do dono, 2026-08-30, revogando o coldre por
+         clique da rodada anterior). Verbatim, testando no aparelho: "no grip
+         direito tem um botão onde você seleciona e solta a arma... qual o
+         objetivo de ficar sem arma? ele deveria ser o botão de mira... armas
+         sempre a mão". O grip direito passa a servir SÓ a mira assistida
+         (abaixo) — `empunha`/`criarEmpunhadura` (o STICKY de um clique, um
+         alternar) continua existindo e testado em isolamento
+         (`test/xr-empunhadura-botao.test.js`, descreve pura), só não é mais
+         chamado aqui: nenhum clique deste botão guarda a arma no jogo real. */
       const grip = botao(direita, 1);
-      const r = empunha.passo(grip);
-      out.empunhar = r.engatado;
-      out.empunharEvento = r.evento;
+      out.empunhar = true;
+      out.empunharEvento = null;
 
       /* MIRA ASSISTIDA — desligada por padrão, e mesmo ligada NÃO move a arma.
          O tempo mínimo separa "empunhar" (um toque) de "mirar" (manter), para
@@ -498,15 +505,13 @@ export function criarEntradaXR({
         || (assistida && grip && gripDesde > 0 && (agora() - gripDesde) >= MIRA_ASSISTIDA_MS);
     } else {
       girarArmado = true;   // controle sumiu: não deixa o giro travado armado errado
-      /* CONTROLE SUMINDO NÃO LARGA A ARMA. Ver `semControle()`: o estado é
-         congelado, não zerado. Largar a arma porque a mão saiu do campo das
-         câmeras por um frame é perder a partida por defeito de hardware.
+      /* CONTROLE SUMINDO NÃO LARGA A ARMA — e agora nada larga a arma, então
+         isto vale por construção: `out.empunhar` já é `true` sempre.
          `out.mirar` não é zerado aqui: a fonte da mão ESQUERDA (gatilho) é
          independente da direita e continua valendo — perder o rastreio da mão
          que segura a arma não pode travar o espalhamento de quem só queria
          soltar o gatilho de apoio. */
-      const r = empunha.semControle();
-      out.empunhar = r.engatado;
+      out.empunhar = true;
       out.empunharEvento = null;
       gripDesde = 0;
     }
@@ -546,14 +551,23 @@ export function criarEntradaXR({
   return {
     ler,
     get girarArmado() { return girarArmado; },
-    empunhando: () => empunha.engatado,
+    /* SEMPRE true (arma sempre na mão, 2026-08-30) — `empunha.engatado` nunca
+       muda mais porque `ler()` não chama `empunha.passo()`. Não lê o módulo
+       por hábito: lê a decisão de produto atual, direto. */
+    empunhando: () => true,
     apoiando: () => apoioBotao,
     mirando: () => mirarBotao,
     /* Sessão nova nasce com a arma na mão: é o que o jogador espera ao voltar,
        e é o comportamento de hoje (a arma era solda). Chamado pelo `onExit`. */
     reset: () => { empunha.reset(true); gripDesde = 0; apoioBotao = false; },
     /* Preferências do menu de VR. `apertar` (sticky) é o padrão; `manter` é a
-       alternativa que a XAG 107 e o Game Accessibility Guidelines pedem. */
+       alternativa que a XAG 107 e o Game Accessibility Guidelines pedem.
+       NUNCA foi ligado a nenhum controle de menu real (`grep` não acha nada
+       em xrui.js/game.js) — só QA. Desde 2026-08-30 (arma sempre na mão),
+       `ler()` não chama mais `empunha.passo()`, então trocar este valor não
+       muda comportamento nenhum no jogo: fica como infraestrutura pronta
+       pro dia em que o coldre por clique voltar a existir (ou for
+       reaproveitada por outro botão), não como preferência viva hoje. */
     prefs: {
       get empunhadura() { return empunha.modo; },
       set empunhadura(v) { empunha.modo = v; },
