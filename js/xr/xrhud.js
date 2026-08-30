@@ -102,7 +102,7 @@ export const PULSO_CV_W = 512, PULSO_CV_H = 384;
    Arma: acima e à esquerda do castelo, fora do cano (que aponta pro −Z).
    Pulso: acima da palma e na direção do cotovelo (+Z do `gripSpace` é a
    direção contrária à da haste segurada). */
-export const ARMA_OFF = [-0.085, 0.105, 0.02];
+export const ARMA_OFF = [-0.14, 0.16, 0.02];
 export const PULSO_OFF = [0, 0.05, 0.085];
 
 /* O MAPA. Item 17 de 17 da lista fechada do H1, e o único que não é texto: um
