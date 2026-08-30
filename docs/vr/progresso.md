@@ -1310,3 +1310,20 @@ tocada — as duas zonas novas são checagens paralelas, como o peito já era)
 3. Validar por medição própria (headset ou sessão longa) se 18/20 cm de raio
    e a posição ombro/quadril são confortáveis de alcançar sem tirar o olho
    do combate — é ergonomia sem lastro, como o próprio código já marca.
+
+---
+
+## Rodada 26 — Validação independente das Rodadas 16-25 · 2026-08-29
+
+**Laudo completo:** `docs/vr/validacao-d59830e.md`. Placar: **30/39** (era
+31/39 no laudo anterior, `18a231e`) — **D1 caiu** (regressão real: `comer` e
+`trocar acessório de mira` ficaram permanentemente inalcançáveis em VR desde
+a Rodada 16, nunca reconhecido como reprovação da régua AAA). **Achado novo
+fora da tabela, mais grave que D1:** as zonas corporais de ombro/quadril
+(Rodada 25) colidem geometricamente com a zona pré-existente do peito — o
+centro do alvo do quadril fica a 2,2 mm de DENTRO do raio do peito, então
+usar o kit médico no ponto que o próprio teste da Rodada 25 valida também
+dispara o gesto de recarga no mesmo aperto. Nenhum dos dois nasceu à toa: os
+dois são a mesma causa — a Rodada 25 não checou a geometria nova contra a
+zona já existente no mesmo arquivo, que já tinha o aviso escrito em
+comentário duas telas acima. Próxima prioridade no laudo, §5.
