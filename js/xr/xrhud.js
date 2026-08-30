@@ -396,10 +396,26 @@ export function createXrHud({
     _aFwd.set(0, 0, -1).applyQuaternion(_aQ);
     _aTmp.copy(olho).add(_aFwd);
     rig.worldToLocal(_aTmp);
-    _fwdL.copy(_aTmp).sub(_olhoL); _fwdL.y = 0;
+    _fwdL.copy(_aTmp).sub(_olhoL);
+    /* componentes ANTES de achatar — `_fwdL` nasce de um vetor unitário
+       rodado só pela rotação do rig (translação cancela na subtração, rig
+       não escala), então `pitchY` é o seno do pitch e `horiz` o cosseno.
+       Guardados aqui porque a fatia abaixo AMOSTRA `_fwdL` já achatado. */
+    const pitchY = _fwdL.y, horiz = Math.hypot(_fwdL.x, _fwdL.z);
+    _fwdL.y = 0;
     if (_fwdL.lengthSq() < 1e-8) _fwdL.set(0, 0, -1); else _fwdL.normalize();
     _aAlvo.copy(_fwdL).multiplyScalar(DIST_AVISO).add(_olhoL);
-    _aAlvo.y = _olhoL.y + AVISO_SOBE;
+    /* A altura sobe por TANGENTE do pitch — é o ponto que fica EXATAMENTE
+       sobre o raio de mira no raio horizontal DIST_AVISO (verificado por
+       geometria: t·cosθ = DIST_AVISO ⇒ t·sinθ = DIST_AVISO·tanθ) — e só
+       depois soma o SOBE fixo. Sem o termo de pitch, olhar para CIMA ~13°
+       (a mesma inclinação de AVISO_SOBE/DIST_AVISO) faz a mira cruzar o
+       painel: medido, o ângulo entre os dois caía para 0,79° — quase em
+       cima da mira em pleno combate (test/xr-aviso.test.js, "MEDIÇÃO —
+       olhar para cima"). Olhando reto o termo é zero e a altura volta a
+       ser a de sempre. `horiz` no denominador (não `cosθ` cru) evita
+       divisão por quase-zero olhando quase reto para cima/baixo. */
+    _aAlvo.y = _olhoL.y + DIST_AVISO * pitchY / Math.max(0.2, horiz) + AVISO_SOBE;
     return _aAlvo;
   }
 
@@ -426,6 +442,16 @@ export function createXrHud({
     const alvo = alvoDoAviso(rig, camera, olho);
     if (!aviso.temPos) { aviso.pos.copy(alvo); aviso.temPos = true; aviso.repondo = false; }
 
+    /* A ALTURA acompanha o PITCH da mira TODO FRAME, com atraso — não é o
+       mesmo mecanismo do horizontal, que só se move durante `repondo`
+       (giro grande). Sem isso, entre dois reposicionamentos horizontais o
+       jogador pode olhar pra cima livremente e o painel fica preso na
+       altura antiga — é assim que a mira cruza o painel a meio caminho de
+       um giro vertical comum. O amortecimento evita virar cabeça-fixa 1:1
+       no eixo vertical: H2 pede "loosely follow… using smoothing
+       animation" como alternativa à âncora rígida, não trava nenhuma. */
+    if (!aviso.repondo) aviso.pos.y += (alvo.y - aviso.pos.y) * (1 - Math.exp(-passo / AVISO_TAU));
+
     /* erro angular no plano horizontal, do painel contra a frente do olhar */
     _aTmp.copy(aviso.pos).sub(_olhoL); _aTmp.y = 0;
     const raio = _aTmp.length();
@@ -449,7 +475,7 @@ export function createXrHud({
         _aTmp.multiplyScalar(DIST_AVISO / r2).add(_olhoL);
         aviso.pos.x = _aTmp.x; aviso.pos.z = _aTmp.z;
       }
-      aviso.pos.y = _olhoL.y + AVISO_SOBE;
+      aviso.pos.y = alvo.y;
       _aTmp.copy(aviso.pos).sub(_olhoL); _aTmp.y = 0;
       const r3 = _aTmp.length();
       const erro2 = r3 < 1e-4 ? Math.PI

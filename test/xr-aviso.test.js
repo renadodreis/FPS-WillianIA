@@ -148,6 +148,17 @@ async function instalarFerramentas() {
       const r = g * Math.PI / 180;
       dev.quaternion.set(0, Math.sin(r / 2), 0, Math.cos(r / 2));
     },
+    /* inclina a CABEÇA de verdade — PITCH, positivo é olhar pra CIMA.
+       Rotação de θ em torno de +X aplicada a "pra frente" (0,0,-1) dá
+       (0, sinθ, −cosθ): sinθ>0 sobe o Y do vetor de mira. Nenhum caso
+       desta bateria usava pitch antes (só `olhar`, que é yaw) — e
+       `alvoDoAviso` (js/xr/xrhud.js) ignora pitch de propósito
+       (`_fwdL.y = 0`), calculando a altura do painel como olho+SOBE fixo. */
+    olharPitch: g => {
+      const dev = window.__xrEmulado;
+      const r = g * Math.PI / 180;
+      dev.quaternion.set(Math.sin(r / 2), 0, 0, Math.cos(r / 2));
+    },
     andar: (x, z) => { window.__xrEmulado.position.set(x, 1.7, z); },
     parar: () => {
       const dev = window.__xrEmulado;
@@ -315,6 +326,62 @@ describe('o aviso central existe DENTRO do mundo em VR (H1)',
         'para a cidade continua sem receber o aviso');
       assert.ok(r.e.aviso.anguloEncara < 12,
         `depois de alcançar, o painel ficou ${r.e.aviso.anguloEncara.toFixed(2)}° fora de encarar o olho`);
+    });
+
+    it('olhar para CIMA durante o aviso não põe o texto em cima da mira (achado + corrigido, 2026-08-29)', async () => {
+      /* ACHADO por esta rodada, medindo o item da missão "nenhum aviso pode
+         bloquear... a mira... durante combate": `AVISO_SOBE` (0,24 m) era
+         um deslocamento FIXO de altura sobre o olho, e `alvoDoAviso`
+         ignorava o PITCH da câmera de propósito (`_fwdL.y = 0`) — todo caso
+         desta bateria até aqui só girava em YAW. Cena realista de combate:
+         o jogador olha pra CIMA (inimigo elevado, o céu, um parapeito)
+         enquanto o aviso está aceso. Antes do fix, medido: olhando reto o
+         ângulo mira↔painel é 13,50° (bate com atan(0,24/1,00), o projeto);
+         a 13° de pitch — a MESMA inclinação do deslocamento — caía para
+         **0,79°**, quase em cima da mira. `js/xr/xrhud.js` agora soma à
+         altura o termo `DIST_AVISO·tan(pitch)` (o ponto que fica exatamente
+         sobre o raio de mira no raio horizontal do painel) antes do SOBE
+         fixo, amortecido (não é o mesmo mecanismo do horizontal, que só
+         segue em giro grande — aqui é contínuo e suave, "loosely follow"
+         de H2, não trava a cabeça). Depois do fix, medido: nunca abaixo de
+         6° na faixa 0–45°, sem dip — ver LIMIAR abaixo. */
+      const AMOSTRAS_GRAUS = [0, 10, 13, 20, 30, 45];
+      const r = await h.play(async ([txt, amostras]) => {
+        const G = window.__game, MP = window.__MP, T = MP.THREE;
+        window.__AV.parar();
+        await window.__AV.espera(300);
+        window.__AV.disparar(txt, 9000);
+        await window.__AV.espera(400);
+        const out = [];
+        for (const g of amostras) {
+          window.__AV.olharPitch(g);
+          await window.__AV.espera(500);
+          const cab = MP.camera.getWorldPosition(new T.Vector3());
+          const q = MP.camera.getWorldQuaternion(new T.Quaternion());
+          const fwd = new T.Vector3(0, 0, -1).applyQuaternion(q);
+          const e = G.XRHud.estado(cab);
+          const av = e.aviso;
+          if (!av || !av.visivel) { out.push({ g, visivel: false }); continue; }
+          const toAv = new T.Vector3().fromArray(av.pos).sub(cab).normalize();
+          const anguloView = Math.acos(Math.max(-1, Math.min(1, fwd.dot(toAv)))) * 180 / Math.PI;
+          out.push({ g, visivel: true, anguloView });
+        }
+        window.__AV.olharPitch(0);
+        window.__AV.parar();
+        return out;
+      }, [AVISO, AMOSTRAS_GRAUS]);
+      console.log('      pitch → ângulo mira↔painel: ' +
+        r.map(a => `${a.g}°→${a.visivel ? a.anguloView.toFixed(2) + '°' : 'sumiu'}`).join(' · '));
+      assert.ok(r.every(a => a.visivel), `o aviso sumiu em algum pitch: ${JSON.stringify(r)}`);
+      /* LIMIAR de bloqueio: bem abaixo de qualquer leitura pós-fix medida
+         (mínimo 6,12° a 45°) e bem acima do que o defeito antigo produzia
+         (0,79° a 13°) — separa claramente os dois mundos, sem depender de
+         decimais. */
+      const LIMIAR_BLOQUEIO = 5;
+      const bloqueou = r.filter(a => a.anguloView < LIMIAR_BLOQUEIO)
+        .map(a => `${a.g}°: ${a.anguloView.toFixed(2)}°`);
+      assert.deepEqual(bloqueou, [],
+        'olhando pra cima o aviso entrou no cone central da mira — bloqueia o alvo durante combate');
     });
 
     it('andar fisicamente para dentro dele não o enfia no olho (I3)', async () => {

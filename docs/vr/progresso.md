@@ -1019,3 +1019,122 @@ skip**, 766 testes, 145 suítes, 1481 s.
    enterrado" — único item do roteiro mínimo ainda sem medição nesta frente.
 2. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
    ainda sem dono; é design novo, pesquisar referência antes de codar.
+
+---
+
+## Rodada 22 — "UI na frente da visão": o aviso central cruza a mira olhando pra cima · 2026-08-29
+
+### Item atacado
+
+O item que faltava do roteiro mínimo: "jogar 5 minutos sem UI na frente da
+visão, arma lateral ou corpo enterrado". Antes de escrever qualquer teste,
+li a cobertura já existente — `test/xr-hud.test.js` (I3, painéis de
+munição/pulso), `test/xr-aviso.test.js` (H1/H2, o aviso central de
+`centerMsg`), `test/xr-empunhadura-*.test.js` (alinhamento da arma na mão) e
+`test/xr-corpo-piso.test.js` (corpo enterrado, fechado na Rodada 18) — pra
+não duplicar prova já feita. Achado: TODA a bateria de `xr-aviso.test.js`
+gira a cabeça só em YAW (`olhar(g)`); nenhum caso usa PITCH. E `alvoDoAviso`
+(`js/xr/xrhud.js`) tem uma linha que só faz sentido girando o pescoço para
+os lados: `_fwdL.y = 0` — o cálculo IGNORA de propósito a inclinação
+vertical da cabeça.
+
+**Sobre o literal "5 minutos reais":** um soak de 300 s de parede quebraria
+o ciclo curto que a skill `vr-quest` protege (~2,5 min); a saída foi medir o
+mecanismo que esse tempo exercitaria (cabeça se movendo em todas as direções
+enquanto um aviso está aceso), não o relógio. Alinhamento de arma e corpo
+enterrado já têm bateria própria (empunhadura-grip/botão e corpo-piso); o
+que faltava era exatamente esta lacuna de PITCH no aviso. Fica registrado
+como não-fechado o soak literal de 5 min contínuos com os três juntos — ver
+"próxima prioridade".
+
+### Causa comprovada, com número
+
+Escrevi a sonda (`olharPitch`, novo helper ao lado do `olhar` existente) e
+medi o ângulo real entre a direção da mira (`camera` forward) e a posição do
+painel de aviso, com o aviso aceso, em seis inclinações. Antes do fix:
+
+| pitch | ângulo mira↔painel |
+|--:|--:|
+| 0° | 13,50° (bate com `atan(0,24/1,00)`, o projeto) |
+| 10° | 3,52° |
+| **13°** | **0,51°** — quase em cima da mira |
+| 20° | 6,47° |
+| 30° | 16,44° |
+| 45° | 31,38° |
+
+O mergulho não é acidente de amostragem: `AVISO_SOBE` (0,24 m) é uma altura
+FIXA sobre o olho e o painel fica a 1,00 m (`DIST_AVISO`) na horizontal —
+quando o pitch se aproxima de `atan(SOBE/DIST) = 13,5°`, o raio de mira
+VARRE exatamente o ponto onde o painel está parado, porque a altura dele
+nunca acompanhou a cabeça. Reinjetado o defeito (zerando o termo de pitch),
+o teste morde: `0,51°`/`3,52°` reproduzidos, vermelho pelo motivo certo.
+
+### Mudança
+
+`js/xr/xrhud.js`, `alvoDoAviso`: a altura do alvo ganha um termo de pitch —
+`DIST_AVISO · tan(pitch)` (o ponto que fica exatamente SOBRE o raio de mira
+no raio horizontal do painel; geometria verificada à mão: `t·cosθ =
+DIST_AVISO ⇒ t·sinθ = DIST_AVISO·tanθ`) — antes de somar o `AVISO_SOBE`
+fixo. `atualizarAviso`: a altura agora acompanha esse alvo TODO FRAME, com
+amortecimento (`AVISO_TAU`, o mesmo já usado no horizontal) quando NÃO há
+reposicionamento grande em curso — é um mecanismo SEPARADO do horizontal
+(que só se move em giro grande, `repondo`), porque a falha aqui era
+justamente ficar preso entre dois desses eventos enquanto o jogador olhava
+livremente para cima. Dentro de `repondo`, a altura passa a copiar o alvo
+(pitch-correto) em vez do valor fixo antigo. Amortecido, não é o mesmo que
+"colar na cabeça" (H2 aceita "loosely follow… using smoothing animation"
+como alternativa à âncora rígida) — e o horizontal continua idêntico
+(nenhuma mudança na lógica de yaw).
+
+Depois do fix, mesma medição:
+
+| pitch | ângulo mira↔painel |
+|--:|--:|
+| 0° | 13,50° |
+| 10° | 12,47° |
+| 13° | 12,18° |
+| 20° | 11,07° |
+| 30° | 9,23° |
+| 45° | 6,12° |
+
+Decadência suave e monotônica, nunca abaixo de 6° na faixa medida — contra
+o mergulho a 0,51° de antes.
+
+### Teste
+
+`test/xr-aviso.test.js`, novo caso "olhar para CIMA durante o aviso não põe
+o texto em cima da mira": dispara o aviso pela chamada real (`centerMsg`),
+amostra 0/10/13/20/30/45° de pitch com 500 ms de acomodação cada, mede o
+ângulo real (produto escalar entre a direção da câmera e o vetor
+olho→painel — nenhuma das duas grandezas é a mesma coisa lida duas vezes).
+Limiar de bloqueio 5° (bem abaixo do pior caso pós-fix, 6,12°; bem acima do
+pior caso pré-fix, 0,51°). Vermelho confirmado com o defeito reinjetado
+(`0 * pitchY` no lugar do termo real), revertido byte a byte (`diff` contra
+backup) depois.
+
+### Verificado
+
+`test/xr-aviso.test.js` completo (10/10, era 9/9) + vermelho confirmado com
+mutante (motivo certo, revertido), `test/xr-hud.test.js` +
+`test/xr-hud-distancia.test.js` (15/15, sem regressão no resto do HUD),
+`npm run lint` limpo.
+
+`npm run test:vr` completo síncrono: **766 pass, 0 fail, 0 cancelled, 1
+skip**, 767 testes, 145 suítes, 1402 s.
+
+### Próxima prioridade
+
+1. O soak literal de 5 minutos contínuos (arma+corpo+HUD juntos, sob
+   movimento real sustentado) continua não fechado como medição de PAREDE —
+   decisão desta rodada foi medir o mecanismo (pitch) em vez do relógio. Se
+   o dono quiser o número literal, é candidato ao roteiro humano
+   `npm run vr:sessao` (que já cobre I1 human-only) em vez de inflar o
+   `test:vr`.
+2. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
+   ainda sem dono; é design novo, pesquisar referência antes de codar.
+3. Com os cinco primeiros itens do roteiro mínimo medidos e os defeitos reais
+   encontrados corrigidos (menu — herdado; spawn — Rodada 18; arma/ADS —
+   Rodada 16; HUD — Rodada 22; onboarding — Rodadas 17/21), o roteiro mínimo
+   "já dá para jogar" está proximo do fechamento automatizável — falta o
+   soak literal (item 1 acima) e os 8 critérios que só o aparelho/humano
+   fecham (ver `docs/vr/criterio-aaa.md` e `npm run vr:sessao`).
