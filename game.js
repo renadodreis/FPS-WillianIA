@@ -3924,15 +3924,23 @@ function tick(forceDt) {
          desvantagem competitiva, que é o oposto do que a XAG 107 pede. */
       teclaXR('KeyR', cmd.recarregar || XRArma.pedeRecarga());
       teclaXR('KeyE', cmd.usar);
-      /* OS QUATRO VERBOS DO RADIAL (js/xr/xrinput.js). Granada, kit médico,
-         comer e trocar acessório de mira não tinham botão nenhum no Touch — o
-         controle acabou, e a saída do gênero é um menu radial no analógico.
+      /* OS QUATRO VERBOS QUE O RADIAL NÃO TINHA BOTÃO PRA DAR (js/xr/xrinput.js).
          A LINHA TEM DE FICAR AQUI, e o motivo é ordem de leitura: `shootUpdate`
          lê `justPressed` mais abaixo e `justPressed.clear()` apaga tudo no fim
          do frame, então `code` escrito depois disto nunca chega a ser visto.
          `confirmou` é um pulso de UM frame, que é exatamente o que `teclaXR`
-         traduz em tecla que sobe e desce. */
-      for (const c of ['KeyG', 'KeyQ', 'KeyF', 'KeyT']) teclaXR(c, cmd.radial.confirmou === c);
+         traduz em tecla que sobe e desce — vale para os quatro, mas o radial
+         nunca confirma nada desde a Rodada 16 (gatilho esquerdo virou ADS,
+         `cmd.radial` é sempre fechado). GRANADA e KIT MÉDICO ganharam um
+         segundo caminho, TRÊS CAMINHOS UMA TECLA do mesmo jeito que `KeyR`
+         acima: gesto de corpo (ombro/quadril + grip, `js/xr/xrweapon.js`)
+         OU o radial se um dia for reposto — nunca os dois ao mesmo tempo no
+         mesmo frame. COMER e TROCAR DE MIRA ficam sem gesto ainda (dívida
+         registrada em docs/vr/progresso.md, sem lugar corporal com
+         precedente de gênero — não inventado). */
+      teclaXR('KeyG', cmd.radial.confirmou === 'KeyG' || XRArma.pedeGranada());
+      teclaXR('KeyQ', cmd.radial.confirmou === 'KeyQ' || XRArma.pedeKitMedico());
+      for (const c of ['KeyF', 'KeyT']) teclaXR(c, cmd.radial.confirmou === c);
       mouse.shooting = cmd.atirar;
       /* SEMI-AUTOMÁTICA LÊ O CLIQUE, não o segurar (`gun.auto ? mouse.shooting :
          mouse.clicked`, logo abaixo em shootUpdate). Sem esta linha a pistola, a

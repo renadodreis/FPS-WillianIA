@@ -185,6 +185,22 @@ export const MAGWELL_MAX = 0.12;
 export const PEITO_OFF = [0, -0.45, -0.15];
 export const PEITO_RAIO = 0.25;
 
+/* GRANADA e KIT MÉDICO — o gatilho esquerdo virou ADS (Rodada 16) e o radial
+   de 4 fatias ficou sem botão (docs/vr/progresso.md, docs/vr/referencia-
+   interacao.md Parte III). A pesquisa daquela rodada recomenda a MESMA
+   receita do peito: zona corporal fixa (offset de vista, girada pela guinada
+   da cabeça) + grip da mão de apoio, sem botão novo e sem menu de invocação.
+   Ombro ESQUERDO para granada (o COLDRE já ocupa o ombro direito, atrás —
+   `COLDRE_OFF` acima — e sobrepor as duas zonas voltaria a ter um empate
+   como pente×apoio); quadril ESQUERDO para o kit médico, abaixo do ombro.
+   Ergonomia SEM LASTRO EXTERNO — nenhuma fonte encontrada publica a distância
+   exata (referência, Parte III, §12) — marcado como tal, candidato a ajuste
+   por humano de headset. */
+export const OMBRO_OFF = [-0.18, -0.12, -0.05];
+export const OMBRO_RAIO = 0.18;
+export const QUADRIL_OFF = [-0.15, -0.55, 0.02];
+export const QUADRIL_RAIO = 0.20;
+
 /* A ESCOPETA, CARTUCHO A CARTUCHO. `PORTA_MAX` é a mesma grandeza do
    `MAGWELL_MAX` — "a mão chegou ao ponto em que a arma recebe munição" — e por
    isso é o mesmo número: um significado, uma medida. `PORTA_REARME` é a
@@ -250,6 +266,7 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
   const _qCant = new THREE.Quaternion(), _eCant = new THREE.Euler(), _eYaw = new THREE.Euler();
   const _qPai = new THREE.Quaternion();
   const _coldre = new THREE.Vector3(), _peito = new THREE.Vector3();
+  const _ombro = new THREE.Vector3(), _quadril = new THREE.Vector3();
   const _magwell = new THREE.Vector3(), _eixoLocal = new THREE.Vector3();
   const _porta = new THREE.Vector3();   // a porta de carregamento da escopeta
   const _qVista = new THREE.Quaternion();
@@ -279,6 +296,9 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
   let pedeRecargaPulso = false;
   let peitoArmado = true;     // a mão precisa SAIR do peito para pedir de novo
   let pedidoT = -1e9;         // quando o peito pediu: decide a ORIGEM da recarga
+  let pedeGranadaPulso = false, pedeKitMedicoPulso = false;
+  let ombroArmado = true, quadrilArmado = true;   // mesma histerese do peito
+  let gripDOmbro = Infinity, gripDQuadril = Infinity;
 
   /* ---- recarga CARTUCHO A CARTUCHO (escopeta) ---- */
   let recPorCartucho = false;
@@ -908,13 +928,17 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
        grip esquerdo, que precisa dela em TODO frame para decidir na borda,
        lia `Infinity` justamente durante a recarga, que é quando a decisão
        importa. */
-    gripDPeito = Infinity;
+    gripDPeito = Infinity; gripDOmbro = Infinity; gripDQuadril = Infinity;
     if (maoApoio && cabeca) {
       let yaw = 0;
       if (vista) { _eYaw.setFromQuaternion(_qVista.copy(vista), 'YXZ'); yaw = _eYaw.y; }
       _peito.fromArray(PEITO_OFF).applyAxisAngle(_v5.set(0, 1, 0), yaw).add(cabeca);
+      _ombro.fromArray(OMBRO_OFF).applyAxisAngle(_v5.set(0, 1, 0), yaw).add(cabeca);
+      _quadril.fromArray(QUADRIL_OFF).applyAxisAngle(_v5.set(0, 1, 0), yaw).add(cabeca);
       maoApoio.getWorldPosition(_v4);
       gripDPeito = _v4.distanceTo(_peito);
+      gripDOmbro = _v4.distanceTo(_ombro);
+      gripDQuadril = _v4.distanceTo(_quadril);
     }
 
     /* PEDIDO DE RECARGA POR GESTO: a mão de apoio no peito, com o grip. O
@@ -933,6 +957,27 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
            e "o relógio manda". */
         pedidoT = tAgora;
       }
+    }
+
+    /* GRANADA e KIT MÉDICO POR GESTO — mesma receita do peito acima
+       (zona corporal fixa + grip da mão de apoio + rearme por histerese),
+       independentes de `recEstado`: pedir uma granada não tem nada a ver
+       com o estado da recarga. Cada zona tem o PRÓPRIO armado/rearme —
+       segurar o grip e passar do ombro pro quadril no mesmo aperto não pode
+       disparar as duas, então cada uma só acende com o grip SUBINDO dentro
+       da própria zona (não basta reentrar; `apoioBotao` tem de estar ativo
+       nesse instante, do mesmo jeito que o peito exige). */
+    pedeGranadaPulso = false;
+    if (maoApoio && cabeca) {
+      const noOmbro = gripDOmbro <= OMBRO_RAIO;
+      if (!noOmbro) ombroArmado = true;
+      else if (ombroArmado && apoioBotao) { pedeGranadaPulso = true; ombroArmado = false; }
+    }
+    pedeKitMedicoPulso = false;
+    if (maoApoio && cabeca) {
+      const noQuadril = gripDQuadril <= QUADRIL_RAIO;
+      if (!noQuadril) quadrilArmado = true;
+      else if (quadrilArmado && apoioBotao) { pedeKitMedicoPulso = true; quadrilArmado = false; }
     }
 
     /* ================================================================
@@ -1062,11 +1107,13 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
     recEvento = null;
     zerarRecarga();
     pedeRecargaPulso = false; peitoArmado = true; pedidoT = -1e9;
+    pedeGranadaPulso = false; ombroArmado = true;
+    pedeKitMedicoPulso = false; quadrilArmado = true;
     recUltimoCartuchoT = -1e9;
     /* O grip esquerdo volta a `livre`: a próxima sessão não pode nascer com o
        modo travado pelo aperto em que o jogador tirou o headset. */
     gripModo = 'livre'; gripAntes = false; gripDesdeT = 0;
-    gripDPeito = Infinity; gripDApoio = Infinity;
+    gripDPeito = Infinity; gripDApoio = Infinity; gripDOmbro = Infinity; gripDQuadril = Infinity;
   }
 
   return {
@@ -1086,6 +1133,12 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
        game.js traduz em `KeyR`, que é o mesmo caminho do botão e do teclado —
        gesto novo não pode significar recarga nova. */
     pedeRecarga: () => pedeRecargaPulso,
+    /* Pulso de UM frame cada: a mão de apoio entrou no ombro (granada) ou no
+       quadril (kit médico) com o grip. O game.js traduz em `KeyG`/`KeyQ`,
+       o mesmo caminho já lido por `shootUpdate`/`useMedkit` no teclado — a
+       validação de inventário/uso continua sendo a mesma de sempre. */
+    pedeGranada: () => pedeGranadaPulso,
+    pedeKitMedico: () => pedeKitMedicoPulso,
     /* O ESTADO DA RECARGA, e o registro CONGELADO da transição. `poll` não
        serve: a 72 Hz o frame em que o pente encaixa escapa da amostragem, e um
        teste que amostra mede outra coisa. */

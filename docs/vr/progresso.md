@@ -1238,3 +1238,75 @@ Arquivos alterados: `docs/vr/referencia-interacao.md`.
 3. Item 8 (10/15 tiros) e item 10 (soak 5min) seguem gap honesto, candidatos
    a `npm run vr:sessao` ou rodada dedicada se o dono quiser o número
    literal.
+
+---
+
+## Rodada 25 — granada no ombro, kit médico no quadril, pelo grip de apoio · 2026-08-29
+
+### Implementado a recomendação da Rodada 24
+
+**Mecanismo, igual ao já existente para o pente.** `js/xr/xrweapon.js` já
+tinha a receita testada para "zona corporal fixa + grip da mão de apoio":
+`PEITO_OFF`/`PEITO_RAIO` (mesma conta — offset de vista girado pela guinada
+da cabeça, medido contra a mão de apoio — dispara `pedeRecargaPulso` com
+histerese de rearme por SAIR da zona). A pesquisa da Rodada 24 supôs
+`js/xr/xrbody.js` como fonte de posição/guinada; na prática esse módulo só
+expõe alturas e a guinada do CORPO (não a posição de mundo), e a peça certa
+já existia em `xrweapon.js` — os parâmetros `cabeca`/`vista` que `game.js`
+já passa pra ele (`camera.getWorldPosition`/`vistaMundo()`), a mesma dupla
+que a zona do peito usa. Ajuste feito: a recomendação (proximidade corporal,
+sem botão novo) foi preservada; a fonte técnica citada na pesquisa não bateu
+com o código real e foi substituída pela que já funciona.
+
+Duas zonas novas, mesmo padrão do peito: `OMBRO_OFF`/`OMBRO_RAIO` (ombro
+ESQUERDO — o direito já é o coldre da arma, `COLDRE_OFF`) para granada,
+`QUADRIL_OFF`/`QUADRIL_RAIO` (quadril esquerdo) para kit médico. Cada uma
+com o PRÓPRIO armado/rearme (independentes entre si e do peito). Pulsos
+novos `pedeGranada()`/`pedeKitMedico()` no retorno do módulo, consumidos em
+`game.js` no MESMO ponto onde os quatro verbos do radial morto já eram
+lidos: `teclaXR('KeyG', cmd.radial.confirmou === 'KeyG' || XRArma.pedeGranada())`
+e o equivalente pro `KeyQ` — três caminhos, uma tecla, do jeito que `KeyR`
+(recarga) já faz entre botão e gesto. Comer (`KeyF`) e troca de mira
+(`KeyT`) continuam só no radial morto (fora de escopo, sem lugar corporal
+com precedente — não inventado).
+
+Números de `OMBRO_OFF`/`QUADRIL_OFF` são ergonomia SEM LASTRO EXTERNO
+(marcado no código e na referência) — candidatos a ajuste por humano de
+headset, do mesmo jeito que `COLDRE_OFF`/`PEITO_OFF` já eram.
+
+### Teste (TDD, IWER real, Quest 3)
+
+`test/xr-verbo-corporal.test.js` (porta 3868, novo), 6 casos: âncora
+independente calculada no PRÓPRIO teste a partir de `G.camera.getWorldPosition()`
+e `G.yawDaVista()` (fontes públicas, não o offset privado do módulo — os
+offsets em si são importados de `xrweapon.js` porque não há fonte externa
+para "onde fica o ombro"). Cobre: gasta uma granada no ombro com grip; NÃO
+gasta uma segunda no mesmo aperto; sair e voltar rearma; sem grip não gasta
+nada (não é comando por proximidade, mesma régua D3 do mundo); fora do raio
+não gasta nada; quadril gasta kit médico E cura de verdade; as duas zonas
+não se contaminam.
+
+Ordem invertida de TDD (implementei antes de escrever o teste, corrigido
+registrando aqui em vez de esconder): compensado reinjetando o defeito
+antigo (`for (const c of [...]) teclaXR(c, cmd.radial.confirmou === c)` sem
+os dois `||`) e confirmando vermelho — 4 de 6 casos morrem pelo motivo certo
+(item não gasto), revertido byte a byte depois.
+
+### Verificado
+
+`xr-verbo-corporal.test.js` 6/6 (vermelho confirmado com mutante, revertido)
+· vizinhos `xr-arma-recarga` + `xr-empunhadura-botao` + `xr-empunhadura-grip`
++ `xr-interact` 33/33 (a ordem PENTE→APOIO→AGARRAR do grip esquerdo não foi
+tocada — as duas zonas novas são checagens paralelas, como o peito já era)
+· `npm run lint` limpo · `npm run test:vr` completo: **772 pass, 0 fail,
+1 skip, 773 testes, 146 suítes** (1482s).
+
+### Próxima prioridade
+
+1. Comer e troca de acessório de mira seguem sem caminho em VR — dívida
+   registrada, sem candidato de gênero encontrado (Rodada 24, §12).
+2. Item 8 (10/15 tiros) e item 10 (soak 5min literal) seguem gap honesto,
+   candidatos a `npm run vr:sessao` ou sessão humana dedicada.
+3. Validar por medição própria (headset ou sessão longa) se 18/20 cm de raio
+   e a posição ombro/quadril são confortáveis de alcançar sem tirar o olho
+   do combate — é ergonomia sem lastro, como o próprio código já marca.
