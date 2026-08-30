@@ -295,4 +295,46 @@ describe('onboarding de inimigos — fiação (quando o game.js liga)',
       assert.equal(r.multiplayerVR, 0, 'chamou iniciarOnboarding em multiplayer — vazou pro modo online');
       assert.equal(r.soloVR, 1, 'não chamou iniciarOnboarding em solo VR — o caso que deveria ligar');
     });
+
+    /* RELATO DO DONO NO APARELHO, 2026-08-30, verbatim: "quando renasço
+       continuo cercado de inimigos... mesmos problemas ao entrar no modo
+       VR" — depois de morrer e clicar JOGAR DE NOVO, a graça nunca mais
+       volta. Causa: `restartMatch()` (game.js) chama `resetarPartida()` e
+       liga `state.started` direto — NUNCA passa por `startGame()`, que é o
+       ÚNICO call site de `iniciarOnboarding()`. O caso acima só prova a
+       PRIMEIRA entrada; este prova a RETOMADA, que é o caminho que o IWER
+       nunca exercitou (nenhum teste desta sessão clicava JOGAR DE NOVO em
+       solo VR e conferia o onboarding). */
+    it('JOGAR DE NOVO em solo VR rearma a graça — a segunda entrada não pode ficar sem proteção',
+      async () => {
+        const r = await h.play(() => {
+          const G = window.__game, R = window.__MP.renderer;
+          R.setAnimationLoop(null);
+          let chamou = 0;
+          const original = G.Skeletons.iniciarOnboarding;
+          G.Skeletons.iniciarOnboarding = (...a) => { chamou++; return original.apply(G.Skeletons, a); };
+
+          window.__MP_active = false;
+          R.xr.isPresenting = true;
+          G.state.started = false;
+          chamou = 0;
+          G.forceStart();
+          const naPrimeiraEntrada = chamou;
+
+          // morre e clica JOGAR DE NOVO — sem sair da sessão, sem voltar ao menu
+          window.QA.MP.player.health = 0;
+          chamou = 0;
+          G.restartMatch();
+          const noRetry = chamou;
+
+          G.Skeletons.iniciarOnboarding = original;
+          R.xr.isPresenting = false;
+          window.__MP_active = false;
+          R.setAnimationLoop(() => G.tick());
+          return { naPrimeiraEntrada, noRetry };
+        });
+        assert.equal(r.naPrimeiraEntrada, 1, 'a primeira entrada não ligou a graça — pré-condição do caso quebrada');
+        assert.equal(r.noRetry, 1,
+          'JOGAR DE NOVO não rearmou a graça — depois da 1ª morte o jogador nunca mais tem proteção inicial');
+      });
   });

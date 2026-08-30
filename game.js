@@ -4190,6 +4190,24 @@ window.addEventListener('pointerlockerror', () => {
    embaixo NÃO devem chamar SFX.ui* de novo — dobraria o som. */
 const MenuUI = wireMenuUI({ SFX });
 
+/* ONBOARDING DE SOBREVIVÊNCIA (P0 item 5 da missão) — só em solo dentro de
+   sessão XR. `!__MP_active` é solo (br-game.js já usa essa bandeira pra
+   decidir se a morte é do servidor) e `!__BR_active` mantém o balanceamento
+   de partida de batalha real intocado. Fora daqui os esqueletos continuam
+   perseguindo de qualquer distância desde o frame 1 — comportamento de
+   sempre, tranca em test/skeletons.test.js.
+   CHAMADA EM DOIS LUGARES, NÃO SÓ NA PRIMEIRA ENTRADA: `restartMatch()`
+   (JOGAR DE NOVO, na tela de morte) nunca passou por `startGame()` — ele
+   chama `resetarPartida()` e liga `state.started` direto. Sem esta função
+   também em `restartMatch()`, a graça só existe uma vez por sessão de
+   navegador: a partir da 1ª morte, todo retry nasce sem proteção nenhuma —
+   relato do dono no aparelho, 2026-08-30 ("quando renasço continuo cercado
+   de inimigos"), medido e reproduzido em test/xr-onboarding-inimigos.test.js
+   ("JOGAR DE NOVO em solo VR rearma a graça"). */
+function ligarOnboardingSeForCaso() {
+  if (XR.presenting && !window.__MP_active && !window.__BR_active) Skeletons.iniciarOnboarding();
+}
+
 function startGame(trusted) {
   if (state.started) return;
   SFX.init(); SFX.resume(); SFX.musicStart(); SFX.setVolumes();
@@ -4211,13 +4229,7 @@ function startGame(trusted) {
   camera.updateProjectionMatrix();
   csmDirty = true;
   state.started = true;
-  /* ONBOARDING DE SOBREVIVÊNCIA (P0 item 5 da missão) — só em solo dentro de
-     sessão XR. `!__MP_active` é solo (br-game.js já usa essa bandeira pra
-     decidir se a morte é do servidor) e `!__BR_active` mantém o balanceamento
-     de partida de batalha real intocado. Fora daqui os esqueletos continuam
-     perseguindo de qualquer distância desde o frame 1 — comportamento de
-     sempre, tranca em test/skeletons.test.js. */
-  if (XR.presenting && !window.__MP_active && !window.__BR_active) Skeletons.iniciarOnboarding();
+  ligarOnboardingSeForCaso();
   updateHealthHUD(); updateAmmoHUD(); updateInvHUD(); updateSlotsHUD(); updateArmorHUD();
   // banner de boas-vindas é do modo solo; no BR o lobby já anuncia a partida
   setTimeout(() => { if (!window.__BR_active) showBanner('CALL OF AI<small>siga as missões · cuidado com a noite</small>', 5200); }, 700);
@@ -4479,6 +4491,7 @@ function restartMatch() {
   if (!resetarPartida()) return false;
   Morte.esconder();
   state.started = true;
+  ligarOnboardingSeForCaso();
   setPaused(false);
   return true;
 }
