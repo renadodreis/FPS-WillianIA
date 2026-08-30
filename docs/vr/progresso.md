@@ -1906,3 +1906,40 @@ decisão escrita, datada, com as amarras de quando ela deixa de valer.
   registrou a referência como ambígua (o jogo não tem sedã pra comparar) —
   não é defeito confirmado, é critério com referência que não encaixa neste
   veículo.
+
+---
+
+## Rodada 34 — C4: porta da fachada corrigida (2,30 → 2,05 m) · 2026-08-30
+
+**Causa comprovada:** `doorH = 2.3` (`js/structures.js:496`, literal local
+usado só pela moldura/vão recuado/marquise do prédio maciço SEM interior —
+a "porta falsa" citada no comentário do worldgen) dava **2,30 m**, 9,5% acima
+do teto (2,1 m) e 15,0% acima do piso (2,0 m) da faixa que C4 exige. Não tem
+relação com `CityInterior.INT.DOOR_H` (2,6 m, porta de INTERIOR com contrato
+de traversal próprio, `test/city-interior.test.js`, ≥2,2 m — essa não mudou).
+
+**Mudança:** extraído `FACADE_DOOR_H` como export de módulo (mesmo padrão de
+`CityInterior.INT.DOOR_H` — single source of truth testável sem precisar
+bootar o jogo inteiro), valor 2,3 → **2,05 m** (meio da faixa 2,0-2,1). É um
+literal fixo, não consumido por `Math.random` em laço — trocar o número não
+desloca a ordem de consumo do PRNG seedado (worldgen intocado).
+
+**Teste (TDD):** `test/city-facade-door.test.js`, novo. Vermelho confirmado
+com o valor antigo exportado tal qual (15,0%/9,5% de erro, os mesmos números
+da Rodada 30) — motivo certo. Verde depois da correção.
+
+**Verificado:** teste focado 1/1; `test/city-interior.test.js` +
+`test/city-layout.test.js` + `test/city-destruction-server.test.js` (a porta
+de INTERIOR e o resto do worldgen de cidade intactos) 46/46; `npm run lint`
+limpo; `npm run test:vr` completo síncrono **782 pass, 0 fail, 1 skip** (783
+testes, 151 suítes, 1536s).
+
+**Arquivos:** `js/structures.js`, `test/city-facade-door.test.js`,
+`docs/vr/progresso.md`.
+
+### Próxima prioridade
+
+Soldado (+20%) segue fora de escopo desta frente VR — precisa de
+investigação dedicada sobre independência hit-sphere×escala visual antes de
+qualquer mudança, por decisão registrada na Rodada 33. Carro e D1 sem ação
+pendente (decisões já fechadas). G2 aguardando aparelho.

@@ -14,6 +14,12 @@ import {
 import { towerPlatforms, towerSurfaces, towerSteps } from './watchtower.js';
 import * as CityInterior from './cityinterior.js';
 
+// Altura da porta de FACHADA (moldura/vão recuado/marquise, prédio maciço
+// sem interior) — decoração, sem relação com CityInterior.INT.DOOR_H (porta
+// de INTERIOR, com contrato de traversal próprio). C4 (docs/vr/criterio-aaa.md)
+// exige 2,0-2,1 m; ver test/city-facade-door.test.js.
+export const FACADE_DOOR_H = 2.05;
+
 export function createStructures(deps) {
   const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
   const sites = [];      // {x, z, r, type}
@@ -493,7 +499,7 @@ export function createStructures(deps) {
       }
       trimBox(w + 0.7, 0.28, d + 0.7, bx, gy + gfH, bz, 0x6c727b);                                    // cornija do térreo
       const fo = faceOffset(face, w, d);
-      const doorW = Math.min(2.8, w * 0.42), doorH = 2.3;
+      const doorW = Math.min(2.8, w * 0.42), doorH = FACADE_DOOR_H;
       const fx = bx + fo.ox, fz = bz + fo.oz;
       if (fo.axis === 'x') {
         if (!oco) {
