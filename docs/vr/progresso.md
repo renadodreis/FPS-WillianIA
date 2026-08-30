@@ -1194,3 +1194,47 @@ headset conectado.
    pediria), mas são candidatos caso o dono queira o número exato.
 3. Quando o Quest físico voltar a conectar: `npm run vr:sessao` fecha I1
    (20 caixas), G4, G5, e os 5 critérios de tempo/térmica (E1/E3/E4/E5/F1).
+
+---
+
+## Rodada 24 — Pesquisa (sem código): para onde vão granada/kit médico/comer/troca de mira · 2026-08-29
+
+Só pesquisa e registro, por regra do porte ("estudar a documentação... ANTES
+de codar") — nenhum `.js` tocado, `docs/vr/referencia-interacao.md` ganhou a
+Parte III (§10-12). Nenhum teste rodado (não havia código pra quebrar).
+
+**Achado principal:** o orçamento de botões voltou a ZERAR (Rodada 16 deu o
+gatilho esquerdo, único livre, para o ADS) — a saída não pode mais ser
+"achar outro botão", tem que ser gesto ou proximidade espacial. Meta
+reconfirma (fetch direto) que invocar por gesto/pose é aceito
+("looking at their palm... is fine") mesmo proibindo menu grudado no
+pulso em movimento. Godot XR Tools tem "Snap Zone" oficial (container
+genérico) mas holster CORPORAL só existe como proposta de comunidade não
+mergeada (`godot-xr-tools#127`) — citado e marcado como tal, não como
+feature oficial. Onde os FPS de VR de referência (Alyx, Into the Radius,
+Boneworks, TWDSS) ancoram inventário no corpo continua SEM fonte citável
+(mesma barreira de acesso da Parte I, §7.5).
+
+**Recomendação registrada (não implementada):** granada perto do ombro, kit
+médico perto do quadril, lidos pelo MESMO verbo `agarrar` que a empunhadura
+esquerda já despacha por proximidade (não um botão novo — reaproveita a
+árvore de decisão por distância que já existe entre apoio/pente/mundo).
+`js/xr/xrbody.js` já expõe `corpo.position` + `guinada` suficiente pra
+aproximar ombro/quadril sem reabrir medição por osso. Comer e troca de
+acessório de mira ficam FORA da recomendação — nenhuma fonte aponta lugar
+corporal natural pros dois, e forçar um seria inventar sem lastro; ficam
+debt registrado, não decisão.
+
+Arquivos alterados: `docs/vr/referencia-interacao.md`.
+
+### Próxima prioridade
+
+1. Implementar a recomendação da Rodada 24 (ombro=granada, quadril=kit
+   médico) com TDD/IWER real — medir a distância de ativação em sessão
+   antes de virar constante (nenhuma fonte deu o número; §12 já registra
+   isso como decisão sem lastro forte a validar por medição própria).
+2. Decidir separadamente o caminho de comer/troca de mira (sem candidato
+   claro ainda — não bloquear a implementação do item 1 por causa disso).
+3. Item 8 (10/15 tiros) e item 10 (soak 5min) seguem gap honesto, candidatos
+   a `npm run vr:sessao` ou rodada dedicada se o dono quiser o número
+   literal.

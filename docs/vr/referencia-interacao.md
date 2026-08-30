@@ -628,3 +628,161 @@ crua** (a "correção óbvia" do D2), o baú a **3,705 m do corpo** e 1,095 m da
 cabeça — do outro lado da parede — **abre**, e a régua chega a 1,490 m do corpo.
 Quatro casos da régua pura, o guarda da instância do jogo e o caso do baú
 através da parede ficam vermelhos juntos.
+
+---
+
+# Parte III — para onde vão os quatro verbos, agora que o gatilho virou ADS
+
+Data desta parte: 2026-08-29 · base `dev` @ `144e24b`.
+
+**O que mudou desde a Parte I.** O pedido do dono, verbatim ("o ADS em VR
+agora deve ser acionado por botão enquanto estiver pressionado e desligado
+ao soltar"), revogou a decisão da §4.4 só na parte do BOTÃO: o gatilho
+esquerdo, que a Parte I deu ao radial, foi realocado para ADS
+(`js/xr/xrinput.js`, Rodada 16, `42ebcc8`). A máquina do radial
+(`criarRadialXR`) continua existindo e testada — só ficou **sem botão que a
+acione** (`ler(null)` sempre). Isto é PESQUISA para a próxima decisão, sem
+código: nada em `js/xr/` ou `test/` muda nesta rodada.
+
+## 10. O orçamento de botões não tem mais folga nenhuma
+
+Recontando a tabela da §1 com o estado pós-Rodada 16:
+
+| Botão | Mão esquerda | Mão direita |
+|---|---|---|
+| 0 · gatilho | **ADS** *(era abrir radial)* | atirar |
+| 1 · empunhadura | agarrar (contextual: apoio/pente/mundo por distância) | mira assistida |
+| 3 · clique do analógico | agachar | pausa |
+| 4 · X / A | usar | pular |
+| 5 · Y / B | recarregar | trocar de arma |
+| eixos 2/3 | andar · correr no batente | girar |
+
+**Dez de dez ocupados, de novo — e desta vez não sobrou nem o gatilho da mão
+de apoio.** Qualquer solução por BOTÃO discreto exige tirar um verbo já
+comprovado de algum lugar, repetindo o mesmo problema que a Parte I já
+resolveu uma vez. A saída, então, não pode ser "achar outro botão" — tem
+que ser **gesto ou proximidade espacial**, que não competem pelo mesmo
+evento de input que atirar/ADS competiam.
+
+## 11. O que a pesquisa desta rodada encontrou
+
+### 11.1 Meta reafirma: gesto de invocação é aceito, botão dedicado não é o padrão do gênero
+
+Já citado na Parte I (§7.1), e continua sendo o achado mais forte:
+
+> *"Spawning a menu from the wrist … is fine, as long as the menu is static
+> once it appears and is positioned in world space rather than following
+> the wrist."*
+— [Meta Horizon Design — Hands UI best practices](https://developers.meta.com/horizon/design/hands-ui-best-practices/)
+(reconfirmado por fetch direto nesta rodada, texto idêntico)
+
+Ou seja: a Meta distingue **invocar por gesto/pose** (olhar para o próprio
+pulso ou palma, aproximar a mão do corpo) de **manter um menu grudado no
+pulso em movimento** (proibido, §7.1). A primeira categoria não usa evento
+de botão nenhum — é leitura de POSIÇÃO relativa entre mão e corpo, o mesmo
+tipo de sinal que `js/xr/xrinteract.js` já usa para decidir apoio vs pente
+vs agarrar-mundo por distância (Parte I, nota de rodapé da Rodada 16 no
+commit `42ebcc8`: "grip esquerdo já é contextual... por distância").
+
+### 11.2 Diretriz nova (não citada na Parte I): proximidade ao corpo para uso frequente
+
+> *"Interactions should minimize muscle effort... When arranging information
+> in virtual space, the features a user will interact with most often
+> should be placed closer to their body, with less important features
+> farther away."*
+— [Meta Horizon Design — Key considerations](https://developers.meta.com/horizon/design/mr-design-guideline/)
+(paráfrase de busca, NÃO fetch direto — marcado como fonte mais fraca que
+uma citação literal; a página não foi buscada palavra-por-palavra nesta
+rodada por limite de tempo. Reconfirmar com fetch direto antes de basear
+uma decisão só nisto.)
+
+### 11.3 Precedente de engine: Godot XR Tools tem "Snap Zone" oficial, container genérico
+
+> *"Snap zones can hold Pickable objects, and the player can pull items out
+> of them, and put items into them."* — a distância de ativação é
+> `Grab Distance`, documentada como *"Radius of snap zone sensitivity to
+> objects being dropped"*.
+— [Godot XR Tools — Snap Zone](https://godotvr.github.io/godot-xr-tools/docs/snap_zone/)
+(fetch direto)
+
+É um contêiner posicionável em qualquer lugar da CENA (não necessariamente
+no corpo) — a peça de baixo nível que um holster corporal usaria, mas o
+Snap Zone em si não define semântica de corpo nenhuma.
+
+### 11.4 Holster corporal existe só como PROPOSTA DE COMUNIDADE, não oficial
+
+> Issue "Virtual Holster Object For Testing / Feedback" (`teddybear082`,
+> `GodotVR/godot-xr-tools#127`): um objeto colocável em qualquer ponto da
+> cena, com botão configurável por mão para guardar/sacar, e o autor aponta
+> a aplicação como "holsteres corporais" ou, aninhado, "inventário tipo
+> mochila".
+— [`GodotVR/godot-xr-tools`, issue #127](https://github.com/GodotVR/godot-xr-tools/issues/127)
+(fetch direto)
+
+**Isto NÃO é feature oficial do godot-xr-tools** — é uma proposta aberta,
+sem merge confirmado no repositório principal. Citada porque é a única
+fonte concreta encontrada de "holster corporal" com código associado, mas
+marcada como comunitária/não adotada, para não repetir o erro que a régua
+deste repo já proíbe (tratar achado de fórum como documentação oficial).
+Note também que o desenho dela é **por botão**, não por gesto — ou seja,
+não resolve sozinho o problema do orçamento zerado da §10.
+
+### 11.5 O que continua SEM confirmação (igual à Parte I, §7.5)
+
+Onde exatamente Half-Life: Alyx, Into the Radius, Boneworks/Bonelab e The
+Walking Dead: Saints & Sinners ancoram granada/kit médico/etc no corpo —
+**ainda sem fonte citável** nesta rodada de pesquisa. As páginas relevantes
+continuam bloqueadas ou o conteúdo indexado não descreve a mecânica com
+precisão suficiente para citar. Não é lembrança confiável o bastante para
+entrar como base de decisão — fica registrado como pista popular, não como
+fonte.
+
+## 12. Recomendação desta rodada (pesquisa, não implementação)
+
+**Caminho recomendado: DUAS zonas de proximidade no CORPO, lidas pelo MESMO
+verbo "agarrar" que a empunhadura esquerda já despacha por contexto — sem
+botão novo, sem gesto de invocar menu nenhum.**
+
+- Granada perto do OMBRO, kit médico perto do QUADRIL — os dois pontos de
+  origem que `js/xr/xrbody.js` já publica sem precisar de consulta a osso
+  nova: o módulo expõe `corpo.position` (raiz, já com correção de
+  agachamento/afundamento aplicada) e `guinada` (yaw do corpo); um ombro ou
+  quadril aproximado é um offset local fixo rodado por `guinada` — não
+  precisa reabrir a lição cara de medir por osso vs. por caixa
+  (`skeleton-rig-eixos` / `CLAUDE.md`, "Box3.setFromObject num SkinnedMesh
+  devolve caixa CONGELADA").
+- **Por que reaproveitar `agarrar` em vez de inventar um verbo novo**: o
+  grip esquerdo já resolve "o que a mão quis pegar" por PROXIMIDADE espacial
+  (apoio da arma vs. pente vs. objeto do mundo) — as duas zonas de corpo
+  são só mais duas entradas nessa MESMA árvore de decisão por distância, não
+  um quinto significado competindo pelo mesmo frame de botão (a distinção
+  que o commit `42ebcc8` já fez ao recusar empilhar ADS ali).
+- **Por que não veio da fonte de holster comunitária (§11.4)**: ela desenha
+  por BOTÃO dedicado por mão, que é exatamente o recurso que a §10 mostra
+  esgotado. A ideia aproveitada dela é só a SEMÂNTICA (zona no corpo = item),
+  não o mecanismo de ativação.
+- **Comer e troca de acessório de mira ficam DE FORA desta recomendação.**
+  Nenhuma fonte encontrada aponta um lugar corporal natural para eles (ombro
+  e quadril têm precedente de gênero para arma/cura; "comer" e "trocar
+  mira" não), e forçar um terceiro/quarto ponto no corpo só para preencher
+  a lista seria inventar sem lastro — exatamente o que a régua deste
+  documento proíbe. Ficam candidatos a uma via SEPARADA (ex.: os dois únicos
+  botões que sobram são os de baixo prioridade de uso — `usar`/`pular` na
+  mão esquerda vs. direita — MAS estão ocupados; ou os dois continuam presos
+  a tecla de desktop só, sem equivalente VR, registrado como debt explícito)
+  — decisão a tomar quando alguém for implementar, não agora.
+
+**Marcado como decisão de ergonomia SEM lastro forte** (nenhuma fonte
+confirma a distância exata ombro/quadril para VR — os números viriam por
+medição própria em sessão, do mesmo jeito que a Parte I mediu 0,42 m para o
+radial): a distância de ativação das duas zonas precisa ser MEDIDA em
+sessão real antes de virar constante, não copiada de um número de outro
+jogo (que, aliás, não foi encontrado — §11.5).
+
+### Próximo passo (implementação, rodada seguinte)
+
+TDD com IWER real: sessão imersiva, mão de apoio posicionada perto do
+ombro/quadril do `corpo` (não um dublê de coordenada arbitrária — ler
+`corpo.position`/`guinada` de dentro da sessão), grip pressionado, medir
+que o verbo certo dispara e que apoio/pente/mundo continuam funcionando
+fora dessas duas zonas (não regredir a árvore de decisão existente).
