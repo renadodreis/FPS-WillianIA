@@ -1653,3 +1653,96 @@ MESMA corrida, só que sorteando um formato de erro diferente por execução.
 2. **C4**: medir soldado humano contra 1,75 m (herdado da Rodada 27).
 3. D1 (decisão do dono), item 8 (10/15 tiros) e item 10 (soak 5min) seguem
    gap honesto — nenhum tocado nesta rodada.
+
+---
+
+## Rodada 30 — C4 fechado: 3 de 5 referências reprovam, medidas por código, não por suposição · 2026-08-30
+
+### O que faltava
+
+A Rodada 27 media só o esqueleto (referência errada — decisão de design
+documentada) e não tinha investigado porta/carro/degrau/baú, alegando que a
+geometria fundida da cidade não tem nó isolado para `Box3.setFromObject`.
+Esta rodada mede as 4 referências que faltam sem precisar de nó isolado
+nenhum: usando os NÚMEROS-FONTE que o próprio jogo usa para desenhar/detectar
+cada objeto (a mesma exigência de "ancorar a medida em algo independente do
+código sob teste" que o CLAUDE.md pede para mira — aqui a âncora É o código
+de produto, lido, não a malha renderizada).
+
+### Medido
+
+| referência | fonte no código | valor real | alvo do critério | erro | veredito |
+|---|---|--:|--:|--:|---|
+| **soldado** (inimigo humano comum) | `js/enemies.js:196`, `hitSpheres()`: topo da cabeça = `p.y + 1.8·s + 0.3·s` (raio da esfera de acerto), `s=1` para o soldado padrão (`heavy?1.16:1`, linha 237) | **2,10 m** | ≈ 1,75 m | **+20,0 %** | **REPROVA** |
+| **porta da cidade** | `js/structures.js:496`: `doorH = 2.3` (vão recuado, literal, sem escala aplicada) | **2,30 m** | 2,0–2,1 m | **+9,5 a +15,0 %** | **REPROVA** |
+| **degrau da escada** | `js/castle.js:713`: `y: originY + 0.18 * (i + 1)` (altura do espelho de cada degrau, literal) | **0,18 m** | ≈ 0,18 m | **0,0 %** | **APROVA** |
+| **carro** | `js/car.js:196-200`: `scaled.scale.set(targetX/rawSize.x, ...)`, `targetX = cfg.half[0]*2*0.98`; três configs de veículo leve/médio: BUGGY `half[0]=1.8`→3,53 m, ESPORTIVO GT `half[0]=1.9`→3,72 m | **3,53–3,72 m** (nenhum veículo do jogo é um "carro" de passeio 4 portas — são buggy/esportivo/caminhão) | ≈ 4,3 m | **−13,4 a −17,9 %** | **REPROVA**, mas **referência ambígua** (ver nota) |
+| **baú** | `js/chestmodel.js:35`: corpo `H=0.44` + tampa em domo até ≈0,80 m fechada | **≈0,80 m** | **nenhum número declarado** em `criterio-aaa.md` §C4 — só "altura do baú" sem alvo | — | **SEM REFERÊNCIA** (gap da régua, não do produto) |
+
+**C4 fecha com placar 1 aprova / 3 reprova / 1 sem referência**, de 5.
+REPROVA no total (o critério exige as cinco dentro de 5 %).
+
+### Por que não corrigi agora
+
+Três reprovações têm causas e custos de correção bem diferentes, e nenhuma é
+barata o bastante pra mexer sem aval:
+
+- **Soldado (+20 %)**: ao contrário do esqueleto (`2,25 m`, comentário
+  explícito "dá medo"), a altura de 2,10 m do soldado **não tem justificativa
+  de design escrita em lugar nenhum** — parece efeito colateral de empilhar
+  cabeça (raio 0,3) sobre o osso da cabeça (`1,78`) sem descontar do valor
+  final. Mas `s` (escala do grupo) e os offsets `1.8`/`0.3` alimentam
+  `hitSpheres()`, que é o hit-detection de VERDADE (tiro na cabeça, flinch,
+  crédito de kill) — mudar isso sem medir o efeito em `enemy-drawcalls.test.js`,
+  `autonomous-attacks.test.js` e no anti-cheat de dano do servidor (que
+  também depende de posição/raio de acerto) é o tipo de mudança que já
+  quebrou coisa nesta base antes por corrigir um número sem seguir os
+  consumidores. Candidato a correção separada, com TDD e os testes de tiro na
+  cabeça como guarda.
+- **Porta (+9,5 a +15 %)**: `doorH` é usado no MESMO cálculo que posiciona
+  moldura, marquise e vão da fachada em `js/structures.js` — é geometria de
+  MUNDO gerada por seed. Não consome `Math.random` (é um literal, não uma
+  chamada), então mudar o número não desalinha o worldgen determinístico,
+  mas muda a SILHUETA de toda fachada da cidade — teria efeito visual amplo
+  o bastante pra merecer aprovação do dono antes de tocar (é justamente o
+  tipo de "rework amplo" que a missão desta frente proíbe enquanto o
+  onboarding é a prioridade).
+- **Carro**: a régua compara contra "carro ≈4,3 m" sem dizer QUAL tipo — este
+  jogo não tem sedã, só buggy/esportivo/caminhão. Comparar um BUGGY (que na
+  vida real também é curto, ~3,4–3,8 m) contra um sedã de 4,3 m é a MESMA
+  família de erro do esqueleto: **referência errada para o objeto**, não
+  necessariamente escala errada. Registro como REPROVA porque é o veredito
+  literal do critério como está escrito, mas sinalizo que o critério pode
+  precisar de uma exceção documentada (como C5 aceita "sem corpo") ou de uma
+  referência por TIPO de veículo — decisão do dono, não de quem mede.
+
+Nenhum arquivo de produto foi tocado nesta rodada — só leitura e medição
+(reaproveitando os métodos verificados abaixo).
+
+### Verificado
+
+Todos os 5 números vêm de leitura direta do código-fonte que o jogo já roda
+(`hitSpheres()`, `doorH`, `keep-step` do castelo, `scale.set` do carro,
+constantes de `chestmodel.js`) — nenhum é suposição nem medição de tela.
+`hitSpheres()` em particular já é exercitado ao vivo por
+`test/enemy-drawcalls.test.js` ("a hitbox continua sendo a esfera analítica",
+que mira exatamente no centro dessa esfera e confirma dano), então os
+offsets `1.8`/`0.3` são comportamento comprovado em produção, não código
+morto. Nenhum `.js` de produto mudou — `npm run lint` e `npm run test:vr`
+não precisaram rodar de novo (nada de comportamento foi alterado).
+
+### Próxima prioridade
+
+1. **Decisão do dono, item 1**: soldado 20 % mais alto que o alvo — corrigir
+   o offset em `js/enemies.js` (barato, mas mexe no hit-detection: precisa de
+   TDD com os testes de tiro na cabeça como guarda) ou aceitar como decisão
+   de design não documentada (documentar o motivo, como o esqueleto já tem).
+2. **Decisão do dono, item 2**: porta 2,3 m — encolher pra 2,0-2,1 m muda a
+   fachada de toda a cidade gerada; ou aceitar e marcar C4 com exceção
+   documentada pra "porta".
+3. **Decisão do dono, item 3**: critério de "carro" precisa de referência por
+   tipo de veículo (buggy/esportivo/caminhão), não um número genérico de
+   sedã — decisão de régua, não de quem implementa.
+4. **G2** (Layers API do Quest) e **D1** (comer/trocar mira) seguem
+   herdados, aguardando pesquisa/decisão. Item 8 (10/15 tiros) e item 10
+   (soak 5min) seguem gap honesto de aparelho/sessão humana.
