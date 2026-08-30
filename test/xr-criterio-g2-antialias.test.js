@@ -1,99 +1,121 @@
 /* ================================================================
-   QA — G2 (docs/vr/criterio-aaa.md): antialiasing existe em XR?
+   QA — G2 · Antialiasing existe em XR (docs/vr/criterio-aaa.md).
 
-   MEDE `renderer.xr.getRenderTarget().samples` dentro de sessão imersiva
-   REAL (IWER, Quest 3). O critério aprova em 4x MSAA, reprova em 0.
+   O MÉTODO QUE A RÉGUA PRESCREVE NÃO EXISTE. `renderer.xr.getRenderTarget()`
+   não é método público do `WebXRManager` no three r0.185.1 instalado aqui —
+   a lista inteira de `this.xxx = function` do módulo (WebXRManager.js) não
+   tem `getRenderTarget`. O alvo de render da sessão (`newRenderTarget`) é
+   variável de CLOSURE, nunca exposta em `renderer.xr`.
 
-   NÃO é bug isolado a corrigir sozinho: ligar MSAA custa 0,5-1,5 ms/frame
-   (Meta, "Multisample Anti-Aliasing Analysis for Meta Quest") num orçamento
-   de frame já apertado (docs/vr/perf-xr.md). Este arquivo só MEDE o estado
-   atual — a decisão de pagar o custo é do dono (trade-off de qualidade vs.
-   orçamento), não de quem escreve o teste.
-   ================================================================ */
+   TENTATIVA 1 (ERRADA, e o erro fica registrado porque quase virou o
+   veredito): ler `renderer.getRenderTarget().samples` (no RENDERER, depois
+   de `renderer.render`) parecia funcionar — devolve o mesmo objeto que
+   `WebXRManager` usa internamente. MAS o three só escreve `samples:
+   attributes.antialias ? 4 : 0` no branch `supportsLayers` (Layers API /
+   `XRProjectionLayer`), lido em `WebXRManager.js` por volta da linha 497.
+   No branch CLÁSSICO (`!supportsLayers`, `XRWebGLLayer`/`baseLayer` —
+   linhas ~426-455), o `WebGLRenderTarget` espelho **nem tem campo
+   `samples` na criação** — fica no default (0) SEMPRE, com ou sem
+   antialiasing real acontecendo no compositor nativo. Medir `samples` nesse
+   branch é medir o vazio: dá 0 mesmo com `antialias:true` pedido e
+   concedido.
+
+   `IWER` (o runtime emulado usado aqui) **não implementa**
+   `XRWebGLBinding.prototype.createProjectionLayer` (confirmado por grep em
+   `node_modules/iwer/lib/`) — logo `supportsLayers` é sempre `false` nesta
+   suíte, e o jogo SEMPRE cai no branch clássico. `samples` é inútil aqui por
+   construção, não por bug de teste.
+
+   O MÉTODO QUE FUNCIONA: a spec do WebXR define `XRWebGLLayer.antialias`
+   como atributo **read-only**, refletindo se a camada usa antialiasing de
+   verdade — e é isso que `WebXRManager` passa pro `layerInit` do
+   `XRWebGLLayer` nativo (`antialias: attributes.antialias`, o valor real de
+   `gl.getContextAttributes().antialias`). `IWER` implementa esse getter
+   (`node_modules/iwer/lib/layers/XRWebGLLayer.js`, `get antialias()`) como
+   eco fiel do que foi pedido na construção — não é decisão de hardware
+   simulada, é passthrough. Lido via `session.renderState.baseLayer.antialias`
+   (a via pública documentada pela spec — `renderState.baseLayer` É a
+   instância que `WebXRManager` criou e registrou com
+   `session.updateRenderState({ baseLayer: glBaseLayer })`).
+
+   O QUE ISTO PROVA E O QUE NÃO PROVA: prova que o PEDIDO (`antialias:true`
+   em `game.js`) chega inteiro até a camada WebXR, sem se perder no caminho
+   three→WebXR. NÃO prova que o Oculus Browser real, no Quest 3, CONCEDE
+   antialiasing de verdade nesse pedido — isso é decisão do compositor
+   nativo, que o IWER não simula (só ecoa o valor pedido). Confirmar o
+   veredito final exige o aparelho físico. */
 'use strict';
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { CHROME, bootGame } = require('./helpers/harness');
 const { bootEmVR } = require('./helpers/iwer');
 
-const PORT = 3870;
+const PORT = 3872;
 
-describe('G2 — antialiasing (MSAA) do render target de sessão XR',
+async function instalarSonda() {
+  const G = window.__game, MP = window.__MP;
+
+  window.__G2 = {
+    presenting: () => !!(G.XR && G.XR.presenting),
+    contextAttrAntialias: () => MP.renderer.getContext().getContextAttributes().antialias,
+    caminho: () => {
+      const session = MP.renderer.xr.getSession();
+      const rs = session ? session.renderState : null;
+      return {
+        temBaseLayer: !!(rs && rs.baseLayer),
+        temLayers: !!(rs && rs.layers && rs.layers.length),
+        baseLayerAntialias: rs && rs.baseLayer ? rs.baseLayer.antialias : null,
+      };
+    },
+    gpuString: () => {
+      const gl = MP.renderer.getContext();
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      return dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    },
+  };
+  return true;
+}
+
+describe('G2 — antialiasing do framebuffer da sessão XR (IWER real)',
   { skip: !CHROME && 'Chrome não encontrado' }, () => {
     let h;
-    before(async () => { h = await bootEmVR(bootGame, { port: PORT }); });
+    before(async () => {
+      h = await bootEmVR(bootGame, { port: PORT });
+      await h.play(instalarSonda);
+      await h.play(async () => { await window.__A.espera(300); });
+    });
     after(async () => { if (h) await h.close(); });
 
-    it('registra o número de amostras (samples) do framebuffer de sessão — sem corrigir, só medir', async () => {
-      /* `renderer.xr.getRenderTarget()` do critério (criterio-aaa.md) NÃO
-         EXISTE nesta versão do three (r0.185) — o alvo de render da sessão é
-         uma variável de clausura interna do WebXRManager, nunca exposta.
-         Confirmado lendo node_modules/three/src/renderers/webxr/WebXRManager.js:
-         zero ocorrência de `getRenderTarget` como método público ali. Ler
-         `renderer.getRenderTarget()` (o método do PRÓPRIO WebGLRenderer,
-         que devolve o alvo ATUALMENTE ligado) DENTRO de um `render()` real
-         dá o mesmo dado pela porta que de fato existe. */
-      const r = await h.play(() => {
-        const MP = window.__MP;
-        let samples = null, antialiasAttr = null;
-        const rOrig = MP.renderer.render.bind(MP.renderer);
-        MP.renderer.render = (cena, cam) => {
-          const v = rOrig(cena, cam);
-          const rt = MP.renderer.getRenderTarget();
-          samples = rt ? rt.samples : 0;
-          return v;
-        };
-        antialiasAttr = MP.renderer.getContextAttributes
-          ? !!MP.renderer.getContextAttributes().antialias : null;
-        const session = MP.renderer.xr.getSession();
-        const rs = session ? session.renderState : null;
-        return new Promise(resolve => {
-          setTimeout(() => {
-            MP.renderer.render = rOrig;
-            resolve({
-              samples, antialiasAttr, presenting: MP.renderer.xr.isPresenting,
-              /* Qual caminho da spec o navegador/emulador escolheu — decide se
-                 `samples` do render target do three SIGNIFICA alguma coisa.
-                 Ver a nota grande abaixo. */
-              temBaseLayer: !!(rs && rs.baseLayer),
-              temLayers: !!(rs && rs.layers && rs.layers.length),
-            });
-          }, 120);
-        });
-      });
-      console.log(`      G2 — samples=${r.samples}, presenting=${r.presenting}, ` +
-        `contexto antialias=${r.antialiasAttr}, baseLayer(clássico)=${r.temBaseLayer}, ` +
-        `layers(moderno)=${r.temLayers}`);
-      assert.equal(r.presenting, true, 'sonda rodou fora de sessão imersiva — número não vale nada');
-      /* A LEITURA SÓ É CONFIÁVEL NO CAMINHO "layers" (moderno). No caminho
-         clássico (`XRWebGLLayer`/`baseLayer`), o three passa
-         `antialias: attributes.antialias` pro CONSTRUTOR NATIVO do layer
-         (que É onde o navegador decide MSAA de verdade) mas NÃO copia esse
-         número pro `WebGLRenderTarget` espelho — `samples` fica 0 ali SEMPRE,
-         com ou sem antialiasing real acontecendo no compositor. Medido lendo
-         node_modules/three/src/renderers/webxr/WebXRManager.js:397-499: o
-         branch `!supportsLayers` (linhas ~426-455) não tem `samples:` na
-         opção do `WebGLRenderTarget`; só o branch `supportsLayers` (linhas
-         ~456-497) tem `samples: attributes.antialias ? 4 : 0`. Se
-         `temBaseLayer` for true aqui, a asserção de reprovação abaixo NÃO
-         pode ser feita com confiança — é isso que este `if` decide. */
-      if (r.temBaseLayer && !r.temLayers) {
-        console.log('      G2 NÃO MEDIDO COM CONFIANÇA — sessão usa o caminho clássico ' +
-          '(XRWebGLLayer/baseLayer), onde `renderer.getRenderTarget().samples` não reflete ' +
-          'o MSAA real pedido ao navegador (antialias:true já vai pro layerInit nativo). ' +
-          'Medir MSAA de verdade neste caminho exige o aparelho físico (captura de frame) ' +
-          'ou checar se o Quest oferece a Layers API — AGUARDANDO APARELHO/PESQUISA.');
-        return;
-      }
-      /* REGISTRO, não asserção de aprovação: o critério aprova em 4, reprova
-         em 0 — mas ligar isso é decisão de orçamento do dono, então este
-         caso só documenta o valor real com `assert.ok` sempre satisfeito
-         (é um número, nunca NaN/undefined) e imprime o veredito no console
-         para o laudo humano citar. Forçar `assert.equal(samples, 4)` aqui
-         faria o CI decidir uma troca de performance sozinho. */
-      assert.ok(Number.isFinite(r.samples), `samples não é um número válido: ${r.samples}`);
-      console.log(r.samples >= 4
-        ? '      G2 APROVA (>=4x MSAA)'
-        : `      G2 REPROVA (${r.samples}x MSAA, teto 4x) — decisão de orçamento pendente do dono`);
+    it('a sessão está mesmo apresentando, com GPU real (não é a amostra que importa sem isto)', async () => {
+      const presenting = await h.play(() => window.__G2.presenting());
+      assert.equal(presenting, true, 'sessão IWER não entrou em apresentação — as amostras seguintes seriam do desktop');
+      const gpu = await h.play(() => window.__G2.gpuString());
+      console.log(`      backend WebGL desta medição: ${gpu}`);
+    });
+
+    it('confirma o caminho ativo (clássico vs Layers API) — decide qual sonda vale', async () => {
+      const c = await h.play(() => window.__G2.caminho());
+      console.log(`      baseLayer(clássico)=${c.temBaseLayer} · layers(moderno)=${c.temLayers} · ` +
+        `baseLayer.antialias=${c.baseLayerAntialias}`);
+      assert.equal(c.temLayers, false,
+        'sessão entrou pela Layers API (inesperado — IWER não implementa createProjectionLayer). ' +
+        'Se isto mudar, `renderer.getRenderTarget().samples` volta a ser a sonda certa, não `baseLayer.antialias`.');
+      assert.equal(c.temBaseLayer, true, 'nenhum `baseLayer` nem `layers` na sessão — nenhuma sonda de G2 tem onde ler');
+    });
+
+    it('o antialias chega inteiro do WebGLRenderer até a XRWebGLLayer — pedido não se perde no caminho', async () => {
+      const antialiasContexto = await h.play(() => window.__G2.contextAttrAntialias());
+      const c = await h.play(() => window.__G2.caminho());
+      assert.equal(antialiasContexto, true,
+        'gl.getContextAttributes().antialias === false — o WebGLRenderer não conseguiu antialias:true ' +
+        'nem no contexto base (game.js pede antialias:true na criação)');
+      assert.equal(c.baseLayerAntialias, antialiasContexto,
+        `baseLayer.antialias (${c.baseLayerAntialias}) diverge do contexto (${antialiasContexto}) — o pedido ` +
+        'se perdeu entre o WebGLRenderer e a XRWebGLLayer (WebXRManager não repassou attributes.antialias)');
+      /* NÃO é assert.equal(c.baseLayerAntialias, true) sozinho: o IWER só ecoa
+         o que foi pedido (visto no getter, node_modules/iwer/lib/layers/
+         XRWebGLLayer.js) — não decide nada por conta própria. Provar "chegou
+         true" é útil; provar "true é o valor CORRETO no Quest real" exige
+         aparelho, e por isso não é a asserção principal deste caso. */
     });
   });

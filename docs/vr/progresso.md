@@ -1746,3 +1746,90 @@ não precisaram rodar de novo (nada de comportamento foi alterado).
 4. **G2** (Layers API do Quest) e **D1** (comer/trocar mira) seguem
    herdados, aguardando pesquisa/decisão. Item 8 (10/15 tiros) e item 10
    (soak 5min) seguem gap honesto de aparelho/sessão humana.
+
+---
+
+## Rodada 31 — G2: por que `samples` mentia, e o que lê o antialias de verdade · 2026-08-30
+
+**Pesquisa, sem código de produto tocado — e um erro próprio corrigido no
+processo, registrado porque quase virou o veredito.** A Rodada 27 (`e341fcb`)
+já tinha achado duas coisas: (1) `renderer.xr.getRenderTarget()` — o método
+que `criterio-aaa.md` prescreve — **não existe** no three r0.185.1 (a lista
+`this.xxx = function(...)` de `WebXRManager.js` não tem esse método; o alvo
+de render é variável de CLOSURE); (2) mesmo lendo `renderer.getRenderTarget()`
+(no RENDERER, não em `renderer.xr`) — que funciona e devolve o objeto certo —
+o campo `.samples` **só é escrito no branch `supportsLayers`** (Layers API /
+`XRProjectionLayer`, `WebXRManager.js` ~linha 497:
+`samples: attributes.antialias ? 4 : 0`). No branch CLÁSSICO
+(`XRWebGLLayer`/`baseLayer`, ~linhas 426-455), a criação do
+`WebGLRenderTarget` espelho **nem tem campo `samples`** — fica 0 sempre,
+com ou sem antialiasing real. `IWER` (o runtime usado aqui) **não implementa**
+`XRWebGLBinding.prototype.createProjectionLayer` (confirmado por grep em
+`node_modules/iwer/lib/`), então esta suíte SEMPRE cai no branch clássico —
+medir `samples` aqui é medir o vazio por construção, não por bug de teste.
+
+**O erro desta rodada:** a primeira versão deste teste ignorou o achado (2)
+da Rodada 27 e voltou a usar `renderer.getRenderTarget().samples` como se
+fosse confiável — mediu `0`, junto com `gl.getContextAttributes().antialias
+=== false` (medido errado também, ver adiante), e quase fechou como
+"G2 reprova, preso ao ambiente headless". A causa dos dois zeros nunca foi o
+navegador negando antialiasing: foi o branch clássico não escrever o campo, e
+uma segunda leitura equivocada de contexto (a mesma sessão, relida
+corretamente logo abaixo, deu `antialias: true`). Sem reler a Rodada 27 com
+atenção MELHOR, o erro teria virado registro permanente.
+
+**O método que funciona no branch clássico:** a spec do WebXR define
+`XRWebGLLayer.antialias` como atributo **read-only**, refletindo se a camada
+usa antialiasing — é o valor que `WebXRManager` passa pro `layerInit` nativo
+(`antialias: attributes.antialias`). Lido via
+`session.renderState.baseLayer.antialias` (a via pública da spec —
+`renderState.baseLayer` é a mesma instância que `WebXRManager` registrou com
+`session.updateRenderState({ baseLayer: glBaseLayer })`). `IWER` implementa
+esse getter como eco fiel do que foi pedido na construção
+(`node_modules/iwer/lib/layers/XRWebGLLayer.js`, `get antialias()`).
+
+**Medido nesta rodada, IWER real, GPU de verdade (`WEBGL_debug_renderer_info`
+→ `ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3050/PCIe/SSE2, OpenGL
+4.5.0)`, não swiftshader):**
+
+| fonte | valor |
+|---|---|
+| `gl.getContextAttributes().antialias` | **`true`** |
+| caminho ativo | clássico (`baseLayer`), `layers` vazio — confirmado |
+| `session.renderState.baseLayer.antialias` | **`true`** |
+
+As duas fontes concordam: o pedido `antialias:true` (`game.js:333`, mudado no
+commit `608547d` de 2026-08-26 — **antes desta sessão**, no MESMO commit que
+introduziu `criterio-aaa.md`) chega inteiro até a `XRWebGLLayer`. O texto do
+critério ("Hoje: 0... `antialias: false`") descreve o estado ANTES daquele
+commit e está desatualizado desde o dia em que foi escrito — não é decisão de
+quem implementa reescrever a régua, mas fica registrado que a premissa do
+texto nunca bateu com o código depois daquele commit.
+
+**Veredito de G2: o PEDIDO passa — mas isto ainda não é aprovação
+confiante.** `IWER` só ecoa o valor recebido; não decide MSAA como um
+compositor de verdade decidiria. O que esta rodada prova é que a cadeia
+`WebGLRenderer → WebXRManager → XRWebGLLayer` não perde o pedido no caminho
+(o que já era incerto — a Rodada 27 não tinha chegado tão longe). O que
+continua faltando é o Oculus Browser real conceder isso de fato no
+compositor do Quest — só o aparelho decide.
+
+**Testes executados:** `xr-criterio-g2-antialias.test.js` (3 casos: sessão
+apresentando + GPU real; caminho clássico confirmado, Layers API ausente;
+`baseLayer.antialias` bate com o contexto) — **3/3 verde**. `npm run lint`
+limpo. Nenhum `.js` de produto mudou — `npm run test:vr` não precisou rodar.
+
+**Arquivos alterados:** `test/xr-criterio-g2-antialias.test.js` (novo),
+`docs/vr/progresso.md`.
+
+### Próxima prioridade
+
+1. **AGUARDANDO APARELHO**: rodar a mesma sonda (`instalarSonda`,
+   `test/xr-criterio-g2-antialias.test.js`) no Quest 3 real via
+   `npm run vr:baseline -- --target=quest --immersive=1` ou DevTools remoto —
+   só o compositor nativo decide se o pedido que chega inteiro até aqui vira
+   MSAA de verdade na tela.
+2. D1 (comer/trocar mira) e as 3 reprovações de C4 (Rodada 30) seguem
+   esperando decisão do dono.
+3. Item 8 (10/15 tiros) e item 10 (soak 5min) seguem gap honesto de
+   aparelho/sessão humana.
