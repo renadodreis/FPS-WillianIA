@@ -941,3 +941,81 @@ confirmado pela regra do repo (duas passagens isoladas limpas), não regressão.
    nesta frente.
 2. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
    ainda sem dono; é design novo, pesquisar referência antes de codar.
+
+---
+
+## Rodada 21 — "eliminar 3 inimigos sem enxame ou spawn injusto" · 2026-08-29
+
+### Item atacado
+
+O item do roteiro mínimo que faltava medir depois do onboarding da Rodada 17
+(`08931f7`): a Rodada 17 deu graça de 15s e teto de 2 ativos, mas ninguém
+tinha medido o que acontece DEPOIS de matar — um esqueleto morto pode virar
+FANTASMA (continuar contando pra vaga) ou a vaga pode ficar PRESA (ninguém
+assume, o que também não é o pedido: entrada gradual, não zero depois da
+graça).
+
+### Causa comprovada — de novo, lacuna de cobertura, não bug de produto
+
+`js/skeletons.js` já recalcula `ativosPermitidos` TODO FRAME a partir de
+`list.filter(sk => sk.alive)` — um morto sai do cálculo no frame seguinte à
+morte, por construção, sem precisar de nenhuma lógica extra de "liberar
+vaga". Escrevi o teste que mata os 2 ativos e confere quem assume: verde de
+primeira. Para não aceitar isso sem prova, reinjetei o defeito histórico da
+classe ("morto continua contando pra vaga") trocando o filtro por
+`list.filter(() => true)` — vermelho confirmado, **0 ativos onde 2 eram
+esperados** (os dois mortos ocupavam as duas vagas do topo-2 pra sempre,
+travando os vivos em passivo). Revertido sem sobrar diff em `js/skeletons.js`.
+
+### Armadilha do próprio teste, achada em TRÊS voltas de TDD
+
+1ª volta: medir "ativo" por deslocamento de posição (`andou`) deu falso
+negativo — quem já chegou ao alcance de ataque PARA de andar (fica atacando
+parado), então o delta de posição mede zero num esqueleto engajado. 2ª volta:
+troquei pra `attacking || targetDistance < 1.6` (a régua que `medir()` já usa
+acima) — funcionou pros dois primeiros pares, mas o CANDIDATO A 9 M do
+terceiro par nunca chegava ao alcance dentro da janela de medição. Depurei com
+um script isolado (`node` direto, sem o test runner) e achei: ele anda
+9,00→6,78 m no primeiro segundo (prova que a vaga abriu) e depois FICA PRESO
+contra alguma estrutura/obstáculo perto do ponto de teste (30,30) pelo resto
+da janela — geometria do mapa, não bug de onboarding (mesma classe já coberta
+em `test/skeletons.test.js`, "o esqueleto DESVIA e continua a caça"). 3ª
+volta, a que ficou: "ativo" = `targetDistance` caiu abaixo do valor de SPAWN
+— um passivo nunca sai do lugar (o ramo de movimento nem roda), então o campo
+fica idêntico ao spawn; qualquer queda prova elegibilidade sem exigir que a
+viagem inteira termine dentro da janela de teste. Também achei e corrigi um
+efeito colateral ORDEM-DEPENDENTE já existente no arquivo: `onboardingT`
+nunca zera sozinho (só `iniciarOnboarding()` zera), e inserir meu caso ENTRE
+os dois testes antigos fazia o segundo ("sem onboarding") herdar o relógio
+recém-rearmado do meu — falha marcada como fantasma que não era. Corrigido
+movendo meu caso para o FIM da bateria (comentário deixado no arquivo
+explicando por quê).
+
+### Mudança
+
+`test/xr-onboarding-inimigos.test.js`: novo helper `espalharDistancias`
+(distâncias conhecidas e diferentes por índice, pra ordem de proximidade ficar
+determinística) e novo caso "matar os 2 ativos libera vaga pro próximo mais
+próximo NO PRÓXIMO FRAME — sem fantasma, sem enxame", cobrindo a cadeia
+completa: 2 mortes reais (`sk.damage(sk.hp)`, o mesmo método que `fire()` usa
+em produção — convenção já estabelecida em `test/skeletons.test.js`), fantasma
+checado (`alive`/`visible`), vaga liberada no frame seguinte, os 2 novos mais
+próximos assumindo (nunca os mais distantes), e uma 3ª morte fechando o
+"eliminar 3" sem nunca passar de 2 ativos simultâneos. Nenhuma mudança em
+`js/skeletons.js` — a lógica já estava certa.
+
+### Verificado
+
+`test/xr-onboarding-inimigos.test.js` completo (4/4, era 3/3) + vermelho
+confirmado com mutante reinjetado (motivo certo: 0 ativos, revertido sem
+diff), `test/skeletons.test.js` (15/15, sem regressão), `npm run lint` limpo.
+
+`npm run test:vr` completo síncrono: **765 pass, 0 fail, 0 cancelled, 1
+skip**, 766 testes, 145 suítes, 1481 s.
+
+### Próxima prioridade
+
+1. "Jogar 5 minutos sem UI na frente da visão, arma lateral ou corpo
+   enterrado" — único item do roteiro mínimo ainda sem medição nesta frente.
+2. Repor granada/kit médico/comer/troca de mira (herdado da Rodada 16) —
+   ainda sem dono; é design novo, pesquisar referência antes de codar.
