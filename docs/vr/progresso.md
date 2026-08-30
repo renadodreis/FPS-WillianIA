@@ -1873,3 +1873,36 @@ rodada.** O ciclo deploy→suíte→fix→redeploy fechou no primeiro deploy.
 
 Igual à Rodada 31: G2 aguardando aparelho, D1 e C4 aguardando decisão do
 dono, itens 8 e 10 aguardando sessão humana/aparelho.
+
+---
+
+## Rodada 33 — Decisão delegada: D1 vira exceção declarada · 2026-08-30
+
+**Pedido do dono, verbatim:** *"PRECISO QUE VC TOME A MELHOR DECISAO VC TEM
+TOLTAL LIBERDADE PROOL DO GAME"* — delegando as decisões de D1 e C4 que
+ficaram em aberto na Rodada 31.
+
+**D1 (comer/trocar mira):** decidido NÃO inventar um lugar corporal sem
+lastro só pra fechar o número. A pesquisa da Rodada 24 já tinha procurado e
+não achado fonte de gênero pra esses dois verbos especificamente (diferente
+de granada/kit médico, que tinham precedente pra arma/cura). Registrei
+**exceção declarada em `docs/vr/criterio-aaa.md`** (mesmo formato de A4):
+D1 fecha 17/19 em VR, os dois ficam como dívida explícita até uma pesquisa
+nova achar um caminho com fonte real. Não é reprovação silenciosa — é
+decisão escrita, datada, com as amarras de quando ela deixa de valer.
+
+**C4 (escala):** três achados, três decisões diferentes, não um pacote só:
+- **Porta da cidade** (+9,5 a 15%): corrigindo agora, rodada separada (ver
+  entrada seguinte) — é decorativa (prédio sólido sem interior), baixo risco.
+- **Soldado** (+20%): NÃO corrigido às pressas. Toca hit-sphere de combate
+  compartilhado com desktop/mobile/multiplayer e validação de dano no
+  servidor — mudar escala de inimigo num jogo multiplayer AO VIVO sem
+  verificar se o hit-sphere é independente do scale visual é o tipo de
+  decisão que pode abrir exploit ou quebrar acerto de tiro pra todo mundo.
+  Registrado como achado prioritário, mas fora do escopo desta frente VR —
+  precisa de investigação dedicada (essa é a decisão: não decidir às pressas
+  é, aqui, a decisão certa).
+- **Carro** (-13 a -18%): sem ação. A própria medição da Rodada 30 já
+  registrou a referência como ambígua (o jogo não tem sedã pra comparar) —
+  não é defeito confirmado, é critério com referência que não encaixa neste
+  veículo.

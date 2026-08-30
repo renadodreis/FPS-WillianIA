@@ -553,6 +553,30 @@ As três leituras que explicam três queixas do dono, sem interpretação:
   `criarEntradaXR().ler()` — provam que a INTENÇÃO sai correta do módulo puro.
   Ninguém segue a intenção até o EFEITO no mundo, e `br-game.js` não aparece em
   nenhum teste de XR.
+- **EXCEÇÃO DECLARADA — `comer` e `trocar acessório de mira`, 2026-08-30.**
+  A Rodada 16 (`42ebcc8`) moveu o gatilho esquerdo do radial de quatro fatias
+  para o ADS (pedido do dono, revogando "ADS só por gesto"), e isso tirou o
+  único botão livre que despachava os quatro verbos sem dono
+  (granada/kit médico/comer/trocar mira). A Rodada 25 (`d59830e`) repôs DOIS
+  dos quatro por zona corporal (granada no ombro, kit médico no quadril,
+  lidos pelo `agarrar` que a empunhadura já despacha por proximidade) — a
+  pesquisa que fundamentou essa escolha (Rodada 24,
+  `docs/vr/referencia-interacao.md` Parte III §12) procurou e **não achou
+  nenhuma fonte de gênero** que ancore `comer` ou `trocar acessório de mira`
+  num lugar do corpo (ombro e quadril têm precedente pra arma/cura; os outros
+  dois não). Forçar um terceiro/quarto ponto corporal sem essa fonte seria
+  inventar sem lastro — exatamente o que este documento proíbe (§11).
+  **Decisão, delegada pelo dono ("total liberdade pro bem do jogo",
+  2026-08-30) em vez de inventada por quem implementa:** os dois verbos ficam
+  **fora da lista fechada de D1 em VR**, como dívida explícita, não como
+  reprovação silenciosa. As amarras: (1) a exceção vale só enquanto nenhuma
+  pesquisa nova achar um lugar corporal ou gesto com fonte de gênero — assim
+  que achar, os dois voltam a responder pela lista fechada; (2) continuam
+  funcionando por teclado no desktop (`KeyF`/`KeyT`, intactos); (3) o
+  `describe` D1 de `test/xr-verbos.test.js` registra o motivo do `skip` desde
+  a Rodada 16 — esta exceção é a mesma decisão, só formalizada na régua.
+  **Custo assumido:** D1 fecha com **17 de 19** ações em VR, não 19 de 19,
+  até a próxima pesquisa.
 
 ### D2 · Alcance medido da cabeça e da mão, nunca do avatar simulado
 - **Mede:** distância usada na decisão de "está perto o bastante", contra a
