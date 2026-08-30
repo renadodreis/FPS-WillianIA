@@ -74,9 +74,16 @@ consertando o jogo.
 - **Nada de gambiarra.** Estudar a documentação e como os jogos de VR existentes
   resolvem o problema ANTES de codar. Trazer a experiência do que já funciona no
   gênero em vez de inventar.
-- **Ciclo obrigatório a cada entrega: deploy → suíte completa → redeploy.**
-  Deploy manual primeiro quando ele quiser testar na hora; a suíte roda depois e
-  o redeploy fecha.
+- **Ciclo obrigatório a cada entrega: deploy → suíte completa → fix → redeploy,
+  NESSA ORDEM.** Deploy é SEMPRE o primeiro passo, por padrão, sem precisar de
+  aprovação por instância — confirmado pelo dono em 2026-08-30 depois de ver o
+  fluxo invertido (suíte antes do deploy) numa rodada e pedir a correção
+  explicitamente. `dev` → `hom` → `prod` (merge fast-forward, push pro `fork`)
+  seguido do deploy mecânico de verdade no servidor (skill `deploy` +
+  `deploy.env`) vêm ANTES de rodar `npm test`. Só depois disso a suíte roda; se
+  ela achar erro, conserta a causa raiz e reempurra + redeploy — não é rodar a
+  suíte e decidir se deploya, é deployar e usar a suíte pra confirmar (ou
+  corrigir o que ela apontar).
 - **Testes primários primeiro.** Testar o dublê em vez da plataforma já deixou
   passar cinco rodadas de "os controles não funcionam" com a suíte verde. Ver a
   skill `vr-quest`: o kit emulado é a base, e o teste mede a coisa (direção,

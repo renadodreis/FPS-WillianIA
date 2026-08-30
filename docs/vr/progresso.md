@@ -1833,3 +1833,43 @@ limpo. Nenhum `.js` de produto mudou — `npm run test:vr` não precisou rodar.
    esperando decisão do dono.
 3. Item 8 (10/15 tiros) e item 10 (soak 5min) seguem gap honesto de
    aparelho/sessão humana.
+
+---
+
+## Rodada 32 — Deploy em produção (as 17 rodadas desta sessão) · 2026-08-30
+
+**Pedido do dono, verbatim, corrigindo a ordem que eu tinha seguido** (rodei a
+suíte completa ANTES do deploy): *"vamos trocar essa logica, deploy sempre
+primeiro e bateria de teste depois, caso achar erro fix, corrige o problema
+atacar o problema e redeploy"*. Ciclo do CLAUDE.md atualizado pra deixar isso
+como padrão, não exceção (ver `CLAUDE.md`, "Ciclo obrigatório a cada
+entrega").
+
+### O que foi feito
+
+1. `dev` (`8f72b63`, as 17 rodadas 16-31 desta sessão) → merge fast-forward em
+   `hom` → merge fast-forward em `prod`. Sem conflito: `hom` e `prod` estavam
+   os dois parados em `ee4d103`, o commit-base de antes da sessão.
+2. Push das três branches pro `fork` (`renadodreis/FPS-WillianIA`).
+3. Deploy mecânico no servidor A (`ubuntu@129.213.33.33`, receita da skill
+   `deploy` + `deploy.env` deste repo, `DEPLOY_METHOD=gitpull`): `git pull
+   --ff-only` na branch `prod` do servidor, `docker compose -f
+   docker-compose.prod.yml up -d --build`. Container `game-fps` subiu
+   **healthy**; `https://game.renatodreis.com.br/` responde **HTTP/2 200**
+   via Cloudflare.
+4. SÓ DEPOIS do deploy no ar: `npm test` completo. **1886 pass, 0 fail, 58
+   cancelled, 1 skip, 1945 testes, 371 suítes** (47,7 min — sessão longa,
+   máquina com horas de fork/teste acumulado). O runner (`scripts/run-tests.js`)
+   isolou os 5 arquivos que geraram os "cancelled" (`br-drops`, `gameplay`,
+   `grass-decor`, `perf-overlay`, `sky-glare`) e rodou cada um 2× isolado —
+   os 5 vieram limpos as duas vezes, **classificados FLAKE de carga, não
+   regressão** (protocolo de triagem já documentado no CLAUDE.md). Veredito
+   final do runner: **suíte VERDE**.
+
+**Nenhum erro real encontrado — nenhum fix, nenhum redeploy necessário nesta
+rodada.** O ciclo deploy→suíte→fix→redeploy fechou no primeiro deploy.
+
+### Próxima prioridade
+
+Igual à Rodada 31: G2 aguardando aparelho, D1 e C4 aguardando decisão do
+dono, itens 8 e 10 aguardando sessão humana/aparelho.
