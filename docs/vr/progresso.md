@@ -1327,3 +1327,56 @@ dispara o gesto de recarga no mesmo aperto. Nenhum dos dois nasceu à toa: os
 dois são a mesma causa — a Rodada 25 não checou a geometria nova contra a
 zona já existente no mesmo arquivo, que já tinha o aviso escrito em
 comentário duas telas acima. Próxima prioridade no laudo, §5.
+
+---
+
+## Rodada 27 — corrige a colisão ombro/quadril×peito (achado da Rodada 26) · 2026-08-29
+
+**Defeito:** `js/xr/xrweapon.js` — `QUADRIL_OFF` caía a 2,2 mm dentro do raio
+de `PEITO_OFF` (distância 0,2478 m contra soma dos raios 0,45 m) e `OMBRO_OFF`
+colidia por 4,1 cm com o peito também (0,3890 m contra 0,43 m); as três
+checagens (`pedeRecargaPulso`/`pedeGranadaPulso`/`pedeKitMedicoPulso`) são
+independentes entre si — ao contrário de pente×apoio, que já tem `gripModo`
+como árbitro —, então alcançar o quadril também satisfazia `gripDPeito ≤
+PEITO_RAIO`.
+
+**Causa:** a Rodada 25 mediu as duas zonas novas contra a zona do ombro
+oposto (que não colide) mas não contra a do peito, que já ocupava boa parte
+do mesmo volume corporal.
+
+**Mudança:** `OMBRO_OFF` e `QUADRIL_OFF` movidos (raios intactos) pra fora do
+raio do peito com folga real (>5 cm de sobra além da soma dos raios nos dois
+pares, não só "não toca no papel"): `OMBRO_OFF = [-0.34,-0.12,-0.05]`,
+`QUADRIL_OFF = [-0.40,-0.72,0.02]` (era `[-0.18,-0.12,-0.05]` e
+`[-0.15,-0.55,0.02]`). Ombro↔quadril continua sem colidir (folga 0,227 m).
+Ergonomia SEM LASTRO EXTERNO, como os originais — candidato a ajuste por
+humano de headset.
+
+**Teste (TDD):** `test/xr-verbo-corporal.test.js` ganhou dois casos novos —
+(1) invariante geométrico puro, lendo as três constantes exportadas e
+comparando distância entre centros contra soma dos raios para todo par de
+zonas (âncora independente do comportamento, guarda qualquer zona futura no
+mesmo grip); (2) comportamental, com IWER real: mão no quadril + grip não
+pode também disparar `XRArma.pedeRecarga()` (amostrado por 40 frames reais
+via `requestAnimationFrame`, só leitura — o pulso dura um frame só, uma
+leitura pontual mentiria "não disparou"). Vermelho confirmado nos dois ANTES
+do fix — o comportamental provou AO VIVO o que o laudo só tinha provado por
+aritmética (`pediuRecarga: true`, medkits gasto 3→2 no mesmo aperto). Verde
+depois do fix, sem tocar nos raios nem no comportamento dos outros verbos.
+
+**Verificado:** `xr-verbo-corporal.test.js` 8/8 (era 6, os 6 originais
+continuam verdes — nenhuma regressão de granada/kit médico) ·
+`xr-empunhadura-botao`+`xr-empunhadura-grip`+`xr-arma-recarga`+`xr-weapon`
+41/41 · `npm run lint` limpo · `npm run test:vr` completo: **774 pass, 0
+fail, 1 skip, 775 testes, 146 suítes** (1450s).
+
+### Próxima prioridade
+
+1. **D1** (Rodada 26) segue em aberto — decisão do dono: exceção declarada
+   na régua para comer/trocar mira, ou nova pesquisa de caminho corporal
+   específico para os dois. Não é decisão de quem implementa.
+2. Item 8 (10/15 tiros) e item 10 (soak 5min literal) seguem gap honesto,
+   candidatos a `npm run vr:sessao` ou sessão humana dedicada.
+3. Validar por medição própria (headset) se as novas posições ombro/quadril
+   continuam alcançáveis sem esforço — mover os centros pode ter piorado o
+   conforto de alcance que a Rodada 25 também não tinha lastro pra garantir.

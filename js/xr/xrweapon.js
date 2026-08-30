@@ -195,10 +195,24 @@ export const PEITO_RAIO = 0.25;
    como pente×apoio); quadril ESQUERDO para o kit médico, abaixo do ombro.
    Ergonomia SEM LASTRO EXTERNO — nenhuma fonte encontrada publica a distância
    exata (referência, Parte III, §12) — marcado como tal, candidato a ajuste
-   por humano de headset. */
-export const OMBRO_OFF = [-0.18, -0.12, -0.05];
+   por humano de headset.
+
+   CORREÇÃO (validação independente, docs/vr/validacao-d59830e.md §2): os
+   offsets originais [-0.18,-0.12,-0.05] (ombro) e [-0.15,-0.55,0.02]
+   (quadril) colidiam com a zona do PEITO — o centro do quadril caía a
+   2,2 mm *dentro* do raio do peito, e `pedeRecargaPulso`/`pedeKitMedicoPulso`
+   são checagens independentes (nenhuma consulta a outra, ao contrário do
+   pente×apoio, que tem `gripModo` como árbitro) — medido AO VIVO em
+   `test/xr-verbo-corporal.test.js` que alcançar o quadril também disparava
+   pedido de recarga no mesmo aperto. Os offsets abaixo mantêm o raio de cada
+   zona intacto e movem os CENTROS pra fora do peito com folga real (>5 cm de
+   sobra além da soma dos raios, não só "não toca no papel") — ombro mais pro
+   lado (mesma altura/profundidade de antes), quadril mais pro lado e mais
+   baixo (coxa, não quadril alto — ainda plausível para uma zona corporal,
+   ergonomia SEM LASTRO do mesmo jeito que os originais). */
+export const OMBRO_OFF = [-0.34, -0.12, -0.05];
 export const OMBRO_RAIO = 0.18;
-export const QUADRIL_OFF = [-0.15, -0.55, 0.02];
+export const QUADRIL_OFF = [-0.40, -0.72, 0.02];
 export const QUADRIL_RAIO = 0.20;
 
 /* A ESCOPETA, CARTUCHO A CARTUCHO. `PORTA_MAX` é a mesma grandeza do
