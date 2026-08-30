@@ -1579,4 +1579,77 @@ aqui.
 3. **C4**: medir soldado humano contra 1,75 m (herdado da Rodada 27).
 4. Itens já registrados: D1 (decisão do dono), item 8 (10/15 tiros) e item 10
    (soak 5min) seguem gap honesto.
-   (soak 5min) seguem gap honesto.
+
+---
+
+## Rodada 29 — o "1 cancelled" era um teste real quebrado, não artefato do runner · 2026-08-30
+
+### Defeito
+
+O "1 cancelled" da Rodada 28 não reproduziu no mesmo formato — em vez disso,
+`npm run test:vr` completo voltou com **2 casos vermelhos** em
+`test/xr-prefs-giro.test.js`: a mão apontava para "giroModo" e o painel
+marcava "velocidade" (a linha logo abaixo); e um valor "suave" não batia
+persistido. Isolado o arquivo sozinho, **4 de 5 execuções falharam** (carga
+da máquina µ conferida: load 1min 0,41, 17 GB livres — não é flake de
+carga, e o protocolo de flake do CLAUDE.md pede exatamente essa checagem
+antes de aceitar "carga" como explicação).
+
+### Causa comprovada — regressão real da Rodada 28, mas o produto está CERTO
+
+A/B decisivo: `js/xr/xrui.js` do commit `ee4d103` (baseline antes desta
+sessão) passa **3 de 3** isolado; o mesmo teste contra o `js/xr/xrui.js` do
+`05698ea` (Rodada 28) falha **4 de 5**. A régua não mudou — o teste é
+idêntico nas duas árvores.
+
+Instrumentando `estado().reposicionando` e `pos.y` dentro do próprio teste
+(devolvido no retorno de `tocar()`, não por `console.log` — mensagens da
+página não chegam ao stdout do Node neste harness, só `console.error`):
+`game.js:3695` chama `XRUI.abrir('menu')` no PRIMEIRO frame de sessão XR
+(`!state.started`), antes de a altura do olho terminar de assentar do
+spawn. `abrir()` força `pousar(true)` nesse instante — e se o olho ainda
+sobe alguns centímetros depois (spawn/agachamento assentando), o painel
+fica pra trás. Antes da Rodada 28 isso NUNCA se corrigia (`erroDeVista()`
+zera a componente Y de propósito — é cone de giro), e o painel ficava com
+um desalinho vertical pequeno e permanente, sem ninguém notar. A Rodada 28
+deu ao painel uma segunda perna de correção justamente para isso — E ELA
+FUNCIONA: mede-se o painel perseguindo o olho por até ~900 ms depois de
+abrir, com suavização (H2 pede "loosely follow… using smoothing
+animation" — um "pop" instantâneo seria pior). **Isso é o produto
+funcionando como projetado, não um bug.**
+
+O que quebrou foi o TESTE: `P.tocar(id)` tirava uma foto do ponto-alvo no
+MUNDO uma vez, mirava a mão sintética nesse ponto fixo, esperava 230 ms
+parada, e só então lia o que estava sob o raio. Um jogador de verdade não
+sofre isso — a mão dele é rastreada quadro a quadro, e ele mira onde o
+painel ESTÁ, não onde estava um instante atrás. Com o painel ainda se
+assentando, o alvo congelado ficava 3-5 cm abaixo da posição real da linha
+ao fim da janela — o bastante para "giroModo" resolver como "velocidade",
+uma linha abaixo.
+
+### Mudança
+
+`test/xr-prefs-giro.test.js`: `tocar()` espera `estado().reposicionando`
+virar `false` (com teto de 1 s) antes de capturar o ponto-alvo e mirar —
+reproduz o comportamento de um jogador que não clica um painel ainda se
+movendo. Nenhuma linha de produto mudou; a Rodada 28 (`05698ea`) está
+correta e fica como está.
+
+### Verificado
+
+Vermelho confirmado 6 vezes contra o código de produto do `05698ea` sem a
+correção do teste (1 no `test:vr` completo, 1 isolado antes da
+investigação, mais 4 de 5 na bateria de confirmação); 3 de 3 limpo contra o
+baseline `ee4d103` (prova de que não é flake de infraestrutura). Depois da
+correção do teste: 5 de 5 isolado limpo; vizinhos `xr-ui.test.js` +
+`xr-menu.test.js` 33/33; `npm run lint` limpo; `npm run test:vr` completo
+síncrono: **780 pass, 0 fail, 1 skip, 0 cancelled** (781 testes, 151
+suítes, 1397 s) — o "cancelled" da Rodada 28 e o "fail" desta rodada eram a
+MESMA corrida, só que sorteando um formato de erro diferente por execução.
+
+### Próxima prioridade
+
+1. **G2**: pesquisar Layers API do Quest 3/OculusBrowser (herdado da Rodada 27).
+2. **C4**: medir soldado humano contra 1,75 m (herdado da Rodada 27).
+3. D1 (decisão do dono), item 8 (10/15 tiros) e item 10 (soak 5min) seguem
+   gap honesto — nenhum tocado nesta rodada.

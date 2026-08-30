@@ -84,6 +84,22 @@ async function instalar() {
     /* aponta para um ponto de uma linha e aperta o gatilho — o caminho do
        jogador, do começo ao fim */
     async tocar(id, onde = 'centro') {
+      /* NINGUÉM MIRA EM PAINEL AINDA SE ASSENTANDO. `abrir()` chama
+         `pousar(true)` no primeiro frame de XR (game.js, `!state.started`),
+         antes da altura do olho terminar de assentar do spawn — e a Rodada
+         28 (js/xr/xrui.js, `erroVertical`/`QUEDA_*`) fez o painel corrigir
+         esse desalinho perseguindo o olho por até ~1 s, de propósito e com
+         suavização (H2: "loosely follow… using smoothing animation" — um
+         "pop" instantâneo seria pior). Medido: `l[onde]` congelado por 230 ms
+         durante essa perseguição faz o alvo no MUNDO ficar 3-5 cm abaixo de
+         onde a linha REALMENTE está no fim da janela — o bastante pra mirar
+         "giroModo" e acertar "velocidade" uma linha abaixo. Um jogador de
+         verdade não sofre isso: a mão dele é rastreada quadro a quadro, não
+         congelada — ele mira onde o painel ESTÁ, não onde estava. Esperar o
+         painel assentar antes de mirar reproduz esse comportamento; travar
+         `l[onde]` antes de saber se o painel ainda se move é medir a
+         corrida, não o clique. */
+      for (let i = 0; i < 40 && this.estado().reposicionando; i++) await window.__A.espera(25);
       const l = this.linha(id);
       if (!l) return { erro: `linha "${id}" não existe na tela` };
       this.apontar('right', l[onde]);
