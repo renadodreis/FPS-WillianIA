@@ -1486,4 +1486,97 @@ nenhuma mudança de comportamento de produto, só instrumentação de medição.
    se carro/porta/degrau/baú valem a instrumentação da malha fundida ou se
    viram exceção documentada (como C5 aceita "sem corpo").
 4. Itens já registrados: D1 (decisão do dono), item 8 (10/15 tiros) e item 10
+
+---
+
+## Rodada 28 — I4 fecha 10/10: os 4 estados que faltavam, e um achado no caminho · 2026-08-30
+
+### Defeito atacado
+
+Os 4 estados sem prova de I4 (Rodada 27): **nave**, **queda livre**,
+**dirigindo** (helicóptero) e **espectador**. Escrito
+`test/xr-criterio-i4-estados.test.js`, um `describe` por estado, cada um
+alcançando o estado pelo CAMINHO DO JOGO (`startBRMatchInShip` +
+`__BR_debug.jump()`/`.spect()` para BR; `G.tryToggleCar()` no helicóptero
+para dirigindo) e saindo por CLIQUE REAL no botão do painel de pausa —
+nunca chamando a função do jogo direto.
+
+### Causa comprovada — achado real, não do roteiro dos 4 estados
+
+**Nave, dirigindo e espectador já funcionavam** (comportamento correto,
+sem defeito de produto — `XRUI.update` roda todo frame de sessão XR
+independente de fase/veículo, como o cabeçalho do arquivo já previa).
+**Queda livre reprovava**, e por um motivo NOVO, fora da lista de suspeitos
+do próprio diretivo desta rodada: `erroDeVista()` (`js/xr/xrui.js`) zera a
+componente Y do vetor de propósito — é cone de GIRO — então um deslocamento
+VERTICAL do olho sem giro nenhum nunca cruzava `CONE_SOLTA` e o painel de
+pausa **nunca reposicionava** durante a queda. Medido: o painel ficava preso
+**~41,6 m ACIMA** do olho, crescendo sem limite enquanto a fase `FALL`
+durasse — SAIR matematicamente inalcançável, o beco que I4 proíbe. É a
+MESMA família de defeito da Rodada 22 (`144e24b`, o aviso central da HUD
+ignorando pitch), só que num painel diferente, achado por acidente ao medir
+outra coisa.
+
+### Mudança
+
+`js/xr/xrui.js`: segunda perna de reposicionamento, independente do cone de
+giro — `erroVertical(alvo)` mede a distância vertical pura (painel↔olho) e
+`QUEDA_SOLTA`/`QUEDA_PARA` (0,50 m / 0,11 m, histerese na mesma proporção
+4,4× do cone de 35°/8°) disparam e param a mesma máquina de `seguir()` que
+já existia para giro. 0,50 m é maior que o pior agachamento medido nesta
+base (0,90 m) — não reagiria a postura normal, só a queda/elevador/salto.
+
+### Teste
+
+`test/xr-criterio-i4-estados.test.js`: 5 casos, portas 3872/3874/3876/3878.
+Um mede a CONVERGÊNCIA por aritmética independente (gap painel↔olho depois
+de 0,8 s e 2,0 s de queda, contra o teto físico do próprio código —
+`46 m/s × 0,22 s TAU ≈ 10,1 m` — não uma tolerância pequena inventada), os
+outros quatro medem o roteiro completo (abrir pausa pelo botão real → clicar
+SAIR → chegar ao menu). Vermelho confirmado com `git stash` da mudança em
+`xrui.js` (o caso de queda morre, os outros três continuam verdes — prova
+que o achado é local à queda, não ao mecanismo de clique). Revertido.
+
+**Armadilha de MEDIÇÃO, não de produto, encontrada no caminho**: a primeira
+versão do clique de "SAIR" mirava o centro da linha uma vez, esperava, e
+disparava — e minava com o painel ainda em movimento (mesmo depois do fix,
+o gap converge para ~10 m, nunca para exatamente zero, então o alvo
+continua deslizando). Duas correções no PRÓPRIO TESTE, nenhuma no produto:
+(1) `Matrix4.lookAt` com vetor up fixo degenera perto do zênite (mirar um
+alvo quase reto acima é quase paralelo ao próprio up) — trocado por
+`Quaternion.setFromUnitVectors`, sem vetor de referência, sem singularidade;
+(2) a confirmação de clique em `js/xr/xrui.js` é borda de subida do gatilho
+NO MESMO FRAME do apontar — sem hover "gravado" pra consultar de fora, então
+o teste passou a reapontar e CONFERIR `item.id==='sair'` antes de apertar,
+repetindo até 150 tentativas (medido: até 73 no pior caso sob a máquina
+carregada por esta sessão inteira) — a mesma perseguição que uma mão de
+verdade faria olhando o realce, não uma segunda chance artificial.
+
+### Verificado
+
+`test/xr-criterio-i4-estados.test.js` 5/5 (3 rodadas completas seguidas,
+incluindo isolamento por `--test-name-pattern` pra descartar flake — a
+rodada isolada de "queda" sozinha precisa de bem menos tentativas que
+encadeada atrás de "nave", confirmando carga de máquina como causa da
+variância, não da lógica). Vizinhos `xr-ui.test.js` + `xr-menu.test.js` +
+`xr-social.test.js`: 52/52 (o mecanismo de giro/cone não regrediu).
+`npm run lint` limpo. `npm run test:vr` completo síncrono: **779 pass, 0
+fail, 1 skip, 1 cancelled** (781 testes, 151 suítes, 1645 s) — o
+"cancelled" não aparece com nome nem motivo em nenhuma linha do log apesar
+de busca exaustiva (`grep -i cancel`), o exit code foi 0 e `fail` é 0;
+registrado como observação para quem revisar a próxima rodada, não
+investigado a fundo por não ter relação aparente com os arquivos tocados
+aqui.
+
+**I4 fecha 10/10** — nenhum estado sem saída, dos 10 que a régua lista.
+
+### Próxima prioridade
+
+1. Investigar o "1 cancelled" do `test:vr` completo (acima) — motivo
+   desconhecido, sem "not ok" correspondente no log; pode ser artefato do
+   runner numa suíte de 781 testes, não necessariamente regressão.
+2. **G2**: pesquisar Layers API do Quest 3/OculusBrowser (herdado da Rodada 27).
+3. **C4**: medir soldado humano contra 1,75 m (herdado da Rodada 27).
+4. Itens já registrados: D1 (decisão do dono), item 8 (10/15 tiros) e item 10
+   (soak 5min) seguem gap honesto.
    (soak 5min) seguem gap honesto.

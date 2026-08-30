@@ -140,6 +140,19 @@ export const QUEDA = 0.09;
 /* Histerese do reposicionamento: começa a voltar aos 35°, para aos 8°. */
 export const CONE_SOLTA = 35 * Math.PI / 180;
 export const CONE_PARA = 8 * Math.PI / 180;
+/* Histerese VERTICAL, em metros — mesma família de defeito da Rodada 22
+   (`js/xr/xrhud.js`, o aviso central que ignorava pitch): `erroDeVista()`
+   zera `_v.y` de propósito (é cone de GIRO, não de altura), então um
+   deslocamento vertical do olho sem giro nunca cruzava `CONE_SOLTA` e o
+   painel nunca reposicionava. Medido em queda livre real (BR, `S.phase ===
+   'FALL'`): o painel ficava travado ~41,6 m ACIMA do olho — SAIR
+   inalcançável, o beco que I4 proíbe. 0,50 m é maior que o pior agachamento
+   medido nesta base (0,90 m de olho — ver `docs/vr/progresso.md`, Rodada
+   18 — seria falso positivo NÃO IR ATÉ LÁ; mas qualquer coisa daí pra cima
+   já é queda, elevador ou salto, não postura). Histerese na mesma proporção
+   da do cone (35°/8° ≈ 4,4×): PARA em 0,50/4,4 ≈ 0,11 m. */
+export const QUEDA_SOLTA = 0.50;
+export const QUEDA_PARA = 0.11;
 const TAU = 0.22;              // constante de tempo do amortecimento, em s
 
 const BOTAO_MENU = 3;          // clique do analógico DIREITO: o único livre
@@ -471,10 +484,17 @@ export function createXrUi({
     return Math.acos(trava(_v.dot(_fwd), -1, 1));
   }
 
+  /* Erro VERTICAL puro — em metros, não em ângulo. `erroDeVista()` é cone de
+     GIRO por design (zera `_v.y`); esta é a segunda perna, para deslocamento
+     de ALTURA sem giro nenhum (queda livre, elevador, salto). */
+  function erroVertical(alvo) {
+    return Math.abs(painel.position.y - alvo.y);
+  }
+
   function seguir(dt) {
     const alvo = pousar(false);
     const erro = erroDeVista();
-    if (!reposicionando && erro > CONE_SOLTA) reposicionando = true;
+    if (!reposicionando && (erro > CONE_SOLTA || erroVertical(alvo) > QUEDA_SOLTA)) reposicionando = true;
     if (reposicionando) {
       const k = 1 - Math.exp(-Math.max(0, num(dt)) / TAU);
       painel.position.lerp(alvo, k);
@@ -488,7 +508,7 @@ export function createXrUi({
         _v.multiplyScalar(DIST / raio).add(_olho);
         painel.position.x = _v.x; painel.position.z = _v.z;
       }
-      if (erroDeVista() < CONE_PARA) reposicionando = false;
+      if (erroDeVista() < CONE_PARA && erroVertical(alvo) < QUEDA_PARA) reposicionando = false;
     }
     /* Encara a POSIÇÃO do olho, não a orientação: girar a cabeça não move o
        olho, então girar a cabeça não mexe no painel. É a diferença entre

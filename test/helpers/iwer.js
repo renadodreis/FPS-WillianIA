@@ -64,10 +64,13 @@ function runtimeEmulado() {
 /* Sobe o jogo com o runtime emulado e entra em sessão imersiva de verdade.
    O botão de VR só nasce depois que `isSessionSupported` resolve — por isso a
    espera por condição em vez de timeout. */
-async function bootEmVR(bootGame, { port, autoStart = false, emJogo = true, initScripts = [] } = {}) {
+async function bootEmVR(bootGame, {
+  port, autoStart = false, emJogo = true, initScripts = [], extraEnv = {},
+} = {}) {
   const h = await bootGame({
     // o runtime PRIMEIRO: scripts extras podem depender de já haver navigator.xr
     port, autoStart, initScripts: [runtimeEmulado(), ...initScripts], protocolTimeout: 300000,
+    extraEnv,
   });
   const erro = await h.play(() => window.__xrEmuladoErro || null);
   if (erro) { await h.close(); throw new Error(`IWER não instalou: ${erro}`); }
