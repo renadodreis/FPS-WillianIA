@@ -166,11 +166,22 @@ export function createEnemies(deps) {
     return { x: 90, z: 90 };
   }
 
+  /* C4 do critério AAA (docs/vr/criterio-aaa.md): humano ≈1,75 m, tolerância
+     5%. O soldado comum/executivo nascia em scale 1, e `hitSpheres()` (mais
+     abaixo) publica o topo da cabeça em 1,8+0,3 = 2,10 m nesse scale — 20%
+     acima do alvo, sem justificativa de design escrita (diferente do
+     `heavy`, que é grande de propósito — "Brutamontes"). `hitSpheres()` já
+     multiplica tudo por `group.scale.y`, então corrigir o scale corrige
+     malha e hitbox JUNTAS, sem dessincronizar uma da outra. 1,75/2,10 dá
+     1,7500 m exato. */
+  const HUMAN_SCALE = 1.75 / 2.1;
+
   function makeEnemy(idx, plan) {
     const heavy = !plan && idx % 4 === 3;
     const suit = !!(plan && plan.suit);
     const { g, parts, flash, skeleton } = buildBody(heavy, suit);
-    if (heavy) g.scale.setScalar(1.16);
+    // escala real fica em respawn() (chamado no fim deste construtor) — ele
+    // sobrescreve qualquer scale posto aqui antes de existir `e`
     scene.add(g);
     const e = {
       id: idx,
@@ -234,7 +245,7 @@ export function createEnemies(deps) {
         const gy = this.plan && this.plan.floorY !== undefined ? this.plan.floorY : heightAt(s.x, s.z);
         this.group.position.set(s.x, gy, s.z);
         this.group.rotation.set(0, this.yaw, 0);
-        this.group.scale.setScalar(this.heavy ? 1.16 : 1);
+        this.group.scale.setScalar(this.heavy ? 1.16 : HUMAN_SCALE);
         this.health = this.maxHp;
         this.alive = true;
         this.fsm = 'PATRULHA';

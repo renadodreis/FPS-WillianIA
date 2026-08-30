@@ -752,10 +752,19 @@ describe('Inimigos — o rig do GLB paga frustum culling', { skip: !CHROME && 'C
 
   /* Caixa de cada malha do rig, com o grupo na origem, colhida em 98b114f
      ANTES do culling voltar. É a prova de que a esfera não mexeu num pixel:
-     mesma malha, mesma pose, mesmo lugar. */
+     mesma malha, mesma pose, mesmo lugar.
+
+     RECAPTURADO em 2026-08-30 (C4 do critério AAA, `js/enemies.js`
+     `HUMAN_SCALE = 1.75/2.1`): esta caixa é medida SEM zerar `group.scale`
+     (diferente do `perfil()` da fusão procedural, lá em cima, que zera de
+     propósito pra separar forma de escala) — o inimigo não-heavy usado aqui
+     (`hasModel && !heavy`) passou de scale 1 pra 0,8333, e cada coordenada
+     escala junto. Valores medidos ao vivo (não calculados à mão) com o fix
+     aplicado; a MENOR corresponde à antiga × 0,8333 (ex.: -0,7395 → -0,6162),
+     confirmando que é escala uniforme, não deformação. */
   const OURO_CAIXA = {
-    Object_7: [[-0.7395, 1.173, -0.4488], [-0.1641, 1.367, 0.6477]],
-    Object_9: [[-0.6647, -0.0021, -0.6795], [0.7281, 1.9179, 0.4529]],
+    Object_7: [[-0.6162, 0.9775, -0.374], [-0.1368, 1.1391, 0.5398]],
+    Object_9: [[-0.5539, -0.0017, -0.5663], [0.6068, 1.5983, 0.3774]],
   };
 
   it('as duas submalhas do rig viram UMA, sem perder vértice nem triângulo', () => {

@@ -1939,7 +1939,66 @@ testes, 151 suítes, 1536s).
 
 ### Próxima prioridade
 
-Soldado (+20%) segue fora de escopo desta frente VR — precisa de
-investigação dedicada sobre independência hit-sphere×escala visual antes de
-qualquer mudança, por decisão registrada na Rodada 33. Carro e D1 sem ação
-pendente (decisões já fechadas). G2 aguardando aparelho.
+Soldado (+20%) — ver rodada seguinte: a investigação dedicada aconteceu e o
+achado mudou a decisão. Carro e D1 sem ação pendente (decisões já fechadas).
+G2 aguardando aparelho.
+
+---
+
+## Rodada 35 — C4 fecha: soldado corrigido, sem exploit aberto · 2026-08-30
+
+**Investigação dedicada que a Rodada 33 pediu, com resultado diferente do
+esperado.** `hitSpheres()` (`js/enemies.js`) já multiplica posição E raio de
+toda esfera por `group.scale.y` — malha e hitbox escalam JUNTAS, não são
+independentes. `server.js` não valida geometria de inimigo (`shotHit` é só
+jogador-contra-jogador). Logo, corrigir escala não abre exploit nem
+dessincroniza hit de visual — a preocupação da Rodada 33 era legítima de
+levantar, mas a resposta, medida, é que o risco não existe.
+
+**Causa comprovada:** soldado comum e executivo nasciam em `group.scale = 1`
+sem nenhuma linha de design por trás (diferente do `heavy`, que tem
+"Brutamontes" escrito) — e é esse "1" que produz 2,10 m de topo de cabeça
+(1,8 + 0,3 de raio), 20% acima do alvo de C4. A linha que fixa o scale de
+verdade é `respawn()` (`this.group.scale.setScalar(this.heavy ? 1.16 : 1)`)
+— a linha na criação (`if (heavy) g.scale.setScalar(1.16)`) é código morto,
+sobrescrito pelo `e.respawn()` chamado no fim do mesmo construtor. Removida.
+
+**Mudança:** `HUMAN_SCALE = 1.75/2.1` (dá 1,7500 m exato). Aplicada só no
+`respawn()`, único lugar que decide o scale de verdade; `heavy` continua
+1,16 — tamanho de propósito, intocado.
+
+**Teste (TDD):** `test/enemy-escala-c4.test.js`, novo (porta 3872). Três
+casos — soldado, executivo, e um GUARDA que o `heavy` NÃO muda (prova que a
+correção não vazou pro Brutamontes). Vermelho confirmado reinjetando
+`this.heavy ? 1.16 : 1` (2 dos 3 casos morrem, o de `heavy` continua verde —
+motivo certo). Revertido, verde de novo.
+
+**Achado no caminho — `enemy-drawcalls.test.js` precisou de recaptura, mas
+só em UMA seção.** O arquivo tem DUAS medições de caixa de vértice: a da
+fusão procedural (`perfil()`) zera `group.scale` de propósito antes de medir
+— pra separar "a malha mudou" de "o scale de produção mudou" — e por isso
+**não precisou de nenhuma mudança** (confirmado rodando: os dourados de
+`executivo`/`soldado`/`pesado` continuaram batendo). Já a caixa do RIG DO
+GLB (`OURO_CAIXA`, describe "o rig do GLB paga frustum culling") mede o
+inimigo vivo SEM zerar o scale — essa sim precisava mudar, e mudou por
+escala uniforme exata (ex.: `Object_7[0][0]`: -0,7395 → -0,6162 = -0,7395 ×
+0,8333). Recapturado AO VIVO (não calculado à mão) com um script isolado
+batendo no mesmo `bootGame`/harness do teste, não por conta própria.
+
+**Verificado:** teste focado 3/3 (vermelho→verde confirmado);
+`enemy-drawcalls.test.js` + `skeletons.test.js` + `hitfeel-core.test.js` +
+`br-pve-weapons.test.js` + `animals-combat.test.js` + `night-combat.test.js`
++ o teste novo, juntos: **104 pass, 0 fail**; `npm run lint` limpo;
+`npm run test:vr` completo síncrono **782 pass, 0 fail, 1 skip** (783
+testes, 151 suítes, 1539s).
+
+**Arquivos:** `js/enemies.js`, `test/enemy-escala-c4.test.js` (novo),
+`test/enemy-drawcalls.test.js`, `docs/vr/progresso.md`.
+
+### Próxima prioridade
+
+C4 fecha: porta corrigida (Rodada 34), soldado corrigido (esta rodada),
+carro sem ação (referência ambígua, Rodada 33), degrau já aprovava. G2
+segue aguardando aparelho — última pendência de C4/D1/G2 desta leva de
+decisões delegadas. Itens 8 (10/15 tiros) e 10 (soak 5min) seguem gap
+honesto de sessão humana/aparelho.
