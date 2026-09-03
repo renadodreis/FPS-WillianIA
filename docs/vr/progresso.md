@@ -2091,3 +2091,51 @@ quaternion identidade não reproduz a pose de um humano; precisa do relato
 específico (punho? dedos? cotovelo?) ou de pose realista na sonda.
 Discoverability da troca de arma (B funciona, 0 → 1 medido) — sem dica na
 tela ainda.
+
+## Rodada 40 — Relato do dono no ar (cc2de39): sem retículo, pente-fantasma só no gesto, e o que NÃO reproduziu · 2026-09-03
+
+**Relato, verbatim:** "agora tem uma mira vermelha... eu NÃO QUERO ISSO... a
+arma já tem mira, precisa ser uma mira natural de JOGOS de fps... quando
+mirar deveríamos ver por ELE... eu não consigo entrar em modo VR... o menu
+trava não aparece não dá pra REINICIAR o JOGO... está muda... o cartucho da
+arma fora do lugar".
+
+**1. Retículo REMOVIDO de vez.** O circle-dot da Rodada 39 (e o ponto de
+antes) saíram. A mira é a do MODELO: `eye`/`front` do perfil (weaponrig)
+já é a óptica/ferro desenhado, e o ADS por botão põe o olho sobre essa reta
+(medido nas 3 primeiras armas: ads 0,999, olho a 0,001 m do eixo do modelo
+com 400 ms de assentamento). `guia()` devolve `aro`/`ponto` nulos por
+contrato; `xr-arma-janela` varre o grafo em 3 poses e cobra ZERO objetos.
+Foto: `r1-ads-arma0` — o tubo da óptica do fuzil centrado, nada desenhado.
+
+**2. "Cartucho fora do lugar" = pente-fantasma por BOTÃO.** Fotografado:
+Y recém-apertado → `aguardando-pente`, `xrPenteFantasma` no grafo preso à
+mão esquerda, pente do modelo 19 cm abaixo do poço (coreografia normal).
+O bloco na mão é o que o jogador vê "fora do lugar". `passoRecarga` agora
+carimba a origem (mesma janela `PEDIDO_JANELA` da escopeta) e só planta o
+pente na mão quando a recarga nasceu do GESTO (mão no peito + grip). Por
+botão a arma recarrega sozinha (POPULATION: ONE, "nenhum pente rastreado").
+Teste novo em `xr-arma-recarga` (origem botão → pente na mão false, no
+grafo false, munição entra); os casos M6/B6 passaram a pedir por gesto
+(`recarregarPorGesto`, mão no peito). Reinjeção `recPenteNaMao = true`:
+o caso do botão morre.
+
+**3. NÃO REPRODUZIDO — "não consigo entrar em VR / menu trava / não dá
+pra reiniciar".** Sonda do caminho inteiro no kit (`probe-menu`,
+`probe-reentrada2`): menu em VR → JOGAR SOLO → morte pelo caminho real
+(`playerDamage`) → painel de morte → JOGAR DE NOVO (dead=false) → pausa
+(clique do analógico direito) → RETOMAR; e SAIR DO VR → ENTRAR EM VR pelo
+`#btnVR`, no menu E em jogo, painel e pausa voltando. `pageErrors` e
+`consoleErrors` vazios em todas as etapas. JS servido com `Cache-Control:
+no-cache` (sem service worker): o aparelho recebe os bytes novos. Fica
+aberto: precisa do passo-a-passo do dono (onde travou: no botão da página?
+no painel dentro do VR? depois de morrer?). Hipótese registrada na skill
+(`vr-quest`): aba duplicada/escondida no navegador do Quest para de
+desenhar e "o menu trava" — sintoma idêntico.
+
+**4. NÃO REPRODUZÍVEL no kit — "está muda".** Nada de áudio mudou nesta
+frente; `SFX.init/resume` no `startGame` é o mesmo. O kit não tem
+AudioContext audível. Pendência: perguntar se o som some só em VR ou no
+desktop também.
+
+**5. Hands ("mãos torta") continua pendente** — sem relato específico.

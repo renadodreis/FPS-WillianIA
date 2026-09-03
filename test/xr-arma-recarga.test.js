@@ -124,7 +124,7 @@ function instalarSonda() {
     varrer(MP.scene);
 
     amostra = {
-      ads: e.ads, recarga: rec.estado, via: rec.via, penteNaMao: rec.penteNaMao,
+      ads: e.ads, recarga: rec.estado, via: rec.via, penteNaMao: rec.penteNaMao, origem: rec.origem,
       recarregando: !!(gun && gun.reloading),
       mag: gun ? gun.mag : null, reserve: gun ? gun.reserve : null,
       magSize: gun ? gun.magSize : null,
@@ -195,6 +195,20 @@ function instalarSonda() {
       window.__A.botao('left', 'y-button', 1);
       await window.__A.espera(120);
       window.__A.botao('left', 'y-button', 0);
+    },
+    /* RECARGA POR GESTO: a mão de apoio no PEITO (`PEITO_OFF` = 0,45 m abaixo
+       e 0,15 m à frente do olho, raio 0,25) com o grip esquerdo apertado.
+       É o único caminho que planta o pente-fantasma na mão (2026-09-03): por
+       BOTÃO a arma recarrega sozinha. Cabeça em (0; 1,70; 0) olhando -Z. */
+    recarregarPorGesto: async () => {
+      const dev = window.__xrEmulado;
+      dev.controllers.left.position.set(0.0, 1.25, -0.15);
+      dev.controllers.left.quaternion.set(0, 0, 0, 1);
+      await window.__A.espera(120);
+      window.__A.botao('left', 'squeeze', 1);
+      await window.__A.espera(140);
+      window.__A.botao('left', 'squeeze', 0);
+      await window.__A.espera(80);
     },
     gatilho: async () => {
       window.__A.botao('right', 'trigger', 1);
@@ -267,9 +281,9 @@ describe('a recarga é um gesto visível no headset',
         window.__AR.mao(0.25, 1.20, -0.25);
         window.__AR.municao(1, 150);
         await window.__AR.espera(400);
+        await window.__AR.recarregarPorGesto();    // pede no PEITO: é o caminho do pente na mão
         await window.__AR.maoEnoPoco(1.00);        // a um metro do poço
-        await window.__AR.recarregar();
-        await window.__AR.espera(400);
+        await window.__AR.espera(300);
         /* segura a mão longe durante a recarga inteira */
         for (let i = 0; i < 12; i++) { await window.__AR.maoEnoPoco(1.00, 1); }
         await window.__AR.espera(900);
@@ -294,9 +308,11 @@ describe('a recarga é um gesto visível no headset',
         window.__AR.mao(0.25, 1.20, -0.25);
         window.__AR.municao(1, 150);
         await window.__AR.espera(400);
-        await window.__AR.maoEnoPoco(0.60);
-        await window.__AR.recarregar();
-        await window.__AR.espera(500);
+        await window.__AR.recarregarPorGesto();
+        /* 2 passos (≈0,26 s): a janela `aguardando-pente` vai de 18 % a 70 %
+           da recarga, e a mão precisa estar a 0,60 m ANTES de ela fechar */
+        await window.__AR.maoEnoPoco(0.60, 2);
+        await window.__AR.espera(200);
         const esperando = window.__AR.ler();
         /* o jogador leva a mão ao poço */
         for (let i = 0; i < 8; i++) await window.__AR.maoEnoPoco(0.08, 1);
@@ -305,7 +321,7 @@ describe('a recarga é um gesto visível no headset',
         await window.__AR.espera(2200);
         return { esperando, dep, evento: dep.evento };
       });
-      console.log(`  esperando → estado ${r.esperando.recarga} · pente na mão` +
+      console.log(`  esperando → estado ${r.esperando.recarga} · origem ${r.esperando.origem} · pente na mão` +
         ` ${r.esperando.penteNaMao} · no grafo ${r.esperando.penteNoGrafo}` +
         ` · preso à mão esquerda ${r.esperando.penteNaMaoEsq}`);
       console.log(`  encaixou  → estado ${r.dep.recarga} · via ${r.dep.via}` +
@@ -330,9 +346,9 @@ describe('a recarga é um gesto visível no headset',
         window.__AR.mao(0.25, 1.20, -0.25);
         window.__AR.municao(1, 150);
         await window.__AR.espera(400);
-        await window.__AR.maoEnoPoco(0.45);
-        await window.__AR.recarregar();
-        await window.__AR.espera(700);
+        await window.__AR.recarregarPorGesto();
+        await window.__AR.maoEnoPoco(0.45, 2);
+        await window.__AR.espera(250);
         const durante = window.__AR.ler();
         await window.__AR.espera(2600);
         return { durante };
@@ -388,16 +404,46 @@ describe('a recarga é um gesto visível no headset',
         `o clique seco é sentido pela mão da ARMA: saiu em ${JSON.stringify(vazios.map(p => p.mao))}`);
     });
 
+    it('recarga por BOTÃO não planta pente na mão — a arma recarrega sozinha (o "cartucho fora do lugar")', async () => {
+      /* O dono, no aparelho (2026-09-03): "o cartucho da arma fora do lugar".
+         Fotografado no kit: Y recém-apertado, estado `aguardando-pente`,
+         `xrPenteFantasma` no grafo preso à mão esquerda, pente do modelo
+         19 cm abaixo do poço. Por botão nada pode aparecer na mão; a recarga
+         termina pelo relógio e a munição entra. Reinjetando
+         `recPenteNaMao = true` sem olhar a origem, este caso morre. */
+      const r = await h.play(async () => {
+        window.__AR.cabeca(1.70);
+        window.__AR.mao(0.25, 1.20, -0.25);
+        window.__AR.maoE(-0.25, 1.20, -0.25);      // mão de apoio longe do peito
+        window.__AR.municao(1, 150);
+        await window.__AR.espera(400);
+        await window.__AR.recarregar();            // Y
+        await window.__AR.espera(700);             // além de FASE_PENTE_FORA
+        const durante = window.__AR.ler();
+        await window.__AR.espera(2600);
+        return { durante, fim: window.__AR.ler() };
+      });
+      console.log(`  botão → estado ${r.durante.recarga} · origem ${r.durante.origem}` +
+        ` · pente na mão ${r.durante.penteNaMao} · no grafo ${r.durante.penteNoGrafo}`);
+      console.log(`  fim   → mag ${r.fim.mag}/${r.fim.reserve} · recarregando ${r.fim.recarregando}`);
+      assert.equal(r.durante.recarregando, true, 'o cenário não chegou a recarregar');
+      assert.equal(r.durante.origem, 'botao', `a origem tinha de ser botão: veio '${r.durante.origem}'`);
+      assert.equal(r.durante.penteNaMao, false, 'a recarga por BOTÃO plantou um pente na mão de apoio');
+      assert.equal(r.durante.penteNoGrafo, false, 'o pente-fantasma apareceu no grafo numa recarga por botão');
+      assert.equal(r.fim.recarregando, false, 'a recarga por botão não terminou');
+      assert.ok(r.fim.mag > 1, `a munição não entrou: pente ${r.fim.mag}`);
+    });
+
     it('o háptico da recarga toca as DUAS mãos, cada uma no seu papel (B6)', async () => {
       const r = await h.play(async () => {
         window.__AR.cabeca(1.70);
         window.__AR.mao(0.25, 1.20, -0.25);
         window.__AR.municao(1, 150);
         await window.__AR.espera(400);
-        await window.__AR.maoEnoPoco(0.60);
         window.__AR.limparDiario();
-        await window.__AR.recarregar();
-        await window.__AR.espera(600);
+        await window.__AR.recarregarPorGesto();
+        await window.__AR.maoEnoPoco(0.60);
+        await window.__AR.espera(500);
         for (let i = 0; i < 8; i++) await window.__AR.maoEnoPoco(0.08, 1);
         await window.__AR.espera(2400);
         return { diario: window.__AR.diario(), fim: window.__AR.ler() };

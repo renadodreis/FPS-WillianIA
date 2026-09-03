@@ -537,6 +537,23 @@ Medidas em 2026-09-03 com a sonda de screenshot do kit emulado (bootEmVR +
   DO GRAFO. E o aro azul de tolerância em volta da ocular era andaime de
   tutorial virado produto — removido.
 
+- **Pente-fantasma só no GESTO.** A recarga por botão (Y) plantava o pente
+  na mão de apoio e esperava o gesto até 70 % do relógio: o jogador via um
+  bloco preso à mão esquerda e o pente do modelo 19 cm abaixo do poço —
+  "o cartucho da arma fora do lugar". `passoRecarga` carimba a origem por
+  `pedidoT`/`PEDIDO_JANELA` (a mesma da escopeta); por botão a arma
+  recarrega sozinha, sem nada na mão.
+- **Nenhum retículo desenhado.** Ponto colimado, circle-dot e aro de
+  tolerância: os três foram recusados pelo dono no aparelho. A mira é o
+  ferro/óptica do MODELO; o ADS por botão põe o olho sobre `eye→front`.
+  `XRArma.guia()` devolve `aro`/`ponto` nulos por contrato.
+- **"O menu trava / não consigo entrar em VR" sem reprodução no kit.** O
+  caminho inteiro (menu → solo → morte → JOGAR DE NOVO → pausa; sair do VR
+  → entrar de novo pelo `#btnVR`) roda limpo em `bootEmVR` com
+  `pageErrors` vazio. Antes de caçar código: aba duplicada/escondida no
+  navegador do Quest (seção "Abas duplicadas matam a interação") e o
+  passo-a-passo exato do dono.
+
 ### A mira sai da ARMA, não do controle
 
 Hierarquia: linha de mira da arma (a ocular do perfil, onde o jogador põe o
