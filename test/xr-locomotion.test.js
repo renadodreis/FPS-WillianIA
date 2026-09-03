@@ -404,6 +404,17 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
       const G = window.__game, MP = window.__MP, T = MP.THREE, A = window.__A;
       const dev = window.__xrEmulado;
       A.solta();
+      /* LEVANTA. O agachar artificial é ALTERNÂNCIA: o perfil acima o ligou e
+         soltar o analógico não o desliga — sem esta linha o jogador segue
+         agachado por este e pelos QUATRO casos seguintes (medido na suíte
+         completa: mirando 0,846 m/s, "a medição começou a 0,847", vinheta 0 %,
+         paridade 2,600 — todos a velocidade de agachado). A (pular) levanta
+         incondicionalmente (js/xr/xrinput.js); o pulo assenta em < 1 s, antes
+         de a medição começar. */
+      A.botao('right', 'a-button', 1);
+      await A.espera(80);
+      A.botao('right', 'a-button', 0);
+      await A.espera(900);
       dev.position.set(0, 1.70, 0);
       dev.quaternion.set(0, 0, 0, 1);
       dev.controllers.right.quaternion.set(0, 0, 0, 1);

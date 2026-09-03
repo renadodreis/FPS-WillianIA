@@ -312,6 +312,16 @@ mexer no repositório de outra pessoa — só com pedido explícito.
   morto) antes de rodar, e nunca encosta na porta 3000.
 - **Monitor com `pgrep` casa com a própria linha de comando.** `until ! pgrep -f
   "run-tests"` nunca termina, porque o shell que o executa contém `run-tests`.
+- **Placar de suíte relatado por agente não vale sem o processo MORTO.** Em
+  2026-09-03 um agente de QA devolveu "168 pass / 0 fail" em 10,7 min — e o
+  `scripts/run-tests.js` dele ainda estava vivo 31 min depois (o segundo
+  agente o encontrou em `xr-mao-controle`). Ele leu o log pela metade e
+  chamou de resultado. Enquanto isso o orquestrador rodou cinco arquivos
+  "isolados" nas mesmas portas, achando a máquina livre. Antes de aceitar um
+  placar: `ps -eo pid,etime,cmd | grep run-tests` tem de estar VAZIO, e o
+  número tem de vir da linha final do próprio runner, não de contagem de
+  `ok`. E antes de rodar QUALQUER teste: o mesmo `ps` — inclusive para os
+  seus próprios.
 
 - **"Teste que passa por acidente" já apareceu DEZ vezes nesta base, e é a
   família de defeito mais cara que ela tem.** Não é falta de cobertura: é teste

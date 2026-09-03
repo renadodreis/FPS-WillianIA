@@ -2139,3 +2139,17 @@ AudioContext audível. Pendência: perguntar se o som some só em VR ou no
 desktop também.
 
 **5. Hands ("mãos torta") continua pendente** — sem relato específico.
+
+**Suíte completa (máquina limpa, runner do repo, placar da LINHA FINAL do
+runner):** 1952 testes / 372 suítes / **1944 pass · 5 fail · 3 skip**,
+2215 s. Os 5 são UM arquivo, `xr-locomotion`: o caso "AGACHADO e MIRANDO"
+passou a segurar o analógico direito para baixo (agachar por ALTERNÂNCIA)
+e nada levantava o jogador depois — os quatro casos seguintes mediram a
+velocidade de agachado (0,846 m/s, "a medição começou a 0,847", vinheta
+0 %, paridade 2,600). Runner: regressão real (3/3 isolado). Vazamento de
+ESTADO do teste, não do produto; corrigido com A (pular) levantando antes
+da medição de "mirando".
+
+**Lição registrada em CLAUDE.md:** o primeiro placar desta rodada ("168
+pass") veio de um agente que leu o log com o runner ainda vivo; a suíte
+válida é a segunda, acima.
