@@ -2191,3 +2191,15 @@ virava "B: TROCAR ARMA" e um pedido de 1,2 s durava 3,5 s. Correção:
 qualquer `centerMsg` do jogo CANCELA as dicas pendentes (mísseis nunca
 perdem pro tutorial); caso novo em `xr-dicas-controles` mede pendentes
 4 → 0, só o aviso da cidade na tela, e a duração pedida.
+
+**Suíte completa em `5498777` (máquina limpa, linha final do runner):** 1955
+testes / 374 suítes / **1952 pass · 0 fail · 3 skip**, runner exit 0.
+Fecha o ciclo deploy → suíte desta rodada.
+
+### Próxima prioridade
+
+Travado no dono: (1) passo-a-passo do "menu trava / não entra em VR" (não
+reproduz no kit); (2) som mudo — só em VR?; (3) o que está torto nas mãos;
+(4) decisão sobre o painel do pulso só-ao-olhar. Sem resposta, o próximo
+tick investiga o flake de `xr-arma-recarga` ("5 cliques secos: saíram 6"
+— borda dupla do gatilho?), que pode ser tiro/clique duplicado de verdade.
