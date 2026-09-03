@@ -4206,7 +4206,45 @@ const MenuUI = wireMenuUI({ SFX });
    de inimigos"), medido e reproduzido em test/xr-onboarding-inimigos.test.js
    ("JOGAR DE NOVO em solo VR rearma a graça"). */
 function ligarOnboardingSeForCaso() {
+  if (XR.presenting) mostrarDicasVR();
   if (XR.presenting && !window.__MP_active && !window.__BR_active) Skeletons.iniciarOnboarding();
+}
+
+/* DICAS DE CONTROLE NO HEADSET. O dono, no aparelho (2026-08-30): "cadê o
+   botão de mira? como eu corro? cadê o botão de correr? ... como trocar de
+   arma". Os verbos existiam; o que não existia era um lugar DENTRO da sessão
+   que dissesse qual botão é qual — o Touch não tem tecla impressa, e o
+   jogador descobre por acidente ou não descobre. Pavlov e Onward mostram o
+   mapa de botões nos primeiros segundos da primeira partida; aqui é o AVISO
+   CENTRAL que já existe (js/xr/xrhud.js `mensagem`: nasce onde o jogador
+   olha, 13,5° ACIMA da linha de mira, a 1 m — fora da linha de tiro por
+   construção, medido em test/xr-aviso.test.js), uma dica por vez, e SÓ NA
+   PRIMEIRA partida da sessão de navegador: repetir a cada JOGAR DE NOVO
+   viraria ruído em cima de quem já sabe. Cada texto cabe em 2 linhas do
+   painel (quebra por palavra, `AVISO_LINHAS`). Guardado por `XR.presenting`
+   e `state.started` na hora de MOSTRAR, não só na de agendar: sair da
+   sessão no meio da sequência não pode deixar avisos agendados pra uma
+   sessão que não existe mais. Medido em test/xr-dicas-controles.test.js. */
+const DICAS_VR = [
+  'MIRAR: GATILHO ESQ. OU GRIP DIR.',
+  'B: TROCAR ARMA  ·  Y: RECARREGAR',
+  'CORRER: CLIQUE DO ANALÓGICO ESQ.',
+  'A: PULAR  ·  ANALÓGICO DIR. PRA BAIXO: AGACHAR',
+];
+const DICA_MS = 3200;         // cada dica fica este tempo na tela
+const DICA_ATRASO_MS = 1200;  // folga depois do spawn: o jogador ainda está assentando a vista
+let dicasVRMostradas = false;
+let dicasVREmissoes = 0;
+function mostrarDicasVR() {
+  if (dicasVRMostradas) return;
+  dicasVRMostradas = true;
+  DICAS_VR.forEach((txt, i) => {
+    setTimeout(() => {
+      if (!XR.presenting || !state.started) return;
+      dicasVREmissoes++;
+      XRHud.mensagem(txt, DICA_MS);
+    }, DICA_ATRASO_MS + i * DICA_MS);
+  });
 }
 
 function startGame(trusted) {
@@ -4828,6 +4866,9 @@ window.__game = {
      jogador — trocar o modo que a Xbox Accessibility Guideline 107 exige que
      seja trocável. */
   entradaXR,
+  /* QA das dicas de controle no headset: lista declarada, cadência e quantas
+     vezes o aviso foi de fato emitido (uma vez por sessão de navegador). */
+  dicasVR: { lista: DICAS_VR, ms: DICA_MS, atraso: DICA_ATRASO_MS, emissoes: () => dicasVREmissoes },
   MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
   // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como
   // verificar de fora que a troca de arma do headset chegou a trocar alguma coisa.

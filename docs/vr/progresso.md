@@ -2153,3 +2153,31 @@ da medição de "mirando".
 **Lição registrada em CLAUDE.md:** o primeiro placar desta rodada ("168
 pass") veio de um agente que leu o log com o runner ainda vivo; a suíte
 válida é a segunda, acima.
+
+## Rodada 41 — Dicas de controle no headset; mãos fotografadas em pose realista · 2026-09-03
+
+**"Como eu corro? Como troco de arma?"** Os verbos existiam; faltava um
+lugar DENTRO da sessão que dissesse o botão. Agora o AVISO CENTRAL (o dos
+mísseis: nasce onde o jogador olha, 13,5° acima da linha de mira, a 1 m —
+fora da linha de tiro por construção) mostra, na PRIMEIRA partida da
+sessão, 4 dicas em sequência (3,2 s cada, 1,2 s depois do spawn): mirar
+(gatilho esq./grip dir.), B troca arma · Y recarrega, correr (clique do
+analógico esq.), A pula · analógico dir. pra baixo agacha. Só em XR;
+JOGAR DE NOVO não repete. `test/xr-dicas-controles.test.js` (porta 3880)
+amostra o painel a 10 Hz: as 4 passam na ordem exata e o aviso some;
+reinício não emite de novo. 2/2.
+
+**Mãos (relato "mãos torta"), sonda com pose realista** (controles a −35°,
+0°, +25°, mão esquerda virada pro rosto): os ossos das mãos do boneco
+caem EXATAMENTE sobre os controles (`haR` = `ctrlR`, `haL` = `ctrlL` nas 4
+poses, 3 casas). Posição certa; o que sobra é orientação/forma da malha
+low-poly, que a foto não fecha sozinha — precisa do detalhe do dono.
+
+**Candidato registrado, NÃO feito (decisão de produto):** o painel do PULSO
+(granadas/kits/vivos) aparece sempre que o controle esquerdo existe, e na
+pose de pronto (mão de apoio no guarda-mão) fica ~10° abaixo do centro da
+vista, colado à arma — a segunda caixa "na frente da tela". O gênero
+(Onward/POPULATION: ONE) só mostra o relógio quando o jogador OLHA pro
+pulso. Custa regra de olhar + histerese e ajuste em 4 arquivos de teste
+que hoje cobram o painel visível com o controle presente. Fica pro dono
+decidir.
