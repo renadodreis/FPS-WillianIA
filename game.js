@@ -4823,9 +4823,10 @@ window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   XRArma, XRInterage, XRUI, XRHud, XRTato, XRTaxa, XRAndar,
-  /* QA + menu de VR: as preferências de empunhadura (`apertar`/`manter`) e de
-     mira assistida. Sem isto não há como um teste — nem o jogador — trocar o
-     modo que a Xbox Accessibility Guideline 107 exige que seja trocável. */
+  /* QA + menu de VR: a preferência de empunhadura (`apertar`/`manter`) e os
+     getters `mirando()`/`apoiando()`. Sem isto não há como um teste — nem o
+     jogador — trocar o modo que a Xbox Accessibility Guideline 107 exige que
+     seja trocável. */
   entradaXR,
   MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
   // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como

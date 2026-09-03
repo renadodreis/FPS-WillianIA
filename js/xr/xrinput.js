@@ -112,21 +112,25 @@
    revogando a frase antiga deste comentário ("nenhum tem botão de ADS") PARA
    ESTA FRENTE. O botão é o GATILHO ESQUERDO (ver o bloco de `criarRadialXR`
    mais abaixo para o motivo de ser esse e não outro), lido puro — sem máquina
-   de estado, sem atraso: aperta liga, solta desliga. `out.mirar` passa a valer
-   `gatilhoEsquerdo || miraAssistida`, e a mira assistida (grip direito, 300 ms,
-   acessibilidade para quem não levanta o braço) continua existindo do jeito
-   que já era. A linha do game.js que lê `cmd.mirar || XRArma.mirando()` não
-   mudou: o botão só acrescenta uma fonte a mais para `cmd.mirar`, e o gesto
-   segue sendo a segunda opção do `||`.
+   de estado, sem atraso: aperta liga, solta desliga. A linha do game.js que
+   lê `cmd.mirar || XRArma.mirando()` não mudou: o botão só acrescenta uma
+   fonte a mais para `cmd.mirar`, e o gesto segue sendo a segunda opção do `||`.
+
+   E O GRIP DIREITO TAMBÉM MIRA (2026-09-03). Com a arma sempre na mão
+   (2026-08-30) o grip direito ficou sem verbo, e o dono pediu, verbatim, o
+   que ele deve fazer: "no grip direito tem um botão onde você seleciona e
+   solta a arma... ele deveria ser o botão de mira". Os dois botões são a
+   MESMA fonte (`mirarBotao`): qualquer um dos dois segurado traz a arma ao
+   olho. A "mira assistida" antiga (grip mantido 300 ms acendia só o
+   espalhamento, sem mover a arma — B4) foi ABSORVIDA por isto: quem não
+   consegue levantar o braço agora vê a mira de verdade em vez de ganhar um
+   número invisível, que é acessibilidade melhor, não pior. O critério B4
+   registra a exceção declarada pelo dono.
 
    Fontes e citações literais em docs/vr/referencia-empunhadura-recarga.md §1.1,
    §1.2, §1.3 e §4.1.
    ================================================================ */
 export const EMPUNHADURA_MODOS = ['apertar', 'manter'];
-
-/* Quanto tempo o grip precisa ficar apertado para a MIRA ASSISTIDA acender.
-   Não é zero de propósito: o mesmo botão empunha, e empunhar é um toque. */
-export const MIRA_ASSISTIDA_MS = 300;
 
 /* A MÁQUINA DA EMPUNHADURA, isolada porque é o que decide se o jogador está
    com a arma na mão — e porque um `if` disso espalhado pelo `ler()` seria
@@ -332,20 +336,38 @@ export function criarRadialXR() {
   return { passo, ler: fontes => passo(maoDe(fontes, 'left')) };
 }
 
-export function criarEntradaXR({
-  empunhadura = 'apertar',
-  miraAssistida = false,
-  agora = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
-} = {}) {
+/* CORRER É O CLIQUE DO ANALÓGICO ESQUERDO — e o batente continua valendo.
+   O dono, no aparelho (2026-08-30): "como eu corro? cadê o botão de correr?".
+   O batente (`CORRER_TILT` = 0,92) é a convenção do gênero no papel, mas é
+   um limiar de HARDWARE: um analógico real com folga ou desgaste entrega
+   0,88–0,95 no batente, e abaixo de 0,92 o jogador empurra até o fim e
+   ANDA. É invisível e indistinguível de "não tem corrida". O clique do
+   analógico (L3) é o sprint de Onward, Contractors, Pavlov e de todo FPS de
+   gamepad — botão que se sente. É TRAVA, não hold: um clique enquanto anda
+   engata a corrida, e ela dura até o polegar voltar ao centro (é o "click
+   to sprint, release stick to stop" do Contractors). Segurar o clique
+   enquanto corre com o polegar no batente é ergonomia ruim (o polegar
+   escorrega do anel). Os dois caminhos coexistem: batente OU trava.
+   O AGACHAR, que morava no clique, foi para o analógico DIREITO PARA BAIXO
+   (alternância): é onde Onward e POPULATION: ONE põem o agachar artificial,
+   e o eixo vertical do analógico direito estava livre — o giro em passos só
+   lê o X. Agachar FÍSICO (abaixar o corpo) continua sendo lido pelo
+   `XR.corpo.agachado` no game.js e não passa por aqui. */
+const AGACHAR_ON = 0.7;    // inclinada pra baixo que alterna o agachar
+const AGACHAR_OFF = 0.35;  // e quanto precisa voltar pra rearmar
+
+export function criarEntradaXR({ empunhadura = 'apertar' } = {}) {
   let girarArmado = true;   // rearma quando o analógico volta pro centro
   let gatilhoAntes = false; // pra separar APERTAR de ESTAR SEGURANDO
   let trocaAntes = false;   // idem pra troca de arma: ciclar em rajada é inútil
   const radial = criarRadialXR();   // seletor dos quatro verbos que não têm botão
   const empunha = criarEmpunhadura(empunhadura);
-  let assistida = !!miraAssistida;
-  let gripDesde = 0;        // quando o grip direito começou a ser mantido
   let apoioBotao = false;   // grip ESQUERDO: a mão de apoio na arma
-  let mirarBotao = false;   // SÓ o gatilho esquerdo — nunca a mira assistida (essa não pode mover a arma)
+  let mirarBotao = false;   // gatilho ESQUERDO ou grip DIREITO: traz a arma ao olho
+  let correrTrava = false;  // clique do analógico esquerdo engatou a corrida
+  let cliqueAntes = false;  // borda do clique
+  let agachado = false;     // alternância do agachar artificial (analógico direito pra baixo)
+  let agacharArmado = true; // rearma quando o analógico direito volta do batente inferior
   /* REARME DA LOCOMOÇÃO. O analógico que escolhe a fatia é o mesmo de andar, e
      o jogador solta o gatilho com o polegar AINDA na direção que escolheu. Sem
      este rearme ele confirma "granada" e sai correndo para a frente no mesmo
@@ -443,24 +465,24 @@ export function criarEntradaXR({
          semântica de `agarrar` — que é do js/xr/xrinteract.js e não é minha. */
       out.apoio = out.agarrar;
       apoioBotao = out.apoio;
-      out.agachar = botao(esquerda, 3);
-      /* CORRER NO BATENTE — e a fatia do radial É o batente, então correr entra
-         na mesma suspensão do andar. Sem isso, escolher qualquer fatia mandava
-         um `ShiftLeft` junto: o jogador confirmava o item já em disparada. */
-      out.correr = !escolhendo && mCru >= CORRER_TILT;
+      /* CORRER: clique do analógico (trava até o polegar voltar ao centro) OU
+         batente. Ver o bloco acima de `criarEntradaXR`. A borda do clique é
+         calculada aqui porque a trava só pode nascer de um aperto NOVO —
+         segurar o clique enquanto o polegar volta ao centro e sai de novo
+         não pode reengatar sozinho. E a fatia do radial É o batente, então
+         correr entra na mesma suspensão do andar. Sem isso, escolher qualquer
+         fatia mandava um `ShiftLeft` junto: o jogador confirmava o item já em
+         disparada. */
+      const clique = botao(esquerda, 3);
+      if (clique && !cliqueAntes) correrTrava = true;
+      if (mCru <= DEADZONE && !clique) correrTrava = false;
+      cliqueAntes = clique;
+      out.correr = !escolhendo && (mCru >= CORRER_TILT || (correrTrava && mCru > DEADZONE));
       out.usar = botao(esquerda, 4);
       out.recarregar = botao(esquerda, 5);
-      /* ADS POR BOTÃO (pedido do dono, 2026-08-29): leitura pura, sem máquina
-         de estado — aperta liga, solta desliga, no mesmo frame. Combinada com
-         a mira assistida logo abaixo, no bloco da mão direita. `mirarBotao`
-         (exposto por `mirando()`) guarda SÓ esta fonte, separada da mistura —
-         é o sinal que `js/xr/xrweapon.js` usa pra decidir se PUXA a arma. A
-         mira assistida (grip direito, abaixo) tem de continuar sem mover a
-         arma um milímetro, por design (B4) — misturar as duas aqui faria o
-         puxão vazar pra acessibilidade que existe justamente pra NÃO mover
-         nada. */
-      out.mirar = botao(esquerda, 0);
-      mirarBotao = out.mirar;
+    } else {
+      correrTrava = false;
+      cliqueAntes = false;
     }
 
     if (direita) {
@@ -482,44 +504,53 @@ export function criarEntradaXR({
       out.atirar = botao(direita, 0);
       out.pular = botao(direita, 4);
 
+      /* AGACHAR ARTIFICIAL: analógico direito PARA BAIXO alterna (ver o bloco
+         acima de `criarEntradaXR`). Eixo 3 positivo é "para trás/baixo" no
+         Touch. Histerese como a do giro: alterna uma vez por inclinada, e
+         precisa voltar até `AGACHAR_OFF` pra valer de novo — segurar pra
+         baixo não pode ficar alternando a 72 Hz. Pular (A) levanta: é o que
+         o jogador espera, e é o que Onward faz. */
+      const baixo = num(d.y);
+      if (agacharArmado && baixo >= AGACHAR_ON && Math.abs(lado) < SNAP_OFF) {
+        agachado = !agachado;
+        agacharArmado = false;
+      } else if (baixo <= AGACHAR_OFF) {
+        agacharArmado = true;
+      }
+      if (out.pular) agachado = false;
+
       /* ARMA SEMPRE NA MÃO (pedido do dono, 2026-08-30, revogando o coldre por
          clique da rodada anterior). Verbatim, testando no aparelho: "no grip
          direito tem um botão onde você seleciona e solta a arma... qual o
          objetivo de ficar sem arma? ele deveria ser o botão de mira... armas
-         sempre a mão". O grip direito passa a servir SÓ a mira assistida
-         (abaixo) — `empunha`/`criarEmpunhadura` (o STICKY de um clique, um
-         alternar) continua existindo e testado em isolamento
+         sempre a mão". `empunha`/`criarEmpunhadura` (o STICKY de um clique,
+         um alternar) continua existindo e testado em isolamento
          (`test/xr-empunhadura-botao.test.js`, descreve pura), só não é mais
-         chamado aqui: nenhum clique deste botão guarda a arma no jogo real. */
-      const grip = botao(direita, 1);
+         chamado aqui: nenhum clique deste botão guarda a arma no jogo real.
+         O grip direito é lido no bloco de `mirarBotao`, abaixo. */
       out.empunhar = true;
       out.empunharEvento = null;
-
-      /* MIRA ASSISTIDA — desligada por padrão, e mesmo ligada NÃO move a arma.
-         O tempo mínimo separa "empunhar" (um toque) de "mirar" (manter), para
-         que o mesmo botão possa fazer as duas coisas sem ambiguidade. É uma
-         SEGUNDA fonte para `out.mirar`, somada por `||` ao gatilho esquerdo
-         (bloco da mão esquerda, acima) — nenhuma desliga a outra. */
-      if (grip) { if (!gripDesde) gripDesde = agora(); } else gripDesde = 0;
-      out.mirar = out.mirar
-        || (assistida && grip && gripDesde > 0 && (agora() - gripDesde) >= MIRA_ASSISTIDA_MS);
     } else {
       girarArmado = true;   // controle sumiu: não deixa o giro travado armado errado
+      agacharArmado = true;
       /* CONTROLE SUMINDO NÃO LARGA A ARMA — e agora nada larga a arma, então
-         isto vale por construção: `out.empunhar` já é `true` sempre.
-         `out.mirar` não é zerado aqui: a fonte da mão ESQUERDA (gatilho) é
-         independente da direita e continua valendo — perder o rastreio da mão
-         que segura a arma não pode travar o espalhamento de quem só queria
-         soltar o gatilho de apoio. */
+         isto vale por construção: `out.empunhar` já é `true` sempre. */
       out.empunhar = true;
       out.empunharEvento = null;
-      gripDesde = 0;
     }
-    /* Controle esquerdo sumiu: sem ele não há como saber se o gatilho está
-       apertado, e `mirarBotao` tem de cair — senão um gatilho preso no
-       último frame visto trava a arma puxada pro olho para sempre (mesmo
-       raciocínio do `apoioBotao` logo abaixo). */
-    if (!esquerda) { apoioBotao = false; out.apoio = false; mirarBotao = false; }
+    out.agachar = agachado;
+
+    /* ADS POR BOTÃO: gatilho ESQUERDO (pedido do dono, 2026-08-29) OU grip
+       DIREITO (pedido do dono, 2026-09-03 — ver o cabeçalho). Leitura pura,
+       sem máquina de estado: aperta liga, solta desliga, no mesmo frame.
+       `mirarBotao` (exposto por `mirando()`) é o sinal que `js/xr/xrweapon.js`
+       usa pra PUXAR a arma ao olho; `out.mirar` alimenta `mouse.aiming`
+       (espalhamento/retículo). Controle que SUMIU não conta: um botão preso
+       no último frame visto travaria a arma puxada pro olho para sempre
+       (mesmo raciocínio do `apoioBotao` logo abaixo). */
+    mirarBotao = !!((esquerda && botao(esquerda, 0)) || (direita && botao(direita, 1)));
+    out.mirar = mirarBotao;
+    if (!esquerda) { apoioBotao = false; out.apoio = false; }
 
     /* APERTAR não é SEGURAR. Arma automática lê o estado contínuo; a
        semi-automática lê o CLIQUE (`gun.auto ? mouse.shooting : mouse.clicked`
@@ -557,9 +588,12 @@ export function criarEntradaXR({
     empunhando: () => true,
     apoiando: () => apoioBotao,
     mirando: () => mirarBotao,
-    /* Sessão nova nasce com a arma na mão: é o que o jogador espera ao voltar,
-       e é o comportamento de hoje (a arma era solda). Chamado pelo `onExit`. */
-    reset: () => { empunha.reset(true); gripDesde = 0; apoioBotao = false; },
+    /* Sessão nova nasce com a arma na mão, em pé e sem corrida travada: é o
+       que o jogador espera ao voltar. Chamado pelo `onExit`. */
+    reset: () => {
+      empunha.reset(true); apoioBotao = false; mirarBotao = false;
+      correrTrava = false; cliqueAntes = false; agachado = false; agacharArmado = true;
+    },
     /* Preferências do menu de VR. `apertar` (sticky) é o padrão; `manter` é a
        alternativa que a XAG 107 e o Game Accessibility Guidelines pedem.
        NUNCA foi ligado a nenhum controle de menu real (`grep` não acha nada
@@ -567,12 +601,12 @@ export function criarEntradaXR({
        `ler()` não chama mais `empunha.passo()`, então trocar este valor não
        muda comportamento nenhum no jogo: fica como infraestrutura pronta
        pro dia em que o coldre por clique voltar a existir (ou for
-       reaproveitada por outro botão), não como preferência viva hoje. */
+       reaproveitada por outro botão), não como preferência viva hoje.
+       `miraAssistida` saiu (2026-09-03): o grip direito virou o botão de
+       mira de verdade, e a mira assistida era o mesmo botão fazendo menos. */
     prefs: {
       get empunhadura() { return empunha.modo; },
       set empunhadura(v) { empunha.modo = v; },
-      get miraAssistida() { return assistida; },
-      set miraAssistida(v) { assistida = !!v; },
     },
   };
 }

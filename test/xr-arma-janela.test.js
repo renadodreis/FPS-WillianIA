@@ -1,29 +1,34 @@
 /* ================================================================
-   A JANELA DE MIRA DEIXA DE SER INVISÍVEL.
+   O RED DOT SÓ EXISTE ATRAVÉS DA JANELA — e não há aro nenhum.
 
-   O ADS físico deste jogo já funcionava — medido antes desta rodada: acende em
-   1,000 com o olho a 0,220 m atrás da ocular e 0,000 m de desvio. O problema
-   nunca foi a mecânica: era que FORA da janela nada acontecia. Sem dica, sem
-   tolerância desenhada, sem "está quase". O jogador não tinha como descobrir
-   onde a janela fica, e a primeira tentativa de quem a procurou (mirar 8 cm à
-   frente do olho) caiu no raio que faz a arma SUMIR de propósito.
+   HISTÓRICO. Este arquivo nasceu para provar que a janela de mira "deixava de
+   ser invisível": um ARO AZUL de tolerância aceso ANTES da janela e um ponto
+   vermelho a 25 % em QUALQUER pose. O dono testou no aparelho (2026-08-30):
+   "existe um arco azul ao redor da arma, existe um ponto vermelho no meio da
+   tela... que porra é essa? isso é jogável pra você???". Fotografado no kit
+   emulado (2026-09-03): com a arma no quadril, ocular a 0,292 m do olho, o
+   ponto estava NO GRAFO com opacidade 0,25 — um ponto flutuando no ar, 20 cm
+   à frente do rosto, seguindo a direção do cano. Nenhum FPS de VR desenha
+   tolerância em volta da óptica, e nenhum red dot real mostra o ponto de
+   fora da janela. Os dois eram andaime de tutorial virado produto.
 
-   O QUE ESTE ARQUIVO MEDE, e em que unidade:
-     · a PROXIMIDADE da janela, contínua, em quatro distâncias declaradas —
-       e o que interessa é ela ser maior que zero FORA da janela, porque um
-       guia que só acende depois de a mira engatar não ensina nada;
-     · o RAIO do aro desenhado, em metros, contra `PERP_MAX` — ele não
-       representa a tolerância, ele é a tolerância em tamanho natural;
+   O QUE ESTE ARQUIVO MEDE AGORA, e em que unidade:
+     · FORA da janela (projeção do olho sobre a lente além de `JANELA_RAIO`),
+       o ponto NÃO está no grafo da cena — em três desvios declarados,
+       inclusive o que a versão antiga cobrava como "guia aceso";
+     · o ARO não existe: `guia().aro` é nulo e nenhum objeto com raio
+       ≥ `PERP_MAX × 0,5` pende do nó da mira, em nenhuma pose;
      · o ÂNGULO, em graus, entre a reta olho→ponto-vermelho e o eixo óptico,
-       com o olho em cinco posições laterais diferentes: é a definição de
-       colimador, e é zero para qualquer posição do olho ou não é red dot;
-     · o custo em DRAW CALLS: quantos objetos a affordance pendura no grafo da
-       mira × quantas vistas o renderer submete por frame (DUAS, uma por olho —
-       é a unidade que E2 declara), mais o RAIO DESENHADO de cada um em metros.
-       O `renderer.info` bruto fica impresso como diagnóstico, e só isso: entre
-       a arma no quadril e a arma no olho mudam grama, LOD e frustum, e esse
-       ruído do mundo já entrou uma vez na conta como se fosse custo da
-       affordance.
+       com o olho em cinco posições laterais DENTRO da janela: é a definição
+       de colimador, e é zero para qualquer posição do olho ou não é red dot;
+     · DENTRO da janela o ponto está cheio (opacidade ≥ 0,95), não a 25 %;
+     · o custo em DRAW CALLS: quantos objetos pendem do grafo da mira × quantas
+       vistas o renderer submete por frame (DUAS, uma por olho — é a unidade
+       que E2 declara). No quadril: ZERO objetos. Mirando: UM (ponto e anel
+       são uma geometria só). O `renderer.info` bruto fica impresso como
+       diagnóstico, e só isso: entre a arma no quadril e a arma no olho mudam
+       grama, LOD e frustum, e esse ruído do mundo já entrou uma vez na conta
+       como se fosse custo da affordance.
 
    O QUE ESTE CASO NÃO CONTAVA, e foi medido por validação independente: as
    três asserções de custo eram aritmética do próprio ajudante — `vistas() >= 1`
@@ -247,7 +252,7 @@ describe('a janela de mira tem corpo no mundo',
         initScripts: [`window.__XRW_PROMISE = import('/js/xr/xrweapon.js')
           .then(m => { window.__XRW = { PERP_MAX: m.PERP_MAX, RECUO_MIN: m.RECUO_MIN,
             RECUO_MAX: m.RECUO_MAX, GUIA_FOLGA_DESVIO: m.GUIA_FOLGA_DESVIO,
-            GUIA_FOLGA_RECUO: m.GUIA_FOLGA_RECUO }; });`],
+            GUIA_FOLGA_RECUO: m.GUIA_FOLGA_RECUO, JANELA_RAIO: m.JANELA_RAIO }; });`],
       });
       await h.play(instalarSonda);
       await h.play(() => window.__A.espera(900));
@@ -255,61 +260,59 @@ describe('a janela de mira tem corpo no mundo',
     });
     after(async () => { if (h) await h.close(); });
 
-    it('a guia acende ANTES da janela e cresce conforme o olho se aproxima', async () => {
-      /* Quatro desvios laterais declarados, do centro da janela para fora. O
-         que este caso cobra é a MONOTONIA e, sobretudo, que o valor no meio da
-         folga seja > 0: é isso que faz dela um guia, e não um carimbo de
-         "acertou". */
+    it('FORA da janela NÃO HÁ PONTO — nem a 25 %, nem no grafo (o ponto flutuante do dono)', async () => {
+      /* Três desvios laterais declarados, todos FORA de `JANELA_RAIO`. O
+         primeiro (0,13 m) é exatamente o que a versão antiga deste caso
+         cobrava como "guia aceso fora da janela"; hoje ele cobra o contrário.
+         O último (0,30 m) é a arma no quadril — a pose em que o dono viu o
+         ponto no meio da tela. */
       const linhas = [];
-      for (const lado of [0, 0.06, 0.13, 0.30]) {
+      for (const lado of [0.13, 0.20, 0.30]) {
         const r = await h.play(async l => {
           window.__AR.cabeca(1.70);
           return window.__AR.mirarCom(0.24, l);
         }, lado);
         linhas.push({ lado, ...r });
         console.log(`  desvio pedido ${f3(lado)} m → medido ${f3(r.desvio)} m` +
-          ` · perto ${f3(r.perto)} · opacidade do aro ${f3(r.opacAro)} · ads ${f3(r.ads)}`);
+          ` · ponto no grafo ${r.pontoNoGrafo} · opacidade ${f3(r.opacPonto)} · ads ${f3(r.ads)}`);
       }
-      const [centro, perto, meio, longe] = linhas;
-      assert.ok(centro.perto >= 0.99,
-        `dentro da janela a proximidade tinha de ser 1: deu ${f3(centro.perto)}`);
-      /* A AFIRMAÇÃO QUE IMPORTA: fora da janela (desvio > PERP_MAX) o guia
-         ainda acende. Se este número for zero, a janela voltou a ser
-         invisível — que é o defeito que este arquivo existe para não deixar
-         voltar. */
-      assert.ok(meio.desvio > K.PERP_MAX,
-        `o cenário não chegou a sair da janela: desvio ${f3(meio.desvio)} m com PERP_MAX ${f3(K.PERP_MAX)}`);
-      assert.ok(meio.perto > 0.05,
-        `FORA da janela (desvio ${f3(meio.desvio)} m) o guia tinha de estar aceso:` +
-        ` a proximidade deu ${f3(meio.perto)}`);
-      assert.ok(perto.perto > meio.perto && meio.perto > longe.perto,
-        `a proximidade tinha de cair monotonicamente com o desvio:` +
-        ` ${f3(perto.perto)} → ${f3(meio.perto)} → ${f3(longe.perto)}`);
-      /* E APAGA DE VEZ além da folga DECLARADA. O limite não é um número
-         escolhido aqui: é `PERP_MAX + GUIA_FOLGA_DESVIO`, e o caso primeiro
-         confirma que o cenário passou dele — senão estaria cobrando o apagão
-         numa distância em que o guia legitimamente ainda acende. */
-      const fim = K.PERP_MAX + K.GUIA_FOLGA_DESVIO;
-      assert.ok(longe.desvio > fim,
-        `o cenário não passou da folga declarada (${f3(fim)} m): foi só a ${f3(longe.desvio)} m`);
-      assert.ok(longe.perto < 0.02,
-        `além da folga (desvio ${f3(longe.desvio)} m > ${f3(fim)} m) o guia tinha de apagar:` +
-        ` deu ${f3(longe.perto)}`);
+      for (const l of linhas) {
+        assert.ok(l.desvio > K.JANELA_RAIO,
+          `o cenário não saiu da janela: desvio ${f3(l.desvio)} m com JANELA_RAIO ${f3(K.JANELA_RAIO)}`);
+        /* A AFIRMAÇÃO QUE IMPORTA. Reinjetando `0.25 + 0.7 * suave(adsT…)`
+           no lugar da janela (o produto de antes), o ponto volta ao grafo
+           com 0,25 nas três poses e este caso morre nas três. */
+        assert.equal(l.pontoNoGrafo, false,
+          `com o olho a ${f3(l.desvio)} m do eixo o ponto vermelho estava NO GRAFO DA CENA ` +
+          `(opacidade ${f3(l.opacPonto)}): é o ponto flutuando no ar que o dono relatou`);
+      }
     });
 
-    it('o aro é a TOLERÂNCIA em tamanho natural (raio = PERP_MAX)', async () => {
-      const r = await h.play(async () => {
-        window.__AR.cabeca(1.70);
-        return window.__AR.mirarCom(0.30, 0.10);   // fora da janela, aro aceso
-      });
-      console.log(`  raio do aro desenhado ${f3(r.raioAro)} m · PERP_MAX ${f3(K.PERP_MAX)} m` +
-        ` · no grafo ${r.aroNoGrafo}`);
-      assert.ok(r.aroNoGrafo,
-        'o aro tinha de estar NO GRAFO DA CENA (objeto sem pai não é desenhado por ninguém)');
-      const err = Math.abs(r.raioAro - K.PERP_MAX);
-      assert.ok(err <= 0.001,
-        `o aro tinha de ter o raio da tolerância: desenhado ${f3(r.raioAro)} m contra` +
-        ` PERP_MAX ${f3(K.PERP_MAX)} m (erro ${(err * 1000).toFixed(2)} mm, teto 1,00 mm)`);
+    it('o ARO AZUL não existe mais — em pose nenhuma', async () => {
+      /* As três poses em que o aro acendia: fora da janela por pouco (o pior
+         caso da versão antiga), no quadril e DENTRO da janela. Em nenhuma
+         delas pode existir objeto com raio de tolerância pendurado na mira.
+         `guia().aro` nulo é a metade barata; a outra metade varre o grafo —
+         um aro pendurado com outro nome passaria pela primeira. */
+      const poses = [];
+      for (const [recuo, lado, nome] of [[0.30, 0.10, 'borda'], [0.60, 0.40, 'quadril'], [0.22, 0, 'mirando']]) {
+        const r = await h.play(async (rc, l) => {
+          window.__AR.cabeca(1.70);
+          const m = await window.__AR.mirarCom(rc, l);
+          return { ...m, lista: window.__AR.desenhaveis() };
+        }, recuo, lado);
+        poses.push({ nome, ...r });
+        console.log(`  ${nome}: aro ${r.aroNoGrafo ? 'NO GRAFO' : 'ausente'} · objetos [` +
+          r.lista.map(o => `${o.nome} r=${f3(o.raio)}`).join(', ') + ']');
+      }
+      for (const p of poses) {
+        assert.equal(p.aroNoGrafo, false, `${p.nome}: o aro azul voltou ao grafo`);
+        assert.equal(p.raioAro, null, `${p.nome}: \`guia().aro\` tinha de ser nulo`);
+        const grande = p.lista.filter(o => o.raio >= K.PERP_MAX * 0.5);
+        assert.equal(grande.length, 0,
+          `${p.nome}: há objeto de tolerância pendurado na mira: ` +
+          grande.map(o => `${o.nome} r=${f3(o.raio)} m`).join(', '));
+      }
     });
 
     it('o ponto vermelho é COLIMADO: ângulo zero para qualquer posição do olho', async () => {
@@ -386,20 +389,24 @@ describe('a janela de mira tem corpo no mundo',
         `o renderer submeteu ${dentro.vistas} vista(s) por frame: sem os DOIS olhos ` +
         'esta medida não é o custo de XR, e E2 se mede por olho');
 
-      /* O QUE A AFFORDANCE PODE CUSTAR, e as três grandezas são independentes
-         entre si: quantos objetos ela pendura PARADA, quantos no pior caso, e
-         o tamanho do que ela desenha. Os três anéis de 30 cm da reinjeção
-         estouram os três. */
-      assert.ok(objs(longe) <= 1,
-        `com a arma no quadril, longe da janela, a affordance deixou ${objs(longe)} ` +
-        `objeto(s) no grafo (${nomes(longe)}): parada ela só pode custar o ponto ` +
-        'colimado, ou vira imposto permanente de ' + custo(longe) + ' draw calls');
-      assert.ok(objs(naBorda) <= 2,
-        `no pior caso a affordance pendurou ${objs(naBorda)} objetos no grafo da ` +
-        `mira (${nomes(naBorda)}): o desenho declarado é aro + ponto, ou seja 2`);
-      assert.ok(custo(naBorda) <= 2 * dentro.vistas,
-        `no pior caso a affordance custa ${custo(naBorda)} draw calls, acima do teto de` +
-        ` ${2 * dentro.vistas} (2 objetos × ${dentro.vistas} vistas)`);
+      /* O QUE O RED DOT PODE CUSTAR, e as grandezas são independentes entre
+         si: quantos objetos pendem PARADA (zero — fora da janela não há
+         ponto), quantos mirando (um — ponto e anel são UMA geometria), e o
+         tamanho do que se desenha. Os três anéis de 30 cm da reinjeção
+         estouram os três; o aro azul antigo estoura o segundo na borda. */
+      assert.equal(objs(longe), 0,
+        `com a arma no quadril, fora da janela, ficou ${objs(longe)} objeto(s) no grafo ` +
+        `(${nomes(longe)}): fora da janela não pode haver ponto nenhum — é o ponto ` +
+        'flutuante do dono, e custa ' + custo(longe) + ' draw calls por nada');
+      assert.equal(objs(naBorda), 0,
+        `na borda de fora da janela ficou ${objs(naBorda)} objeto(s) no grafo da mira ` +
+        `(${nomes(naBorda)}): o aro azul voltou, ou o ponto acende fora da janela`);
+      assert.ok(objs(dentro) <= 1,
+        `mirando, o red dot pendurou ${objs(dentro)} objetos (${nomes(dentro)}): ponto e ` +
+        'anel têm de ser UMA geometria — cada objeto a mais é um draw call por olho');
+      assert.ok(custo(dentro) <= 1 * dentro.vistas,
+        `mirando, o red dot custa ${custo(dentro)} draw calls, acima do teto de` +
+        ` ${dentro.vistas} (1 objeto × ${dentro.vistas} vistas)`);
 
       /* E O TAMANHO. A affordance É a tolerância em tamanho natural: nada nela
          pode ser maior que `PERP_MAX`. Um objeto de 30 cm de raio pendurado
@@ -413,20 +420,16 @@ describe('a janela de mira tem corpo no mundo',
         'nada dela pode ser maior que ela');
     });
 
-    it('DENTRO da janela o aro APAGA e o ponto fica cheio (o ferro assume)', async () => {
+    it('DENTRO da janela o ponto está CHEIO — não a 25 % como antes', async () => {
       const r = await h.play(async () => {
         window.__AR.cabeca(1.70);
         return window.__AR.mirarCom(0.22, 0);
       });
-      console.log(`  ads ${f3(r.ads)} · aro ${f3(r.opacAro)} (grafo ${r.aroNoGrafo})` +
-        ` · ponto ${f3(r.opacPonto)} (grafo ${r.pontoNoGrafo})`);
+      console.log(`  ads ${f3(r.ads)} · ponto ${f3(r.opacPonto)} (grafo ${r.pontoNoGrafo})`);
       assert.ok(r.ads > 0.9,
         `o cenário não chegou a mirar: o ADS deu ${f3(r.ads)} — nada foi testado`);
-      assert.ok(r.opacAro < 0.02,
-        `com a mira engatada o aro tinha de apagar: opacidade ${f3(r.opacAro)}`);
-      assert.equal(r.aroNoGrafo, false,
-        'apagado, o aro tinha de SAIR do grafo — opacidade 0 ainda custa draw call');
-      assert.ok(r.opacPonto > 0.8,
+      assert.equal(r.pontoNoGrafo, true, 'mirando, o ponto tinha de estar no grafo da cena');
+      assert.ok(r.opacPonto >= 0.95,
         `com a mira engatada o ponto tinha de estar cheio: opacidade ${f3(r.opacPonto)}`);
     });
   });

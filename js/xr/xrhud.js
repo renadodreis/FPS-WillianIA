@@ -99,10 +99,20 @@ export const ARMA_CV_W = 512, ARMA_CV_H = 256;
 export const PULSO_CV_W = 512, PULSO_CV_H = 384;
 
 /* Onde cada painel se pendura, no espaço LOCAL do pai.
-   Arma: acima e à esquerda do castelo, fora do cano (que aponta pro −Z).
+   Arma: AO LADO e ABAIXO do castelo, à esquerda, junto do punho (o cano
+   aponta pro −Z; +Z é a coronha). Ficava ACIMA (y = +0,16) — e acima do
+   castelo é, com a arma erguida na altura do peito/ombro (a pose natural de
+   quem está atirando sem ADS), exatamente a LINHA DE VISADA: o painel
+   caía no meio da vista. O dono relatou três vezes, a última em 2026-08-30:
+   "as informações de tiro, quantidade de munição, continua plotando no
+   meio da tela impedindo visão". Subir o painel (rodada anterior) piorou
+   o caso da arma erguida. Onde o gênero põe o contador: no CORPO da arma,
+   de lado, abaixo da linha de mira (Pavlov: no receptor; Contractors:
+   holográfico na lateral; Onward: no pulso). Abaixo do eixo, ele só entra
+   na vista quando o jogador OLHA para a arma — que é quando quer lê-lo.
    Pulso: acima da palma e na direção do cotovelo (+Z do `gripSpace` é a
    direção contrária à da haste segurada). */
-export const ARMA_OFF = [-0.14, 0.16, 0.02];
+export const ARMA_OFF = [-0.11, -0.04, 0.06];
 export const PULSO_OFF = [0, 0.05, 0.085];
 
 /* O MAPA. Item 17 de 17 da lista fechada do H1, e o único que não é texto: um

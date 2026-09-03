@@ -70,6 +70,25 @@ async function instalarSonda() {
   const G = window.__game, MP = window.__MP, T = MP.THREE;
   let amostra = null;
 
+  /* O EIXO ÓPTICO DE REFERÊNCIA, reconstruído do PERFIL DO MODELO — nunca de
+     `XRArma.estado().eixo`, que é gerado pelo código sob teste (comparar uma
+     reta consigo mesma já deu 1,86e-15 m nesta base com 0,12 m de erro real).
+     `eye`/`front` da mira ativa são calibração do GLB desenhado; a matriz é a
+     do `gun.group`, que é o objeto na tela. Amostrado DEPOIS do render, que é
+     quando a pose de XR está escrita (o three a escreve dentro de `render`). */
+  function eixoDoModelo(gun) {
+    const idx = G.arsenal.indexOf(gun);
+    const perfil = G.WeaponRig.inspect ? G.WeaponRig.inspect(idx) : null;
+    const s = G.WeaponRig.activeSight ? G.WeaponRig.activeSight(gun) : null;
+    if (!s || !perfil) return null;
+    const c = (gun.modelStatus === 'fallback' && s.fb) ? s.fb : s;
+    if (!c || !c.eye || !c.front) return null;
+    const m = gun.group.matrixWorld;
+    const a = new T.Vector3().fromArray(c.eye).applyMatrix4(m);
+    const b = new T.Vector3().fromArray(c.front).applyMatrix4(m);
+    return { ocular: a, eixo: b.sub(a).normalize() };
+  }
+
   const rOrig = MP.renderer.render.bind(MP.renderer);
   MP.renderer.render = (cena, cam) => {
     const v = rOrig(cena, cam);
@@ -85,12 +104,25 @@ async function instalarSonda() {
       mm.decompose(p, q, s);
       locP = p.toArray(); locQ = q.toArray();
     }
+    /* O OLHO CONTRA O EIXO DO MODELO, na pose DESENHADA (depois do puxão):
+       `recuoReal` é o quanto o olho está atrás da ocular ao longo do eixo;
+       `desvioReal` é a distância do olho à reta do eixo. Mirar de verdade é
+       desvio ~0: o olho SOBRE a linha de mira. */
+    let recuoReal = null, desvioReal = null;
+    const ref = gun ? eixoDoModelo(gun) : null;
+    if (ref) {
+      const olho = new T.Vector3().setFromMatrixPosition(MP.camera.matrixWorld);
+      const d = olho.clone().sub(ref.ocular);
+      const proj = d.dot(ref.eixo);
+      recuoReal = -proj;
+      desvioReal = d.addScaledVector(ref.eixo, -proj).length();
+    }
     amostra = {
       aiming: !!(G.mouse && G.mouse.aiming),
       adsFisico: e.ads,
       radialVisivel: G.XRInterage.estado().radial.visivel,
       radialAberto: G.XRInterage.estado().radial.aberto,
-      locP, locQ,
+      locP, locQ, recuoReal, desvioReal,
     };
     return v;
   };
@@ -138,7 +170,10 @@ describe('ADS por botão — gatilho esquerdo (P0 do dono)',
         return window.__ADS.ler();
       });
       const dur = await h.play(async () => {
-        await window.__ADS.espera(230);
+        /* 400 ms: `SUAVIZA_ADS` = 14 deixa e^(-14·0,4) ≈ 0,4 % do caminho por
+           andar — a 250 ms sobravam 3 %, que sobre 0,29 m de desvio natural
+           é ~0,9 cm de "erro" que não é do produto, é do relógio. */
+        await window.__ADS.espera(400);
         return window.__ADS.ler();
       });
       const dep = await h.play(async () => {
@@ -148,7 +183,7 @@ describe('ADS por botão — gatilho esquerdo (P0 do dono)',
       });
       console.log(`      antes: aiming=${antes.aiming} ads_fisico=${f3(antes.adsFisico)}`);
       console.log(`      cedo (~20ms): ads_fisico=${f3(cedo.adsFisico)}`);
-      console.log(`      apertado (~250ms): aiming=${dur.aiming} ads_fisico=${f3(dur.adsFisico)}`);
+      console.log(`      apertado (~400ms): aiming=${dur.aiming} ads_fisico=${f3(dur.adsFisico)}`);
       console.log(`      solto: aiming=${dep.aiming} ads_fisico=${f3(dep.adsFisico)}`);
 
       assert.equal(antes.aiming, false, 'nasceu mirando sem apertar nada');
@@ -171,6 +206,52 @@ describe('ADS por botão — gatilho esquerdo (P0 do dono)',
       console.log(`      arma vs palma: andou ${f3(dP)} m, girou ${f3(dA)}°`);
       assert.ok(dP > 0.02,
         `a arma não saiu visivelmente da pose de quadril em relação à palma (só ${f3(dP)} m)`);
+
+      /* O OLHO SOBRE A LINHA DE MIRA — medido contra o eixo do MODELO, não do
+         módulo. A versão de 2026-08-30 puxava ao longo de punho→boca, e o
+         olho ficava ~6 cm FORA do eixo óptico: o jogador via a óptica ACIMA
+         da vista e o ponto vermelho no corpo da arma (fotografado no kit
+         emulado). Reinjetando `_muzzleMundo − _gripMundo` no lugar de
+         `_eixo`, este número volta para a casa dos centímetros e o caso
+         morre. Teto 1,5 cm: metade do raio do ponto de um red dot pequeno
+         ainda cabe; 6 cm é a óptica fora da vista. */
+      console.log(`      olho contra o eixo do MODELO: recuo ${f3(dur.recuoReal)} m · desvio ${f3(dur.desvioReal)} m`);
+      assert.ok(dur.desvioReal !== null, 'sem eixo de referência do modelo não há o que comparar');
+      assert.ok(dur.desvioReal <= 0.015,
+        `mirando pelo botão o olho ficou ${f3(dur.desvioReal)} m FORA da linha de mira (teto 0,015):` +
+        ' o jogador vê a arma, não a mira');
+      assert.ok(dur.recuoReal >= 0.14 && dur.recuoReal <= 0.45,
+        `o olho ficou a ${f3(dur.recuoReal)} m atrás da ocular — fora da janela [0,14; 0,45] do ADS`);
+    });
+
+    it('o GRIP DIREITO também traz a arma ao olho (pedido do dono, 2026-09-03)', async () => {
+      /* "no grip direito tem um botão onde você seleciona e solta a arma...
+         ele deveria ser o botão de mira". Mesma fonte (`mirarBotao`), mesmo
+         puxão, medido com a mão longe do olho. */
+      await h.play(async () => { window.__ADS.maoLonge(); await window.__ADS.espera(400); });
+      const antes = await h.play(() => window.__ADS.ler());
+      const dur = await h.play(async () => {
+        window.__A.botao('right', 'squeeze', 1);
+        await window.__ADS.espera(400);
+        return window.__ADS.ler();
+      });
+      const dep = await h.play(async () => {
+        window.__A.botao('right', 'squeeze', 0);
+        await window.__ADS.espera(300);
+        return window.__ADS.ler();
+      });
+      const dP = Math.hypot(
+        dur.locP[0] - antes.locP[0], dur.locP[1] - antes.locP[1], dur.locP[2] - antes.locP[2]);
+      console.log(`      grip: aiming ${antes.aiming}→${dur.aiming}→${dep.aiming} · ads ${f3(antes.adsFisico)}→${f3(dur.adsFisico)}→${f3(dep.adsFisico)}` +
+        ` · andou ${f3(dP)} m · desvio ${f3(dur.desvioReal)} m`);
+      assert.equal(antes.aiming, false, 'já estava mirando antes de apertar');
+      assert.equal(dur.aiming, true, 'o grip direito não ligou mouse.aiming');
+      assert.ok(dur.adsFisico > 0.85, `o grip direito não trouxe a arma ao olho (ads ${f3(dur.adsFisico)})`);
+      assert.ok(dP > 0.02, `a arma não saiu da pose de quadril (só ${f3(dP)} m)`);
+      assert.ok(dur.desvioReal <= 0.015,
+        `pelo grip o olho ficou ${f3(dur.desvioReal)} m fora da linha de mira (teto 0,015)`);
+      assert.equal(dep.aiming, false, 'soltar o grip não desligou a mira');
+      assert.ok(dep.adsFisico < 0.15, `soltar o grip não devolveu a arma (ads ${f3(dep.adsFisico)})`);
     });
 
     it('segurando o gatilho esquerdo para mirar, o radial de itens NÃO abre', async () => {

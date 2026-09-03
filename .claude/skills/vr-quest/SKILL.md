@@ -467,12 +467,17 @@ API, não a forma conveniente.**
 
   | | esquerda | direita |
   |---|---|---|
-  | analógico | andar | girar em passos |
-  | clique do analógico (3) | correr | — |
-  | gatilho (0) | — | atirar |
-  | empunhadura (1) | agachar / deslizar | mirar |
-  | botão de baixo (4) | usar | pular |
+  | analógico | andar (batente = correr) | girar em passos (X) · PARA BAIXO = agachar, alternância (Y) |
+  | clique do analógico (3) | correr (trava até o polegar voltar ao centro) | pausa / menu |
+  | gatilho (0) | MIRAR (traz a arma ao olho) | atirar |
+  | empunhadura (1) | apoio na arma / agarrar | MIRAR (traz a arma ao olho) |
+  | botão de baixo (4) | usar | pular (e levanta o agachar) |
   | botão de cima (5) | recarregar | trocar de arma |
+
+  Mapa vigente desde 2026-09-03 (`js/xr/xrinput.js`). Três decisões do dono
+  que o mapa carrega: arma SEMPRE na mão (nenhum botão guarda), grip direito
+  É o botão de mira, e correr tem BOTÃO (o batente 0,92 é limiar de hardware —
+  analógico com folga nunca chega, e "como eu corro?" foi o relato).
 
 - **APERTAR não é SEGURAR, e a diferença mata arma.** No game.js,
   `const want = gun.auto ? mouse.shooting : mouse.clicked`: automática lê o
@@ -507,6 +512,30 @@ de lugar — e é indistinguível de "a mira está horrível" para quem está jo
 
 **Objeto de grip criado depois do `setSession` só recebe pose no frame
 seguinte.** Ler `visible` na mesma chamada dá falso negativo.
+
+### Ver a MIRA em vez da arma: duas armadilhas que só a foto pegou
+
+Medidas em 2026-09-03 com a sonda de screenshot do kit emulado (bootEmVR +
+`page.screenshot`) — os números da suíte estavam verdes nas duas:
+
+- **Puxar a arma ao olho pelo eixo ERRADO.** O ADS por botão transladava a
+  ocular até 0,20 m à frente do olho ao longo de `gripR → muzzle`. Esse eixo
+  não é o óptico: o punho fica abaixo e atrás do cano, e o ângulo entre as
+  duas retas deixava a ocular ~6 cm FORA da linha do olho. Na foto: a óptica
+  acima da vista e o ponto vermelho desenhado NO CORPO da arma. `ads` media
+  0,9998 (a medida é da pose NATURAL, antes do puxão) e o teste passava.
+  O eixo certo é `geo.bore` levado ao mundo pela pose final (`_eixo`), e a
+  régua que pega é o desvio do OLHO contra o eixo do MODELO (`WeaponRig`
+  `eye`/`front` × `gun.group.matrixWorld`) DEPOIS do render — 6 cm vira
+  0,000 m.
+- **Red dot desenhado fora da janela.** O colimador em `(olho.x, olho.y, 0)`
+  do espaço da mira é geometricamente certo, mas com opacidade fixa em
+  qualquer pose ele aparece ONDE QUER QUE o olho se projete na lente — com a
+  arma no quadril, 30 cm acima da óptica, flutuando no ar 20 cm à frente do
+  rosto. "Ponto vermelho no meio da tela." Um red dot real só existe com o
+  olho dentro da abertura: `JANELA_RAIO`, fora disso opacidade zero e FORA
+  DO GRAFO. E o aro azul de tolerância em volta da ocular era andaime de
+  tutorial virado produto — removido.
 
 ### A mira sai da ARMA, não do controle
 

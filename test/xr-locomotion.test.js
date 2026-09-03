@@ -387,8 +387,12 @@ describe('andar dentro do headset (sessão imersiva real)', { skip: !CHROME && '
     /* Falha se a fiação trocar só `WALK_SPEED` e `RUN_SPEED` e esquecer
        `CROUCH_SPEED`/`ADS_SPEED`, que é o descuido natural: o jogador
        agachado ficaria mais rápido que andando. */
+    /* AGACHAR ARTIFICIAL é o analógico DIREITO para baixo (alternância,
+       2026-09-03 — o clique do esquerdo virou correr, a pedido do dono).
+       Mantido para baixo durante todo o perfil: alterna UMA vez na entrada
+       (histerese) e o jogador fica agachado o perfil inteiro. */
     const ag = await h.play(() => window.__VEL.perfil(
-      [['stick', 'left', 0, -0.88], ['botao', 'left', 'thumbstick', 1]], 1800));
+      [['stick', 'left', 0, -0.88], ['stick', 'right', 0, 0.9]], 1800));
     /* MIRAR É O GESTO. Desde a rodada da empunhadura o grip direito SEGURA e
        GUARDA a arma (js/xr/xrinput.js) — não mira. Dirigir por `squeeze` aqui
        media 1,693 m/s, que é a velocidade de ANDAR: o `mouse.aiming` nunca

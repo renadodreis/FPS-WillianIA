@@ -332,6 +332,21 @@ As três leituras que explicam três queixas do dono, sem interpretação:
   não existe no gênero (Alyx explicitamente não tem).
 - **Por que a suíte não pega:** o botão de mira em VR só é testado quanto a
   "acende `mouse.aiming`".
+- **EXCEÇÃO DECLARADA (2026-09-03, decisão do dono, autoridade delegada em
+  2026-08-30 — "vc tem total liberdade pro bem do game"):** o critério foi
+  escrito para a MIRA ASSISTIDA (grip mantido acendia só o espalhamento) e
+  para proibir snap-to-eye. O dono, testando no aparelho, pediu o contrário
+  verbatim: "no grip direito tem um botão onde você seleciona e solta a
+  arma... qual o objetivo de ficar sem arma? ele deveria ser o botão de
+  mira... armas sempre a mão" e, sobre o botão que não movia a arma, "o modo
+  mira que você está colocando é o modo normal de segurar a arma, eu deveria
+  ver a MIRA da arma, não a arma". Hoje o grip direito E o gatilho esquerdo
+  TRAZEM a arma ao olho pelo eixo óptico (transição suave, o mesmo `damp` do
+  ADS físico — continua sem teleporte), e ao soltar ela volta à palma.
+  Medido em `test/xr-ads-gatilho.test.js` e `test/xr-empunhadura-botao.test.js`
+  (olho a ≤ 1,5 cm do eixo do MODELO, retorno à palma ≤ 3 cm). O que B4
+  passa a cobrar é a parte que sobreviveu: nada TELEPORTA — a transição é
+  amortecida. A parte "não move a arma" fica revogada para este projeto.
 
 ### B5 · Segunda mão importa (apoio / punho dianteiro)
 - **Mede:** com as duas empunhaduras seguradas, o eixo do cano contra o vetor

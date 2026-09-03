@@ -167,29 +167,79 @@ describe('correr e trocar de arma — sem isso não é FPS', () => {
   /* O Touch entrega 5 botões pressionáveis por mão (0,1,3,4,5): o índice 2 é
      nulo, o 6 é capacitivo e o 7 é reservado pela plataforma — "Buttons reserved
      by the UA or platform MUST NOT be exposed on the Gamepad" (W3C). Com o grip
-     esquerdo indo para o agarrar, agachar desce para o clique do analógico e
-     correr vai para o BATENTE, que é a convenção do gênero. */
-  it('clique do analógico esquerdo é AGACHAR', () => {
-    const btns = [false, false, false, true];
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, 0], btns)]).agachar, true);
+     esquerdo indo para o agarrar, correr vai para o BATENTE (convenção do
+     gênero) E para o CLIQUE do analógico esquerdo (2026-09-03, pedido do dono
+     no aparelho: "como eu corro? cadê o botão de correr?" — o batente é
+     limiar de hardware, o clique é botão que se sente). O agachar artificial
+     foi para o analógico DIREITO PARA BAIXO (Onward, POPULATION: ONE). */
+  const L3 = [false, false, false, true];
+
+  it('clique do analógico esquerdo NÃO é mais agachar', () => {
+    const e = criarEntradaXR();
+    assert.equal(e.ler([mao('left', [0, 0, 0, 0], L3)]).agachar, false,
+      'o clique do analógico esquerdo ainda agacha — ele agora é o correr');
   });
 
-  it('correr é o analógico no BATENTE, não o clique', () => {
-    // clique sem inclinada não corre
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, 0], [false, false, false, true])]).correr, false,
-      'o clique do analógico ainda corre — ele agora é o agachar');
-    // andar normal (meia inclinada) não corre
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, -0.6])]).correr, false,
+  it('correr: o clique ENGATA a corrida enquanto anda, e ela dura até o polegar voltar ao centro', () => {
+    const e = criarEntradaXR();
+    // meia inclinada sem clique: anda, não corre
+    assert.equal(e.ler([mao('left', [0, 0, 0, -0.6])]).correr, false,
       'meia inclinada virou corrida: o jogador correria sem pedir');
-    // batente corre
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1])]).correr, true,
-      'empurrar o analógico até o fim não corre');
+    // clique com meia inclinada: corre
+    assert.equal(e.ler([mao('left', [0, 0, 0, -0.6], L3)]).correr, true,
+      'clicar o analógico enquanto anda não correu — "cadê o botão de correr?"');
+    // soltou o clique, polegar segue inclinado: CONTINUA correndo (trava)
+    assert.equal(e.ler([mao('left', [0, 0, 0, -0.6])]).correr, true,
+      'soltar o clique parou a corrida: sprint é trava, não hold (o polegar não segura clique no anel)');
+    assert.equal(e.ler([mao('left', [0, 0, 0, -0.5])]).correr, true, 'a trava tinha de durar');
+    // polegar voltou ao centro: trava cai
+    assert.equal(e.ler([mao('left', [0, 0, 0, 0])]).correr, false);
+    // e inclinar de novo SEM clicar não corre: a trava não pode sobreviver ao centro
+    assert.equal(e.ler([mao('left', [0, 0, 0, -0.6])]).correr, false,
+      'a corrida reengatou sozinha depois de o polegar passar pelo centro');
   });
 
-  it('correr é estado contínuo, não borda — soltar para de correr', () => {
-    entrada.ler([mao('left', [0, 0, 0, -1])]);
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, -1])]).correr, true, 'segurar mantém');
-    assert.equal(entrada.ler([mao('left', [0, 0, 0, -0.3])]).correr, false);
+  it('correr: clique com o polegar PARADO não deixa corrida armada', () => {
+    const e = criarEntradaXR();
+    e.ler([mao('left', [0, 0, 0, 0], L3)]);      // clique no centro
+    e.ler([mao('left', [0, 0, 0, 0])]);          // soltou, ainda no centro
+    assert.equal(e.ler([mao('left', [0, 0, 0, -0.6])]).correr, false,
+      'um clique no centro ficou armado e disparou corrida na inclinada seguinte');
+  });
+
+  it('correr: o batente CONTINUA correndo sem clique (os dois caminhos coexistem)', () => {
+    const e = criarEntradaXR();
+    assert.equal(e.ler([mao('left', [0, 0, 0, -1])]).correr, true,
+      'empurrar o analógico até o fim não corre');
+    assert.equal(e.ler([mao('left', [0, 0, 0, -1])]).correr, true, 'segurar mantém');
+    assert.equal(e.ler([mao('left', [0, 0, 0, -0.3])]).correr, false, 'soltar para de correr');
+  });
+
+  it('agachar artificial: analógico DIREITO para baixo ALTERNA, com histerese', () => {
+    const e = criarEntradaXR();
+    const dir = y => [mao('right', [0, 0, 0, y])];
+    assert.equal(e.ler(dir(0)).agachar, false, 'nasceu agachado');
+    assert.equal(e.ler(dir(0.9)).agachar, true, 'empurrar para baixo não agachou');
+    assert.equal(e.ler(dir(0.9)).agachar, true, 'segurar para baixo desagachou (alternou de novo)');
+    assert.equal(e.ler(dir(0.5)).agachar, true, 'voltar só até 0,5 (acima de AGACHAR_OFF) não pode rearmar');
+    assert.equal(e.ler(dir(0.9)).agachar, true, 'rearmou sem passar por AGACHAR_OFF');
+    assert.equal(e.ler(dir(0)).agachar, true, 'soltar o analógico levantou: é alternância, não hold');
+    assert.equal(e.ler(dir(0.9)).agachar, false, 'segunda inclinada não levantou');
+  });
+
+  it('agachar artificial: para baixo NA DIAGONAL não agacha (é o giro em passos)', () => {
+    const e = criarEntradaXR();
+    assert.equal(e.ler([mao('right', [0, 0, 0.8, 0.8])]).agachar, false,
+      'inclinada diagonal agachou junto com o giro');
+  });
+
+  it('agachar artificial: PULAR levanta', () => {
+    const e = criarEntradaXR();
+    e.ler([mao('right', [0, 0, 0, 0.9])]);
+    assert.equal(e.ler([mao('right', [0, 0, 0, 0])]).agachar, true);
+    const r = e.ler([mao('right', [0, 0, 0, 0], [false, false, false, false, true])]);
+    assert.equal(r.pular, true, 'o cenário não pulou');
+    assert.equal(r.agachar, false, 'pular não levantou o agachar artificial');
   });
 
   it('B da direita troca de arma, um passo por aperto', () => {

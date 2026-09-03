@@ -12,9 +12,10 @@
      · a distância, em METROS, entre a âncora `gripR` do modelo e a palma
        (`gripSpace`), com a arma empunhada e com a arma guardada;
      · a distância, em METROS, da arma até o ponto do coldre no corpo;
-     · a variação da pose LOCAL da arma em relação à palma — em METROS e em
-       GRAUS — quando o botão de mira assistida é apertado (B4: botão não
-       teleporta a arma);
+     · a variação da pose LOCAL da arma em relação à palma — em METROS — e o
+       desvio do OLHO contra o eixo óptico do MODELO quando o grip direito é
+       segurado: desde 2026-09-03 esse botão TRAZ a arma ao olho (pedido do
+       dono; o B4 antigo, "grip não move a arma", virou exceção declarada);
      · munição em PENTE e RESERVA ao coldrear no meio da recarga.
 
    DUAS ÂNCORAS INDEPENDENTES, de propósito. `gripR` vem de `gun.parts.handR`,
@@ -278,46 +279,48 @@ describe('segurar e guardar a arma, medido no headset',
         `depois de 6 cliques a arma se afastou da palma: ${f3(dep.gripNaPalma)} m (teto 0,030)`);
     });
 
-    it('B4 — a MIRA ASSISTIDA acende o ADS do jogo e NÃO move a arma', async () => {
-      /* A mira assistida é a acessibilidade que substitui o antigo `mirar` do
-         grip: para quem não consegue levantar o braço. Ela vale espalhamento e
-         retículo, e o que este caso cobra é que ela não encoste na POSE — que
-         é B4, e é o que oito de oito FPS de VR recusam fazer. */
+    it('o GRIP DIREITO segurado TRAZ a arma ao olho, e soltar devolve à palma (dono, 2026-09-03)', async () => {
+      /* ERA "B4 — a MIRA ASSISTIDA acende o ADS e NÃO move a arma": o grip
+         mantido 300 ms ligava só o espalhamento, com a arma parada no quadril.
+         O dono, no aparelho: "no grip direito tem um botão onde você seleciona
+         e solta a arma... ele deveria ser o botão de mira". A régua inverteu:
+         o grip PUXA a arma ao olho (mesmo puxão do gatilho esquerdo), e o
+         que este caso cobra agora é (a) que ela vá, (b) que o olho caia
+         SOBRE o eixo óptico do modelo, e (c) que ao soltar ela VOLTE à palma
+         — a arma nunca sai da mão, só vai ao olho enquanto o botão está
+         apertado. O `prefs.miraAssistida` não existe mais. */
       const antes = await h.play(async () => {
         window.__AR.cabeca(1.70);
         window.__AR.mao(0.25, 1.20, -0.25);   // arma no quadril, longe da janela
-        window.__game.entradaXR.prefs.miraAssistida = true;
         await window.__AR.espera(600);
         return window.__AR.ler();
       });
       const dur = await h.play(async () => {
         window.__A.botao('right', 'squeeze', 1);
-        await window.__AR.espera(700);        // acima de MIRA_ASSISTIDA_MS (300)
+        await window.__AR.espera(400);
         return window.__AR.ler();
       });
-      await h.play(async () => {
+      const dep = await h.play(async () => {
         window.__A.botao('right', 'squeeze', 0);
-        await window.__AR.espera(400);
-        window.__game.entradaXR.prefs.miraAssistida = false;
-        /* o clique completo acima guardou a arma (é o Sticky); devolve à mão
-           para não contaminar os casos seguintes */
-        await window.__AR.clique();
-        await window.__AR.espera(400);
+        await window.__AR.espera(500);
+        return window.__AR.ler();
       });
       const dP = Math.hypot(dur.locP[0] - antes.locP[0], dur.locP[1] - antes.locP[1],
         dur.locP[2] - antes.locP[2]);
-      const dA = await h.play((a, b) => window.__AR.angulo(a, b), antes.locQ, dur.locQ);
-      console.log(`  solto    → aiming ${antes.aiming} ads ${f3(antes.ads)}`);
+      console.log(`  solto    → aiming ${antes.aiming} ads ${f3(antes.ads)} · gripR↔palma ${f3(antes.gripNaPalma)} m`);
       console.log(`  APERTADO → aiming ${dur.aiming} ads ${f3(dur.ads)}` +
-        ` · a arma andou ${f3(dP)} m e girou ${f3(dA)}° em relação à palma`);
-      assert.equal(dur.aiming, true,
-        'a mira assistida ligada tinha de acender o ADS do jogo (espalhamento/retículo)');
-      assert.ok(dP <= 0.01,
-        `B4: o botão moveu a arma ${f3(dP)} m em relação à palma (teto 0,010)`);
-      assert.ok(dA <= 1.0,
-        `B4: o botão girou a arma ${f3(dA)}° em relação à palma (teto 1,0°)`);
-      assert.ok(dur.ads < 0.10,
-        `o botão não pode acender o ADS FÍSICO: ele deu ${f3(dur.ads)} com a arma no quadril`);
+        ` · a arma andou ${f3(dP)} m em relação à palma`);
+      console.log(`  soltou   → aiming ${dep.aiming} ads ${f3(dep.ads)} · gripR↔palma ${f3(dep.gripNaPalma)} m`);
+      assert.equal(antes.aiming, false, 'já nasceu mirando');
+      assert.equal(dur.aiming, true, 'o grip direito tinha de acender o ADS do jogo');
+      assert.ok(dur.ads > 0.85,
+        `o grip direito não trouxe a arma ao olho: ads ${f3(dur.ads)} com a arma no quadril`);
+      assert.ok(dP > 0.02,
+        `a arma não saiu do quadril em relação à palma (só ${f3(dP)} m)`);
+      assert.equal(dep.aiming, false, 'soltar o grip não desligou a mira');
+      assert.ok(dep.gripNaPalma <= 0.03,
+        `ao soltar o grip a arma tinha de VOLTAR à palma: gripR↔palma ${f3(dep.gripNaPalma)} m (teto 0,030)`);
+      assert.equal(dep.empunhada, true, 'a arma saiu da mão — "armas sempre a mão" quebrou');
     });
 
     it('B5 — a segunda mão engata onde o BRAÇO alcança, e não só na âncora', async () => {

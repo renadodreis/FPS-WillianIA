@@ -45,6 +45,11 @@
       ganhou uma segunda fonte. Sem essa fonte, o botão só mexia
       `mouse.aiming` (espalhamento) e a arma nunca saía da pose de quadril —
       medido, 0,00 m de deslocamento segurando o gatilho.
+      2026-09-03: o botão também é o GRIP DIREITO (pedido do dono: "ele
+      deveria ser o botão de mira"), e o puxão anda pelo EIXO ÓPTICO — não
+      pelo eixo punho→boca — para o olho cair SOBRE a linha de mira (ver o
+      bloco do puxão em `aplicar`). O ponto vermelho só existe através da
+      janela da óptica (`JANELA_RAIO`), como num red dot real.
 
    DUAS MÃOS (Onward/Pavlov): quando a mão de apoio chega perto da âncora
    `supportHand`, a direção do cano passa a ser a LINHA ENTRE AS MÃOS. A
@@ -172,16 +177,37 @@ export const JANELAS_SEPARADAS = RECUO_MIN > CABECA_RAIO;
 export const COLDRE_OFF = [0.22, -0.28, 0.16];
 export const COLDRE_ANIM = 0.20;   // s até a arma chegar às costas (e voltar)
 
-/* A GUIA DA JANELA DE MIRA. Estes dois números são o quanto ANTES da janela a
-   affordance começa a aparecer — e existir fora da janela é o ponto todo: uma
-   dica que só acende depois que a mira engatou não ensina nada, porque nesse
-   instante o jogador já está mirando. */
+/* A PROXIMIDADE DA JANELA DE MIRA. Estes dois números são o quanto ANTES da
+   janela a proximidade começa a contar. Hoje ela alimenta SÓ o háptico de
+   "entrou na janela" (`dentroDaJanela`, abaixo) — o ARO AZUL que ela
+   desenhava foi REMOVIDO em 2026-09-03 a pedido do dono, testando no aparelho:
+   "existe um arco azul ao redor da arma... que porra é essa? isso é jogável
+   pra você?". Nenhum FPS de VR de referência desenha tolerância em volta da
+   mira (Onward, Pavlov, Contractors, Alyx: a mira é o ferro/óptica e nada
+   mais); o aro era andaime de tutorial virado produto. */
 export const GUIA_FOLGA_RECUO = 0.25;    // m de folga além de RECUO_MIN/MAX
 export const GUIA_FOLGA_DESVIO = 0.16;   // m de folga além de PERP_MAX
-/* Acima disto o aro apaga: a mira ENGATOU e quem manda agora é o ferro da arma.
-   É o comportamento do POPULATION: ONE ("o retículo some ao mirar", NÃO
-   VERIFICADO — ver §3 da referência) e é o critério H3 desta base. */
-export const GUIA_APAGA_ADS = 0.6;
+
+/* A JANELA (abertura) DO RED DOT, em metros, no plano da lente. O ponto só
+   existe quando a PROJEÇÃO DO OLHO sobre a lente cai dentro dela — que é
+   como um red dot de verdade funciona: fora da janela não há ponto nenhum,
+   e é por isso que ninguém vê um ponto flutuando no ar com a arma no
+   quadril. Antes desta mudança o ponto ficava a 25 % de opacidade em
+   QUALQUER pose (medido: opacidade 0,25 e no grafo com a ocular a 0,292 m
+   do olho), e o dono viu exatamente isso: "existe um ponto vermelho no
+   meio da tela... que porra é essa?". O raio é a MESMA tolerância lateral
+   do ADS (`PERP_MAX`): dentro dela o jogo considera o jogador mirando, e
+   o ponto tem de concordar com o jogo — ADS aceso sem ponto, ou ponto sem
+   ADS, é a mira mentindo pro jogador. Borda suave nos últimos 15 %. */
+export const JANELA_RAIO = PERP_MAX;
+/* O retículo, em metros SOBRE A LENTE (a ~0,20 m do olho no ADS por botão):
+   ponto de 1,8 mm ≈ 0,5° de diâmetro (~12 px no Quest 3) e anel de
+   ~1,9° — é o "círculo com ponto" (circle-dot) do EOTech, o retículo de
+   óptica de reflexo mais reconhecível que existe, e o que o dono descreveu
+   ("bolinha com cruz"). Um red dot real tem 2–4 MOA (≈0,05°): na resolução
+   do headset isso seria 1 px, invisível. */
+export const RETICULO_PONTO_R = 0.0009;
+export const RETICULO_ANEL_R = [0.0028, 0.0034];
 
 /* RECARGA. `MAGWELL_MAX` é o quanto a mão de apoio precisa chegar perto do poço
    do carregador para o pente ser aceito; `PEITO_*` é a zona de onde ele é
@@ -313,7 +339,7 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
   let empunhadaAntes = true;
 
   /* ---- affordance da janela de mira ---- */
-  let guiaAro = null, guiaPonto = null, guiaOpac = 0, guiaPerto = 0;
+  let guiaPonto = null, guiaOpac = 0, guiaPerto = 0;
   let miraDentroAntes = false, miraUltimoPulso = -1e9;
 
   /* ---- recarga ---- */
@@ -444,41 +470,51 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
   }
 
   /* ================================================================
-     A JANELA DE MIRA GANHA CORPO NO MUNDO.
+     O RED DOT — UM objeto, e só através da janela.
 
-     São DOIS objetos, com papéis opostos e que nunca aparecem juntos:
+     O PONTO (com o anel do circle-dot) é o colimador. Desenhado em
+     `(olho.x, olho.y, 0)` do espaço da mira, com a lente em z = 0, ele tem
+     ângulo ZERO até o eixo do cano para QUALQUER posição do olho — que é a
+     definição de red dot, e o que faz o jogador poder mirar sem alinhar o
+     rosto. E ele SÓ EXISTE quando essa projeção cai dentro de `JANELA_RAIO`:
+     de fora da janela um red dot real não mostra nada, e o jogo também não.
 
-     · O ARO fica na ocular, no plano perpendicular ao eixo óptico, com raio
-       EXTERNO igual a `PERP_MAX` — ou seja, ele não "representa" a tolerância,
-       ele É a tolerância desenhada em tamanho natural. Acende progressivamente
-       ANTES da janela (é para isso que existem `GUIA_FOLGA_*`) e apaga quando
-       o ADS engata: passada a porta, quem manda é o ferro da arma.
-     · O PONTO VERMELHO é o colimador. Desenhado em `(olho.x, olho.y, 0)` do
-       espaço da mira, com a lente em z = 0, ele tem ângulo ZERO até o eixo do
-       cano para QUALQUER posição do olho — que é a definição de red dot, e o
-       que faz o jogador poder mirar sem alinhar o rosto.
+     Havia um segundo objeto — um ARO AZUL de tolerância em volta da ocular,
+     aceso antes da janela como "dica". Removido em 2026-09-03 (ver
+     `JANELA_RAIO` acima): o dono o viu como defeito, e é o que ele era.
 
-     Os dois SAEM DO GRAFO quando não valem nada, em vez de ficarem com
-     `visible: false`. Não é elegância: objeto com `visible: true` e sem pai não
-     é desenhado por ninguém, e um teste que lê `visible` sem perguntar pelo
-     grafo já ficou 11 de 12 verde nesta base sobre produto quebrado. Fora do
-     grafo, a pergunta "isto está na tela?" tem uma resposta só, e ela custa
-     zero draw call quando a resposta é não.
+     Ponto e anel são UMA geometria (posições e índices concatenados): um
+     draw call por olho, não dois — E2 conta por objeto submetido.
+
+     SAI DO GRAFO quando não vale nada, em vez de ficar com `visible: false`.
+     Não é elegância: objeto com `visible: true` e sem pai não é desenhado por
+     ninguém, e um teste que lê `visible` sem perguntar pelo grafo já ficou 11
+     de 12 verde nesta base sobre produto quebrado. Fora do grafo, a pergunta
+     "isto está na tela?" tem uma resposta só, e ela custa zero draw call
+     quando a resposta é não.
      ================================================================ */
-  function criarGuia() {
-    if (guiaAro) return;
-    const aroGeo = new THREE.RingGeometry(PERP_MAX * 0.86, PERP_MAX, 40);
-    guiaAro = new THREE.Mesh(aroGeo, new THREE.MeshBasicMaterial({
-      color: 0x8fd8ff, transparent: true, opacity: 0, side: THREE.DoubleSide,
-      depthTest: false, depthWrite: false, toneMapped: false,
-    }));
-    guiaAro.name = 'xrGuiaJanelaMira';
-    guiaAro.renderOrder = 10;
-    guiaAro.matrixAutoUpdate = true;
+  function geometriaReticulo() {
+    const ponto = new THREE.CircleGeometry(RETICULO_PONTO_R, 16);
+    const anel = new THREE.RingGeometry(RETICULO_ANEL_R[0], RETICULO_ANEL_R[1], 40);
+    const pa = ponto.getAttribute('position'), pb = anel.getAttribute('position');
+    const pos = new Float32Array((pa.count + pb.count) * 3);
+    pos.set(pa.array.subarray(0, pa.count * 3), 0);
+    pos.set(pb.array.subarray(0, pb.count * 3), pa.count * 3);
+    const ia = ponto.getIndex().array, ib = anel.getIndex().array;
+    const idx = new Uint16Array(ia.length + ib.length);
+    idx.set(ia, 0);
+    for (let i = 0; i < ib.length; i++) idx[ia.length + i] = ib[i] + pa.count;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    ponto.dispose(); anel.dispose();
+    return g;
+  }
 
-    const pontoGeo = new THREE.CircleGeometry(0.0034, 14);
-    guiaPonto = new THREE.Mesh(pontoGeo, new THREE.MeshBasicMaterial({
-      color: 0xff2b2b, transparent: true, opacity: 0,
+  function criarGuia() {
+    if (guiaPonto) return;
+    guiaPonto = new THREE.Mesh(geometriaReticulo(), new THREE.MeshBasicMaterial({
+      color: 0xff2b2b, transparent: true, opacity: 0, side: THREE.DoubleSide,
       depthTest: false, depthWrite: false, toneMapped: false,
     }));
     guiaPonto.name = 'xrPontoColimado';
@@ -916,28 +952,32 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
        `fonteDaMira`, item 3 do cabeçalho) leiam a pose JÁ puxada — mira e
        tiro continuam na mesma reta.
        Só desloca em linha reta: da ocular NATURAL até um ponto a
-       `RECUO_ALVO_BOTAO` do olho, na direção que o cano já aponta (o mesmo
-       eixo que `_muzzleMundo`/`_gripMundo` descrevem, calculado pelo padrão
-       de posição já usado no arquivo — não o `_eixo` da medida acima, que
-       vive noutro espaço). Nunca converge NO olho (ficaria `naCara`, que
-       SOME a arma — o oposto do pedido).
+       `RECUO_ALVO_BOTAO` do olho AO LONGO DO EIXO ÓPTICO (`_eixo`, que é
+       `geo.bore` levado ao mundo pela pose final — a mesma reta que a medida
+       do ADS físico usa). Isso põe o OLHO SOBRE O EIXO da mira: desvio zero,
+       ponto no centro da lente. A versão anterior (2026-08-30) puxava ao
+       longo de `gripR → muzzle`, que é OUTRA reta — o punho fica abaixo e
+       atrás do cano, e o ângulo entre as duas deixava a ocular ~6 cm FORA
+       da linha do olho: o jogador via a ÓPTICA acima da vista e o ponto
+       vermelho desenhado no corpo da arma, abaixo dela (fotografado no kit
+       emulado, 2026-09-03). Era exatamente "vejo a arma, não a mira".
+       Nunca converge NO olho (ficaria `naCara`, que SOME a arma — o oposto
+       do pedido).
        SÓ COM `mirarBotao`, NUNCA só por `adsT > 0`. O gesto físico sozinho já
        mede a mão de verdade contra a ocular; empurrar a arma TAMBÉM nesse
        caso desalinha a posição real do controle da posição medida, e a
        medida do PRÓXIMO frame passa a comparar o olho contra uma ocular que
        o puxão do frame anterior moveu — corrompeu exatamente o teste do
        gesto físico puro (`test/xr-weapon.test.js`, "mirar é FÍSICO"), que
-       não aperta botão nenhum. */
-    if (mirarBotao && temSegmento && cabeca && adsT > 0.001) {
-      _v6.copy(_muzzleMundo).sub(_gripMundo);
-      if (_v6.lengthSq() > 1e-6) {
-        _v6.normalize();
-        _v7.copy(cabeca).addScaledVector(_v6, RECUO_ALVO_BOTAO);   // ocular ALVO, no mundo
-        _v8.copy(_ocular);                    // ocular NATURAL (calculada linhas acima), no mundo
-        weaponRoot.parent.worldToLocal(_v8);  // ambas convertidas pro espaço do PAI de
-        weaponRoot.parent.worldToLocal(_v7);  // weaponRoot — o mesmo espaço de weaponRoot.position
-        weaponRoot.position.addScaledVector(_v9.copy(_v7).sub(_v8), adsT);
-      }
+       não aperta botão nenhum. E só com MIRA (`geo.temMira`): a faca não tem
+       ocular, e puxar o eixo punho→boca dela pro olho seria uma lâmina na
+       cara. */
+    if (mirarBotao && geo.temMira && cabeca && adsT > 0.001) {
+      _v7.copy(cabeca).addScaledVector(_eixo, RECUO_ALVO_BOTAO);   // ocular ALVO, no mundo
+      _v8.copy(_ocular);                    // ocular NATURAL (calculada linhas acima), no mundo
+      weaponRoot.parent.worldToLocal(_v8);  // ambas convertidas pro espaço do PAI de
+      weaponRoot.parent.worldToLocal(_v7);  // weaponRoot — o mesmo espaço de weaponRoot.position
+      weaponRoot.position.addScaledVector(_v9.copy(_v7).sub(_v8), adsT);
     }
 
     /* As matrizes de mundo da arma acabaram de ficar velhas (mudamos a pose do
@@ -963,28 +1003,30 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
     if (geo.porta) _porta.copy(geo.porta).applyMatrix4(gun.group.matrixWorld);
     else _porta.copy(_magwell);
 
-    /* ---- A JANELA DE MIRA DEIXA DE SER INVISÍVEL ---- */
+    /* ---- O RED DOT, SÓ ATRAVÉS DA JANELA ---- */
     const mostraGuia = !oculto && !naCara && coldreK < 0.5 && geo.temMira && weaponRoot.visible;
     guiaPerto = mostraGuia ? proximidadeDaJanela(medida.recuo, medida.desvio) : 0;
-    const opacAro = guiaPerto * (1 - suave(adsT, GUIA_APAGA_ADS - 0.15, GUIA_APAGA_ADS)) * 0.85;
-    const opacPonto = mostraGuia ? (0.25 + 0.7 * suave(adsT, 0.15, 0.7)) : 0;
-    guiaOpac = opacAro;
-    if (opacAro > 0.004 || opacPonto > 0.004) criarGuia();
-    if (guiaAro) {
-      guiaAro.material.opacity = opacAro;
-      noGrafo(guiaAro, miraNo, opacAro > 0.004);
+    let opacPonto = 0;
+    if (mostraGuia && cabeca) {
+      /* O COLIMADOR. O olho, trazido para o espaço da mira, define X e Y; o Z
+         é a LENTE, sempre em zero. Assim o vetor olho→ponto é (0, 0, −ez),
+         que é o eixo óptico exato — ângulo zero para QUALQUER posição do
+         olho, que é o que distingue um red dot de um adesivo na tela.
+         E A JANELA: o ponto existe se o olho está ATRÁS da lente (z > 0) e a
+         projeção dele cai dentro de `JANELA_RAIO`. Fora disso, opacidade
+         zero e fora do grafo — sem ponto flutuando no ar com a arma no
+         quadril (era 0,25 fixo em qualquer pose, e o dono viu). */
+      miraNo.updateWorldMatrix(true, false);
+      _mInv.copy(miraNo.matrixWorld).invert();
+      _v5.copy(cabeca).applyMatrix4(_mInv);
+      if (_v5.z > 0.02) opacPonto = 1 - suave(Math.hypot(_v5.x, _v5.y), JANELA_RAIO * 0.85, JANELA_RAIO);
+    }
+    guiaOpac = opacPonto;
+    if (opacPonto > 0.004) criarGuia();
+    if (guiaPonto) {
       guiaPonto.material.opacity = opacPonto;
       noGrafo(guiaPonto, miraNo, opacPonto > 0.004);
-      if (opacPonto > 0.004 && cabeca) {
-        /* O COLIMADOR. O olho, trazido para o espaço da mira, define X e Y; o Z
-           é a LENTE, sempre em zero. Assim o vetor olho→ponto é (0, 0, −ez),
-           que é o eixo óptico exato — ângulo zero para QUALQUER posição do
-           olho, que é o que distingue um red dot de um adesivo na tela. */
-        miraNo.updateWorldMatrix(true, false);
-        _mInv.copy(miraNo.matrixWorld).invert();
-        _v5.copy(cabeca).applyMatrix4(_mInv);
-        guiaPonto.position.set(_v5.x, _v5.y, 0);
-      }
+      if (opacPonto > 0.004) guiaPonto.position.set(_v5.x, _v5.y, 0);
     }
 
     /* Háptico da janela, na BORDA e com carência — ver MIRA_CARENCIA_MS. */
@@ -1173,7 +1215,6 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
        depois de tirar o headset. E o estado volta a "arma na mão": a próxima
        sessão não pode nascer com a arma coldreada porque a anterior terminou
        com o botão no meio do caminho. */
-    if (guiaAro && guiaAro.parent) guiaAro.parent.remove(guiaAro);
     if (guiaPonto && guiaPonto.parent) guiaPonto.parent.remove(guiaPonto);
     if (penteFantasma && penteFantasma.parent) penteFantasma.parent.remove(penteFantasma);
     armaDoNo = null;
@@ -1277,12 +1318,13 @@ export function createXrWeapon({ THREE, WeaponRig, arsenal }) {
       dPeito: gripDPeito,
       dApoio: gripDApoio,
     }),
-    /* A affordance da janela, medível de fora: a proximidade CONTÍNUA (que é o
-       que a torna um guia e não um carimbo), a opacidade que saiu dela, e os
-       dois objetos para o teste poder subir por `.parent` até a cena — ler
-       `visible` sem perguntar pelo grafo já deixou um teste desta base 11 de 12
-       verde sobre produto quebrado. */
-    guia: () => ({ perto: guiaPerto, opacidade: guiaOpac, aro: guiaAro, ponto: guiaPonto }),
+    /* O red dot, medível de fora: a proximidade CONTÍNUA da janela (hoje só
+       alimenta o háptico), a opacidade do PONTO, e o objeto para o teste poder
+       subir por `.parent` até a cena — ler `visible` sem perguntar pelo grafo
+       já deixou um teste desta base 11 de 12 verde sobre produto quebrado.
+       `aro` fica no contrato como `null` de propósito: o aro azul foi removido
+       (2026-09-03) e um teste que o encontre no grafo tem de reprovar. */
+    guia: () => ({ perto: guiaPerto, opacidade: guiaOpac, aro: null, ponto: guiaPonto }),
     estado: () => ({
       ativo: vivo,
       ads: adsT,

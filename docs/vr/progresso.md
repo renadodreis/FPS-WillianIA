@@ -2002,3 +2002,92 @@ carro sem ação (referência ambígua, Rodada 33), degrau já aprovava. G2
 segue aguardando aparelho — última pendência de C4/D1/G2 desta leva de
 decisões delegadas. Itens 8 (10/15 tiros) e 10 (soak 5min) seguem gap
 honesto de sessão humana/aparelho.
+
+## Rodadas 36–38 — Os três hotfixes ao vivo do relato do dono (2026-08-30), registrados
+
+Deployados em sequência (deploy → verificação de hash → suíte), cada um com
+o commit descrevendo a causa; o registro aqui ficou para trás e entra agora.
+
+- **`8947fe0` — ADS por botão PUXA a arma.** `adsT` só alimentava opacidade
+  e retículo; a arma nunca saía da pose de quadril com o gatilho segurado
+  (medido: 0,00 m). O `mirarBotao` passou a forçar `alvo = 1` e um puxão
+  em `weaponRoot.position` (mesmo `damp` do gesto). Dois defeitos meus no
+  caminho, os dois pegos pela suíte: puxar por `adsT > 0` (e não só pelo
+  botão) corrompia a medida do gesto FÍSICO no frame seguinte; e ler
+  `mirarBotao` do `out.mirar` combinado vazava o puxão pra mira assistida
+  (B4 acusou 0,409 m).
+- **`624358d` — arma sempre na mão.** O STICKY do grip direito (um clique,
+  um alternar — deliberado e testado) guardava a arma no primeiro clique;
+  o dono revogou ("qual o objetivo de ficar sem arma?"). `ler()` parou de
+  chamar `empunha.passo()`; a máquina segue testada em isolamento.
+- **`fa3e858` — painel de munição sobe** (`ARMA_OFF` y 0,105 → 0,16).
+  Mitigação parcial — e, como a rodada seguinte mediu, na direção errada
+  para a arma erguida. Ver Rodada 39.
+
+## Rodada 39 — "Cadê a mira / o arco azul / o ponto vermelho / como eu corro" — os cinco, fotografados · 2026-09-03
+
+**Método novo, e é o que destravou a rodada:** sonda de screenshot no kit
+emulado (`bootEmVR` + `page.screenshot`, script no scratchpad). A suíte
+estava VERDE em todos os cinco itens abaixo; a foto mostrou os três de
+mira em um frame. O dono tinha recusado (com razão) conectar o aparelho:
+"você tem o kit de desenvolvimento".
+
+**1. ADS puxava pelo eixo ERRADO.** O puxão da Rodada 36 transladava a
+ocular a 0,20 m do olho ao longo de `gripR → muzzle`. O punho fica abaixo
+e atrás do cano; o ângulo entre essa reta e o eixo óptico deixava a ocular
+~6 cm FORA da linha do olho. Foto: óptica ACIMA da vista, ponto vermelho
+desenhado NO CORPO da arma. `ads` = 0,9998 (é medida da pose NATURAL, não
+da puxada) — o teste passava. Agora o puxão anda por `_eixo` (`geo.bore` na
+pose final, mundo): olho SOBRE a linha de mira. Régua nova em
+`xr-ads-gatilho`: desvio do OLHO contra o eixo do MODELO (`WeaponRig`
+`eye`/`front` × `gun.group.matrixWorld`, depois do render) ≤ 1,5 cm.
+
+**2. O arco azul era o `guiaAro`** — aro de tolerância (r = `PERP_MAX`)
+aceso ANTES da janela, "dica" de uma rodada antiga. Nenhum FPS de VR
+desenha isso. Removido; `guia().aro` é `null` por contrato e o teste varre
+o grafo da mira por objeto ≥ `PERP_MAX × 0,5`.
+
+**3. O ponto vermelho no meio da tela era o colimador a 25 % em QUALQUER
+pose.** Medido no quadril: ocular a 0,292 m do olho, ponto NO GRAFO,
+opacidade 0,25 — desenhado em `(olho.x, olho.y, 0)` da lente, ou seja
+30 cm acima da óptica, flutuando 20 cm à frente do rosto. Um red dot só
+existe através da janela: `JANELA_RAIO` (= `PERP_MAX`), fora dela opacidade
+0 e FORA DO GRAFO. Retículo virou circle-dot (ponto 1,8 mm + anel ~1,9°,
+EOTech — o "bolinha com cruz" do dono), UMA geometria (1 draw call/olho).
+No quadril: 0 objetos (era 1).
+
+**4. Painel de munição no meio da tela.** `ARMA_OFF` ficava ACIMA do
+castelo — e acima do castelo, com a arma erguida na altura do peito/ombro
+(pose natural de tiro sem ADS), é a linha de visada. Subir (Rodada 38)
+piorou. Agora AO LADO e ABAIXO (`[-0,11; -0,04; 0,06]`), no receptor à
+esquerda, como Pavlov/Contractors. Foto: fora da vista na pose de tiro,
+legível ao olhar pra arma.
+
+**5. "Como eu corro?"** Correr era SÓ o batente (`CORRER_TILT` 0,92) —
+limiar de hardware que analógico com folga não alcança. Agora: clique do
+analógico esquerdo engata a corrida (trava até o polegar voltar ao centro
+— Onward/Contractors/Pavlov), batente continua valendo. Medido na sonda:
+1,009 → 1,764 m/s no clique (janela de aceleração). O agachar artificial,
+que morava no clique, foi pro analógico DIREITO PARA BAIXO (alternância
+com histerese; Onward/POPULATION: ONE); A (pular) levanta. Agachar físico
+segue por `XR.corpo.agachado`.
+
+**6. Grip direito É o botão de mira** (pedido verbatim do dono). Mesma
+fonte `mirarBotao` do gatilho esquerdo. A "mira assistida" (grip 300 ms
+acendia só espalhamento) foi absorvida — `prefs.miraAssistida` e
+`MIRA_ASSISTIDA_MS` saíram. B4 ganhou EXCEÇÃO DECLARADA em
+`docs/vr/criterio-aaa.md` (teleporte continua proibido; "não move a arma"
+revogado pelo dono).
+
+**Testes reescritos:** `xr-arma-janela` (fora da janela = sem ponto; aro
+inexistente; E2: 0 objetos no quadril, ≤ 1 mirando), `xr-ads-gatilho`
+(olho no eixo do modelo; caso do grip), `xr-input` (correr por clique com
+trava; agachar por analógico direito; pular levanta; diagonal não agacha),
+`xr-locomotion` (agachado dirige pelo analógico direito), `xr-empunhadura-
+botao` (B4 antigo → grip traz ao olho e devolve à palma ≤ 3 cm).
+
+**Não fechado nesta rodada:** "mãos torta" — a sonda com controle em
+quaternion identidade não reproduz a pose de um humano; precisa do relato
+específico (punho? dedos? cotovelo?) ou de pose realista na sonda.
+Discoverability da troca de arma (B funciona, 0 → 1 medido) — sem dica na
+tela ainda.
