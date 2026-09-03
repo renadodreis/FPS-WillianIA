@@ -2203,3 +2203,14 @@ reproduz no kit); (2) som mudo — só em VR?; (3) o que está torto nas mãos;
 (4) decisão sobre o painel do pulso só-ao-olhar. Sem resposta, o próximo
 tick investiga o flake de `xr-arma-recarga` ("5 cliques secos: saíram 6"
 — borda dupla do gatilho?), que pode ser tiro/clique duplicado de verdade.
+
+## Rodada 42 — O flake "5 cliques secos: saíram 6" tinha causa, e era a régua · 2026-09-03
+
+O fuzil é AUTOMÁTICO a 690 rpm (87 ms entre tiros); o ajudante `gatilho()`
+do teste segurava o gatilho 90 ms. Quando um frame caía nos 3 ms finais
+do aperto, um aperto virava DOIS tiros: os 3 tiros saíam em 2 apertos e
+o 3º aperto já era seco — 6 secos, 3 tiros, `mag` 0 (as outras asserções
+passavam, por isso "flake"). Produto correto (arma automática dispara
+enquanto o gatilho está apertado); régua com janela de 3 ms. Aperto de
+40 ms, abaixo do intervalo de tiro: um aperto é um tiro por construção.
+3/3 isolado, 8 pulsos = 3 tiros + 5 secos nas três.

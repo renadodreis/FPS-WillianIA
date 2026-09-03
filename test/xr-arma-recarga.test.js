@@ -212,7 +212,12 @@ function instalarSonda() {
     },
     gatilho: async () => {
       window.__A.botao('right', 'trigger', 1);
-      await window.__A.espera(90);
+      /* 40 ms, e não 90: o fuzil é AUTOMÁTICO a 690 rpm (87 ms entre tiros).
+         Um aperto de 90 ms ocasionalmente cobria dois tiros — quando um frame
+         caía nos 3 ms finais — e o caso do gatilho seco contava 6 secos em
+         vez de 5 (flake medido na suíte de 2026-09-03; passava isolado).
+         Abaixo do intervalo de tiro, um aperto é UM tiro por construção. */
+      await window.__A.espera(40);
       window.__A.botao('right', 'trigger', 0);
       await window.__A.espera(320);   // acima do gate de 0,25 s do clique seco
     },
