@@ -97,3 +97,50 @@ describe('dicas de controle ao começar a partida em VR',
       assert.equal(r.depois, r.antes, 'JOGAR DE NOVO repetiu as dicas — a sequência é uma vez por sessão');
     });
   });
+
+describe('uma mensagem DO JOGO manda nas dicas — mísseis não perdem pro tutorial',
+  { skip: !CHROME && 'Chrome não encontrado' }, () => {
+    let h;
+    before(async () => {
+      h = await bootEmVR(bootGame, { port: PORT, emJogo: false });
+      await h.play(() => window.__A.espera(600));
+    });
+    after(async () => { if (h) await h.close(); });
+
+    it('a mensagem da cidade cancela as dicas pendentes e fica na tela pelo tempo pedido', async () => {
+      /* Medido na suíte antes desta correção: a mensagem da cidade virava
+         "B: TROCAR ARMA" no tick seguinte, e um pedido de 1,2 s durava 3,5 s.
+         Reinjetando (tirar o `cancelarDicasVR()` de `centerMsg`), a primeira
+         asserção abaixo morre com o texto da dica no lugar do aviso. */
+      const AVISO = '⚠ MÍSSEIS SE APROXIMANDO DA CIDADE';
+      const r = await h.play(async ([AVISO]) => {
+        const G = window.__game, MP = window.__MP;
+        G.forceStart();
+        await window.__A.espera(400);                 // antes da 1ª dica (1200 ms)
+        const pendentesAntes = G.dicasVR.pendentes();
+        MP.centerMsg(AVISO, 2500);
+        const pendentesDepois = G.dicasVR.pendentes();
+        const vistos = [];
+        let ultimo = null;
+        const t0 = performance.now();
+        while (performance.now() - t0 < G.dicasVR.atraso + G.dicasVR.lista.length * G.dicasVR.ms + 500) {
+          await window.__A.espera(100);
+          const e = G.XRHud.estado();
+          const a = e && e.aviso;
+          const txt = a && a.visivel && a.opacidade > 0.5 ? a.texto : null;
+          if (txt !== ultimo) { vistos.push({ t: Math.round(performance.now() - t0), txt }); ultimo = txt; }
+        }
+        return { pendentesAntes, pendentesDepois, vistos, emissoes: G.dicasVR.emissoes() };
+      }, [AVISO]);
+      console.log(`      pendentes: ${r.pendentesAntes} → ${r.pendentesDepois} · emissões de dica: ${r.emissoes}`);
+      console.log('      vistos: ' + r.vistos.map(v => `${v.t}ms=${v.txt === null ? '(nada)' : JSON.stringify(v.txt)}`).join(' | '));
+      const textos = r.vistos.map(v => v.txt).filter(Boolean);
+      assert.ok(r.pendentesAntes >= 3, `o cenário não pegou as dicas ainda agendadas (${r.pendentesAntes})`);
+      assert.equal(r.pendentesDepois, 0, 'a mensagem do jogo não cancelou as dicas pendentes');
+      assert.deepEqual(textos, [AVISO],
+        'depois da mensagem da cidade o painel mostrou outra coisa — uma dica sobrescreveu o aviso');
+      const some = r.vistos.find(v => v.txt === null && v.t > 0);
+      assert.ok(some && some.t >= 2300 && some.t <= 3300,
+        `o aviso da cidade tinha de durar ~2,5 s: sumiu em ${some ? some.t : '?'} ms`);
+    });
+  });

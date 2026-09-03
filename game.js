@@ -1328,6 +1328,13 @@ function centerMsg(text, dur = 1800) {
   ui.centerMsg.style.opacity = '1';
   clearTimeout(msgTimer);
   msgTimer = setTimeout(() => ui.centerMsg.style.opacity = '0', dur);
+  /* MENSAGEM DO JOGO MANDA. As dicas de controle (`mostrarDicasVR`) usam o
+     mesmo painel, e `XRHud.mensagem` SUBSTITUI o texto: uma dica agendada
+     em cima de "⚠ MÍSSEIS SE APROXIMANDO DA CIDADE" apagaria o aviso que
+     decide se o jogador sai da cidade a tempo (medido na suíte: a mensagem
+     da cidade virava "B: TROCAR ARMA" e um pedido de 1,2 s durava 3,5 s).
+     Qualquer mensagem de verdade cancela o que restava do tutorial. */
+  cancelarDicasVR();
   /* O MESMO AVISO DENTRO DO MUNDO. A sessão `immersive-vr` sem `dom-overlay`
      não desenha DOM: sem esta linha "⚠ MÍSSEIS SE APROXIMANDO DA CIDADE"
      simplesmente não existe no headset, e quem está de costas para a cidade
@@ -4235,16 +4242,19 @@ const DICA_MS = 3200;         // cada dica fica este tempo na tela
 const DICA_ATRASO_MS = 1200;  // folga depois do spawn: o jogador ainda está assentando a vista
 let dicasVRMostradas = false;
 let dicasVREmissoes = 0;
+let dicasVRTimers = [];
+function cancelarDicasVR() {
+  for (const t of dicasVRTimers) clearTimeout(t);
+  dicasVRTimers = [];
+}
 function mostrarDicasVR() {
   if (dicasVRMostradas) return;
   dicasVRMostradas = true;
-  DICAS_VR.forEach((txt, i) => {
-    setTimeout(() => {
-      if (!XR.presenting || !state.started) return;
-      dicasVREmissoes++;
-      XRHud.mensagem(txt, DICA_MS);
-    }, DICA_ATRASO_MS + i * DICA_MS);
-  });
+  dicasVRTimers = DICAS_VR.map((txt, i) => setTimeout(() => {
+    if (!XR.presenting || !state.started) return;
+    dicasVREmissoes++;
+    XRHud.mensagem(txt, DICA_MS);
+  }, DICA_ATRASO_MS + i * DICA_MS));
 }
 
 function startGame(trusted) {
@@ -4868,7 +4878,10 @@ window.__game = {
   entradaXR,
   /* QA das dicas de controle no headset: lista declarada, cadência e quantas
      vezes o aviso foi de fato emitido (uma vez por sessão de navegador). */
-  dicasVR: { lista: DICAS_VR, ms: DICA_MS, atraso: DICA_ATRASO_MS, emissoes: () => dicasVREmissoes },
+  dicasVR: {
+    lista: DICAS_VR, ms: DICA_MS, atraso: DICA_ATRASO_MS,
+    emissoes: () => dicasVREmissoes, pendentes: () => dicasVRTimers.length,
+  },
   MenuGate, // QA: progresso honesto do boot (bootLabel/bootFases) e estado do portão do menu
   // QA: qual arma está na mão. `gun` é `let` de módulo, e sem isto não há como
   // verificar de fora que a troca de arma do headset chegou a trocar alguma coisa.

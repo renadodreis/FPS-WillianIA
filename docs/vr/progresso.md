@@ -2181,3 +2181,13 @@ vista, colado à arma — a segunda caixa "na frente da tela". O gênero
 pulso. Custa regra de olhar + histerese e ajuste em 4 arquivos de teste
 que hoje cobram o painel visível com o controle presente. Fica pro dono
 decidir.
+
+**Suíte completa em `bc84a75` (máquina limpa, linha final do runner):** 1954
+testes / 373 suítes / 1948 pass · 3 fail · 3 skip. `xr-arma-recarga`
+("5 cliques secos: saíram 6") passou 2× isolado — flake de borda de
+gatilho, anotado. `xr-aviso` regressão real, e era MINHA: as dicas usam o
+mesmo painel e `XRHud.mensagem` SUBSTITUI o texto — a mensagem da cidade
+virava "B: TROCAR ARMA" e um pedido de 1,2 s durava 3,5 s. Correção:
+qualquer `centerMsg` do jogo CANCELA as dicas pendentes (mísseis nunca
+perdem pro tutorial); caso novo em `xr-dicas-controles` mede pendentes
+4 → 0, só o aviso da cidade na tela, e a duração pedida.
