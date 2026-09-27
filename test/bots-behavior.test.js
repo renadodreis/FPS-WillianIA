@@ -23,7 +23,12 @@ describe('Bots gerenciados', () => {
     assert.equal(result.status, 0, result.error ? result.error.message : result.stderr);
   });
 
-  it('prioriza o humano válido mais próximo antes de outros bots', () => {
+  /* Este caso EXIGIA o defeito: "prioriza o humano válido mais próximo antes
+     de outros bots". Com isso todo bot num raio de 100 m escolhia o humano, e
+     três bots dividiam o TTK por três (docs/mobile/referencia-bots.md, seção
+     0). A régua agora é a do CoD — ameaça como soma, sem viés extra para o
+     jogador no fácil (`threatbias` easy 100 contra veteran 400). */
+  it('não dá prioridade absoluta ao humano: com os dois visíveis, o bot mais próximo vence', () => {
     const selectTarget = helper('selectTarget');
     const self = { id: 'self', x: 0, z: 0 };
     const candidates = [
@@ -32,7 +37,31 @@ describe('Bots gerenciados', () => {
       { id: 'human-near', x: 18, z: 0, alive: true, phase: 'PLAY', isBot: false },
     ];
 
-    assert.equal(selectTarget(self, candidates, 80).id, 'human-near');
+    assert.equal(selectTarget(self, candidates, 80).id, 'bot-near');
+  });
+
+  it('desconta a ameaça de quem já está sendo atacado por outros bots (−150 por atacante)', () => {
+    const selectTarget = helper('selectTarget');
+    const self = { id: 'self', x: 0, z: 0 };
+    // 'cercado' está 4 m mais perto, mas três bots já o atacam: 3 × 150 vale 45 m
+    const candidates = [
+      { id: 'cercado', x: 20, z: 0, alive: true, phase: 'PLAY', isBot: false },
+      { id: 'livre', x: 24, z: 0, alive: true, phase: 'PLAY', isBot: false },
+    ];
+    assert.equal(selectTarget(self, candidates, 80).id, 'cercado', 'sem atacantes, o mais perto vence');
+    const engaged = new Map([['cercado', 3]]);
+    assert.equal(selectTarget(self, candidates, 80, { t: 10, engaged }).id, 'livre');
+  });
+
+  it('quem está ferindo o bot sobe na ameaça, mesmo mais longe', () => {
+    const selectTarget = helper('selectTarget');
+    const self = { id: 'self', x: 0, z: 0 };
+    const candidates = [
+      { id: 'perto', x: 20, z: 0, alive: true, phase: 'PLAY', isBot: true },
+      { id: 'atirador', x: 60, z: 0, alive: true, phase: 'PLAY', isBot: false, hurtT: 9 },
+    ];
+    assert.equal(selectTarget(self, candidates, 100, { t: 10 }).id, 'atirador');
+    assert.equal(selectTarget(self, candidates, 100, { t: 30 }).id, 'perto', 'ferida velha não pesa mais');
   });
 
   it('filtra fase, vida, espectador e alcance antes de escolher alvo', () => {
@@ -239,6 +268,21 @@ describe('Bots gerenciados', () => {
     assert.equal(bot.pendingChest, null);
   });
 
+  it('nova rodada esquece o que o bot sabia da anterior (percepção, alvo, janela de erro)', () => {
+    const resetBotForMatch = helper('resetBotForMatch');
+    const bot = {
+      aware: new Map([['h', { perceived: true }]]), targetId: 'h', engageT: 40,
+      missUntil: 99, lastShotT: 50, hurtT: 45,
+    };
+    resetBotForMatch(bot);
+    assert.equal(bot.aware.size, 0);
+    assert.equal(bot.targetId, null);
+    assert.equal(bot.engageT, null);
+    assert.equal(bot.missUntil, -Infinity);
+    assert.equal(bot.lastShotT, -Infinity);
+    assert.equal(bot.hurtT, -Infinity);
+  });
+
   it('não consome a janela de cadência enquanto não existe alvo atacável', () => {
     const canAttemptAttack = helper('canAttemptAttack');
     const bot = { weapon: 'FUZIL', lastShot: 10 };
@@ -281,15 +325,37 @@ describe('Bots gerenciados', () => {
     assert.equal(bot.lootDropped, false);
   });
 
-  it('pacote de tiro errado usa Y dos pés porque o cliente adiciona a altura do tronco', () => {
+  /* O erro tem de ser VISTO: traçante passando rente ao rosto, não no chão em
+     volta do pé (Game AI Pro 3 cap. 33: "whiz tracers right past the player's
+     face at eye level"; Lidén: traçante perto da cabeça é tensão e
+     recompensa). A convenção do pacote continua: `playerFired` do br-game.js
+     desenha até `toPos + 1 m`, então o pacote manda Y já descontado. */
+  it('tiro errado passa a 0,5–1,5 m do rosto, na altura dos olhos, e segue além do alvo', () => {
     const buildMissShot = helper('buildMissShot');
-    const packet = buildMissShot(
-      { x: 1, y: 4, z: 2, weapon: 'DMR' },
-      { x: 10, y: 7, z: 12 },
-      () => 0.5,
-    );
-
-    assert.deepEqual(packet.fromPos, [1, 5.5, 2]);
-    assert.deepEqual(packet.toPos, [10, 7, 12]);
+    const { mulberry32 } = require(path.join(__dirname, '..', 'server.js'));
+    const rng = mulberry32(5);
+    const cases = [
+      [{ x: 1, y: 4, z: 2, weapon: 'FUZIL' }, { x: 10, y: 7, z: 32 }, 320],
+      [{ x: 0, y: 0, z: 0, weapon: 'ESCOPETA' }, { x: 3, y: 1, z: 18 }, 120],
+      [{ x: 0, y: 0, z: 0, weapon: 'SNIPER' }, { x: -70, y: 12, z: 85 }, 320],
+    ];
+    for (const [bot, target, maxRange] of cases) {
+      for (let i = 0; i < 200; i++) {
+        const packet = buildMissShot(bot, target, rng);
+        assert.deepEqual(packet.fromPos, [bot.x, bot.y + 1.5, bot.z]);
+        const from = packet.fromPos;
+        const to = [packet.toPos[0], packet.toPos[1] + 1, packet.toPos[2]]; // como br-game.js desenha
+        const sx = to[0] - from[0], sz = to[2] - from[2];
+        const k = ((target.x - from[0]) * sx + (target.z - from[2]) * sz) / (sx * sx + sz * sz);
+        const px = from[0] + sx * k, pz = from[2] + sz * k;
+        const lateral = Math.hypot(target.x - px, target.z - pz);
+        const height = from[1] + (to[1] - from[1]) * k;
+        assert.ok(lateral >= 0.5 - 1e-9 && lateral <= 1.5 + 1e-9, `passou a ${lateral.toFixed(2)} m do eixo do alvo`);
+        assert.ok(Math.abs(height - (target.y + 1.6)) <= 0.3, `passou a ${(height - target.y).toFixed(2)} m do pé (olho: 1,6 m)`);
+        assert.ok(k < 0.95, `o traçante terminou no alvo (k=${k.toFixed(2)}), não passou por ele`);
+        const len = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+        assert.ok(len <= maxRange, `pacote de ${len.toFixed(1)} m seria recusado pelo servidor (teto ${maxRange} m)`);
+      }
+    }
   });
 });
