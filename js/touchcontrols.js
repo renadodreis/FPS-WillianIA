@@ -39,6 +39,19 @@
    lados). O dedo que aperta ATIRAR alimenta o MESMO acumulador do olhar
    enquanto arrasta, multiplicado por um fator próprio (0 desliga). Nada
    muda no caminho do tiro.
+
+   HUD QUE SERVE (referência §4 e P2-7; critérios C7/C8 da régua do celular):
+   · ARMAS COMO ÍCONES (#tcArmas): uma arma por toque, pelo índice — o ⇄ só
+     andava pra frente (até 7 toques entre duas das 8 do BR).
+   · BOTÕES CONTEXTUAIS: USAR, COMER, KIT e GRANADA só aparecem quando o jogo
+     tem o que fazer com eles (`disponivel`, lido do jogo). Some por
+     `visibility`, a célula fica: nada anda de lugar debaixo do polegar.
+   · TRAVA DE CORRIDA: arrastar o analógico além de um ponto acima dele trava
+     a corrida (SPRINT_LOCK_R). O jogo não precisa saber: travado, o módulo
+     sai 1 e o `mag > SPRINT_MAG` de sempre corre.
+   As leituras do jogo (arsenal, arma ativa, troca, disponível) chegam por
+   injeção no createTouchControls; sem elas tudo volta ao comportamento
+   anterior (fiação ausente nunca apaga botão).
    ================================================================ */
 import { TOUCH_DEFAULTS } from './config.js';
 import { tanRatio } from './aimassist.js';
@@ -68,6 +81,28 @@ export const STICK_DEADZONE = 0.12;
 /* Correr no toque não tem botão: é o analógico no talo (mesma leitura de
    um gatilho analógico de controle). Acima disto liga o `sprintHeld`. */
 export const SPRINT_MAG = 0.85;
+
+/* TRAVA DE CORRIDA (docs/mobile/referencia-mira-toque.md §4.2/§4.3, P2-7).
+   PUBG Mobile: "drag the "Cross" icon and hold in running mode"; Warzone
+   Mobile: "lock Auto Sprint to a button above the virtual stick". Arrastar o
+   dedo do analógico ALÉM de um ponto acima dele trava a corrida: o polegar
+   pode relaxar de volta pro centro e o jogador segue correndo, cheio, na
+   direção do dedo (ou em frente, com o dedo parado no centro). Destrava ao
+   PUXAR PARA TRÁS além da zona morta, ao soltar o dedo e em todo releaseAll.
+
+   [INFERÊNCIA — sem fonte] Nenhum jogo publica o limiar (referência §5, item
+   10: CoD fala em "forward position", PUBG em "running mode", sem número).
+   · 1,6 R = 93 px acima de onde o dedo encostou. Precisa ficar ALÉM do talo
+     com folga: quem corre empurra o polegar para fora do raio (58 px) sem
+     querer, e 1,3 R de sobra (75 px) nunca trava (teste de núcleo). E precisa
+     caber no polegar: com a origem a 60–90 px do rodapé, o alvo fica a
+     150–180 px do rodapé, dentro de qualquer paisagem de 360 px.
+   · cone de 30° em volta da vertical: a diagonal de 45° (correr de esguelha)
+     nunca trava; o polegar que sobe torto até 30° trava.
+   Dirigindo, a trava fica DESLIGADA (setSprintLock): lá o analógico vira
+   tecla de volante, e "travado com o dedo no centro" seria acelerador preso. */
+export const SPRINT_LOCK_R = 1.6;
+export const SPRINT_LOCK_CONE = 30;
 
 /* SENSIBILIDADE DO OLHAR — radianos por px de CSS.
    O mouse com pointer lock usa `movementX * 0.002 * pointerSpeed`, em px
@@ -130,6 +165,15 @@ export function createTouchCore(options) {
   const lookOut = { dx: 0, dy: 0 };  // devolvido por takeLook()
   let stickId = null, lookId = null;
   let lastLookX = 0, lastLookY = 0;
+  /* trava de corrida (ver SPRINT_LOCK_R): `travaOn` é a permissão (veículo
+     desliga), `travado` o estado, `perto` = dedo além do talo subindo, ainda
+     sem travar (a camada DOM mostra o alvo). `rawX/rawY` guardam o último
+     ponto do dedo para recalcular o movimento quando a trava é desligada por
+     fora, sem esperar o próximo pointermove. */
+  const lockDist = radius * SPRINT_LOCK_R;
+  const coneCos = Math.cos(SPRINT_LOCK_CONE * Math.PI / 180);
+  let travaOn = true, travado = false, perto = false;
+  let rawX = 0, rawY = 0;
 
   function zeroMove() { move.x = 0; move.y = 0; move.mag = 0; }
 
@@ -137,7 +181,22 @@ export function createTouchCore(options) {
      -> x = strafe (direita +), y = frente (+ = W), mag = 0..1 */
   function setStick(px, py) {
     const dx = num(px), dy = num(py);
+    rawX = dx; rawY = dy;
     const len = Math.hypot(dx, dy);
+    /* subindo DENTRO do cone: -dy/len = cosseno do ângulo com a vertical */
+    const subindo = -dy > 0 && -dy >= len * coneCos;
+    if (travaOn) {
+      if (!travado && subindo && -dy >= lockDist) travado = true;
+      else if (travado && dy > radius * dz) travado = false;   // puxou pra trás
+    }
+    perto = travaOn && !travado && subindo && len >= radius;
+    if (travado) {
+      /* corrida CHEIA na direção do dedo; polegar descansando no centro =
+         em frente (é o "auto sprint" do WZM, não um acelerador de meio curso) */
+      if (len <= radius * dz) { move.x = 0; move.y = 1; move.mag = 1; return; }
+      move.x = dx / len; move.y = -dy / len; move.mag = 1;
+      return;
+    }
     if (len <= 0) { zeroMove(); return; }
     let m = len / radius;
     if (m > 1) m = 1;                       // fora do raio = talo, não mais
@@ -154,6 +213,7 @@ export function createTouchCore(options) {
     stickId = id;
     owners.set(id, 'stick');
     move.active = true;
+    travado = false;
     setStick(x, y);
     return true;
   }
@@ -167,8 +227,20 @@ export function createTouchCore(options) {
     owners.delete(id);
     stickId = null;
     move.active = false;
+    travado = false;
+    perto = false;
     zeroMove();
     return true;
+  }
+  /* veículo liga/desliga a permissão. Desligar com a trava engatada solta na
+     hora e devolve ao movimento o que o DEDO está pedindo agora. */
+  function setSprintLock(on) {
+    travaOn = !!on;
+    if (travaOn) return;
+    perto = false;
+    if (!travado) return;
+    travado = false;
+    if (stickId !== null) setStick(rawX, rawY);
   }
 
   function onLookStart(id, x, y) {
@@ -251,6 +323,8 @@ export function createTouchCore(options) {
     stickId = null;
     lookId = null;
     move.active = false;
+    travado = false;
+    perto = false;
     zeroMove();
     look.dx = 0;
     look.dy = 0;
@@ -260,15 +334,57 @@ export function createTouchCore(options) {
     onStickStart, onStickMove, onStickEnd,
     onLookStart, onLookMove, onLookEnd, takeLook,
     press, release, releasePointer, releaseAll,
-    onPressMove, setFireLook,
+    onPressMove, setFireLook, setSprintLock,
     get fireLook() { return fireLook; },
     pressed: act => held.has(act),
     roleOf: id => { const r = owners.get(id); return r === undefined ? null : r; },
     getMove: () => move,
     lookActive: () => lookId !== null,
     stickActive: () => stickId !== null,
+    /* corrida travada (ver SPRINT_LOCK_R) e "dedo a caminho da trava" */
+    locked: () => travado,
+    nearLock: () => perto,
+    /* quantos dedos ainda são donos de alguma coisa (pointercancel: o último
+       que sai é quem autoriza soltar a mira alternada — ver camada DOM) */
+    ativos: () => owners.size,
     radius, deadzone: dz,
   };
+}
+
+/* ================================================================
+   BOTÕES CONTEXTUAIS (C8) — puro
+   ================================================================ */
+
+/* Os botões que só aparecem quando servem (referência §4.1/§4.5: CoD Mobile
+   "this button will pop-up"; Critical Ops "The touch button appears when you
+   can pick up an item"). O resto do cluster é fixo: o gatilho, a mira, pular,
+   agachar e recarregar servem sempre. */
+export const CONTEXT_ACTS = Object.freeze(['use', 'eat', 'med', 'nade']);
+const CONTEXT_SET = new Set(CONTEXT_ACTS);
+
+/* `disponivel(act)` é a leitura do JOGO (inventário, #prompt, baú do BR). As
+   duas travas daqui são de segurança, não de gosto:
+   · botão SEGURADO fica — some com o dedo em cima e o toque seguinte cai na
+     área de mira, o `keyup` casado vira órfão e o jogador perde o gesto;
+   · fiação ausente, lixo ou exceção = VISÍVEL. Um defeito na leitura do jogo
+     pode no máximo mostrar um botão a mais, nunca apagar o kit médico. */
+export function botaoVisivel(act, disponivel, pressionado) {
+  if (!CONTEXT_SET.has(act) || pressionado || typeof disponivel !== 'function') return true;
+  try { return !!disponivel(act); } catch (e) { return true; }
+}
+
+/* ================================================================
+   ARMAS COMO ÍCONES (C7) — puro
+   ================================================================ */
+
+/* Rótulo curto do ícone: a primeira palavra do nome declarado em
+   js/weapons.js ("FUZIL", "DMR", "FACA"...). O número do slot mora no próprio
+   ícone, então as duas ESCOPETAS continuam distintas. */
+export function rotuloArma(nome) {
+  if (typeof nome !== 'string') return '';
+  const t = nome.trim();
+  if (!t) return '';
+  return t.split(/\s+/)[0];
 }
 
 /* ================================================================
@@ -345,6 +461,17 @@ export function saveTouchSetting(settings, key, value, persist) {
   try { if (typeof persist === 'function') persist(); return true; }
   catch (e) { return false; }
 }
+/* "Restaurar padrão" (C9): devolve TODAS as chaves de toque ao padrão de
+   js/config.js e só elas (volume, resolução etc. são de outra seção). Mesma
+   regra do saveTouchSetting: vale na sessão primeiro, persistir é melhor
+   esforço — cota cheia não pode prender o jogador no ajuste que ele quis
+   desfazer. */
+export function restaurarToque(settings, persist) {
+  if (!settings || typeof settings !== 'object') return false;
+  for (const k of Object.keys(TOUCH_DEFAULTS)) settings[k] = TOUCH_DEFAULTS[k];
+  try { if (typeof persist === 'function') persist(); return true; }
+  catch (e) { return false; }
+}
 
 /* ================================================================
    CAMADA DOM
@@ -370,7 +497,9 @@ const KEY_OF = {
 };
 
 const IDS = { root: 'touchUI', move: 'tcMove', knob: 'tcMoveKnob', look: 'tcLook', btns: 'tcBtns',
-  btnsL: 'tcBtnsL' };   // segundo ATIRAR, à esquerda (fora do cluster: é do polegar ESQUERDO)
+  btnsL: 'tcBtnsL',     // segundo ATIRAR, à esquerda (fora do cluster: é do polegar ESQUERDO)
+  armas: 'tcArmas',     // armas como ícones tocáveis (C7)
+  trava: 'tcTrava' };   // alvo da trava de corrida, acima do analógico
 /* aviso de orientação: o nó do aviso e o botão de escape (ver createOrientationGate) */
 const GATE_IDS = { gate: 'rotateGate', play: 'rgPlay' };
 
@@ -454,9 +583,21 @@ export function createTouchControls(deps) {
       /* sem toque não há ajuste de toque, escala de ADS nem tiro automático:
          o mouse segue com o `pointerSpeed` de sempre */
       cfg, lookScale: () => 1, setAutoFire() {}, bindSettings() {}, autoFire: false,
-      lookIsTouch: false,
+      lookIsTouch: false, sprintLocked: false,
     };
   }
+
+  /* LEITURAS DO JOGO (fiação em game.js; todas opcionais — sem elas o toque
+     se comporta como antes desta rodada, e nenhum botão some):
+     · `arsenal` + `armaAtiva()` + `trocarArma(i)` — C7, armas como ícones
+       tocáveis: qualquer arma em UM toque, pelo índice (CoD Mobile: "Tapping
+       the stowed weapon will take it out and make it the current weapon").
+     · `disponivel(act)` — C8, o botão aparece quando serve (ver botaoVisivel).
+     Nenhuma delas aloca por chamada: são lidas uma vez por frame. */
+  const arsenal = Array.isArray(d.arsenal) ? d.arsenal : null;
+  const armaAtiva = typeof d.armaAtiva === 'function' ? d.armaAtiva : null;
+  const trocarArma = typeof d.trocarArma === 'function' ? d.trocarArma : null;
+  const disponivel = typeof d.disponivel === 'function' ? d.disponivel : null;
 
   /* estado do tiro automático: o que a assistência pediu neste frame, e se
      foi ele (e não um dedo) que segurou o gatilho — ver syncMouse */
@@ -487,6 +628,9 @@ export function createTouchControls(deps) {
        takeLook não era dedo — game.js desliga assistência e automático */
     get lookIsTouch() { return dedoNoQuadro; },
     setPlaying, releaseAll, frame, bindSettings,
+    /* corrida travada pelo analógico (SPRINT_LOCK_R). O jogo não precisa ler:
+       travado, o módulo sai 1 e o `mag > SPRINT_MAG` de sempre já corre. */
+    get sprintLocked() { return core.locked(); },
     /* rad/px do olhar JÁ com o ajuste do jogador (a razão Y/X e o zoom são
        aplicados por quem gira a câmera: game.js applyTouchLook) */
     get lookSens() { return LOOK_RAD_PER_CSS_PX * cfg.look; },
@@ -507,11 +651,56 @@ export function createTouchControls(deps) {
   const lookEl = doc.getElementById(IDS.look);
   const btnsEl = doc.getElementById(IDS.btns);
   const btnsLEl = doc.getElementById(IDS.btnsL);
-  api.el = { root, move: moveEl, knob: knobEl, look: lookEl, btns: btnsEl, btnsL: btnsLEl };
+  const armasEl = doc.getElementById(IDS.armas);
+  /* alvo da trava de corrida: nasce aqui se o HTML não o trouxe (andaime) */
+  let travaEl = doc.getElementById(IDS.trava);
+  if (!travaEl && moveEl) {
+    travaEl = doc.createElement('div');
+    travaEl.id = IDS.trava;
+    travaEl.setAttribute('aria-hidden', 'true');
+    travaEl.textContent = '⇈';
+    moveEl.appendChild(travaEl);
+  }
+  api.el = { root, move: moveEl, knob: knobEl, look: lookEl, btns: btnsEl, btnsL: btnsLEl,
+    armas: armasEl, trava: travaEl };
 
   /* `touch-action:none` é FUNCIONAL, não enfeite: sem ele o navegador
      rola/dá zoom e cancela a sequência de pointermove no meio do arrasto. */
-  for (const el of [moveEl, lookEl, btnsEl, btnsLEl]) if (el) el.style.touchAction = 'none';
+  for (const el of [moveEl, lookEl, btnsEl, btnsLEl, armasEl]) if (el) el.style.touchAction = 'none';
+
+  /* ---- C8: botões contextuais (act -> elementos), lidos UMA vez ---- */
+  const ctxEls = {};
+  const ctxShown = {};
+  if (btnsEl) {
+    for (const b of btnsEl.querySelectorAll('.tcBtn[data-act]')) {
+      const act = b.dataset.act;
+      if (!CONTEXT_SET.has(act)) continue;
+      (ctxEls[act] || (ctxEls[act] = [])).push(b);
+    }
+  }
+
+  /* ---- C7: armas como ícones. Um botão por arma, na ORDEM do arsenal: a
+     posição de cada arma nunca muda (memória do polegar), a trancada fica no
+     lugar dela, apagada e sem receber toque. ---- */
+  const chips = [];
+  if (arsenal && armaAtiva && trocarArma && armasEl) {
+    for (let i = 0; i < arsenal.length; i++) {
+      const w = arsenal[i] || {};
+      const b = doc.createElement('button');
+      b.type = 'button';
+      b.className = 'tcArma';
+      b.dataset.slot = String(i);
+      const n = doc.createElement('b');
+      n.textContent = String(i + 1);
+      const r = doc.createElement('small');
+      r.textContent = rotuloArma(w.name);
+      b.append(n, r);
+      b.setAttribute('aria-label', `Arma ${i + 1}: ${typeof w.name === 'string' ? w.name : ''}`);
+      armasEl.appendChild(b);
+      chips.push({ el: b, rotulo: r, nome: r.textContent });
+    }
+    html.classList.add('armas');   // CSS troca o #slots do HUD por esta barra
+  }
 
   const KeyEv = win.KeyboardEvent || (typeof KeyboardEvent !== 'undefined' ? KeyboardEvent : null);
   const WheelEv = win.WheelEvent || (typeof WheelEvent !== 'undefined' ? WheelEvent : null);
@@ -587,6 +776,9 @@ export function createTouchControls(deps) {
     if (!btn) return;
     const act = btn.dataset.act;
     if (!ACTS.has(act)) return;
+    /* contextual escondido não é botão (C8). O dedo de verdade nem chega aqui
+       (`visibility: hidden` não recebe toque); isto cobre evento despachado */
+    if (btn.classList.contains('tcFora')) return;
     e.preventDefault();               // sem isto vem mousedown de compatibilidade
     if (act !== 'pause' && !live()) return;
     if (!core.press(act, e.pointerId, e.clientX, e.clientY)) return;
@@ -614,7 +806,34 @@ export function createTouchControls(deps) {
     knobSpan = Math.max(12, Math.min(r.width, r.height) * 0.3);
     knobOX = originX - (r.left + r.width / 2);
     knobOY = originY - (r.top + r.height / 2);
+    /* o alvo da trava fica ONDE ela engata: SPRINT_LOCK_R raios acima do
+       ponto em que o dedo encostou (a origem é flutuante). Escrito uma vez por
+       gesto — só aparece quando o dedo passa do talo subindo (`perto`). */
+    if (travaEl) {
+      /* o filho absoluto mede a partir da caixa de PADDING do anel, dentro
+         da borda de 2 px — sem descontar a borda o alvo saía 2 px abaixo do
+         ponto em que a trava engata (o teste achou 90,5 px contra 92,8) */
+      const tx = originX - r.left - (moveEl.clientLeft || 0);
+      const ty = originY - r.top - (moveEl.clientTop || 0) - core.radius * SPRINT_LOCK_R;
+      travaEl.style.transform = `translate3d(${tx.toFixed(1)}px,${ty.toFixed(1)}px,0)`;
+    }
     capture(moveEl, e.pointerId);
+  }
+
+  /* ---- C7: toque no ícone de uma arma = essa arma, já ----
+     Na DESCIDA do dedo, como todo botão deste módulo: é o quadro mais cedo
+     possível, e um dedo que depois arrasta não vira olhar (ele não é dono de
+     nada no núcleo, então o pointermove dele é ignorado). */
+  function onArmaDown(e) {
+    const b = e.target && e.target.closest ? e.target.closest('.tcArma[data-slot]') : null;
+    if (!b) return;
+    e.preventDefault();               // mesmo motivo do onBtnDown (mouse de compatibilidade)
+    if (!live()) return;
+    const i = Number(b.dataset.slot);
+    const w = arsenal[i];
+    if (!w || w.locked) return;
+    trocarArma(i);
+    syncArmas();                      // o destaque anda no mesmo quadro do toque
   }
 
   /* ---- olhar ---- */
@@ -650,6 +869,17 @@ export function createTouchControls(deps) {
     if (role === null) return;
     if (role === 'stick' || role === 'look') core.releasePointer(e.pointerId);
     else letGo(role);
+  }
+  /* pointercancel é o SISTEMA tomando o gesto (notificação puxada, gesto de
+     borda, chamada). Cada dedo cancelado solta o que segurava, como no
+     pointerup; e quando o ÚLTIMO dedo que era dono de algo sai assim, o resto
+     do estado vai junto — inclusive a MIRA alternada, que nenhum dedo segura
+     (C10: "pointercancel de todos os dedos: a MIRA segue ligada"). Um dedo
+     estranho (fora dos controles) cancelado não mexe em nada. */
+  function onPointerCancel(e) {
+    const dono = core.roleOf(e.pointerId) !== null;
+    onPointerUp(e);
+    if (dono && core.ativos() === 0) releaseAll();
   }
 
   function releaseAll() {
@@ -717,9 +947,53 @@ export function createTouchControls(deps) {
     html.classList.toggle('br', on);
   }
 
+  /* ---- C8: o botão aparece quando serve ----
+     Esconde com `visibility` (classe `tcFora`), NUNCA com `display`: a célula
+     do grid continua ocupada e nenhum outro botão anda de lugar — memória do
+     polegar. Escreve só na transição. */
+  function syncContexto() {
+    if (!disponivel) return;
+    for (let i = 0; i < CONTEXT_ACTS.length; i++) {
+      const act = CONTEXT_ACTS[i];
+      const on = botaoVisivel(act, disponivel, core.pressed(act));
+      if (ctxShown[act] === on) continue;
+      ctxShown[act] = on;
+      const els = ctxEls[act];
+      if (els) for (let k = 0; k < els.length; k++) els[k].classList.toggle('tcFora', !on);
+    }
+  }
+  /* ---- C7: a barra de armas acompanha o arsenal ----
+     Assinatura numérica (arma ativa + máscara de trancadas): comparar um
+     número por frame, reescrever o DOM só quando o arsenal muda. */
+  let armasSig = -1;
+  function syncArmas() {
+    if (!chips.length) return;
+    let ativa;
+    try { ativa = armaAtiva(); } catch (e) { ativa = -1; }
+    if (typeof ativa !== 'number' || !Number.isInteger(ativa)) ativa = -1;
+    let mask = 0;
+    for (let i = 0; i < chips.length && i < 30; i++) if (arsenal[i] && arsenal[i].locked) mask |= 1 << i;
+    const sig = mask * 64 + (ativa + 1);
+    if (sig === armasSig) return;
+    armasSig = sig;
+    for (let i = 0; i < chips.length; i++) {
+      const c = chips[i];
+      const tranc = !!(arsenal[i] && arsenal[i].locked);
+      c.el.classList.toggle('ativa', i === ativa);
+      c.el.classList.toggle('tranc', tranc);
+      c.el.setAttribute('aria-pressed', i === ativa ? 'true' : 'false');
+      c.el.setAttribute('aria-disabled', tranc ? 'true' : 'false');
+      c.rotulo.textContent = tranc ? '🔒' : c.nome;
+    }
+  }
+
   function frame(inVehicle) {
     syncMouse();
     syncBR();
+    syncContexto();
+    syncArmas();
+    /* dirigindo, a trava de corrida sai: o analógico vira volante binário */
+    core.setSprintLock(!inVehicle);
     const m = core.getMove();
     /* dirigindo/voando, playerUpdate nem roda (game.js:2530) — quem lê
        input é js/car.js / js/heli.js, e os dois só entendem `keys` */
@@ -729,7 +1003,11 @@ export function createTouchControls(deps) {
     setVeh('KeyS', hyst(veh.KeyS, -y));
     setVeh('KeyD', hyst(veh.KeyD, x));
     setVeh('KeyA', hyst(veh.KeyA, -x));
-    if (moveEl) moveEl.classList.toggle('on', m.active);
+    if (moveEl) {
+      moveEl.classList.toggle('on', m.active);
+      moveEl.classList.toggle('trava', core.locked());
+      moveEl.classList.toggle('perto', core.nearLock());
+    }
     if (!knobEl) return;
     // dedo fora: a origem flutuante deixa de valer e a bolinha volta ao centro
     // desenhado (senão ela fica parada onde o último toque começou)
@@ -785,9 +1063,10 @@ export function createTouchControls(deps) {
   if (btnsLEl) btnsLEl.addEventListener('pointerdown', onBtnDown);
   if (moveEl) moveEl.addEventListener('pointerdown', onMoveDown);
   if (lookEl) lookEl.addEventListener('pointerdown', onLookDown);
+  if (armasEl && chips.length) armasEl.addEventListener('pointerdown', onArmaDown);
   win.addEventListener('pointermove', onPointerMove);
   win.addEventListener('pointerup', onPointerUp);
-  win.addEventListener('pointercancel', onPointerUp);
+  win.addEventListener('pointercancel', onPointerCancel);
   win.addEventListener('lostpointercapture', onPointerUp);
   win.addEventListener('blur', releaseAll);
   doc.addEventListener('visibilitychange', () => { if (doc.hidden) releaseAll(); });
@@ -830,7 +1109,23 @@ export function createTouchControls(deps) {
         mostrar(el, key, mul);
       });
     }
+    /* C9: "restaurar padrão" da seção de toque (CoD Mobile e WZM têm; aqui
+       era slider por slider, de memória). Vale na hora, repinta os sete
+       controles e persiste por melhor esforço (restaurarToque engole a cota). */
+    const reset = doc.getElementById('setTReset');
+    if (reset) {
+      reset.addEventListener('click', () => {
+        restaurarToque(settings, persist);
+        aplicarCfg();
+        for (const [id, key, mul] of LINHAS) {
+          const el = doc.getElementById(id);
+          if (el) mostrar(el, key, mul);
+        }
+      });
+    }
   }
+
+  syncArmas();   // a barra nasce certa, antes do primeiro frame
 
   return api;
 }

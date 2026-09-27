@@ -188,6 +188,10 @@
         <div class="srow"><span>Assistência de mira</span><select id="setTAssist"><option value="1" selected>Ligada</option><option value="0">Desligada</option></select></div>
         <div class="srow"><span>Tiro automático</span><select id="setTAuto"><option value="0" selected>Desligado</option><option value="1">Ligado</option></select></div>
         <div class="srow"><span>Segundo ATIRAR à esquerda</span><select id="setTFireL"><option value="0" selected>Não</option><option value="1">Sim</option></select></div>
+        <!-- critério C9: volta os sete ajustes de toque ao padrão (js/config.js),
+             e só eles. Ligado por js/touchcontrols.js (bindSettings). É AÇÃO,
+             não ajuste: fica fora das linhas .srow (que são os sete ajustes). -->
+        <div class="sfim"><button type="button" id="setTReset">Restaurar padrão</button></div>
       </div>
       <div class="mbtn sec" id="btnBack" role="button" tabindex="0" style="margin-top:14px">VOLTAR</div>
     </div>
@@ -251,7 +255,10 @@
      ================================================================ -->
 <div id="touchUI">
   <div id="tcLook" aria-hidden="true"></div>
-  <div id="tcMove" aria-hidden="true"><div id="tcMoveKnob"></div></div>
+  <!-- #tcTrava: o alvo da TRAVA DE CORRIDA (PUBG "running mode", WZM "lock
+       Auto Sprint to a button above the virtual stick"). Só aparece quando o
+       dedo passa do talo subindo; quem posiciona é js/touchcontrols.js. -->
+  <div id="tcMove" aria-hidden="true"><div id="tcMoveKnob"></div><div id="tcTrava" aria-hidden="true">⇈</div></div>
   <div id="tcBtns">
     <button type="button" class="tcBtn" data-act="chat"   aria-label="Abrir o chat da partida">💬</button>
     <button type="button" class="tcBtn" data-act="pause"  aria-label="Pausar">≡</button>
@@ -276,6 +283,13 @@
   <div id="tcBtnsL">
     <button type="button" class="tcBtn" data-act="fireL" aria-label="Atirar (esquerda)">◉</button>
   </div>
+  <!-- ARMAS COMO ÍCONES TOCÁVEIS (critério C7: qualquer arma em UM toque).
+       CoD Mobile: "Tapping the stowed weapon will take it out and make it the
+       current weapon". Fora do cluster (a zona do polegar já está cheia), no
+       topo direito. Os botões nascem no JS, um por arma do arsenal e na ordem
+       dele — só existem com a fiação do game.js; sem ela o #slots de sempre
+       continua na tela (html.armas, ver style.css). -->
+  <div id="tcArmas" role="toolbar" aria-label="Armas"></div>
 </div>
 
 <!-- Aviso de orientação: o jogo é SÓ paisagem. Só aparece com

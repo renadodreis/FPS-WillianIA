@@ -944,18 +944,36 @@
   .tcBtn[data-act="crouch"] { grid-area: crouch; }
   .tcBtn[data-act="jump"]   { grid-area: jump; }
 
+  /* O ALVO É O QUADRADO INTEIRO; o desenho arredondado mora no ::before.
+     `border-radius` também recorta o HIT TEST: um botão de 48 px com cantos de
+     14 px só recebia o dedo num quadrado de 40 px (critério C2, medido por
+     `elementFromPoint`) — os quatro cantos caíam na área de mira. Apple HIG:
+     "a button needs a hit region of at least 44x44 pt" — REGIÃO DE TOQUE, não
+     desenho. O visual não mudou um pixel; os cantos passaram a ser do botão.
+     O gatilho é a exceção de propósito: continua círculo (72 px úteis de
+     sobra) e os cantos dele seguem sendo área de mira. */
   .tcBtn { pointer-events: auto; touch-action: none;
     -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
     min-width: 48px; min-height: 48px;   /* alvo de toque REAL, não padding */
     display: flex; align-items: center; justify-content: center;
     -webkit-appearance: none; appearance: none; cursor: pointer;
-    border: 1px solid rgba(255,255,255,0.30); border-radius: 14px;
-    background: rgba(10,14,22,0.40); color: rgba(240,248,255,0.92);
+    position: relative; isolation: isolate;
+    border: 0; border-radius: 0; background: transparent;
+    --tcBd: rgba(255,255,255,0.30); --tcBg: rgba(10,14,22,0.40); --tcR: 14px;
+    color: rgba(240,248,255,0.92);
     font-family: inherit; font-weight: 700; line-height: 1;
     font-size: clamp(15px, 3.6vmin, 22px); letter-spacing: .04em;
     text-shadow: 0 1px 2px rgba(0,0,0,0.85); }
-  .tcBtn[data-act="fire"] { border-radius: 50%; font-size: clamp(24px, 6vmin, 40px);
-    border-color: rgba(255,255,255,0.42); background: rgba(18,24,34,0.46); }
+  .tcBtn::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+    border: 1px solid var(--tcBd); border-radius: var(--tcR); background: var(--tcBg); }
+  .tcBtn[data-act="fire"] { border-radius: 50%; --tcR: 50%; font-size: clamp(24px, 6vmin, 40px);
+    --tcBd: rgba(255,255,255,0.42); --tcBg: rgba(18,24,34,0.46); }
+  /* C8 — O BOTÃO APARECE QUANDO SERVE (USAR, COMER, KIT, GRANADA; ver
+     botaoVisivel em js/touchcontrols.js). `visibility` e NÃO `display`: a
+     célula do grid continua ocupada, nenhum outro botão anda (memória do
+     polegar), e o buraco devolve área de MIRA ao polegar direito — o toque
+     ali cai no #tcLook. */
+  .tcBtn.tcFora { visibility: hidden; }
   .tcBtn[data-act="ads"], .tcBtn[data-act="use"], .tcBtn[data-act="inv"]
     { font-size: clamp(10px, 2.4vmin, 14px); letter-spacing: .12em; }
   .tcBtn[data-act="med"] { color: #ff8478; }
@@ -967,8 +985,8 @@
   html.mobile.br .tcBtn[data-act="chat"] { display: flex; }
   /* pressionado: SÓ cor. Sem filter, sem box-shadow espalhado, sem
      transição — o dedo precisa da resposta no frame do toque. */
-  .tcBtn.on { background: rgba(255,182,66,0.42); border-color: #ffd76a; color: #fff6de; }
-  .tcBtn[data-act="med"].on { background: rgba(255,90,74,0.45); border-color: #ff8478; color: #fff; }
+  .tcBtn.on { --tcBg: rgba(255,182,66,0.42); --tcBd: #ffd76a; color: #fff6de; }
+  .tcBtn[data-act="med"].on { --tcBg: rgba(255,90,74,0.45); --tcBd: #ff8478; color: #fff; }
   .tcBtn:focus-visible { outline: 2px solid #ffd76a; outline-offset: 2px; }
 
   /* SEGUNDO ATIRAR (polegar esquerdo). Nasce escondido: só com o ajuste
@@ -981,8 +999,73 @@
     bottom: calc(env(safe-area-inset-bottom, 0px) + var(--tcEdgeY)); }
   html.mobile.fireL #tcBtnsL { display: block; }
   .tcBtn[data-act="fireL"] { width: calc(var(--tcb) * 1.4); height: calc(var(--tcb) * 1.4);
-    border-radius: 50%; font-size: clamp(22px, 5.4vmin, 36px);
-    border-color: rgba(255,255,255,0.42); background: rgba(18,24,34,0.46); }
+    border-radius: 50%; --tcR: 50%; font-size: clamp(22px, 5.4vmin, 36px);
+    --tcBd: rgba(255,255,255,0.42); --tcBg: rgba(18,24,34,0.46); }
+
+  /* TRAVA DE CORRIDA (js/touchcontrols.js, SPRINT_LOCK_R — PUBG "running
+     mode", WZM "lock Auto Sprint to a button above the virtual stick").
+     #tcTrava é o ALVO: aparece só quando o dedo já passou do talo subindo
+     (`.perto`), exatamente onde a trava engata — antes disso ele cobriria o
+     killfeed, que mora logo acima do analógico. Travado, quem avisa é o
+     próprio anel (dourado, com ⇈ dentro dele: nada sai do círculo). */
+  #tcTrava { position: absolute; left: 0; top: 0; width: 44px; height: 44px; margin: -22px 0 0 -22px;
+    display: none; align-items: center; justify-content: center; border-radius: 50%;
+    border: 2px dashed rgba(255,215,106,0.85); background: rgba(10,14,22,0.35);
+    color: #ffd76a; font-size: 20px; font-weight: 800; line-height: 1;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85); pointer-events: none; }
+  #tcMove.perto #tcTrava { display: flex; }
+  #tcMove.trava { border-color: #ffd76a; background: rgba(255,182,66,0.16); }
+  #tcMove.trava #tcMoveKnob { background: rgba(255,215,106,0.85); border-color: #fff6de; }
+  #tcMove.trava::after { content: '⇈'; position: absolute; left: 50%; top: 5px; transform: translateX(-50%);
+    color: #ffd76a; font-size: 14px; font-weight: 800; line-height: 1; pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85); }
+
+  /* ARMAS COMO ÍCONES TOCÁVEIS (critério C7 — CoD Mobile: "Tapping the stowed
+     weapon will take it out and make it the current weapon"). Antes, a troca
+     era o ⇄ que só anda pra frente: até 7 toques entre duas das 8 armas do BR,
+     e tocar a arma no #slots caía no canvas (#hud é pointer-events: none).
+     · TOPO DIREITO, fora do cluster: a zona do polegar já está cheia, e o
+       topo direito é o vão livre mais perto do polegar direito (o centro fica
+       longe dos dois). A barra encosta à direita e, em V1 (667 px), ainda
+       sobra vão até a barra de VIDA.
+     · Uma posição FIXA por arma, na ordem do arsenal (1..8): a trancada fica
+       no lugar dela, apagada e sem receber toque — nada anda quando uma arma
+       destranca (memória do polegar).
+     · 44 px de ALVO (Apple HIG / WCAG 2.5.5), quadrado inteiro: o desenho
+       arredondado mora no ::before, como no .tcBtn.
+     Só existe com a fiação do game.js (`html.armas`); sem ela o #slots de
+     sempre continua na tela. */
+  html.mobile {
+    --tcArma: 44px; --tcArmaGap: 3px;
+    --tcArmasW: calc(var(--tcArma) * 8 + var(--tcArmaGap) * 7);
+  }
+  #tcArmas { position: absolute; z-index: 2; display: none; pointer-events: none;
+    top: var(--hudT); right: var(--hudR); gap: var(--tcArmaGap); }
+  html.mobile.armas #tcArmas { display: flex; }
+  .tcArma { pointer-events: auto; touch-action: none; position: relative; isolation: isolate;
+    flex: none; width: var(--tcArma); height: var(--tcArma); padding: 0; margin: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    -webkit-appearance: none; appearance: none; border: 0; border-radius: 0; background: transparent;
+    color: rgba(240,248,255,0.9); font-family: inherit; line-height: 1; cursor: pointer;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85); }
+  .tcArma::before { content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+    border: 1px solid rgba(255,255,255,0.26); border-radius: 8px; background: rgba(8,12,18,0.62); }
+  .tcArma b { font-size: 15px; font-weight: 800; }
+  .tcArma small { font-size: 7.5px; font-weight: 700; letter-spacing: 0; opacity: .88;
+    max-width: calc(100% - 4px); overflow: hidden; white-space: nowrap; }
+  .tcArma.ativa { color: #fff6de; }
+  .tcArma.ativa::before { background: rgba(255,182,66,0.42); border-color: #ffd76a; }
+  /* trancada: continua no lugar (leitura do que falta), mas não é alvo — o
+     toque ali cai na área de mira */
+  .tcArma.tranc { pointer-events: none; opacity: .38; }
+  .tcArma:focus-visible { outline: 2px solid #ffd76a; outline-offset: 1px; }
+  /* a barra SUBSTITUI o #slots do HUD em partida (é a mesma leitura: qual está
+     ativa, quais estão trancadas). Na pausa o #touchUI some e o #slots volta. */
+  html.mobile.playing.armas #slots { display: none; }
+  /* o FPS/ping e os pontos do solo desciam por baixo da barra */
+  html.mobile.armas #fps { top: calc(var(--hudT) + var(--tcArma) + 6px); }
+  html.mobile.armas #score { top: calc(var(--hudT) + var(--tcArma) + 20px); }
 
   /* AJUSTES DE TOQUE no menu: só existem no celular. O `<output>` mostra o
      valor do slider ao lado do rótulo (sensibilidade sem número é chute). */
@@ -990,6 +1073,14 @@
   html.mobile #settings .touchOnly { display: block; }
   #settings .srow output { margin-left: 6px; color: #ffd76a; font-weight: 700;
     font-variant-numeric: tabular-nums; }
+  /* C9: "restaurar padrão" da seção de toque — alvo de 44 px, largo (o texto
+     é o rótulo; o quadrado útil não perde nada nos cantos) */
+  #settings .touchOnly .sfim { display: flex; justify-content: flex-end; margin: 6px 0 2px; }
+  #setTReset { min-height: 44px; min-width: 44px; padding: 0 14px; cursor: pointer;
+    font: inherit; font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
+    color: #ffd76a; background: rgba(255,215,106,0.08);
+    border: 1px solid rgba(255,215,106,0.45); border-radius: 8px; }
+  #setTReset:active { background: rgba(255,182,66,0.34); }
 
   /* ================= #rotateGate ================= */
   /* z-index 400 (e não 300): o lobby do BR (.brPanel, multiplayer-client.js)
@@ -1141,6 +1232,12 @@
   html.mobile #brToast { right: var(--ammoR); bottom: calc(var(--hudB) + 132px);
     font-size: 11px; max-height: clamp(52px, 18vh, 120px); overflow: hidden; }
   html.mobile #brToast div { padding: 3px 9px; flex: none; }
+  /* com o SEGUNDO ATIRAR ligado, o chat e os toasts sobem acima dele. O
+     "topo do 2º ATIRAR fica abaixo do chat" só valia com o botão de 48 px: no
+     tablet (V5, --tcb 74) ele tem 104 px e entrava 2376 px² no chat. */
+  html.mobile { --fireLTop: calc(env(safe-area-inset-bottom, 0px) + var(--tcEdgeY) + var(--tcb) * 1.4); }
+  html.mobile.fireL #brChat { bottom: max(calc(var(--hudB) + 72px), calc(var(--fireLTop) + 6px)); }
+  html.mobile.fireL #brToast { bottom: max(calc(var(--hudB) + 132px), calc(var(--fireLTop) + 66px)); }
   /* ARSENAL COMPACTO. Esconder os slots apagava a ÚNICA leitura de qual arma
      está ativa e de quais estão trancadas (🔒) — e no toque a troca é o botão
      `swap`, que só anda pra frente: ciclar às cegas custa até 7 toques. O nome
@@ -1182,6 +1279,10 @@
     max-width: calc(100vw - var(--hudL) - var(--ammoR));
     max-height: calc(100vh - var(--hudT) - var(--stickT) - 10px);
     padding: 12px 14px; font-size: 12px; }
+  /* ...e pela barra de ARMAS no topo direito (C7): em 667 px o painel de
+     320 px entrava 36 px embaixo dos ícones — que ficam POR CIMA (#touchUI) */
+  html.mobile.armas #invPanel { max-width: min(calc(100vw - var(--hudL) - var(--ammoR)),
+    calc(100vw - var(--hudL) - var(--hudR) - var(--tcArmasW) - 8px)); }
   html.mobile #invPanel h3 { font-size: 11px; letter-spacing: 2px; margin-bottom: 8px; }
   html.mobile .invRow { padding: 3px 0; }
 
@@ -1260,7 +1361,45 @@
   html.mobile #mpPanel .brCount { font-size: 40px; }
   html.mobile #mpPanel .brBtn { min-height: 48px; margin-top: 12px; }
   html.mobile #mpPanel .brInput { min-height: 44px; font-size: 16px; }
-  html.mobile #brFlags input[type=checkbox] { width: 20px; height: 20px; }
+  /* ALVOS DO LOBBY ≥ 44 px (critério C2; Apple HIG 44 pt, WCAG 2.5.5 44 px).
+     Medidos antes: presets de cor com 22 px, cores com 34 px, regras com 20 px.
+     · o "OK" do anfitrião tinha ~46 px de largo com cantos de 8 px: o quadrado
+       útil caía abaixo de 44 — largura mínima de 64 px resolve sem mexer no
+       desenho; */
+  html.mobile #mpPanel #brHostBtn { min-width: 64px; }
+  /* · paletas prontas e o dado: 48 px de altura e folga lateral, para o
+       quadrado útil não morrer nos cantos arredondados; */
+  html.mobile #mpPanel .brPreset, html.mobile #mpPanel #brRandom {
+    min-height: 48px; min-width: 56px; padding: 0 12px !important; font-size: 12px !important; }
+  /* · as quatro cores: o seletor nativo é o próprio alvo (sem cantos). A
+       linha das cores e a prévia 3D QUEBRAM de linha quando não cabem lado a
+       lado: em pé (390 px) a prévia sentava em cima da 4ª cor (0 px úteis) e
+       das paletas (36 px). 4 × 48 + 3 × 8 = 216 px é o piso da coluna. */
+  html.mobile #mpPanel .brCol4 { width: 48px; height: 48px; }
+  html.mobile #mpPanel .brCoresRow { flex-wrap: wrap; }
+  html.mobile #mpPanel .brCoresCol { flex: 1 1 216px; }
+  /* · tela estreita (retrato): as duas colunas do lobby empilham — lado a
+       lado, cada uma ficava com ~146 px e as regras viravam uma palavra por
+       linha */
+  @media (max-width: 600px) {
+    html.mobile #mpPanel .brRow { flex-direction: column; }
+    html.mobile #mpPanel .brCol { flex: none; width: 100%; }
+  }
+  /* · regras da sala: a caixa de 44 px é o ALVO; o desenho é um quadrado de
+       22 px no meio dela (borda transparente de 11 px + fundo só no
+       padding-box). `appearance: none` é o que deixa o alvo crescer sem o
+       checkbox virar um quadrado de 44 px na tela. */
+  html.mobile #brFlags label { min-height: 44px; }
+  html.mobile #brFlags input[type=checkbox] {
+    -webkit-appearance: none; appearance: none; flex: none; margin: 0; cursor: pointer;
+    width: 44px; height: 44px; box-sizing: border-box; border: 11px solid transparent; border-radius: 0;
+    background: rgba(255,255,255,0.08) padding-box;
+    box-shadow: inset 0 0 0 2px rgba(255,215,106,0.75); }
+  html.mobile #brFlags input[type=checkbox]:checked {
+    background: #ffd76a url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.2 8.4l3.1 3.1L12.8 5' fill='none' stroke='%231a1408' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 100% no-repeat padding-box;
+    box-shadow: none; }
+  html.mobile #brFlags input[type=checkbox]:disabled { opacity: .45; cursor: default; }
+  html.mobile #brFlags input[type=checkbox]:focus-visible { outline: 2px solid #ffd76a; outline-offset: -9px; }
 
   /* ================================================================
      RETRATO LIBERADO (`html.portraitok`) — o modo de quem NÃO consegue
@@ -1306,6 +1445,30 @@
     html.mobile.portraitok #brHint { bottom: calc(var(--clusterT) + 98px); }
     /* o arsenal cabe inteiro numa tela estreita se ceder o centro */
     html.mobile.portraitok #slots { max-width: calc(100vw - var(--hudL) - var(--hudR)); }
+    /* ARMAS em pé: a faixa do topo (minimapa + vida) não tem largura pra 8
+       ícones de 44 px ao lado. A barra ganha a PRÓPRIA faixa no topo e tudo que
+       se ancora em --hudT desce junto — a altura é o recurso que sobra em pé. */
+    html.mobile.portraitok.armas {
+      --tcArmasH: var(--tcArma);
+      --hudT: calc(env(safe-area-inset-top, 0px) + 6px + var(--tcArmasH) + 6px);
+    }
+    html.mobile.portraitok.armas #tcArmas { display: grid; top: calc(env(safe-area-inset-top, 0px) + 6px);
+      left: var(--hudL); right: var(--hudR); justify-content: center;
+      grid-template-columns: repeat(8, var(--tcArma)); }
+    html.mobile.portraitok.armas #fps { top: var(--hudT); }
+    html.mobile.portraitok.armas #score { top: calc(var(--hudT) + 15px); }
+    /* SEGUNDO ATIRAR em pé: à direita do analógico ele sentava em cima do
+       RECARREGAR (em 390 px sobram 32 px entre o analógico e o cluster) —
+       medido: ⟳ com 36 px úteis. Em pé ele sobe para CIMA do analógico, no
+       mesmo polegar, e o killfeed sobe junto para não ficar debaixo dele. */
+    html.mobile.portraitok #tcBtnsL { left: calc(env(safe-area-inset-left, 0px) + var(--tcEdgeX));
+      bottom: calc(var(--stickT) + var(--tcGap)); }
+    html.mobile.portraitok.fireL #killfeed { bottom: calc(var(--stickT) + var(--tcb) * 1.4 + 16px); }
+  }
+  /* em pé e estreito (360 px): 8 × 44 não cabem numa linha — duas de quatro */
+  @media (orientation: portrait) and (max-width: 388px) {
+    html.mobile.portraitok.armas { --tcArmasH: calc(var(--tcArma) * 2 + var(--tcArmaGap)); }
+    html.mobile.portraitok.armas #tcArmas { grid-template-columns: repeat(4, var(--tcArma)); }
   }
 
   /* landscape curto: com os controles em 44-48px as 7 linhas de CONFIGURAÇÕES

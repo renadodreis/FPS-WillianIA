@@ -716,3 +716,264 @@ describe('aviso de orientação — saída quando girar não resolve', () => {
     assert.equal(g.blocking(), true, 'sem matchMedia devia medir innerWidth/innerHeight');
   });
 });
+
+/* ================================================================
+   TRAVA DE CORRIDA (docs/mobile/referencia-mira-toque.md §4.2/§4.3 e P2-7).
+   PUBG Mobile: "drag the "Cross" icon and hold in running mode"; Warzone
+   Mobile: "lock Auto Sprint to a button above the virtual stick". Arrastar o
+   analógico ALÉM de um ponto acima dele trava a corrida; puxar para trás ou
+   soltar o dedo destrava. O limiar NÃO tem fonte (referência §5, item 10):
+   é inferência escrita no código, e o que este bloco trava é o COMPORTAMENTO
+   em volta dele — correr no talo de sempre nunca trava sem querer.
+   ================================================================ */
+describe('núcleo dos controles de toque — trava de corrida', () => {
+  let SPRINT_LOCK_R, SPRINT_LOCK_CONE;
+  before(async () => {
+    ({ SPRINT_LOCK_R, SPRINT_LOCK_CONE } = await import('../js/touchcontrols.js'));
+  });
+  const acima = f => -STICK_RADIUS * f;   // px de tela: y cresce pra BAIXO
+
+  it('dado o limiar declarado, então ele fica ALÉM do talo e dentro do alcance do polegar', () => {
+    assert.equal(typeof SPRINT_LOCK_R, 'number', 'falta a constante SPRINT_LOCK_R');
+    // além do talo (1,0 R) com folga: quem corre no talo passa do raio sem querer
+    assert.ok(SPRINT_LOCK_R >= 1.4, `limiar ${SPRINT_LOCK_R} R encosta no talo: trava sem querer`);
+    // 2,2 R = 128 px acima do dedo: o polegar ainda alcança sem soltar o aparelho
+    assert.ok(SPRINT_LOCK_R <= 2.2, `limiar ${SPRINT_LOCK_R} R longe demais do polegar`);
+    assert.ok(SPRINT_LOCK_CONE > 0 && SPRINT_LOCK_CONE < 45,
+      `cone de ${SPRINT_LOCK_CONE}° deixaria a diagonal de 45° travar`);
+  });
+
+  it('dado o dedo arrastado acima do limiar, então TRAVA — e a corrida fica com o dedo de volta perto do centro', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R) - 1);
+    assert.equal(c.locked(), true, 'arrastou acima do limiar e não travou');
+    c.onStickMove(1, 0, acima(0.25));           // polegar relaxa: 1/4 do raio
+    const m = c.getMove();
+    assert.equal(c.locked(), true, 'relaxar o polegar soltou a trava');
+    assert.ok(m.mag > SPRINT_MAG, `travado e o módulo caiu pra ${m.mag} (não corre)`);
+    assert.ok(Math.abs(m.mag - 1) < 1e-12, `travado corre CHEIO, veio ${m.mag}`);
+    assert.ok(Math.abs(m.y - 1) < 1e-12 && Math.abs(m.x) < 1e-12, `direção ${m.x},${m.y} não é a frente`);
+  });
+
+  it('dado o talo de sempre (até 1,3 R de sobra), então NÃO trava: soltar o polegar volta a andar', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, acima(1.3));
+    assert.equal(c.locked(), false, 'correr no talo travou sem o jogador pedir');
+    c.onStickMove(1, 0, acima(0.4));
+    assert.ok(c.getMove().mag < 0.5, `sem trava, 0,4 R devia andar devagar: ${c.getMove().mag}`);
+  });
+
+  it('dado o dedo acima do limiar mas fora do cone (diagonal), então NÃO trava', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    const r = STICK_RADIUS * SPRINT_LOCK_R * 1.5;
+    const a = (SPRINT_LOCK_CONE + 5) * Math.PI / 180;   // 5° fora do cone
+    c.onStickMove(1, r * Math.sin(a), -r * Math.cos(a));
+    assert.equal(c.locked(), false, `travou a ${SPRINT_LOCK_CONE + 5}° da vertical`);
+    const b = (SPRINT_LOCK_CONE - 5) * Math.PI / 180;   // 5° dentro
+    c.onStickMove(1, r * Math.sin(b), -r * Math.cos(b));
+    assert.equal(c.locked(), true, `não travou a ${SPRINT_LOCK_CONE - 5}° da vertical`);
+  });
+
+  it('dada a trava, então a direção é a do dedo (sem torção) e o módulo é 1', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.1));
+    c.onStickMove(1, 20, -30);                  // dedo volta pra dentro, meio de lado
+    const m = c.getMove();
+    const pedido = Math.atan2(20, 30) * 180 / Math.PI;
+    const andado = Math.atan2(m.x, m.y) * 180 / Math.PI;
+    assert.ok(Math.abs(andado - pedido) < 1e-9, `travado andou a ${andado}°, o dedo pediu ${pedido}°`);
+    assert.ok(Math.abs(Math.hypot(m.x, m.y) - 1) < 1e-12);
+  });
+
+  it('dada a trava, então PUXAR PARA TRÁS destrava e o analógico volta a ser analógico', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.1));
+    c.onStickMove(1, 0, STICK_RADIUS * 0.5);    // meio raio pra trás
+    const m = c.getMove();
+    assert.equal(c.locked(), false, 'puxar pra trás não destravou');
+    assert.ok(m.y < 0, `puxou pra trás e o jogador segue indo pra frente (${m.y})`);
+    // dentro da zona morta pra trás NÃO destrava: é o polegar descansando
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.1));
+    c.onStickMove(1, 0, STICK_RADIUS * STICK_DEADZONE * 0.5);
+    assert.equal(c.locked(), true, 'o polegar descansando no centro destravou');
+    assert.ok(Math.abs(c.getMove().y - 1) < 1e-12, 'polegar no centro com a trava: devia seguir em frente');
+  });
+
+  it('dada a trava, então SOLTAR o dedo destrava (e o próximo toque nasce sem trava)', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.1));
+    c.onStickEnd(1);
+    assert.equal(c.locked(), false, 'soltar o dedo não destravou');
+    assert.equal(c.getMove().mag, 0, 'soltou e o jogador segue correndo sozinho');
+    c.onStickStart(2, 0, 0);
+    c.onStickMove(2, 0, acima(0.3));
+    assert.equal(c.locked(), false);
+    assert.ok(c.getMove().mag < 0.5);
+  });
+
+  it('dados releaseAll e pointercancel, então a trava solta junto', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.1));
+    c.releaseAll();
+    assert.equal(c.locked(), false, 'releaseAll deixou a corrida travada');
+    c.onStickStart(3, 0, 0);
+    c.onStickMove(3, 0, acima(SPRINT_LOCK_R + 0.1));
+    assert.equal(c.releasePointer(3), 'stick');
+    assert.equal(c.locked(), false, 'pointercancel deixou a corrida travada');
+  });
+
+  it('dado o veículo (trava desligada), então não trava e a que existia solta na hora', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.1));
+    c.onStickMove(1, 0, acima(0.25));
+    assert.equal(c.locked(), true);
+    c.setSprintLock(false);                     // entrou no carro: cruzeiro sem mão não
+    assert.equal(c.locked(), false, 'desligar a trava não soltou a que existia');
+    assert.ok(c.getMove().mag < 0.5, `o módulo não voltou ao do dedo: ${c.getMove().mag}`);
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.5));
+    assert.equal(c.locked(), false, 'travou com a trava desligada');
+    c.setSprintLock(true);
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.6));
+    assert.equal(c.locked(), true, 'religar a trava não voltou a travar');
+  });
+
+  it('dado o dedo quase no limiar, então o núcleo avisa que a trava está PERTO (alvo visível)', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, acima(0.8));
+    assert.equal(c.nearLock(), false, 'dentro do raio não é "perto da trava"');
+    c.onStickMove(1, 0, acima(1.1));
+    assert.equal(c.nearLock(), true, 'passou do talo pra cima e o alvo da trava não apareceu');
+    c.onStickMove(1, 0, acima(SPRINT_LOCK_R + 0.1));
+    assert.equal(c.nearLock(), false, 'travado não é mais "perto": o alvo sai');
+  });
+});
+
+/* ================================================================
+   C8 — O BOTÃO APARECE QUANDO SERVE (docs/mobile/criterio-aaa.md). CoD
+   Mobile: "When passing over a weapon on the ground, this button will
+   pop-up"; Critical Ops 1.70: "The touch button appears when you can pick
+   up an item". Regra pura: quem decide é o jogo (`disponivel`); o núcleo só
+   garante as duas travas de segurança — botão SEGURADO não some debaixo do
+   dedo, e fiação ausente ou quebrada nunca apaga botão nenhum.
+   ================================================================ */
+describe('núcleo dos controles de toque — botões contextuais', () => {
+  let botaoVisivel, CONTEXT_ACTS;
+  before(async () => {
+    ({ botaoVisivel, CONTEXT_ACTS } = await import('../js/touchcontrols.js'));
+  });
+
+  it('dado o contrato, então USAR, COMER, KIT e GRANADA são os contextuais (e o gatilho nunca é)', () => {
+    assert.deepEqual([...CONTEXT_ACTS].sort(), ['eat', 'med', 'nade', 'use']);
+  });
+
+  it('dada a condição de jogo, então o botão acompanha: aparece com, some sem', () => {
+    const tem = { use: false, eat: false, med: false, nade: false };
+    const disp = act => tem[act];
+    for (const act of CONTEXT_ACTS) {
+      assert.equal(botaoVisivel(act, disp, false), false, `${act} visível sem ter o que fazer`);
+      tem[act] = true;
+      assert.equal(botaoVisivel(act, disp, false), true, `${act} escondido com o que fazer`);
+    }
+    for (const act of ['fire', 'ads', 'jump', 'crouch', 'reload', 'swap', 'inv', 'pause'])
+      assert.equal(botaoVisivel(act, () => false, false), true, `${act} não é contextual e sumiu`);
+  });
+
+  it('dado o dedo SEGURANDO o botão, então ele não some no meio do gesto', () => {
+    assert.equal(botaoVisivel('use', () => false, true), true,
+      'o botão sumiu debaixo do dedo (o baú abriu e o USAR evaporou com o dedo em cima)');
+  });
+
+  it('dada fiação ausente ou quebrada, então NENHUM botão some (falha aberta)', () => {
+    for (const lixo of [undefined, null, 42, 'x', {}])
+      assert.equal(botaoVisivel('med', lixo, false), true, `sem fiação (${String(lixo)}) o kit sumiu`);
+    assert.equal(botaoVisivel('nade', () => { throw new Error('boom'); }, false), true,
+      'uma exceção na leitura do jogo apagou a granada');
+  });
+});
+
+/* ================================================================
+   C7 — ARMAS COMO ÍCONES: o rótulo curto de cada arma. Sai do nome
+   declarado em js/weapons.js (a primeira palavra); o número do slot mora no
+   ícone, então duas ESCOPETAS continuam distinguíveis.
+   ================================================================ */
+describe('núcleo dos controles de toque — rótulo das armas', () => {
+  let rotuloArma;
+  before(async () => { ({ rotuloArma } = await import('../js/touchcontrols.js')); });
+
+  it('dado o nome da arma, então o rótulo é a primeira palavra', () => {
+    assert.equal(rotuloArma('FUZIL "VAGALUME"'), 'FUZIL');
+    assert.equal(rotuloArma('DMR "FALCÃO"'), 'DMR');
+    assert.equal(rotuloArma('FACA "AURORA"'), 'FACA');
+    assert.equal(rotuloArma('  SNIPER   "AGULHA"'), 'SNIPER');
+  });
+
+  it('dado lixo, então rótulo vazio sem lançar', () => {
+    for (const lixo of [undefined, null, 42, {}, ''])
+      assert.equal(rotuloArma(lixo), '', `rótulo de ${String(lixo)}`);
+  });
+});
+
+/* ================================================================
+   C9 — "RESTAURAR PADRÃO" dos ajustes de toque. Vale na sessão mesmo quando
+   gravar lança (aba privada, cota cheia): a falha de persistir não pode
+   deixar o jogador preso num ajuste que ele quis desfazer.
+   ================================================================ */
+describe('núcleo dos controles de toque — restaurar padrão', () => {
+  let restaurarToque, TOUCH_DEFAULTS;
+  before(async () => {
+    ({ restaurarToque } = await import('../js/touchcontrols.js'));
+    ({ TOUCH_DEFAULTS } = await import('../js/config.js'));
+  });
+
+  it('dados ajustes mexidos, então restaurar devolve TODOS os padrões e não toca no resto', () => {
+    const s = { touchLook: 2.2, touchRatioY: 0.35, touchAds: 1.4, touchFireLook: 0,
+      touchAssist: 0, touchAutoFire: 1, touchFireLeft: 1, vol: 0.2, res: 1 };
+    assert.equal(restaurarToque(s, () => {}), true);
+    for (const k of Object.keys(TOUCH_DEFAULTS))
+      assert.equal(s[k], TOUCH_DEFAULTS[k], `${k} não voltou ao padrão`);
+    assert.equal(s.vol, 0.2, 'restaurar o TOQUE mexeu no volume');
+    assert.equal(s.res, 1, 'restaurar o TOQUE mexeu na resolução');
+  });
+
+  it('dado localStorage que lança, então restaura na sessão e devolve false (não derruba)', () => {
+    const s = { touchLook: 2.2 };
+    let r;
+    assert.doesNotThrow(() => { r = restaurarToque(s, () => { throw new Error('QuotaExceededError'); }); });
+    assert.equal(r, false);
+    assert.equal(s.touchLook, TOUCH_DEFAULTS.touchLook, 'sem persistir, a sessão também não restaurou');
+    assert.equal(restaurarToque(null, () => {}), false, 'aceitou settings nulo');
+  });
+});
+
+/* ================================================================
+   C10 — pointercancel de TODOS os dedos solta a mira alternada. O núcleo
+   conta quantos dedos ainda são donos de alguma coisa: é por esse número que
+   a camada DOM sabe que o último dedo saiu e pode chamar o releaseAll.
+   ================================================================ */
+describe('núcleo dos controles de toque — contagem de dedos donos', () => {
+  it('dados dedos entrando e saindo, então ativos() conta os donos vivos', () => {
+    const c = createTouchCore();
+    assert.equal(c.ativos(), 0);
+    c.onStickStart(1, 0, 0);
+    c.onLookStart(2, 0, 0);
+    c.press('fire', 3, 0, 0);
+    assert.equal(c.ativos(), 3);
+    c.releasePointer(2);
+    assert.equal(c.ativos(), 2);
+    c.releasePointer(1);
+    c.releasePointer(3);
+    assert.equal(c.ativos(), 0);
+    c.press('ads', 4);
+    c.releaseAll();
+    assert.equal(c.ativos(), 0);
+  });
+});

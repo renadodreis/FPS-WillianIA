@@ -156,10 +156,33 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
     assert.equal(r.paused, false);
   });
 
-  it('dado o modo celular em partida, então os controles estão na tela e recebem o dedo', async () => {
+  /* CONTRATO NOVO (C8, docs/mobile/criterio-aaa.md). Este caso exigia os 14
+     botões SEMPRE na tela (`btns.length === 14` + "falta o botão X") — era o
+     próprio defeito escrito como requisito: USAR, COMER, KIT e GRANADA
+     ocupando a zona do polegar com 0 carne, 0 kit e nada ao alcance. Agora:
+     o CONTRATO DO HTML continua com os 14 `data-act` (o módulo depende deles);
+     os DEZ fixos estão na tela e recebem o dedo; os QUATRO contextuais estão
+     na tela exatamente quando o jogo tem o que fazer com eles — e a condição
+     é lida do JOGO (inventário, #prompt), não do módulo de toque. Os casos
+     de transição, "não anda de lugar" e "não some debaixo do dedo" moram em
+     test/hud-contexto.test.js. */
+  it('dado o modo celular em partida, então os fixos estão na tela, os contextuais seguem o jogo, e todos recebem o dedo', async () => {
     const r = await play(() => {
       const doc = document;
+      const G = window.QA.G;
+      window.QA.tick(1);
       const btns = [...doc.querySelectorAll('#tcBtns .tcBtn[data-act]')].map(b => b.dataset.act);
+      const naTela = act => {
+        const el = doc.querySelector(`#tcBtns .tcBtn[data-act="${act}"]`);
+        const cs = getComputedStyle(el), rc = el.getBoundingClientRect();
+        if (cs.display === 'none' || cs.visibility !== 'visible') return false;
+        const hit = doc.elementFromPoint(rc.left + rc.width / 2, rc.top + rc.height / 2);
+        return !!hit && (hit === el || el.contains(hit));
+      };
+      const vis = {};
+      for (const a of btns) vis[a] = window.TQA.semLobby(() => naTela(a));
+      const jogo = { use: doc.getElementById('prompt').style.opacity === '1' || !!window.__BR_bauPerto,
+        eat: G.inventory.meat > 0, med: G.inventory.medkits > 0, nade: G.inventory.nades > 0 };
       /* O painel do lobby BR (.brPanel, z-index 300) é modal e nasce aberto no
          boot de QA — em partida ele fecha. Ele é escondido aqui só para o hit
          test medir o que interessa: os controles POR CIMA do HUD e do canvas. */
@@ -178,7 +201,7 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
         touchUI: window.TQA.visible('touchUI'),
         move: window.TQA.visible('tcMove'),
         look: window.TQA.visible('tcLook'),
-        btns,
+        btns, vis, jogo,
         alvoStick: alvos.stick,
         alvoLook: alvos.look,
         alvoFire: alvos.fire,
@@ -190,10 +213,14 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
     assert.equal(r.touchUI, true, '#touchUI invisível em partida no celular');
     assert.equal(r.move, true, '#tcMove invisível');
     assert.equal(r.look, true, '#tcLook invisível');
-    assert.equal(r.btns.length, 14, `esperava 14 botões, achei ${r.btns.join(',')}`);
-    for (const act of ['fire', 'ads', 'jump', 'crouch', 'reload', 'nade', 'use', 'med',
-      'swap', 'inv', 'pause', 'eat', 'sight', 'chat'])
-      assert.ok(r.btns.includes(act), `falta o botão ${act}`);
+    // contrato do HTML (o módulo liga os 14 data-act): presença no DOM, não na tela
+    assert.deepEqual([...r.btns].sort(), ['ads', 'chat', 'crouch', 'eat', 'fire', 'inv', 'jump', 'med',
+      'nade', 'pause', 'reload', 'sight', 'swap', 'use'], `contrato do HTML: ${r.btns.join(',')}`);
+    for (const act of ['fire', 'ads', 'jump', 'crouch', 'reload', 'swap', 'inv', 'pause', 'sight', 'chat'])
+      assert.equal(r.vis[act], true, `o botão FIXO ${act} não está na tela (ou não recebe o dedo)`);
+    for (const act of ['use', 'eat', 'med', 'nade'])
+      assert.equal(r.vis[act], r.jogo[act],
+        `${act}: na tela = ${r.vis[act]}, mas o jogo ${r.jogo[act] ? 'TEM' : 'não tem'} o que fazer com ele`);
     // hit test REAL: o que está sob o dedo é o controle, não o HUD
     assert.equal(r.alvoStick, 'tcMove', `dedo no analógico caiu em ${r.alvoStick}`);
     assert.equal(r.alvoLook, 'tcLook', `dedo na área de mira caiu em ${r.alvoLook}`);
@@ -250,6 +277,54 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
        cima (um px de dedo = 3,2e-3). */
     assert.ok(Math.abs(r.soltou.yaw - r.travado.yaw) < 1e-9,
       `soltar o dedo continuou girando a câmera: ${r.soltou.yaw - r.travado.yaw} rad`);
+  });
+
+  /* ================================================================
+     M3 — O MESMO ARRASTO É O MESMO ÂNGULO EM QUALQUER TAXA DE QUADROS.
+     Este arquivo passava 45/45 com o delta do olhar multiplicado por `dt·60`
+     (laudo 7515734, §4.2): todos os casos rodavam no dt padrão de 1/60, onde
+     o fator vale 1. O arrasto é DISTÂNCIA de dedo, não velocidade — o ângulo
+     não pode depender de quantos quadros couberam dentro dele.
+     Âncora: 120 px × o ganho declarado no MENU (o `<output>` do slider mostra
+     100 %, que é 0,0032 rad/px por js/touchcontrols.js) — o giro é lido da
+     `camera.quaternion`, e o caso de 1 evento × 120 eventos compara o jogo
+     com ele mesmo em cadências de dedo diferentes.
+     ================================================================ */
+  it('M3: dado o mesmo arrasto a 30, 60 e 120 Hz (e em 1 ou 120 eventos), então o giro é o MESMO', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G;
+      const medir = (hz, eventos) => {
+        QA.reset();
+        QA.tick(90, 1 / hz);                        // recuo e FOV assentam NESSA taxa
+        const a = T.look();
+        const p = T.down('#tcLook', 81, 600, 200);
+        /* 120 px pra ESQUERDA, espalhados por `eventos` pointermoves, um
+           quadro depois de cada grupo de 10 px (o dedo não espera o quadro) */
+        const passo = 120 / eventos;
+        for (let k = 1; k <= eventos; k++) {
+          T.move('#tcLook', 81, p[0] - passo * k, p[1]);
+          if (k % Math.max(1, Math.round(eventos / 12)) === 0) QA.tick(1, 1 / hz);
+        }
+        QA.tick(2, 1 / hz);
+        const b = T.look();
+        T.up('#tcLook', 81, p[0] - 120, p[1]);
+        QA.tick(1, 1 / hz);
+        return (b.yaw - a.yaw) * 180 / Math.PI;
+      };
+      const out = { hz30: medir(30, 120), hz60: medir(60, 120), hz120: medir(120, 120),
+        umEvento: medir(60, 1), menu: document.getElementById('setTLookV').textContent,
+        sens: G.Touch.lookSens };
+      QA.reset();
+      QA.tick(2);
+      return out;
+    });
+    const esperado = 120 * 0.0032 * 180 / Math.PI;   // 22,0016° — ganho de 100 % do menu
+    console.log(`  [M3] 120 px: ${r.hz30.toFixed(4)}° a 30 Hz, ${r.hz60.toFixed(4)}° a 60 Hz, ` +
+      `${r.hz120.toFixed(4)}° a 120 Hz, ${r.umEvento.toFixed(4)}° em 1 evento (conta: ${esperado.toFixed(4)}°)`);
+    assert.equal(r.menu, '100%', 'cenário inválido: a sensibilidade do menu não está em 100 %');
+    for (const [nome, v] of [['30 Hz', r.hz30], ['60 Hz', r.hz60], ['120 Hz', r.hz120], ['1 evento', r.umEvento]])
+      assert.ok(Math.abs(v - esperado) < esperado * 0.001,
+        `${nome}: o mesmo arrasto girou ${v.toFixed(4)}°, a conta pede ${esperado.toFixed(4)}°`);
   });
 
   /* ================================================================
@@ -653,6 +728,9 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
       QA.tick(1);
       const recarregando = G.gun.reloading;
       QA.reset();
+      /* C8: granada e kit só aparecem com o item no inventário */
+      G.inventory.nades = Math.max(1, G.inventory.nades);
+      G.inventory.medkits = Math.max(1, G.inventory.medkits);
       QA.tick(4);
       const nadesAntes = G.inventory.nades;
       T.tap('.tcBtn[data-act="nade"]', 1);
@@ -850,6 +928,85 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
     assert.ok(r.crouchT < 0.2, `continuou agachado: ${r.crouchT}`);
   });
 
+  /* C10 (laudo 7515734): "pointercancel de todos os dedos: a MIRA (alternada)
+     segue ligada". A mira é o único estado que nenhum dedo segura — por isso
+     o caso de cima (analógico + ATIRAR + ⇩) não a pegava. */
+  it('C10: dado pointercancel de TODOS os dedos com a MIRA ligada, então a mira também solta', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G;
+      QA.reset();
+      QA.tick(20);
+      const p = T.down('#tcMove', 101);
+      T.move('#tcMove', 101, p[0], p[1] - 200);
+      T.down('.tcBtn[data-act="fire"]', 102);
+      T.tap('.tcBtn[data-act="ads"]', 103);
+      QA.tick(5);
+      const antes = { mirando: G.mouse.aiming, atirando: G.mouse.shooting, mag: G.Touch.getMove().mag };
+      T.cancel('#tcMove', 101);
+      const umSo = G.mouse.aiming;               // ainda há um dedo dono: a mira fica
+      T.cancel('.tcBtn[data-act="fire"]', 102);
+      QA.tick(10);
+      return { antes, umSo, mirando: G.mouse.aiming, atirando: G.mouse.shooting,
+        acesos: [...document.querySelectorAll('.tcBtn.on')].map(b => b.dataset.act) };
+    });
+    assert.equal(r.antes.mirando && r.antes.atirando && r.antes.mag > 0.9, true,
+      'cenário inválido: analógico + ATIRAR + MIRA não foram montados');
+    assert.equal(r.umSo, true, 'cancelar UM dedo (com outro ainda segurando) derrubou a mira');
+    assert.equal(r.mirando, false, 'pointercancel de todos os dedos deixou a MIRA ligada');
+    assert.equal(r.atirando, false);
+    assert.deepEqual(r.acesos, [], `botões acesos depois do cancelamento: ${r.acesos.join(',')}`);
+  });
+
+  /* C10: o jogo chama `Touch.releaseAll()` ao abrir o chat e ao morrer (outra
+     frente). Aqui: ele cobre TUDO que o critério lista — W/A/S/D, Space,
+     ControlLeft, Tab, E, gatilho, mira, `.on`, trava de corrida, velocidade 0,5
+     s depois — e os dedos que CONTINUAM na tela, arrastando, não religam nada. */
+  it('C10: dado releaseAll com cinco dedos na tela, então tudo solta e o dedo que segue arrastando não religa', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G, P = QA.MP.player;
+      QA.reset();
+      QA.tick(20);
+      const p = T.down('#tcMove', 111);
+      T.move('#tcMove', 111, p[0], p[1] - 120);  // além do alvo: corrida TRAVADA
+      T.down('.tcBtn[data-act="fire"]', 112);
+      T.down('.tcBtn[data-act="crouch"]', 113);
+      T.down('.tcBtn[data-act="jump"]', 114);
+      T.down('.tcBtn[data-act="inv"]', 115);
+      T.tap('.tcBtn[data-act="ads"]', 116);
+      QA.tick(3);
+      const antes = { trava: G.Touch.sprintLocked, fogo: G.mouse.shooting, mira: G.mouse.aiming,
+        ctrl: !!G.keys.ControlLeft, space: !!G.keys.Space, tab: !!G.keys.Tab };
+      G.Touch.releaseAll();
+      /* os dedos NÃO saíram da tela: seguem arrastando */
+      for (let i = 1; i <= 10; i++) {
+        T.move('#tcMove', 111, p[0] + i * 3, p[1] - 150);
+        T.move('.tcBtn[data-act="fire"]', 112, 700 - i * 5, 300);
+        QA.tick(3);
+      }
+      const k = G.keys;
+      const out = { antes,
+        teclas: ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ControlLeft', 'Tab', 'KeyE'].filter(c => k[c]),
+        fogo: G.mouse.shooting, mira: G.mouse.aiming, trava: G.Touch.sprintLocked,
+        mag: G.Touch.getMove().mag, vel: Math.hypot(P.vel.x, P.vel.z),
+        acesos: [...document.querySelectorAll('.tcBtn.on, #tcMove.on, #tcMove.trava')].map(b => b.dataset.act || b.id) };
+      /* devolve: dedos saem, inventário fecha */
+      for (const [sel, id] of [['#tcMove', 111], ['.tcBtn[data-act="fire"]', 112], ['.tcBtn[data-act="crouch"]', 113],
+        ['.tcBtn[data-act="jump"]', 114], ['.tcBtn[data-act="inv"]', 115]]) T.up(sel, id);
+      document.getElementById('invPanel').classList.remove('open');
+      QA.tick(10);
+      return out;
+    });
+    assert.deepEqual(r.antes, { trava: true, fogo: true, mira: true, ctrl: true, space: true, tab: true },
+      'cenário inválido: os cinco dedos + a mira não foram montados');
+    assert.deepEqual(r.teclas, [], `teclas presas depois do releaseAll: ${r.teclas.join(',')}`);
+    assert.equal(r.fogo, false, 'gatilho preso depois do releaseAll');
+    assert.equal(r.mira, false, 'mira presa depois do releaseAll');
+    assert.equal(r.trava, false, 'corrida travada depois do releaseAll');
+    assert.equal(r.mag, 0, 'o dedo que seguiu no analógico religou o movimento');
+    assert.ok(r.vel < 0.5, `0,5 s depois o jogador ainda anda a ${r.vel} m/s`);
+    assert.deepEqual(r.acesos, [], `controles acesos: ${r.acesos.join(',')}`);
+  });
+
   it('dada a perda de foco da janela, então tudo solta (aba trocada no meio do tiro)', async () => {
     const r = await play(() => {
       const QA = window.QA, T = window.TQA;
@@ -1008,6 +1165,7 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
       G.inventory.meat = 3;
       QA.MP.player.health = 40;
       QA.MP.player.healPool = 0;
+      QA.tick(1);   // C8: o COMER só aparece com carne — em até 1 quadro
       const antes = G.inventory.meat;
       T.down('.tcBtn[data-act="eat"]', 1);
       const tecla = !!G.keys.KeyF;
@@ -1106,30 +1264,198 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
       'o inventário cobre o cluster de botões (e não recebe o dedo)');
   });
 
-  it('dado o celular, então o arsenal continua legível e fora dos controles', async () => {
+  /* O arsenal do celular agora é a barra de ARMAS TOCÁVEIS (#tcArmas, C7) —
+     o #slots do HUD sai de cena em partida porque a barra É a mesma leitura
+     (qual está na mão, quais estão trancadas). A troca em um toque é medida
+     em test/hud-armas.test.js; aqui fica a leitura. */
+  it('dado o celular, então o arsenal continua legível (agora tocável) e fora dos controles', async () => {
     const r = await play(() => {
       const QA = window.QA, T = window.TQA, G = QA.G;
       QA.reset();
       QA.tick(4);
+      const trava2 = G.arsenal[2].locked;
       G.arsenal[2].locked = true;   // garante pelo menos uma trancada
       G.switchWeapon(0);
       QA.tick(2);
-      const slots = document.getElementById('slots');
-      return {
-        visivel: T.visible('slots'),
-        texto: slots.textContent,
-        ativos: slots.querySelectorAll('.slot.active').length,
-        rect: T.rect('#slots'),
+      const barra = document.getElementById('tcArmas');
+      const out = {
+        visivel: T.visible('tcArmas'),
+        texto: barra.textContent,
+        ativos: barra.querySelectorAll('.tcArma.ativa').length,
+        ativaCerta: !!barra.querySelector(`.tcArma.ativa[data-slot="${G.arsenal.indexOf(G.gun)}"]`),
+        rect: T.rect('#tcArmas'),
         stick: T.rect('#tcMove'), btns: T.rect('#tcBtns'), ammo: T.rect('#ammoWrap'),
       };
+      G.arsenal[2].locked = trava2;
+      QA.tick(1);
+      return out;
     });
     assert.equal(r.visivel, true,
       'o celular escondeu o arsenal inteiro — sem leitura de qual arma vem nem do que está trancado');
     assert.ok(/🔒/.test(r.texto), `nenhum cadeado no arsenal: "${r.texto}"`);
-    assert.equal(r.ativos, 1, `esperava 1 slot ativo, achei ${r.ativos}`);
+    assert.equal(r.ativos, 1, `esperava 1 arma acesa, achei ${r.ativos}`);
+    assert.equal(r.ativaCerta, true, 'a arma acesa não é a que está na mão');
     assert.equal(overlapArea(r.rect, r.stick), 0, 'o arsenal cobre o analógico');
     assert.equal(overlapArea(r.rect, r.btns), 0, 'o arsenal cobre o cluster de botões');
     assert.equal(overlapArea(r.rect, r.ammo), 0, 'o arsenal cobre a munição');
+  });
+
+  /* ================================================================
+     TRAVA DE CORRIDA (referência §4.2/§4.3, P2-7): arrastar o analógico além
+     de um ponto ACIMA dele trava a corrida. O alvo desenhado (#tcTrava) tem
+     de estar onde a trava engata — é a única dica que o jogador tem —, e o
+     teste acha esse ponto pela TELA (centro do alvo), não pela constante.
+     ================================================================ */
+  it('dado o dedo arrastado até o alvo acima do analógico, então a corrida TRAVA com o polegar relaxado; puxar pra trás solta', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, P = QA.MP.player, G = QA.G;
+      const vel = () => Math.hypot(P.vel.x, P.vel.z);
+      const mv = document.getElementById('tcMove');
+      QA.reset();
+      QA.tick(2);
+      /* controle: polegar a 10 px da origem, SEM trava = anda devagar */
+      let p = T.down('#tcMove', 91);
+      T.move('#tcMove', 91, p[0], p[1] - 10);
+      QA.tick(45);
+      const semTrava = vel();
+      T.up('#tcMove', 91, p[0], p[1] - 10);
+      QA.tick(30);
+      /* agora: sobe além do talo — o alvo aparece — e vai até ELE */
+      QA.reset();
+      QA.tick(2);
+      p = T.down('#tcMove', 92);
+      T.move('#tcMove', 92, p[0], p[1] - 70);
+      QA.tick(1);
+      const alvo = document.getElementById('tcTrava');
+      const alvoVisivel = getComputedStyle(alvo).display !== 'none';
+      const ra = alvo.getBoundingClientRect();
+      const ax = ra.left + ra.width / 2, ay = ra.top + ra.height / 2;
+      const travadoAntes = G.Touch.sprintLocked;
+      T.move('#tcMove', 92, ax, ay - 1);      // o dedo chega ao alvo
+      QA.tick(1);
+      const travou = G.Touch.sprintLocked;
+      const anel = mv.classList.contains('trava');
+      const alvoSome = getComputedStyle(alvo).display === 'none';
+      T.move('#tcMove', 92, p[0], p[1] - 10); // polegar relaxa: 10 px da origem
+      QA.tick(45);
+      const relaxado = vel();
+      const fwd = new QA.MP.THREE.Vector3(0, 0, -1).applyQuaternion(QA.MP.camera.quaternion);
+      fwd.y = 0; fwd.normalize();
+      const indoFrente = (P.vel.x * fwd.x + P.vel.z * fwd.z) / (vel() || 1);
+      T.move('#tcMove', 92, p[0], p[1] + 40);  // puxa pra TRÁS
+      QA.tick(30);
+      const soltou = !G.Touch.sprintLocked;
+      const re = (P.vel.x * fwd.x + P.vel.z * fwd.z);
+      T.up('#tcMove', 92, p[0], p[1] + 40);
+      QA.tick(30);
+      return { semTrava, alvoVisivel, dy: p[1] - ay, travadoAntes, travou, anel, alvoSome,
+        relaxado, indoFrente, soltou, re, parado: vel(), anelDepois: mv.classList.contains('trava') };
+    });
+    console.log(`  [trava] alvo a ${r.dy.toFixed(1)} px acima do dedo; polegar a 10 px: ` +
+      `${r.semTrava.toFixed(2)} m/s sem trava, ${r.relaxado.toFixed(2)} m/s travado`);
+    assert.ok(r.semTrava < 3, `cenário inválido: sem trava, 10 px já corria (${r.semTrava} m/s)`);
+    assert.equal(r.alvoVisivel, true, 'o dedo passou do talo subindo e o alvo da trava não apareceu');
+    assert.equal(r.travadoAntes, false, 'travou antes de o dedo chegar ao alvo');
+    assert.equal(r.travou, true, 'o dedo chegou ao alvo desenhado e a corrida não travou');
+    assert.equal(r.anel, true, 'travado, o anel do analógico não avisa');
+    assert.equal(r.alvoSome, true, 'travado, o alvo continuou na tela (cobre o killfeed)');
+    assert.ok(r.relaxado > 6.5, `travado com o polegar relaxado devia CORRER (>6,5 m/s), veio ${r.relaxado} m/s`);
+    assert.ok(r.indoFrente > 0.95, `travado, o jogador não corre pra onde olha (cos ${r.indoFrente})`);
+    assert.equal(r.soltou, true, 'puxar o analógico pra trás não destravou');
+    assert.ok(r.re < -0.5, `puxou pra trás e o jogador não recuou (${r.re} m/s na frente)`);
+    assert.ok(r.parado < 0.5, `soltou o dedo e o jogador seguiu (${r.parado} m/s)`);
+    assert.equal(r.anelDepois, false);
+  });
+
+  it('dado o carro, então a trava de corrida não existe (acelerador preso seria cruzeiro sem mão)', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G;
+      QA.reset();
+      G.teleportToCar();
+      QA.tick(4);
+      G.tryToggleCar();
+      QA.tick(4);
+      const dirigindo = G.state.driving;
+      const p = T.down('#tcMove', 93);
+      T.move('#tcMove', 93, p[0], p[1] - 160);  // bem além do alvo
+      QA.tick(2);
+      const travou = G.Touch.sprintLocked;
+      T.move('#tcMove', 93, p[0], p[1]);        // polegar volta ao centro
+      QA.tick(3);
+      const w = !!G.keys.KeyW;
+      T.up('#tcMove', 93, p[0], p[1]);
+      QA.tick(2);
+      if (G.state.driving) G.tryToggleCar();
+      QA.tick(4);
+      return { dirigindo, travou, w };
+    });
+    assert.equal(r.dirigindo, true, 'cenário inválido: não entrou no carro');
+    assert.equal(r.travou, false, 'a trava de corrida engatou dirigindo');
+    assert.equal(r.w, false, 'polegar no centro e o acelerador (KeyW) seguiu apertado');
+  });
+
+  /* ================================================================
+     C9 — "RESTAURAR PADRÃO" e localStorage que LANÇA (aba privada, cota
+     cheia). A âncora do efeito é o GIRO medido na câmera contra a conta com o
+     padrão de js/config.js (1,0 × 0,0032 rad/px) — não o valor do slider.
+     ================================================================ */
+  it('C9: dado RESTAURAR PADRÃO, então os sete ajustes voltam e o giro volta ao do padrão', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA;
+      const set = (id, v, ev) => { const el = document.getElementById(id); el.value = String(v); el.dispatchEvent(new Event(ev)); };
+      const giro = () => {
+        QA.reset();
+        QA.tick(90);   // FOV do caso anterior (mira, corrida) assenta: a escala do zoom volta a 1
+        const a = T.look();
+        const p = T.down('#tcLook', 121, 600, 200);
+        T.move('#tcLook', 121, p[0] - 50, p[1]);
+        QA.tick(1);
+        const b = T.look();
+        T.up('#tcLook', 121, p[0] - 50, p[1]);
+        QA.tick(1);
+        return b.yaw - a.yaw;
+      };
+      set('setTLook', 200, 'input'); set('setTRatio', 40, 'input'); set('setTAds', 130, 'input');
+      set('setTFire', 0, 'input'); set('setTAssist', 0, 'change'); set('setTAuto', 1, 'change');
+      set('setTFireL', 1, 'change');
+      const mexido = giro();
+      document.getElementById('setTReset').click();
+      const ids = ['setTLook', 'setTRatio', 'setTAds', 'setTFire', 'setTAssist', 'setTAuto', 'setTFireL'];
+      return {
+        mexido, padrao: giro(),
+        valores: ids.map(id => document.getElementById(id).value),
+        saidas: ['setTLookV', 'setTRatioV', 'setTAdsV', 'setTFireV'].map(id => document.getElementById(id).textContent),
+        fireL: document.documentElement.classList.contains('fireL'),
+      };
+    });
+    /* 0,1 %: o FOV do caso anterior ainda deixa ~1e-4 de resíduo na escala do
+       zoom; um restaurar que não vale erra por um fator 2, não por 1e-4 */
+    assert.ok(Math.abs(r.mexido / (50 * 0.0032 * 2) - 1) < 1e-3, `cenário inválido: 200 % não dobrou o giro (${r.mexido})`);
+    assert.ok(Math.abs(r.padrao / (50 * 0.0032) - 1) < 1e-3, `restaurou e o giro ficou ${r.padrao} rad (padrão: ${50 * 0.0032})`);
+    assert.deepEqual(r.valores, ['100', '60', '100', '100', '1', '0', '0'], 'os controles do menu não voltaram ao padrão');
+    assert.deepEqual(r.saidas, ['100%', '60%', '100%', '100%'], 'o número ao lado do slider não voltou');
+    assert.equal(r.fireL, false, 'restaurou e o segundo ATIRAR continuou na tela');
+  });
+
+  it('C9: dado localStorage que LANÇA, então mexer nos ajustes e restaurar não derruba nada e vale na sessão', async () => {
+    const errosAntes = h.pageErrors.length;
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G;
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () { throw new DOMException('cheio', 'QuotaExceededError'); };
+      try {
+        const el = document.getElementById('setTLook');
+        el.value = '150';
+        el.dispatchEvent(new Event('input'));
+        const mexido = G.Touch.lookSens;
+        document.getElementById('setTReset').click();
+        return { mexido, restaurado: G.Touch.lookSens, saida: document.getElementById('setTLookV').textContent };
+      } finally { Storage.prototype.setItem = orig; }
+    });
+    assert.equal(h.pageErrors.length, errosAntes, `localStorage lançando virou erro de página: ${h.pageErrors.slice(errosAntes).join(' | ')}`);
+    assert.ok(Math.abs(r.mexido - 0.0032 * 1.5) < 1e-12, `o ajuste não valeu na sessão sem persistir (${r.mexido})`);
+    assert.ok(Math.abs(r.restaurado - 0.0032) < 1e-12, `restaurar sem persistir não valeu na sessão (${r.restaurado})`);
+    assert.equal(r.saida, '100%');
   });
 
   it('dado o modo celular, então nenhum erro de página apareceu no caminho', () => {
@@ -1329,6 +1655,28 @@ describe('Controles de toque — chat do BR no celular',
       assert.equal(r.fechou, true, 'o segundo toque não fechou/enviou');
     });
 
+    /* C4 (laudo 7515734, REGRESSÃO): o chat aberto no celular dizia "Enter
+       envia · Esc fecha" — o celular não tem Esc, e quem envia e fecha é o
+       próprio 💬. O texto é lido do CAMPO FOCADO, que é o que o jogador vê. */
+    it('C4: dado o chat aberto no celular, então o texto de ajuda cita o botão, não tecla', async () => {
+      const r = await h.play(() => {
+        const S = window.__BR_debug.S, T = window.TQA;
+        window.QA.tick(2);
+        T.tap('.tcBtn[data-act="chat"]', 131);
+        const campo = document.getElementById('brChatInput');
+        const out = { aberto: !!S.chatOpen, foco: document.activeElement === campo, ajuda: campo.placeholder };
+        campo.value = '';
+        T.tap('.tcBtn[data-act="chat"]', 131);
+        out.fechou = !S.chatOpen;
+        return out;
+      });
+      assert.equal(r.aberto && r.foco, true, 'cenário inválido: o chat não abriu com o campo focado');
+      assert.ok(!/\b(enter|esc|escape)\b|clique|mouse|\[[A-Z]+\]/i.test(r.ajuda),
+        `o chat do celular cita tecla que o aparelho não tem: "${r.ajuda}"`);
+      assert.ok(/💬/.test(r.ajuda), `o texto de ajuda não aponta o botão que envia: "${r.ajuda}"`);
+      assert.equal(r.fechou, true);
+    });
+
     /* O BR tinha a MESMA promessa de tecla ausente que o interact.js já
        consertou: "[ESPAÇO] pra pular" na nave, "WASD pra planar" no
        paraquedas e a lista de controles do lobby toda em teclado. */
@@ -1441,7 +1789,7 @@ describe('Controles de toque — desktop não muda', { skip: !CHROME && 'Chrome 
     assert.equal(r.gate, 'none', '#rotateGate visível no desktop');
     assert.equal(r.botao, 'none', '#rgPlay visível no desktop');
     assert.equal(r.classesIguais, true, `o portão inerte mexeu no <html>: "${r.classes}"`);
-    assert.ok(!/portraitok|rgstuck|\bbr\b|mobile/.test(r.classes),
+    assert.ok(!/portraitok|rgstuck|\bbr\b|mobile|\barmas\b|fireL/.test(r.classes),
       `classe do modo celular vazou pro desktop: "${r.classes}"`);
   });
 

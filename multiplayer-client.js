@@ -157,6 +157,13 @@
         border: 1px solid rgba(255,255,255,.18); border-radius: 6px; font-size: 14px; box-sizing: border-box; }
       select.brInput { background: #131a24; }
       .brInput option { background: #131a24; color: #e8f1f8; }
+      /* seletor de cor: o tamanho sai do inline pra cá — o celular cresce o
+         alvo para 48 px (style.css, critério C2) e inline venceria a regra */
+      .brCol4 { width: 44px; height: 34px; border: 0; padding: 0; background: none; cursor: pointer; }
+      /* cores + prévia 3D lado a lado; o celular deixa quebrar de linha
+         (style.css) quando a coluna não comporta os dois */
+      .brCoresRow { display: flex; gap: 12px; align-items: flex-start; }
+      .brCoresCol { flex: 1; min-width: 0; }
       #brFlags label { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
       #brFlags input[type=checkbox] { accent-color: #ffd76a; width: 15px; height: 15px; }
       #brFlags select { width: auto; padding: 4px 8px; }
@@ -232,8 +239,19 @@
     document.body.appendChild(zoneMapC);
     const rosterBox = div('brRoster');
     const chatBox = div('brChat');
-    chatBox.innerHTML = `<div id="brChatLog"></div><input id="brChatInput" class="brInput" maxlength="120"
-      placeholder="Enter envia · Esc fecha">`;
+    chatBox.innerHTML = `<div id="brChatLog"></div><input id="brChatInput" class="brInput" maxlength="120">`;
+    /* O TEXTO DE AJUDA É DO APARELHO (critério C4): no celular não existe Esc,
+       e o "Enter" do teclado virtual nem sempre se chama Enter — quem envia e
+       fecha é o botão 💬, o mesmo que abriu. `html.mobile` é escrita pelo
+       js/touchcontrols.js no boot do game.js, que pode rodar DEPOIS daqui: por
+       isso a escolha é refeita a cada foco, que é quando o texto aparece. */
+    const chatAjuda = () => (document.documentElement.classList.contains('mobile')
+      ? 'escreva · toque 💬 para enviar' : 'Enter envia · Esc fecha');
+    {
+      const campo = chatBox.querySelector('#brChatInput');
+      campo.placeholder = chatAjuda();
+      campo.addEventListener('focus', () => { campo.placeholder = chatAjuda(); });
+    }
     const bossBar = div('brBossBar');
     bossBar.innerHTML = `<div class="lbl">⛰ GOLEM DA FORTALEZA</div><div class="bar"><div class="fill" id="brBossFill"></div></div>`;
     const spectBar = div('brSpect');
@@ -306,13 +324,12 @@
             <div class="brH">SEU NICK</div>
             <input id="brNick" class="brInput" maxlength="14" value="${esc(S.nick)}">
             <div class="brH">CORES DO PERSONAGEM</div>
-            <div style="display:flex;gap:12px;align-items:flex-start">
-              <div style="flex:1;min-width:0">
+            <div class="brCoresRow">
+              <div class="brCoresCol">
                 <div style="display:flex;gap:8px">
                   ${['corpo', 'roupa', 'detalhe', 'visor'].map((l, i) =>
                     `<label style="font-size:10px;text-align:center;opacity:.8">${l}<br>
-                     <input type="color" class="brCol4" data-i="${i}" value="${esc(S.myColors[i])}"
-                       style="width:44px;height:34px;border:0;background:none;cursor:pointer"></label>`).join('')}
+                     <input type="color" class="brCol4" data-i="${i}" value="${esc(S.myColors[i])}"></label>`).join('')}
                 </div>
                 <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:9px">
                   ${PRESETS.map((p, i) =>
@@ -356,15 +373,18 @@
               <span><b>TAB</b> inventário</span><span><b>ENTER</b> chat da sala</span>
             </div>
             <div class="brKeys brKeysToque">
-              <span><b>analógico</b> mover · no talo corre</span><span><b>arrastar</b> à direita mira</span>
-              <span><b>◉</b> atirar</span><span><b>MIRA</b> liga/desliga mira</span>
+              <span><b>analógico</b> mover · no talo corre</span><span><b>⇈</b> arraste acima dele: trava a corrida</span>
+              <span><b>arrastar</b> à direita mira</span><span><b>◉</b> atirar (arrastando, mira)</span>
+              <span><b>MIRA</b> liga/desliga mira</span><span><b>1–8</b> no topo: toque a arma</span>
               <span><b>⇧</b> pular/paraquedas</span><span><b>⇩</b> agachar (segure)</span>
-              <span><b>⟳</b> recarregar</span><span><b>⇄</b> troca de arma</span>
+              <span><b>⟳</b> recarregar</span><span><b>⇄</b> próxima arma</span>
               <span><b>●</b> granada</span><span><b>✚</b> kit médico</span>
               <span><b>🍖</b> comer carne</span><span><b>🔭</b> troca de mira</span>
               <span><b>USAR</b> veículo / baú</span><span><b>INV</b> inventário</span>
               <span><b>💬</b> chat da sala</span><span><b>≡</b> pausa</span>
             </div>
+            <div class="brKeysToque" style="font-size:11px;opacity:.7;margin-top:4px">
+              USAR, granada, kit e carne só aparecem quando há o que usar.</div>
             <div class="brH">REGRAS DA SALA <span style="opacity:.5">(só o anfitrião altera)</span></div>
             <div id="brFlags" style="font-size:12.5px;line-height:1.9">
               <label><input type="checkbox" id="fgGolem"> GOLEM da fortaleza</label>
