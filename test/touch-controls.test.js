@@ -720,6 +720,107 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
     assert.equal(r.lock, false, 'retomar no celular pediu pointer lock');
   });
 
+  /* C5 (docs/mobile/criterio-aaa.md). O navegador do celular, depois de um
+     toque cujo `pointerdown` NÃO foi cancelado, despacha mouse de
+     COMPATIBILIDADE: pointerdown → pointerup → mousedown → mouseup → click.
+     O `mousedown` de game.js escuta a janela sem olhar a origem — e 47 % da
+     tela em partida é canvas nu. O headless não gera esses eventos; o dublê
+     os despacha na ordem do Chrome Android, com a marca que o próprio Chrome
+     põe neles (`sourceCapabilities.firesTouchEvents`), e SÓ depois de um
+     pointerdown não cancelado (dublê que despacha sempre seria bom demais). */
+  /* `semMarca`: o Safari não implementa InputDeviceCapabilities — lá o mouse
+     de compatibilidade chega SEM `sourceCapabilities`, e só o relógio do
+     último toque pode reconhecê-lo. */
+  function toqueComCompat(el, x, y, id, semMarca = false) {
+    const o = { pointerId: id, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y,
+      bubbles: true, cancelable: true };
+    const down = new PointerEvent('pointerdown', o);
+    el.dispatchEvent(down);
+    el.dispatchEvent(new PointerEvent('pointerup', o));
+    if (down.defaultPrevented) return false;   // regra do Pointer Events: sem compat
+    const caps = !semMarca && typeof InputDeviceCapabilities === 'function'
+      ? new InputDeviceCapabilities({ firesTouchEvents: true }) : null;
+    const m = { button: 0, buttons: 1, clientX: x, clientY: y, bubbles: true, cancelable: true,
+      sourceCapabilities: caps };
+    el.dispatchEvent(new MouseEvent('mousedown', m));
+    el.dispatchEvent(new MouseEvent('mouseup', { ...m, buttons: 0 }));
+    el.dispatchEvent(new MouseEvent('click', { ...m, buttons: 0 }));
+    return true;
+  }
+
+  it('C5: dado um toque em área VAZIA da tela (canvas nu), então a arma NÃO dispara', async () => {
+    const r = await play(toqueSrc => {
+      const toque = new Function(`return (${toqueSrc})`)();
+      const QA = window.QA, G = QA.G;
+      QA.reset();
+      /* arma SEMI (DMR): o mousedown e o mouseup de compatibilidade chegam
+         juntos, então a automática (lê `mouse.shooting`) já vê o gatilho
+         solto no frame — quem dispara é o `mouse.clicked` que fica armado */
+      /* a arma e a trava VOLTAM no fim: os casos seguintes seguram o gatilho
+         esperando a automática de antes (o da cinemática ficou vermelho com
+         "30 -> 30" enquanto este vazava a DMR) */
+      const armaAntes = G.arsenal.indexOf(G.gun), travaAntes = G.arsenal[2].locked;
+      G.arsenal[2].locked = false;
+      G.switchWeapon(2);
+      QA.tick(30);
+      try {
+        const canvas = document.querySelector('canvas#game') || document.querySelector('canvas');
+        /* pontos de canvas NU: o que está por cima no ponto é o próprio canvas */
+        const pontos = [];
+        for (let y = 20; y < innerHeight - 20; y += 40)
+          for (let x = 20; x < innerWidth - 20; x += 40)
+            if (document.elementFromPoint(x, y) === canvas) pontos.push([x, y]);
+        const antes = G.gun.mag;
+        let compat = 0, id = 700;
+        let n = 0;
+        for (const [x, y] of pontos.slice(0, 12)) {
+          if (toque(canvas, x, y, id++, n++ % 2 === 1)) compat++;   // metade "Safari"
+          QA.tick(3);
+        }
+        return { pontos: pontos.length, compat, antes, depois: G.gun.mag, atirando: G.mouse.shooting };
+      } finally {
+        G.arsenal[2].locked = travaAntes;
+        G.switchWeapon(armaAntes);
+        QA.tick(30);
+      }
+    }, toqueComCompat.toString());
+    assert.ok(r.pontos > 0, 'cenário inválido: nenhum ponto de canvas nu na tela em partida');
+    assert.ok(r.compat > 0, 'cenário inválido: nenhum toque gerou mouse de compatibilidade');
+    assert.equal(r.depois, r.antes,
+      `toque em canvas nu DISPAROU: pente ${r.antes} → ${r.depois} (${r.compat} toques)`);
+    assert.equal(r.atirando, false, 'gatilho ficou preso depois dos toques');
+  });
+
+  it('C5-b: dado o toque que TIRA DA PAUSA, então ele não dispara', async () => {
+    const r = await play(toqueSrc => {
+      const toque = new Function(`return (${toqueSrc})`)();
+      const QA = window.QA, G = QA.G, T = window.TQA;
+      QA.reset();
+      const armaAntes = G.arsenal.indexOf(G.gun), travaAntes = G.arsenal[2].locked;
+      G.arsenal[2].locked = false;   // semi: ver o caso de cima
+      G.switchWeapon(2);
+      QA.tick(30);
+      try {
+        T.tap('.tcBtn[data-act="pause"]', 1);
+        const pausado = G.state.paused;
+        const ov = document.getElementById('overlay');
+        const b = ov.getBoundingClientRect();
+        const antes = G.gun.mag;
+        toque(ov, b.left + b.width / 2, b.top + b.height * 0.8, 780);
+        QA.tick(6);
+        return { pausado, voltou: !G.state.paused, antes, depois: G.gun.mag };
+      } finally {
+        if (G.state.paused) document.getElementById('overlay').click();
+        G.arsenal[2].locked = travaAntes;
+        G.switchWeapon(armaAntes);
+        QA.tick(30);
+      }
+    }, toqueComCompat.toString());
+    assert.equal(r.pausado, true, 'cenário inválido: o botão de pausa não pausou');
+    assert.equal(r.voltou, true, 'cenário inválido: o toque não tirou da pausa');
+    assert.equal(r.depois, r.antes, `o toque que retoma DISPAROU: pente ${r.antes} → ${r.depois}`);
+  });
+
   it('dado um dedo cancelado (pointercancel), então nada fica preso', async () => {
     const r = await play(() => {
       const QA = window.QA, T = window.TQA;

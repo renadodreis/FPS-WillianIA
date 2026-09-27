@@ -454,16 +454,38 @@ export function createTouchControls(deps) {
       /* sem toque não há ajuste de toque, escala de ADS nem tiro automático:
          o mouse segue com o `pointerSpeed` de sempre */
       cfg, lookScale: () => 1, setAutoFire() {}, bindSettings() {}, autoFire: false,
+      lookIsTouch: false,
     };
   }
 
   /* estado do tiro automático: o que a assistência pediu neste frame, e se
      foi ele (e não um dedo) que segurou o gatilho — ver syncMouse */
   let autoFire = false, autoHeld = false;
+  /* QUEM MEXEU NESTE QUADRO FOI UM DEDO? (critério A1) A assistência é do
+     dedo: com `?mobile=1` no desktop, arrastar a área de mira com o MOUSE
+     recebia assistência com precisão de mouse (0,806° medidos). `naoDedo`
+     são os ponteiros vivos que não são toque; `naoDedoNoQuadro` acumula
+     entre dois `takeLook` — o arrasto de mouse que terminou antes do quadro
+     ainda é consumido nele, e esse quadro também não é do dedo. */
+  const naoDedo = new Set();
+  let naoDedoNoQuadro = false, dedoNoQuadro = true;
+  function tipoDoPonteiro(e) {
+    if (e.pointerType === 'touch') return;
+    naoDedo.add(e.pointerId);
+    naoDedoNoQuadro = true;
+  }
+  function takeLook() {
+    dedoNoQuadro = !naoDedoNoQuadro;
+    naoDedoNoQuadro = naoDedo.size > 0;
+    return core.takeLook();
+  }
   const api = {
     core, enabled, fallback: false, el: null,
     getMove: core.getMove,
-    takeLook: core.takeLook,
+    takeLook,
+    /* false se algum ponteiro que moveu mira/analógico desde o último
+       takeLook não era dedo — game.js desliga assistência e automático */
+    get lookIsTouch() { return dedoNoQuadro; },
     setPlaying, releaseAll, frame, bindSettings,
     /* rad/px do olhar JÁ com o ajuste do jogador (a razão Y/X e o zoom são
        aplicados por quem gira a câmera: game.js applyTouchLook) */
@@ -568,6 +590,7 @@ export function createTouchControls(deps) {
     e.preventDefault();               // sem isto vem mousedown de compatibilidade
     if (act !== 'pause' && !live()) return;
     if (!core.press(act, e.pointerId, e.clientX, e.clientY)) return;
+    tipoDoPonteiro(e);
     pressedEl.set(act, btn);
     capture(btn, e.pointerId);
     pressAct(act);
@@ -579,6 +602,7 @@ export function createTouchControls(deps) {
     if (!live()) return;
     e.preventDefault();
     if (!core.onStickStart(e.pointerId, 0, 0)) return;
+    tipoDoPonteiro(e);
     /* rect lido UMA vez por gesto (nunca no pointermove: leitura de
        layout no caminho quente é reflow por evento) */
     const r = moveEl.getBoundingClientRect();
@@ -598,6 +622,7 @@ export function createTouchControls(deps) {
     if (!live()) return;
     e.preventDefault();
     if (!core.onLookStart(e.pointerId, e.clientX, e.clientY)) return;
+    tipoDoPonteiro(e);
     capture(lookEl, e.pointerId);
   }
 
@@ -614,11 +639,13 @@ export function createTouchControls(deps) {
   function onPointerMove(e) {
     const role = core.roleOf(e.pointerId);
     if (role === null) return;
+    if (naoDedo.has(e.pointerId)) naoDedoNoQuadro = true;
     if (role === 'stick') core.onStickMove(e.pointerId, e.clientX - originX, e.clientY - originY);
     else if (role === 'look') core.onLookMove(e.pointerId, e.clientX, e.clientY);
     else if (AIM_ACTS.has(role)) core.onPressMove(e.pointerId, e.clientX, e.clientY); // o gatilho mira
   }
   function onPointerUp(e) {
+    naoDedo.delete(e.pointerId);
     const role = core.roleOf(e.pointerId);
     if (role === null) return;
     if (role === 'stick' || role === 'look') core.releasePointer(e.pointerId);
@@ -626,6 +653,7 @@ export function createTouchControls(deps) {
   }
 
   function releaseAll() {
+    naoDedo.clear();
     for (const act of TOUCH_ACTS) letGo(act);
     mouse.shooting = false;
     mouse.aiming = false;
@@ -724,6 +752,34 @@ export function createTouchControls(deps) {
     if (!playing) releaseAll();
     else syncBR();   // entrar em partida BR já nasce com o botão de chat na tela
   }
+
+  /* ---- MOUSE DE COMPATIBILIDADE (critério C5) ----
+     Depois de um toque cujo `pointerdown` não foi cancelado, o navegador do
+     celular despacha pointerdown → pointerup → mousedown → mouseup → click.
+     Os controles cancelam o deles (preventDefault em onBtnDown/onMoveDown/
+     onLookDown), mas 47 % da tela em partida é canvas NU, e o `mousedown` de
+     game.js escuta a janela sem olhar a origem: 12 toques no vazio davam 2
+     tiros de DMR (arma semi lê `mouse.clicked`, que ficava armado).
+     Duas marcas, porque nenhuma é universal: `sourceCapabilities.
+     firesTouchEvents` (Chrome) e o relógio do último toque (Safari não tem
+     InputDeviceCapabilities). CAPTURA na janela roda antes de qualquer outro
+     ouvinte. Campo, botão e menu continuam recebendo o mousedown — só o
+     gatilho do jogo deixa de ouvir o toque que não era gatilho. */
+  const COMPAT_MS = 1000;
+  const agora = () => (win.performance && win.performance.now ? win.performance.now() : Date.now());
+  let ultimoToque = -Infinity;
+  function marcarToque(e) { if (e.pointerType === 'touch') ultimoToque = agora(); }
+  function engolirCompat(e) {
+    const caps = e.sourceCapabilities;
+    if (!(caps && caps.firesTouchEvents) && agora() - ultimoToque > COMPAT_MS) return;
+    const alvo = e.target;
+    if (alvo && alvo.closest &&
+        alvo.closest('input, textarea, select, button, a, [role="button"], #overlay, #settings, #mpPanel')) return;
+    e.stopImmediatePropagation();
+  }
+  win.addEventListener('pointerdown', marcarToque, true);
+  win.addEventListener('pointerup', marcarToque, true);
+  win.addEventListener('mousedown', engolirCompat, true);
 
   if (btnsEl) btnsEl.addEventListener('pointerdown', onBtnDown);
   if (btnsLEl) btnsLEl.addEventListener('pointerdown', onBtnDown);

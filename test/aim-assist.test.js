@@ -37,8 +37,8 @@ function instalar() {
      partida, br-game.js). Aqui eles sairiam na frente da cruz e virariam
      alvo da assistência no meio da medição. */
   for (const e of G.Enemies.list) { e.alive = false; if (e.group) e.group.visible = false; }
-  const evt = (el, type, id, x, y) => el.dispatchEvent(new PointerEvent(type, {
-    pointerId: id, pointerType: 'touch', isPrimary: id === 1,
+  const evt = (el, type, id, x, y, tipo = 'touch') => el.dispatchEvent(new PointerEvent(type, {
+    pointerId: id, pointerType: tipo, isPrimary: id === 1,
     clientX: x, clientY: y, bubbles: true, cancelable: true }));
   const _f = new THREE.Vector3(), _o = new THREE.Vector3(), _v = new THREE.Vector3();
   const _e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -163,11 +163,11 @@ function instalar() {
     /* O DEDO SIMULADO. Reage ao erro de `atraso` frames atrás com `ganho`
        por frame, pelo #tcLook. `mover(i)` posiciona o alvo antes do frame i.
        Devolve a série de erros (rad) e a de yaw da câmera. */
-    rastrear(t, { frames = 210, atraso = 9, ganho = 0.12, mover = () => {}, id = 31 } = {}) {
+    rastrear(t, { frames = 210, atraso = 9, ganho = 0.12, mover = () => {}, id = 31, tipo = 'touch' } = {}) {
       const el = document.querySelector('#tcLook');
       const r = el.getBoundingClientRect();
       let px = r.left + r.width / 2, py = r.top + r.height / 2;
-      evt(el, 'pointerdown', id, px, py);
+      evt(el, 'pointerdown', id, px, py, tipo);
       const hist = [], erros = [], yaws = [];
       for (let i = 0; i < frames; i++) {
         mover(i);
@@ -176,12 +176,12 @@ function instalar() {
         const sens = G.Touch.lookSens;               // rad/px do QUADRIL
         px += -e.yaw * ganho / sens;
         py += -e.pitch * ganho / (sens * G.Touch.cfg.ratioY);
-        evt(el, 'pointermove', id, px, py);
+        evt(el, 'pointermove', id, px, py, tipo);
         QA.tick(1);
         erros.push(A.erro(t));
         yaws.push(A.olhar().yaw);
       }
-      evt(el, 'pointerup', id, px, py);
+      evt(el, 'pointerup', id, px, py, tipo);
       QA.tick(1);
       return { erros, yaws };
     },
@@ -207,20 +207,30 @@ describe('Assistência de mira no toque — celular', { skip: !CHROME && 'Chrome
   /* Alvo a 20 m, andando de lado em senoide (±2 m, período 2,5 s: pico de
      5 m/s — um jogador trocando de direção). Mesmo dedo, mesmo começo;
      só o ajuste muda. */
-  function cenarioLateral(assist) {
-    return play(ligada => {
+  function cenarioLateral(assist, { tipo = 'touch', bandeiras = {} } = {}) {
+    return play((ligada, tipo, bandeiras) => {
       const A = window.AQA;
       A.limpar();
       A.ajuste('setTAssist', ligada ? 1 : 0);
       A.posicionar();
       const p0 = A.ponto(20);
       const t = A.criar(p0.x, p0.z);
-      const r = A.rastrear(t, {
-        mover: i => { const p = A.ponto(20, 2 * Math.sin(2 * Math.PI * (i / 60) / 2.5)); A.pos(t, p.x, p.z); },
-      });
+      /* bandeiras que br-game.js publica (nave/queda: __BR_freeze; espectador:
+         __BR_espectador) — ligadas SÓ durante o rastreio */
+      const antes = {};
+      for (const k in bandeiras) { antes[k] = window[k]; window[k] = bandeiras[k]; }
+      let r;
+      try {
+        r = A.rastrear(t, {
+          tipo,
+          mover: i => { const p = A.ponto(20, 2 * Math.sin(2 * Math.PI * (i / 60) / 2.5)); A.pos(t, p.x, p.z); },
+        });
+      } finally {
+        for (const k in antes) window[k] = antes[k];
+      }
       A.limpar();
       return { erros: r.erros, yaws: r.yaws };
-    }, assist);
+    }, assist, tipo, bandeiras);
   }
 
   it('(b) dado um alvo andando de lado, então o erro angular médio CAI com a assistência', async () => {
@@ -235,6 +245,28 @@ describe('Assistência de mira no toque — celular', { skip: !CHROME && 'Chrome
     assert.ok(mCom < mSem * 0.85,
       `a assistência não ajudou: ${mCom.toFixed(3)}° com contra ${mSem.toFixed(3)}° sem`);
   });
+
+  /* A1 (docs/mobile/criterio-aaa.md): assistência é do DEDO. O portão era
+     `Touch.enabled` — com `?mobile=1` no desktop, arrastar #tcLook com o
+     MOUSE recebia assistência com precisão de mouse. E nave, queda e
+     espectador (onde `player.dead` é falso) não estavam no portão. O controle
+     positivo é o caso (b): o mesmo rastreio com o dedo MUDA a vista. */
+  const difMax = (a, b) => Math.max(...a.map((y, i) => Math.abs(y - b[i])));
+  for (const [nome, opt] of [
+    ['mouse arrastando a área de mira', { tipo: 'mouse' }],
+    ['caneta arrastando a área de mira', { tipo: 'pen' }],
+    ['nave/queda (__BR_freeze)', { bandeiras: { __BR_freeze: true } }],
+    ['espectador (__BR_espectador)', { bandeiras: { __BR_espectador: true } }],
+  ]) {
+    it(`A1: dado ${nome}, então a assistência não mexe na vista (0 rad)`, async () => {
+      assert.notEqual(campo, null, 'cenário inválido: nenhuma direção de campo aberto');
+      const sem = await cenarioLateral(false, opt);
+      const com = await cenarioLateral(true, opt);
+      const d = difMax(sem.yaws, com.yaws);
+      console.log(`  [A1 ${nome}] maior diferença de yaw com × sem assistência: ${graus(d).toExponential(3)}°`);
+      assert.ok(d < 1e-9, `assistência agiu com ${nome}: ${graus(d).toFixed(4)}° de diferença`);
+    });
+  }
 
   /* ---- (c) quem o jogador NÃO vê ---- */
   function cenarioEscondido(assist, esconder) {

@@ -1989,8 +1989,13 @@ function applyTouchLook(dt) {
   lookRadians(look.dx, look.dy, Touch.lookSens, cfg.ratioY, k, _aaGiro);
   _euler.setFromQuaternion(camera.quaternion);
   let dYaw = _aaGiro.yaw, dPitch = _aaGiro.pitch;
-  // XR e mouse nunca recebem assistência; veículo e morte também não
-  if ((cfg.assist || cfg.autoFire) && !XR.presenting && !state.driving && !state.flying && !player.dead) {
+  /* XR e mouse nunca recebem assistência; veículo e morte também não. E o
+     BR tem estados em que `player.dead` é falso e a vista não é de combate:
+     nave e queda (`__BR_freeze`, o mesmo portão do tiro) e espectador
+     (`enterSpectator` devolve `dead = false`). `lookIsTouch`: quem mexeu
+     neste quadro foi um DEDO — mouse sob ?mobile=1 não ganha assistência. */
+  if ((cfg.assist || cfg.autoFire) && Touch.lookIsTouch && !XR.presenting && !state.driving && !state.flying &&
+      !player.dead && !state.paused && !window.__BR_freeze && !window.__BR_espectador) {
     const q = _aaQuadro;
     q.dt = dt; q.eye = camera.position; q.yaw = _euler.y; q.pitch = _euler.x;
     q.fov = camera.fov; q.aspect = camera.aspect; q.inYaw = dYaw; q.inPitch = dPitch;
