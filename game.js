@@ -15,6 +15,7 @@ import { isMobileEnv } from './js/mobile.js';
 import { createTouchControls, createOrientationGate, clampPitch, lookRadians,
   SPRINT_MAG as TOUCH_SPRINT_MAG } from './js/touchcontrols.js';
 import { createAimAssist, weaponClass } from './js/aimassist.js';
+import { createOclusao } from './js/oclusao.js';
 import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } from './js/utils.js';
 import { createTerrain } from './js/terrain.js';
 import { createBiomes } from './js/biomes.js';
@@ -1985,22 +1986,36 @@ function setOpacityOnce(el, value) { styleOnce(el, 'opacity', value); }
    propriedade do applyFpsCamera (shake/lean/morte) — não se escreve aqui.
    ================================================================ */
 /* ASSISTÊNCIA DE MIRA DO TOQUE (js/aimassist.js — núcleo puro). A linha de
-   visada é o MESMO `rayBlockedAt` que decide se o tiro passa: nunca assiste
-   quem a parede/terreno esconde. Vetores soltos, nada de Object3D (o UUID
-   consome o `Math.random` seedado do worldgen). */
+   visada é o MESMO `rayBlockedAt` que decide se o tiro passa E, depois dele,
+   o que a TELA desenha e a bala não conhece (js/oclusao.js: veículo, copa e
+   galho, painel, tenda, castelo — medido pelo validador em 7515734: 20 de 30
+   posições atrás do caminhão com 0 px e a assistência agindo). Vetores
+   soltos, nada de Object3D (o UUID consome o `Math.random` seedado do
+   worldgen). */
 const _aaOlho = new THREE.Vector3(), _aaDir = new THREE.Vector3();
 const _aaVazio = [];
 const _aaLists = [_aaVazio, _aaVazio, _aaVazio, _aaVazio];
 const _aaGiro = { yaw: 0, pitch: 0 };
+const Oclusao = createOclusao({
+  raiz: scene, heightAt,
+  // não é parede: a arma e o corpo presos à câmera, e o chão (marcha própria)
+  ignorar: o => o === camera || o === terrainMesh,
+  // alvo não tampa a si mesmo: as MESMAS listas que a assistência percorre
+  * alvos() {
+    yield* (window.__MP_remotePlayers || _aaVazio); yield* extraTargets; yield* Bosses; yield* Enemies.list;
+  },
+  agora: () => performance.now(),
+});
 const AimAssist = createAimAssist({
   root: scene, heightAt, grassTop: 1.4 * CFG.GRASS_HEIGHT, // topo da lâmina mais alta (js/grass.js)
-  los(e, c, r) {
+  los(e, c, r, t) {
     _aaOlho.set(e.x, e.y, e.z);
     _aaDir.set(c.x - e.x, c.y - e.y, c.z - e.z);
     const len = _aaDir.length();
     if (len < 1e-3) return true;
     _aaDir.multiplyScalar(1 / len);
-    return rayBlockedAt(_aaOlho, _aaDir, len) >= len - r;
+    if (rayBlockedAt(_aaOlho, _aaDir, len) < len - r) return false;
+    return !Oclusao.tampa(e, c, r, t && (t.group || t.mesh));
   },
 });
 const _aaQuadro = { dt: 0, eye: null, yaw: 0, pitch: 0, fov: 75, aspect: 1, inYaw: 0, inPitch: 0,
@@ -2010,6 +2025,10 @@ function applyTouchLook(dt) {
   if (!Touch.enabled) return;   // desktop: o mouse é do PointerLockControls, intocado
   const look = Touch.takeLook();
   const cfg = Touch.cfg;
+  /* a grade de oclusão se monta aos poucos (orçamento por quadro) desde que
+     a assistência está LIGADA, não só quando o dedo mexe: senão o primeiro
+     arrasto do combate cairia com tudo pendente (e pendente = não assiste) */
+  if ((cfg.assist || cfg.autoFire) && !XR.presenting) Oclusao.atualizar();
   /* sensibilidade: ajuste do jogador × razão Y/X × razão das tangentes do
      zoom (P1-4/P1-5). A base do zoom é o FOV do quadril do momento (85
      correndo), para o sprint não mexer na sensibilidade. O `pointerSpeed`
@@ -5114,6 +5133,7 @@ window.__game = {
   isMobile: __mobile, // br-game.js pula o pointer lock com isto (script clássico)
   Touch,              // QA: núcleo do toque, elementos e estado do analógico
   AimAssist,          // QA: assistência de mira do toque (last = saída do último frame)
+  Oclusao,            // QA: o que a tela desenha e a bala não conhece (estado(), prontoJa())
   Orient,             // QA: aviso de orientação (bloqueio, escape em retrato)
   controls,           // QA: pointerSpeed é o multiplicador de ADS do olhar
   MenuCam, // QA/captura: goTo('cidade'|'castelo'|'vulcao'|'carro')
