@@ -219,9 +219,11 @@ describe('assistência de mira — SLOW (atrito sobre o alvo)', () => {
 describe('assistência de mira — PULL (acompanha o movimento RELATIVO)', () => {
   /* alvo a 20 m andando 5 m/s de lado: a cada frame a direção dele muda
      Δψ = atan(x1/20) − atan(x0/20). O pull devolve 30 % disso (hip, interno).
-     A VISTA acompanha o alvo (o cenário põe a cruz nele a cada frame, como um
-     jogador que rastreia perfeito): sem isso ele sai da zona em ~5 frames e o
-     caso deixa de medir o pull interno. */
+     A VISTA está onde o alvo ESTAVA no quadro anterior (o cenário a põe lá a
+     cada frame): a cruz fica ATRÁS do alvo exatamente Δψ, que é o caso em que
+     o pull age. Sem isso o alvo sai da zona em ~5 frames e o caso deixa de
+     medir o pull interno. (Com a cruz JÁ em cima do alvo, puxar passaria do
+     centro — é o defeito do A5; o caso abaixo, "cruz à frente", cobre.) */
   function rastreia(o) {
     const { aa } = nucleo();
     const t = bonecoEm(20);
@@ -231,10 +233,25 @@ describe('assistência de mira — PULL (acompanha o movimento RELATIVO)', () =>
       t.group.position.x += 5 / 60;
       const x1 = t.group.position.x;
       deltas.push(Math.atan2(-x1, 20) - Math.atan2(-x0, 20));
-      saidas.push(aa.step(quadro([t], Object.assign({ yaw: Math.atan2(-x1, 20) }, o))));
+      saidas.push(aa.step(quadro([t], Object.assign({ yaw: Math.atan2(-x0, 20) }, o))));
     }
     return { yaw: saidas.at(-1).yaw, delta: deltas.at(-1) };
   }
+
+  it('dado a cruz À FRENTE do alvo (no sentido em que ele anda), então o pull não empurra (o alvo vem até ela)', () => {
+    /* o alvo anda pra direita 5 m/s a 20 m; a cruz está 0,3° à DIREITA dele
+       (à frente): puxar junto adiantaria a cruz e atrasaria o encontro */
+    const { aa } = nucleo();
+    const t = bonecoEm(20);
+    let maior = 0;
+    for (let i = 0; i < 40; i++) {
+      t.group.position.x += 5 / 60;
+      const x1 = t.group.position.x;
+      const r = aa.step(quadro([t], { yaw: Math.atan2(-x1, 20) - 0.3 * DEG, inPitch: 1e-9 }));
+      maior = Math.max(maior, Math.abs(r.pullYaw));
+    }
+    assert.equal(maior, 0, `com a cruz à frente o pull empurrou ${maior} rad`);
+  });
 
   it('dado o dedo mexendo e o alvo andando pra DIREITA, então a vista vira pra direita 30 % do necessário', () => {
     // entrada vertical minúscula = "dedo mexendo"; o eixo medido é o yaw
@@ -259,6 +276,85 @@ describe('assistência de mira — PULL (acompanha o movimento RELATIVO)', () =>
     const t = bonecoEm(20, 1.2);
     const r = assenta(aa, quadro([t], { inPitch: 1e-9 }));
     assert.ok(Math.abs(r.yaw) < 1e-12, `alvo parado puxou a vista ${r.yaw} rad`);
+  });
+});
+
+/* ================================================================
+   A5/A4 (docs/mobile/criterio-aaa.md) — o rastreio com a assistência nunca
+   PIORA, e a assistência nunca faz a cruz CRUZAR o centro do alvo.
+
+   Medido pelo validador em 7515734 (A5-c): alvo a 30 °/s, o dedo é uma CÓPIA
+   do movimento do alvo atrasada 150 ms — a 20 m o erro médio subia de 4,34°
+   para 4,64° com a assistência. Causa, reproduzida aqui: o pull SOMAVA 30 %
+   do movimento do alvo a um dedo que já o acompanhava; a cruz passava à
+   FRENTE do alvo e travava lá (o slow freando o dedo que "se afasta"). Na
+   virada do alvo, a cruz adiantada ficava do lado errado: 8,32° de erro
+   contra 4,50° sem assistência.
+
+   Três jogadores, todos com 150 ms de atraso (Insomniac 02:02: 250–320 ms de
+   reação média — 150 ms é um jogador BOM):
+     · cópia  — o do validador: repete o movimento angular do alvo, atrasado;
+     · fechado — corrige o ERRO que via 150 ms atrás, com ganho 0,12/quadro;
+     · misto  — as duas coisas (acompanha a velocidade E corrige a posição).
+   O alvo anda em volta do jogador a 5, 30 e 60 °/s, virando a cada 2 s, a
+   10, 20 e 30 m. A régua é o ângulo entre a cruz e o centro do alvo, que sai
+   da GEOMETRIA do cenário (a posição do alvo), nunca da saída do módulo.
+   ================================================================ */
+describe('assistência de mira — A5: nunca piora o rastreio (nem cruza o alvo)', () => {
+  const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+  function rastreio({ R, vel, on, modelo, frames = 600, atraso = 9, ganho = 0.12, periodo = 120 }) {
+    const { aa } = nucleo();
+    const t = boneco(0, 0);
+    const w = vel * DEG / 60;
+    let ang = -Math.PI / 2;
+    const poe = () => { t.group.position.x = -Math.sin(ang) * R; t.group.position.z = -Math.cos(ang) * R; };
+    poe();
+    const olhoY = 1.62;
+    let yaw = ang;
+    const pitch = Math.atan2(1.10 - olhoY, R);
+    const hist = [], errH = [];
+    let soma = 0, cruzouPelaAssist = 0, rhoMax = 0;
+    for (let f = 0; f < frames; f++) {
+      const s = Math.floor(f / periodo) % 2 === 0 ? 1 : -1;
+      ang += s * w; hist.push(s * w); poe();
+      const eAtras = errH[Math.max(0, errH.length - 1 - atraso)] || 0;
+      const copia = f >= atraso ? hist[f - atraso] : 0;
+      const inYaw = modelo === 'copia' ? copia : modelo === 'fechado' ? eAtras * ganho : copia + eAtras * ganho * 0.5;
+      const r = aa.step(quadro([t], { eye: { x: 0, y: olhoY, z: 0 }, yaw, pitch, inYaw, maxRange: 150, assist: on }));
+      // o que o DEDO sozinho faria com a cruz neste quadro, e o que a assistência fez
+      const eDedo = wrap(ang - (yaw + inYaw));
+      yaw += r.yaw;
+      const e = wrap(ang - yaw);
+      if (Math.abs(eDedo) > 1e-9 && Math.sign(e) !== Math.sign(eDedo) && Math.abs(e) > 1e-9) cruzouPelaAssist++;
+      if (r.pullYaw) rhoMax = Math.max(rhoMax, r.pullYaw / (s * w));
+      errH.push(e);
+      soma += Math.abs(e);
+    }
+    return { erro: soma / frames / DEG, cruzouPelaAssist, rhoMax };
+  }
+
+  for (const modelo of ['copia', 'fechado', 'misto']) {
+    it(`dado o dedo "${modelo}" com 150 ms de atraso, então o erro médio CAI a 10/20/30 m e 5/30/60 °/s`, () => {
+      const linhas = [], piores = [];
+      for (const R of [10, 20, 30]) for (const vel of [5, 30, 60]) {
+        const c = rastreio({ R, vel, on: true, modelo });
+        const s = rastreio({ R, vel, on: false, modelo });
+        const pct = 100 * (c.erro / s.erro - 1);
+        linhas.push(`${R} m ${vel} °/s: ${s.erro.toFixed(3)}° → ${c.erro.toFixed(3)}° (${pct >= 0 ? '+' : ''}${pct.toFixed(1)} %)`);
+        if (!(c.erro < s.erro)) piores.push(linhas.at(-1));
+      }
+      console.log(`  [A5 ${modelo}] sem → com\n    ` + linhas.join('\n    '));
+      assert.deepEqual(piores, [], `a assistência PIOROU o rastreio:\n${piores.join('\n')}`);
+    });
+  }
+
+  it('dado qualquer rastreio, então a assistência nunca faz a cruz cruzar o centro do alvo (A4) e ρ < 1', () => {
+    const casos = [];
+    for (const modelo of ['copia', 'fechado', 'misto']) for (const R of [10, 20, 30]) for (const vel of [5, 30, 60]) {
+      const c = rastreio({ R, vel, on: true, modelo });
+      if (c.cruzouPelaAssist > 0 || c.rhoMax >= 1) casos.push(`${modelo} ${R} m ${vel} °/s: ${c.cruzouPelaAssist} cruzamentos, ρ máx ${c.rhoMax.toFixed(3)}`);
+    }
+    assert.deepEqual(casos, [], `a assistência cruzou o centro do alvo:\n${casos.join('\n')}`);
   });
 });
 

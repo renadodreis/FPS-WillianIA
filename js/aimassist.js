@@ -38,7 +38,11 @@
         do "teste que passa por acidente");
      2. está dentro do frustum e do alcance (que a neblina limita);
      3. a linha de visada do olho até ela está livre — no jogo, o MESMO
-        `rayBlockedAt` que decide se o tiro passa (terreno, estruturas, troncos).
+        `rayBlockedAt` que decide se o tiro passa (terreno, estruturas, troncos)
+        E nada DESENHADO na frente (js/oclusao.js: veículo, copa e galho,
+        painel, tenda, castelo — o que a tela mostra e a bala atravessa ou
+        nem conhece). `los(olho, ponto, raio, alvo)` recebe o alvo para que o
+        corpo dele nunca tampe a si mesmo.
    E o alvo só conta como visto se ao menos uma parte com linha livre estiver
    ACIMA DO TOPO DA GRAMA: grama não é linha de visada (o raio atravessa), então
    uma parte que a grama pode cobrir não prova nada sozinha.
@@ -138,6 +142,39 @@ const rumo = (giro, desvio) => giro !== 0 && Math.abs(desvio) > 1e-9 && Math.sig
 function closeK(dist) {
   const t = clamp01((dist - AIM.CLOSE_NEAR) / (AIM.CLOSE_FAR - AIM.CLOSE_NEAR));
   return AIM.CLOSE_FLOOR + (1 - AIM.CLOSE_FLOOR) * t;
+}
+
+/* PULL de UM eixo. `n` = quanto o alvo andou neste quadro, visto do olho (o
+   giro que o manteria parado na tela); `resto` = quanto falta, DEPOIS do
+   dedo, até a parte mirada; `k` = força. Devolve k·n ("a percentage of the
+   rotation needed to stay on target", Lyra .cpp l. 675) — com duas travas.
+
+   O DEFEITO (validador, 7515734, A5-c): o dedo que copia o alvo com 150 ms de
+   atraso rastreava PIOR a 20 m com a assistência (4,64° × 4,34°). Reproduzido
+   no núcleo: o pull empurrava a cruz PARA ALÉM do centro do alvo, e o slow
+   (que freia o dedo que "se afasta") a travava lá, adiantada. Na virada do
+   alvo a cruz adiantada estava do lado errado: 8,32° de erro contra 4,50° sem
+   assistência. Um jogador que acompanha a velocidade E corrige a posição
+   piorava até +22,5 % (a 30 m, 60 °/s).
+
+   1. Só com a cruz ATRÁS do alvo no sentido em que ele anda. Com a cruz à
+      frente, o alvo vem até ela sozinho; puxar junto só atrasa o encontro
+      (A5-b) e é o que a deixava adiantada. A Insomniac só centralizava
+      "turning towards the center of the target" (11:32).
+   2. Nunca mais que o `resto`: a assistência não faz a cruz CRUZAR a parte
+      mirada (A4: "0 cruzamentos causados pela assistência").
+
+   O que foi medido e RECUSADO: interpolar o dedo rumo ao rastreio perfeito
+   (Insomniac 10:29, "interpolating between the player's input and that target
+   input") limitando o pull ao que falta ao dedo. Não piorou nenhum caso, mas
+   tirou 73 % da ajuda de quem corrige pelo erro (cenário (b) do teste de
+   jogo: 35,3 % → 9,4 % de erro a menos a 20 m) sem melhorar nenhum outro — as
+   duas travas acima sozinhas já zeram o dano. */
+function puxa(n, resto, k) {
+  if (!(k > 0) || n === 0) return 0;
+  const sg = n > 0 ? 1 : -1;
+  if (resto * sg <= 0) return 0;
+  return sg * Math.min(k * Math.abs(n), Math.abs(resto));
 }
 
 const MAX_SPH = 8;
@@ -284,7 +321,7 @@ export function createAimAssist(deps) {
         if (!c.inF[k]) continue;
         cP.x = c.x[k]; cP.y = c.y[k]; cP.z = c.z[k];
         losCalls++;
-        if (!los(eyeP, cP, c.r[k])) continue;
+        if (!los(eyeP, cP, c.r[k], c.t)) continue;
         c.vis[k] = 1;
         if (c.y[k] - heightAt(c.x[k], c.z[k]) >= grassTop) c.seen = true;
       }
@@ -351,14 +388,21 @@ export function createAimAssist(deps) {
 
     /* ---- 5. PULL: fração do giro que manteria a mira no alvo ----
        Direção do CENTRO do alvo (todas as partes): é o movimento do corpo,
-       e ela não salta quando uma parte entra ou sai de trás da cobertura. */
+       e ela não salta quando uma parte entra ou sai de trás da cobertura.
+       Quanto puxar, por eixo, é `puxa` (acima): só rumo ao alvo, e nunca
+       além dele. */
     const vx = best.cx - ex, vy = best.cy - ey, vz = best.cz - ez;
     const tPsi = Math.atan2(-vx, -vz), tTh = Math.atan2(vy, Math.hypot(vx, vz));
     if (prevAngT === best.t && pullCur > 0) {
       const dPsi = wrap(tPsi - prevPsi), dTh = tTh - prevTheta;
       if (Math.abs(dPsi) < AIM.JUMP && Math.abs(dTh) < AIM.JUMP) {
         const scale = looking ? 1 : strafe * AIM.STRAFE_PENALTY;
-        let py = pullCur * scale * dPsi, pp = pullCur * scale * dTh;
+        const kk = pullCur * scale;
+        // quanto falta, DEPOIS do dedo, até a parte mirada (a mais perto da cruz)
+        const ax = best.x[k] - ex, ay = best.y[k] - ey, az = best.z[k] - ez;
+        const restoPsi = wrap(Math.atan2(-ax, -az) - (psi + out.yaw));
+        const restoTh = Math.atan2(ay, Math.hypot(ax, az)) - (theta + out.pitch);
+        let py = puxa(dPsi, restoPsi, kk), pp = puxa(dTh, restoTh, kk);
         const mag = Math.hypot(py * cT, pp), cap = AIM.MAX_PULL * dt;
         if (mag > cap && mag > 0) { py *= cap / mag; pp *= cap / mag; }
         out.pullYaw = py; out.pullPitch = pp;
