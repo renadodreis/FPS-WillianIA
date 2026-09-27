@@ -138,4 +138,15 @@ export const TOUCH_DEFAULTS = Object.freeze({
 export const SETTINGS = Object.assign({ vol: 0.5, res: 1.5, shadow: 1, bloom: 1, ping: 1, autores: 1, aa: 1,
   ...TOUCH_DEFAULTS },
   (() => { try { return JSON.parse(localStorage.getItem('callofai_cfg') || '{}'); } catch (e) { return {}; } })());
-export function persistSettings() { localStorage.setItem('callofai_cfg', JSON.stringify(SETTINGS)); }
+/* GRAVAR É MELHOR ESFORÇO, NUNCA CONDIÇÃO PARA JOGAR. Safari em aba privada
+   (versões antigas), cota cheia e iframe com sandbox fazem `setItem` — ou o
+   próprio acesso a `localStorage` — LANÇAR. Sem o `try`, o primeiro boot (que
+   grava o preset do auto-tier) morria com `QuotaExceededError` e o jogo nunca
+   subia (laudo `7515734`, A6/C9). O ajuste continua valendo na memória
+   (`SETTINGS`); só não sobrevive ao recarregar. Devolve se gravou. Em Node
+   puro (o processo dos bots importa este módulo, sem DOM) também só devolve
+   `false`: nada aqui pode tocar `localStorage` fora de `try` ou de função. */
+export function persistSettings() {
+  try { localStorage.setItem('callofai_cfg', JSON.stringify(SETTINGS)); return true; }
+  catch (e) { return false; }
+}
