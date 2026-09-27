@@ -1738,6 +1738,25 @@ function teclaXR(code, ativo) {
 /* Sair da sessão com botão apertado deixaria a tecla presa para sempre. */
 function soltarTeclasXR() { for (const c of [..._teclasXR]) teclaXR(c, false); }
 
+/* SOLTA TODA A ENTRADA DO JOGO — teclas, mouse e os dedos do toque — numa
+   transição em que o jogador não está mais comandando o boneco. Validador
+   (laudo `7515734`, C10): abrir o chat do BR com o polegar no analógico, o
+   dedo no ATIRAR e o ⇩ apertados não soltava nada — o boneco andava 1,275 m
+   em 0,5 s, atirando e agachado, enquanto o jogador digitava; e na MORTE
+   `ControlLeft`, `shooting` e `aiming` seguiam ligados.
+   `Touch.releaseAll()` emite o `keyup` casado de cada botão e esquece os
+   dedos: o dedo que continua na tela passa a não controlar nada até ser
+   levantado e encostado de novo (regra de ouro de js/touchcontrols.js).
+   Os botões do HEADSET não são reescritos aqui: `teclaXR` só volta a emitir na
+   próxima BORDA, então o botão que ficou apertado também precisa ser solto e
+   apertado de novo — a mesma regra do dedo. */
+function soltarEntrada() {
+  for (const k in keys) keys[k] = false;
+  justPressed.clear();
+  mouse.shooting = mouse.aiming = mouse.clicked = false;
+  Touch.releaseAll();
+}
+
 /* ROTAÇÃO DA VISTA NO MUNDO — a única que serve para decidir direção em VR.
 
    Em XR `camera.quaternion` é a pose da CABEÇA RELATIVA AO RIG (o three
@@ -2330,8 +2349,13 @@ function applyFpsCamera(dt, t, vistaPronta = false) {
   const gap = 7 + spd * 1.4 + trauma * 18 + (player.onGround ? 0 : 9);
   const gapPx = gap.toFixed(1) + 'px';
   if (ui.crosshair.__hudGap !== gapPx) { ui.crosshair.__hudGap = gapPx; ui.crosshair.style.setProperty('--gap', gapPx); }
-  // só some quando existe uma referência ADS válida na tela (faca: nunca some)
-  setOpacityOnce(ui.crosshair, (state.driving || WeaponRig.sightRefK(gun, adsT) > 0.5) ? '0' : '1');
+  /* A RETÍCULA SÓ APARECE QUANDO DIZ A VERDADE (M6): some quando nenhum tiro
+     pode sair — o MESMO portão do `shootUpdate` (nave, queda, paraquedas,
+     espectador, morto, dirigindo, pausa). Medido pelo validador: na nave ela
+     ficava com opacidade 1 e `__BR_freeze` ligado. E some quando existe uma
+     referência ADS válida na tela (faca: nunca some). Voando CONTINUA: dá pra
+     atirar da porta do helicóptero. */
+  setOpacityOnce(ui.crosshair, (tiroBloqueado() || WeaponRig.sightRefK(gun, adsT) > 0.5) ? '0' : '1');
 
   // flash de dano decai + indicador de direção
   flashT = Math.max(0, flashT - dt * 1.4);
@@ -2384,6 +2408,14 @@ function updateAmmoHUD() {
   ui.ammoMag.classList.toggle('empty', !gun.melee && gun.mag === 0);
   ui.ammoReserve.textContent = gun.melee ? '' : '| ' + gun.reserve;
   ui.weaponName.textContent = gun.name;
+}
+/* O PORTÃO DO TIRO, fonte única: morto, dirigindo, pausado, nave/queda/
+   paraquedas/espectador do BR (`__BR_freeze`) e a cinemática da cidade. É
+   lido pelo `shootUpdate` e pela retícula — retícula visível com o tiro
+   travado é a tela mentindo (M6). No helicóptero PODE atirar (porta aberta);
+   dirigindo não — as mãos estão no volante. */
+function tiroBloqueado() {
+  return state.driving || state.paused || player.dead || !!window.__BR_freeze || state.cinematic;
 }
 function reloadBlocked() { // mesma condição do gate de tiro: morto/dirigindo/pausado/nave/cinemática
   return player.dead || state.driving || state.paused || window.__BR_freeze || state.cinematic
@@ -2889,7 +2921,7 @@ function shootUpdate(dt, t) {
     }
   }
   // no helicóptero PODE atirar (porta aberta); dirigindo não — as mãos estão no volante
-  if (state.driving || state.paused || player.dead || window.__BR_freeze || state.cinematic) { mouse.clicked = false; return; }
+  if (tiroBloqueado()) { mouse.clicked = false; return; }
   if (justPressed.has('KeyG') && !state.flying) Grenades.throwNade(t);
   const interval = 60 / gun.rpm;
   const want = gun.auto ? mouse.shooting : mouse.clicked;
@@ -2963,6 +2995,7 @@ function playerDamage(dmg, fromPos, cause) {
   if (player.health <= 0) {
     player.health = 0;
     player.dead = true;
+    soltarEntrada(); // morto não segura gatilho, mira nem ⇩ (C10)
     SFX.deathSting();
     timeScale = 0.35; // câmera lenta enquanto cai
     addKillFeed('<b>Você</b> caiu em combate');
@@ -4216,6 +4249,9 @@ function tick(forceDt) {
        cinemática dona da câmera sem tocar nela nem nos projéteis. */
     Touch.takeLook();
     Touch.setAutoFire(false); // o automático não sobrevive à cinemática (tiro velho no fim dela)
+    /* a cinemática não passa pelo applyFpsCamera, que é quem pinta a retícula:
+       sem isto ela ficava do jeito que o último quadro de jogo deixou (M6) */
+    setOpacityOnce(ui.crosshair, '0');
     /* O RIG CONTINUA SEGUINDO O CORPO DURANTE A CINEMÁTICA. Ela é dona da
        CÂMERA, não dos PÉS: o jogador de headset continua andando pelo quarto
        dele, e a cinemática é justamente onde ele fica parado assistindo e se
@@ -4557,11 +4593,8 @@ function resetarPartida() {
   flashT = 0; dmgDirT = 0; healAnimT = 0;
 
   /* ---- entrada (dedo/tecla presos não sobrevivem ao reinício) ---- */
-  for (const k in keys) keys[k] = false;
-  justPressed.clear();
-  mouse.shooting = mouse.aiming = mouse.clicked = false;
+  soltarEntrada();
   mouse.swayX = mouse.swayY = 0;
-  Touch.releaseAll();
 
   /* ---- pontuação, inventário, arsenal ---- */
   score = 0; kills = 0;
@@ -5077,6 +5110,7 @@ window.__game = {
   Morte,     // tela de morte: dona da frente (z 200) — br-game.js e QA
   restartMatch, voltarAoMenu, // saídas da morte no SOLO (recusam em partida online)
   setPaused, // ÚNICO escritor de state.paused (QA/testes usam este caminho)
+  soltarEntrada, // br-game.js: abrir o chat solta teclas, mouse e dedos (C10)
   isMobile: __mobile, // br-game.js pula o pointer lock com isto (script clássico)
   Touch,              // QA: núcleo do toque, elementos e estado do analógico
   AimAssist,          // QA: assistência de mira do toque (last = saída do último frame)

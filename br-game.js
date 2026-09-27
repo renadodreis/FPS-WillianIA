@@ -27,6 +27,10 @@
        anunciar tecla que o aparelho não tem é o mesmo defeito que o
        js/interact.js já resolveu para USAR/✚/●. */
     const PULO = G.isMobile ? 'botão ⇧' : '[ESPAÇO]';
+    /* e a de USAR: no celular o baú abre pelo botão USAR (o mesmo `KeyE` do
+       teclado, emitido pelo cluster) — "E — ABRIR BAÚ" era tecla que o
+       aparelho não tem (laudo `7515734`, C4) */
+    const USAR = G.isMobile ? 'USAR' : 'E';
     // Quem entra durante PLAYING recebe apenas `init`, não `matchStart`.
     // Aplicar as flags aqui mantém o mesmo PvE para late join e participantes.
     window.__BR_zumbis = !!(S.flags && S.flags.zumbis);
@@ -846,6 +850,25 @@
     }
 
     /* =============== queda + paraquedas =============== */
+    /* RUMO COMANDADO NO PLANO — teclado E analógico do toque, relativo à
+       vista (`fw` frente, `rt` direita, horizontais e unitários). O analógico
+       a pé NÃO emite tecla (só dirigindo: js/touchcontrols.js), e esta função
+       lia só W/A/S/D: no celular a queda e o paraquedas andavam 0,00 m nas 8
+       direções, com a dica prometendo "analógico pra planar" (laudo
+       `7515734`, E3). Mesma soma do `playerUpdate` (game.js): o analógico
+       entra com a MAGNITUDE (meio curso plana mais devagar), a direção sai
+       exata (zona morta radial, sem quantizar em 8), e o módulo é limitado a
+       1 — tecla sozinha ou em diagonal dá exatamente o que dava antes. */
+    function rumoComandado(fw, rt, out) {
+      const K = G.keys;
+      let frente = (K.KeyW ? 1 : 0) - (K.KeyS ? 1 : 0);
+      let lado = (K.KeyD ? 1 : 0) - (K.KeyA ? 1 : 0);
+      const tm = G.Touch && G.Touch.getMove();
+      if (tm && tm.active) { frente += tm.y; lado += tm.x; }
+      out.set(fw.x * frente + rt.x * lado, 0, fw.z * frente + rt.z * lado);
+      if (out.lengthSq() > 1) out.normalize();
+      return out;
+    }
     let fallVy = 0;
     const _mv = new THREE.Vector3(), _fw = new THREE.Vector3(), _rt = new THREE.Vector3();
     function fallStep(dt) {
@@ -854,7 +877,7 @@
       const acc = S.chuteOpen ? 26 : 34;
       fallVy = Math.max(fallVy - acc * dt, -maxFall);
       if (S.chuteOpen && fallVy < -8.5) fallVy += (Math.min(-8.5 - fallVy, 60 * dt)); // freia ao abrir
-      /* Deriva horizontal com WASD na direção da VISTA — pelo yaw de mundo, a
+      /* Deriva horizontal (WASD ou analógico) na direção da VISTA — pelo yaw de mundo, a
          mesma fonte única que a nave, o minimapa e o `rotY` mandado ao servidor
          já usam (game.js, `yawDaVista`). Medido em sessão imersiva: aqui o
          `getWorldDirection` projetado dava o MESMO rumo que o yaw (erro 0,00°
@@ -867,13 +890,7 @@
       const yawQueda = G.yawDaVista();
       _fw.set(-Math.sin(yawQueda), 0, -Math.cos(yawQueda));
       _rt.set(-_fw.z, 0, _fw.x);
-      _mv.set(0, 0, 0);
-      const K = G.keys;
-      if (K.KeyW) _mv.add(_fw);
-      if (K.KeyS) _mv.sub(_fw);
-      if (K.KeyD) _mv.add(_rt);
-      if (K.KeyA) _mv.sub(_rt);
-      if (_mv.lengthSq() > 0) _mv.normalize().multiplyScalar(S.chuteOpen ? 10.5 : 13);
+      rumoComandado(_fw, _rt, _mv).multiplyScalar(S.chuteOpen ? 10.5 : 13);
       P.pos.x += _mv.x * dt;
       P.pos.z += _mv.z * dt;
       P.pos.y += fallVy * dt;
@@ -1860,6 +1877,10 @@
     /* =============== teclado / chat =============== */
     const chatInput = UI.chatInput;
     function openChat() {
+      /* quem abre o chat PARA de comandar o boneco: solta teclas, mouse e os
+         dedos do toque (C10 — o boneco andava 1,275 m em 0,5 s, atirando e
+         agachado, enquanto o jogador digitava) */
+      if (G.soltarEntrada) G.soltarEntrada();
       S.chatOpen = true;
       chatInput.style.display = 'block';
       chatInput.value = '';
@@ -2279,7 +2300,7 @@
         promptAcc = 0;
         if (S.phase === 'PLAY' && !MP.player.dead) {
           const c = nearestCrate();
-          if (c) UI.hint('<b style="color:#ffd76a">E</b> — ABRIR BAÚ');
+          if (c) UI.hint(`<b style="color:#ffd76a">${USAR}</b> — ABRIR BAÚ`);
           else if (UI.hintBox.innerHTML.includes('ABRIR BAÚ')) UI.hint('');
         }
       }
