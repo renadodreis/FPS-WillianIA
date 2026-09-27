@@ -227,13 +227,139 @@ function observePlayerUpdate(observed, update) {
   return player;
 }
 
+function createBotState(i, s, rng = Math.random) {
+  return {
+    i, s, id: null, alive: false, hp: 100, phase: 'LOBBY',
+    x: 0, y: 0, z: 0, wp: null, lastShot: 0, diedSent: false,
+    weapon: 'FACA', ammo: Infinity, pendingDrop: null, pendingChest: null,
+    jumpAt: 0, mira: 0.4 + rng() * 0.5, // "pontaria" varia por bot
+  };
+}
+
+/* Estado do processo inteiro de bots: todos moram num processo só, então o
+   que é "global" (jogadores observados, drops, baús, terreno) é um objeto. */
+function createBotWorld() {
+  return {
+    plan: null, t0: 0, bots: [],
+    observedPlayers: new Map(), drops: new Map(), chests: new Map(),
+    terrain: null,
+  };
+}
+
+/* Candidatos a alvo neste tick: os bots do processo (posição de agora) e os
+   humanos observados pelo `playerUpdate`. */
+function buildCandidates(world) {
+  const botIds = new Set(world.bots.map(o => o.id));
+  const candidates = world.bots.map(o => ({ ...o, isBot: true, spectator: false }));
+  for (const player of world.observedPlayers.values()) {
+    if (!botIds.has(player.id)) candidates.push(player);
+  }
+  return candidates;
+}
+
+/* UM passo de decisão de todos os bots (o laço de 10 Hz chama isto). Puro no
+   sentido que importa para o teste: tudo que o bot faz sai pelos métodos do
+   socket de cada bot (`s.emit`, `s.volatile.emit`, `s.timeout().emit`), e o
+   acaso vem do `rng` injetado. */
+function tickBots(world, t, rng = Math.random) {
+  const { plan, bots, drops, chests, terrain } = world;
+  const zone = plan ? zoneAt(Math.max(t, 0), plan) : null;
+  for (const b of bots) {
+    if (!b.alive) continue;
+    if (b.phase === 'SHIP') {
+      if (!plan) continue;
+      // protocolo novo: posição LOCAL no slot atribuído pelo servidor —
+      // ele valida e reconstrói a posição mundial pela rota autoritativa
+      const slotIdx = plan.shipSlots && Number.isInteger(plan.shipSlots[b.id]) ? plan.shipSlots[b.id] : b.i;
+      const sl = ShipProto.slotLocal(slotIdx);
+      const local = [sl[0], ShipProto.DIMS.floorY, sl[1]];
+      const w = ShipProto.localToWorld(ShipProto.poseAt(plan.ship, t), local);
+      [b.x, b.y, b.z] = w;
+      if (t >= b.jumpAt) b.phase = 'FALL';
+      b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, shipLocal: local, heldWeapon: 'FACA', car: -1 });
+    } else if (b.phase === 'FALL') {
+      const groundY = terrain ? terrain.heightAt(b.x, b.z) : 4;
+      b.y = Math.max(groundY, b.y - 4.2);
+      if (b.y <= groundY + 0.01) b.phase = 'PLAY';
+      b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, fall: true, chute: true, heldWeapon: 'FACA', car: -1 });
+    } else {
+      const candidates = buildCandidates(world);
+      const target = selectTarget(b, candidates, 100);
+      const action = chooseCombatAction(b, target);
+      if (action.weapon === 'FACA' && b.weapon !== 'FACA' && b.ammo <= 0) {
+        b.weapon = 'FACA';
+        b.ammo = Infinity;
+      }
+      let nearestLoot = null, nearestLootD = Infinity;
+      if (b.weapon === 'FACA' || b.ammo < 12) for (const drop of drops.values()) {
+        const dd = Math.hypot(drop.pos[0] - b.x, drop.pos[2] - b.z);
+        if (dd < nearestLootD) { nearestLoot = { type: 'drop', value: drop }; nearestLootD = dd; }
+      }
+      if (b.weapon === 'FACA' || b.ammo < 12) for (const chest of chests.values()) {
+        const dd = Math.hypot(chest.x - b.x, chest.z - b.z);
+        if (dd < nearestLootD) { nearestLoot = { type: 'chest', value: chest }; nearestLootD = dd; }
+      }
+      if (nearestLoot && nearestLootD < 180) {
+        const loot = nearestLoot.value;
+        const lx = nearestLoot.type === 'drop' ? loot.pos[0] : loot.x;
+        const lz = nearestLoot.type === 'drop' ? loot.pos[2] : loot.z;
+        b.wp = [lx, lz];
+        if (nearestLootD < 2.2 && nearestLoot.type === 'drop' && !b.pendingDrop) {
+          b.pendingDrop = loot.id;
+          b.y = Number(loot.pos[1]) || b.y;
+          b.s.timeout(2000).emit('takeDrop', { id: loot.id }, (err, res) => {
+            if (!err && res && res.ok) applyLoot(b, res.items);
+            if (!err && res && res.ok) drops.delete(loot.id);
+            b.pendingDrop = null;
+          });
+        } else if (nearestLootD < 2.2 && nearestLoot.type === 'chest' && !b.pendingChest) {
+          b.pendingChest = loot.key;
+          b.s.timeout(2000).emit('openChest', { key: loot.key }, (err, res) => {
+            if (!err && res && res.ok) applyLoot(b, res.items);
+            if (!err && res && (res.ok || res.opened)) chests.delete(loot.key);
+            b.pendingChest = null;
+          });
+        }
+      } else if (action.type === 'chase') {
+        b.wp = [target.x, target.z];
+      } else if (action.type === 'shoot') {
+        b.wp = action.distance > 28 ? [target.x, target.z] : [b.x, b.z];
+      } else if (!b.wp || Math.hypot(b.x - b.wp[0], b.z - b.wp[1]) < 3 || isPointInGas(b.wp[0], b.wp[1], zone)) {
+        b.wp = chooseWaypoint(zone, rng);
+      }
+      const dx = b.wp[0] - b.x, dz = b.wp[1] - b.z, d = Math.hypot(dx, dz);
+      if (d > 1e-4) {
+        const step = Math.min(0.45, d);
+        b.x += (dx / d) * step; b.z += (dz / d) * step;
+      }
+      if (terrain) b.y = terrain.heightAt(b.x, b.z);
+      b.s.volatile.emit('state', {
+        pos: [b.x, b.y, b.z], rotY: combatFacingYaw(b, target, action, dx, dz), heldWeapon: b.weapon, car: -1,
+      });
+      const profile = WEAPON_PROFILES[action.weapon] || WEAPON_PROFILES.FACA;
+      if (canAttemptAttack(b, target, action, t, rng() * 0.45)) {
+        b.lastShot = t;
+        const bursts = action.type === 'melee' ? 1 : Math.min(profile.bursts, b.ammo);
+        const fromPos = [b.x, b.y + 1.5, b.z];
+        if (rng() < b.mira) for (let k = 0; k < bursts; k++) b.s.emit('shotHit', {
+          targetId: target.id, dmg: profile.dmg,
+          weapon: action.weapon,
+          fromPos,
+        });
+        else b.s.emit('shotFired', buildMissShot(b, target, rng));
+        if (action.type === 'shoot') {
+          b.ammo -= bursts;
+          if (b.ammo <= 0) { b.weapon = 'FACA'; b.ammo = Infinity; }
+        }
+      }
+    }
+  }
+}
+
 function startBots(N, URL) {
-  let plan = null, t0 = 0;
-  const bots = [];
-  const observedPlayers = new Map();
-  const drops = new Map();
-  const chests = new Map();
-  let terrain = null, terrainPromise = null, loadedWorldSeed = null;
+  const world = createBotWorld();
+  const { bots, observedPlayers, drops, chests } = world;
+  let terrainPromise = null, loadedWorldSeed = null;
 
   function rebuildWorld(worldSeed, openedChests = []) {
     const numericSeed = Number(worldSeed) >>> 0;
@@ -241,7 +367,7 @@ function startBots(N, URL) {
     loadedWorldSeed = numericSeed;
     terrainPromise = createBotTerrain(numericSeed)
       .then(t => {
-        terrain = t;
+        world.terrain = t;
         const opened = new Set(openedChests);
         chests.clear();
         for (const chest of createBotChestSpots(numericSeed, t)) {
@@ -255,12 +381,7 @@ function startBots(N, URL) {
 
   for (let i = 0; i < N; i++) {
     const s = io(URL, { transports: ['websocket'] });
-    const b = {
-      i, s, id: null, alive: false, hp: 100, phase: 'LOBBY',
-      x: 0, y: 0, z: 0, wp: null, lastShot: 0, diedSent: false,
-      weapon: 'FACA', ammo: Infinity, pendingDrop: null, pendingChest: null,
-      jumpAt: 0, mira: 0.4 + Math.random() * 0.5, // "pontaria" varia por bot
-    };
+    const b = createBotState(i, s);
     s.on('init', d => {
       b.id = d.id;
       rebuildWorld(d.worldSeed, d.openedChests || []);
@@ -270,7 +391,7 @@ function startBots(N, URL) {
       s.emit('hello', { nick: NICKS[i % NICKS.length] + (i >= NICKS.length ? i : ''), bot: true, colors: botColors(i) });
     });
     s.on('matchStart', d => {
-      plan = d.plan; t0 = d.t0;
+      world.plan = d.plan; world.t0 = d.t0;
       resetBotForMatch(b);
       b.jumpAt = d.plan.ship.flyTime * (0.25 + 0.65 * Math.random());
       console.log(`[bot ${i}] partida começou — pulando aos ${b.jumpAt.toFixed(0)}s`);
@@ -316,102 +437,8 @@ function startBots(N, URL) {
   }
 
   setInterval(() => {
-    if (!plan) return;
-    const t = (Date.now() - t0) / 1000;
-    const zone = zoneAt(Math.max(t, 0), plan);
-    for (const b of bots) {
-      if (!b.alive) continue;
-      if (b.phase === 'SHIP') {
-        // protocolo novo: posição LOCAL no slot atribuído pelo servidor —
-        // ele valida e reconstrói a posição mundial pela rota autoritativa
-        const slotIdx = plan.shipSlots && Number.isInteger(plan.shipSlots[b.id]) ? plan.shipSlots[b.id] : b.i;
-        const sl = ShipProto.slotLocal(slotIdx);
-        const local = [sl[0], ShipProto.DIMS.floorY, sl[1]];
-        const w = ShipProto.localToWorld(ShipProto.poseAt(plan.ship, t), local);
-        [b.x, b.y, b.z] = w;
-        if (t >= b.jumpAt) b.phase = 'FALL';
-        b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, shipLocal: local, heldWeapon: 'FACA', car: -1 });
-      } else if (b.phase === 'FALL') {
-        const groundY = terrain ? terrain.heightAt(b.x, b.z) : 4;
-        b.y = Math.max(groundY, b.y - 4.2);
-        if (b.y <= groundY + 0.01) b.phase = 'PLAY';
-        b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, fall: true, chute: true, heldWeapon: 'FACA', car: -1 });
-      } else {
-        const botIds = new Set(bots.map(o => o.id));
-        const candidates = bots.map(o => ({ ...o, isBot: true, spectator: false }));
-        for (const player of observedPlayers.values()) {
-          if (!botIds.has(player.id)) candidates.push(player);
-        }
-        const target = selectTarget(b, candidates, 100);
-        const action = chooseCombatAction(b, target);
-        if (action.weapon === 'FACA' && b.weapon !== 'FACA' && b.ammo <= 0) {
-          b.weapon = 'FACA';
-          b.ammo = Infinity;
-        }
-        let nearestLoot = null, nearestLootD = Infinity;
-        if (b.weapon === 'FACA' || b.ammo < 12) for (const drop of drops.values()) {
-          const dd = Math.hypot(drop.pos[0] - b.x, drop.pos[2] - b.z);
-          if (dd < nearestLootD) { nearestLoot = { type: 'drop', value: drop }; nearestLootD = dd; }
-        }
-        if (b.weapon === 'FACA' || b.ammo < 12) for (const chest of chests.values()) {
-          const dd = Math.hypot(chest.x - b.x, chest.z - b.z);
-          if (dd < nearestLootD) { nearestLoot = { type: 'chest', value: chest }; nearestLootD = dd; }
-        }
-        if (nearestLoot && nearestLootD < 180) {
-          const loot = nearestLoot.value;
-          const lx = nearestLoot.type === 'drop' ? loot.pos[0] : loot.x;
-          const lz = nearestLoot.type === 'drop' ? loot.pos[2] : loot.z;
-          b.wp = [lx, lz];
-          if (nearestLootD < 2.2 && nearestLoot.type === 'drop' && !b.pendingDrop) {
-            b.pendingDrop = loot.id;
-            b.y = Number(loot.pos[1]) || b.y;
-            b.s.timeout(2000).emit('takeDrop', { id: loot.id }, (err, res) => {
-              if (!err && res && res.ok) applyLoot(b, res.items);
-              if (!err && res && res.ok) drops.delete(loot.id);
-              b.pendingDrop = null;
-            });
-          } else if (nearestLootD < 2.2 && nearestLoot.type === 'chest' && !b.pendingChest) {
-            b.pendingChest = loot.key;
-            b.s.timeout(2000).emit('openChest', { key: loot.key }, (err, res) => {
-              if (!err && res && res.ok) applyLoot(b, res.items);
-              if (!err && res && (res.ok || res.opened)) chests.delete(loot.key);
-              b.pendingChest = null;
-            });
-          }
-        } else if (action.type === 'chase') {
-          b.wp = [target.x, target.z];
-        } else if (action.type === 'shoot') {
-          b.wp = action.distance > 28 ? [target.x, target.z] : [b.x, b.z];
-        } else if (!b.wp || Math.hypot(b.x - b.wp[0], b.z - b.wp[1]) < 3 || isPointInGas(b.wp[0], b.wp[1], zone)) {
-          b.wp = chooseWaypoint(zone);
-        }
-        const dx = b.wp[0] - b.x, dz = b.wp[1] - b.z, d = Math.hypot(dx, dz);
-        if (d > 1e-4) {
-          const step = Math.min(0.45, d);
-          b.x += (dx / d) * step; b.z += (dz / d) * step;
-        }
-        if (terrain) b.y = terrain.heightAt(b.x, b.z);
-        b.s.volatile.emit('state', {
-          pos: [b.x, b.y, b.z], rotY: combatFacingYaw(b, target, action, dx, dz), heldWeapon: b.weapon, car: -1,
-        });
-        const profile = WEAPON_PROFILES[action.weapon] || WEAPON_PROFILES.FACA;
-        if (canAttemptAttack(b, target, action, t, Math.random() * 0.45)) {
-          b.lastShot = t;
-          const bursts = action.type === 'melee' ? 1 : Math.min(profile.bursts, b.ammo);
-          const fromPos = [b.x, b.y + 1.5, b.z];
-          if (Math.random() < b.mira) for (let k = 0; k < bursts; k++) b.s.emit('shotHit', {
-            targetId: target.id, dmg: profile.dmg,
-            weapon: action.weapon,
-            fromPos,
-          });
-          else b.s.emit('shotFired', buildMissShot(b, target));
-          if (action.type === 'shoot') {
-            b.ammo -= bursts;
-            if (b.ammo <= 0) { b.weapon = 'FACA'; b.ammo = Infinity; }
-          }
-        }
-      }
-    }
+    if (!world.plan) return;
+    tickBots(world, (Date.now() - world.t0) / 1000);
   }, 100);
 
   /* watchdog: servidor caiu → bots saem sozinhos (sem processos órfãos) */
@@ -435,7 +462,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  startBots, selectTarget, isPointInGas, chooseWaypoint, movementYaw, combatFacingYaw, observePlayerUpdate,
+  startBots, createBotWorld, createBotState, buildCandidates, tickBots, selectTarget, isPointInGas, chooseWaypoint, movementYaw, combatFacingYaw, observePlayerUpdate,
   applyLoot, chooseCombatAction,
   createBotTerrain, createBotChestSpots, resetBotForMatch, canAttemptAttack, buildMissShot, dropLootOnce,
 };
