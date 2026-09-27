@@ -2268,6 +2268,11 @@
         }
       }
 
+      /* C8 (docs/mobile/criterio-aaa.md): o botão USAR do toque aparece com um
+         baú ao alcance — a cada quadro, porque a dica logo abaixo tem folga
+         de 0,15 s e o botão não pode esperar por ela. Lido pelo game.js
+         (`disponivel` do createTouchControls). */
+      window.__BR_bauPerto = S.phase === 'PLAY' && !MP.player.dead && !!nearestCrate();
       /* prompt de baú + HUD (com folga, não a cada frame) */
       promptAcc += dt;
       if (promptAcc > 0.15) {

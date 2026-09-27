@@ -1600,7 +1600,18 @@ function setPaused(p) {
    objeto inerte: nenhum listener, nenhum elemento, nada muda no
    desktop. Ver js/touchcontrols.js.
    ================================================================ */
-const Touch = createTouchControls({ isMobile: __mobile, mouse, state, setPaused, settings: SETTINGS });
+const Touch = createTouchControls({ isMobile: __mobile, mouse, state, setPaused, settings: SETTINGS,
+  /* C7: armas como ícones tocáveis — qualquer arma em UM toque, pelo índice */
+  arsenal, armaAtiva: () => arsenal.indexOf(gun), trocarArma: i => switchWeapon(i),
+  /* C8: o botão aparece quando serve. USAR = a MESMA condição que acende o
+     #prompt (js/interact.js escreve a opacidade) ou o baú do BR ao alcance. */
+  disponivel: act => {
+    if (act === 'use') return ui.prompt.style.opacity === '1' || !!window.__BR_bauPerto;
+    if (act === 'eat') return inventory.meat > 0;
+    if (act === 'med') return inventory.medkits > 0;
+    if (act === 'nade') return inventory.nades > 0;
+    return true;
+  } });
 /* HUD com nome de TECLA: no celular não existe "E". Só o JS resolve texto (o
    CSS não reescreve conteúdo), e o botão equivalente se chama USAR. */
 if (__mobile) {
