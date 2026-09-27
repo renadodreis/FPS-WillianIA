@@ -121,6 +121,21 @@ export function applyMobileCfg(cfg = CFG, overrides = MOBILE_CFG) {
 // GPU não dá conta e voltar quando sobra folga (ver js/adaptivequality.js).
 // `aa` = SMAA. São TRÊS passes em resolução cheia (bordas, pesos, mistura),
 // o item mais caro do pós — e o único que não tinha botão.
-export const SETTINGS = Object.assign({ vol: 0.5, res: 1.5, shadow: 1, bloom: 1, ping: 1, autores: 1, aa: 1 },
+/* CONTROLES DE TOQUE (só o celular lê; o desktop nunca encosta nestas chaves).
+   Fonte única dos padrões — js/touchcontrols.js normaliza a partir daqui.
+   docs/mobile/referencia-mira-toque.md §6:
+   · touchLook      — multiplicador da sensibilidade do olhar (1 = 0,0032 rad/px)
+   · touchRatioY    — vertical ÷ horizontal; 0,6 é o do Lyra (pitch = yaw × 0,6)
+   · touchAds       — multiplicador SOBRE a razão das tangentes, só na mira
+   · touchFireLook  — quanto o dedo no ATIRAR gira a câmera (0 desliga)
+   · touchAssist    — assistência de mira (ligada: é o padrão de todo AAA de toque)
+   · touchAutoFire  — tiro automático: DESLIGADO até o dono decidir (§6 P0-3)
+   · touchFireLeft  — segundo ATIRAR à esquerda */
+export const TOUCH_DEFAULTS = Object.freeze({
+  touchLook: 1, touchRatioY: 0.6, touchAds: 1, touchFireLook: 1,
+  touchAssist: 1, touchAutoFire: 0, touchFireLeft: 0,
+});
+export const SETTINGS = Object.assign({ vol: 0.5, res: 1.5, shadow: 1, bloom: 1, ping: 1, autores: 1, aa: 1,
+  ...TOUCH_DEFAULTS },
   (() => { try { return JSON.parse(localStorage.getItem('callofai_cfg') || '{}'); } catch (e) { return {}; } })());
 export function persistSettings() { localStorage.setItem('callofai_cfg', JSON.stringify(SETTINGS)); }

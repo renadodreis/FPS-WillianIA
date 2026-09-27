@@ -971,6 +971,26 @@
   .tcBtn[data-act="med"].on { background: rgba(255,90,74,0.45); border-color: #ff8478; color: #fff; }
   .tcBtn:focus-visible { outline: 2px solid #ffd76a; outline-offset: 2px; }
 
+  /* SEGUNDO ATIRAR (polegar esquerdo). Nasce escondido: só com o ajuste
+     ligado (`html.fireL`, escrito por js/touchcontrols.js). Mora na faixa
+     livre do rodapé, colado à DIREITA do analógico — o mesmo polegar desliza
+     do stick pro gatilho. 1,4 botão de lado: o topo fica abaixo do chat do BR
+     (--hudB + 72px), que ocupa a mesma faixa logo acima. */
+  #tcBtnsL { position: absolute; z-index: 2; display: none;
+    left: calc(var(--stickR) + var(--tcGap));
+    bottom: calc(env(safe-area-inset-bottom, 0px) + var(--tcEdgeY)); }
+  html.mobile.fireL #tcBtnsL { display: block; }
+  .tcBtn[data-act="fireL"] { width: calc(var(--tcb) * 1.4); height: calc(var(--tcb) * 1.4);
+    border-radius: 50%; font-size: clamp(22px, 5.4vmin, 36px);
+    border-color: rgba(255,255,255,0.42); background: rgba(18,24,34,0.46); }
+
+  /* AJUSTES DE TOQUE no menu: só existem no celular. O `<output>` mostra o
+     valor do slider ao lado do rótulo (sensibilidade sem número é chute). */
+  #settings .touchOnly { display: none; }
+  html.mobile #settings .touchOnly { display: block; }
+  #settings .srow output { margin-left: 6px; color: #ffd76a; font-weight: 700;
+    font-variant-numeric: tabular-nums; }
+
   /* ================= #rotateGate ================= */
   /* z-index 400 (e não 300): o lobby do BR (.brPanel, multiplayer-client.js)
      é z-index 300 e entra no <body> DEPOIS deste nó — empatado, ele ficaria

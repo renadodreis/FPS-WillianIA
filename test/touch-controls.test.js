@@ -119,7 +119,13 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
   before(async () => {
     h = await bootGame({ port: PORT_MOBILE, query: '?mobile=1', viewport: PHONE_VIEWPORT });
     await h.play(installPointerHelpers);
-    await h.play(() => { window.QA.reset(); window.QA.tick(4); });
+    /* Os inimigos comuns ficam em pé no QA (o BR real os mata no começo da
+       partida, br-game.js). Com a assistência de mira do toque ligada por
+       padrão, um deles perto da cruz mexeria no giro que estes casos medem. */
+    await h.play(() => {
+      for (const e of window.QA.G.Enemies.list) { e.alive = false; if (e.group) e.group.visible = false; }
+      window.QA.reset(); window.QA.tick(4);
+    });
   });
   after(async () => { if (h) await h.close(); });
   const play = (fn, ...args) => h.play(fn, ...args);
@@ -235,7 +241,246 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
     assert.ok(Math.abs(r.travado.pitch) <= 1.55 + 1e-6,
       `pitch estourou o clamp de game.js: ${r.travado.pitch}`);
     assert.ok(r.travado.pitch > 1.5, `pitch devia encostar no teto, ficou ${r.travado.pitch}`);
-    assert.equal(r.soltou.yaw, r.travado.yaw, 'soltar o dedo continuou girando a câmera');
+    /* TOLERÂNCIA, NÃO IGUALDADE: com o pitch no teto (1,55 rad, a 1,2° do
+       gimbal) o ida-e-volta Euler↔quatérnio do applyFpsCamera — que roda todo
+       frame, com ou sem dedo — mexe o último bit do yaw (medido: 1,4e-15 rad
+       por frame, com o applyTouchLook saindo cedo e zero candidato de
+       assistência). O `equal` passava por sorte de bits: com a razão Y/X em
+       1,0 a sequência de pitch era outra. Girar de verdade é 1e-4 rad pra
+       cima (um px de dedo = 3,2e-3). */
+    assert.ok(Math.abs(r.soltou.yaw - r.travado.yaw) < 1e-9,
+      `soltar o dedo continuou girando a câmera: ${r.soltou.yaw - r.travado.yaw} rad`);
+  });
+
+  /* ================================================================
+     P0-1 — O ATIRAR TAMBÉM GIRA A CÂMERA (docs/mobile/referencia-mira-toque.md)
+     ================================================================ */
+  it('(a) dado o dedo no ATIRAR arrastando, então a câmera gira N px × sens E a arma dispara', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G;
+      const btn = '.tcBtn[data-act="fire"]';
+      /* `municao` false = GATILHO SECO: o dedo segura o gatilho, mas sem bala
+         não há tiro nem RECUO — e o recuo (com desvio sorteado por tiro) soma
+         yaw no mesmo frame, o que contaminaria o giro medido. Com munição, o
+         mesmo gesto prova que a arma dispara enquanto o dedo arrasta. */
+      const medir = (fator, municao) => {
+        if (fator !== undefined) {
+          const el = document.getElementById('setTFire');
+          el.value = String(fator);
+          el.dispatchEvent(new Event('input'));
+        }
+        QA.reset();
+        QA.tick(90);                               // switchAnim e a mola do recuo assentam
+        G.gun.mag = municao ? G.gun.magSize : 0; G.gun.reloading = false;
+        const mag0 = G.gun.mag;
+        const antes = T.look();
+        const p = T.down(btn, 5);
+        // 100 px pra ESQUERDA, em 5 passos, sem soltar o gatilho
+        for (let i = 1; i <= 5; i++) T.move(btn, 5, p[0] - 20 * i, p[1]);
+        QA.tick(1);
+        const depois = T.look();
+        QA.tick(12);
+        const out = { dyaw: depois.yaw - antes.yaw, dpitch: depois.pitch - antes.pitch,
+          gastou: mag0 - G.gun.mag, segurando: G.mouse.shooting, sens: G.Touch.lookSens };
+        T.up(btn, 5, p[0] - 100, p[1]);
+        QA.tick(2);
+        out.soltou = !G.mouse.shooting;
+        return out;
+      };
+      /* o gatilho seco dispara RECARGA automática (game.js, startReload), que
+         drena a reserva: a munição volta no fim, senão o caso do botão de
+         recarga, mais adiante, não tem o que recarregar */
+      const guarda = { mag: G.gun.mag, reserve: G.gun.reserve };
+      const cheio = medir(undefined, false);
+      const atirando = medir(undefined, true);
+      const metade = medir(50, false);
+      const zero = medir(0, false);
+      const zeroAtira = medir(0, true);
+      medir(100, false);                            // devolve o padrão
+      G.gun.reloading = false; G.gun.mag = guarda.mag; G.gun.reserve = guarda.reserve;
+      return { cheio, atirando, metade, zero, zeroAtira };
+    });
+    const esperado = 100 * r.cheio.sens;             // dedo pra esquerda = yaw +
+    console.log(`  [a] ATIRAR arrastado 100 px: girou ${(r.cheio.dyaw * 180 / Math.PI).toFixed(3)}° ` +
+      `(conta: ${(esperado * 180 / Math.PI).toFixed(3)}°); com munição girou ` +
+      `${(r.atirando.dyaw * 180 / Math.PI).toFixed(3)}° e gastou ${r.atirando.gastou} balas`);
+    assert.ok(Math.abs(r.cheio.dyaw - esperado) < 1e-6,
+      `arrastar o ATIRAR devia girar ${esperado} rad, girou ${r.cheio.dyaw}`);
+    assert.ok(Math.abs(r.cheio.dpitch) < 1e-9, `arrasto horizontal mexeu no pitch: ${r.cheio.dpitch}`);
+    assert.equal(r.cheio.segurando, true, 'arrastar soltou o gatilho');
+    assert.equal(r.cheio.soltou, true);
+    // com munição: dispara E gira (o recuo soma no máximo alguns milirradianos)
+    assert.ok(r.atirando.gastou > 0, 'o dedo no ATIRAR girou mas não disparou');
+    assert.ok(Math.abs(r.atirando.dyaw - esperado) < 0.01,
+      `atirando, o giro saiu ${r.atirando.dyaw} rad contra ${esperado}`);
+    assert.equal(r.atirando.segurando, true);
+    assert.ok(Math.abs(r.metade.dyaw - esperado / 2) < 1e-6, `fator 50 %: ${r.metade.dyaw}`);
+    assert.ok(Math.abs(r.zero.dyaw) < 1e-9, `fator 0 devia desligar o giro: ${r.zero.dyaw}`);
+    assert.ok(r.zeroAtira.gastou > 0, 'com o giro desligado o botão parou de atirar');
+  });
+
+  it('(a) dados o dedo do olhar E o do ATIRAR juntos, então os dois giros somam', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G;
+      QA.reset();
+      QA.tick(90);
+      const guarda = { mag: G.gun.mag, reserve: G.gun.reserve };
+      G.gun.mag = 0;                              // gatilho seco: sem recuo no giro medido
+      const antes = T.look();
+      const a = T.down('#tcLook', 21, 600, 120);
+      const b = T.down('.tcBtn[data-act="fire"]', 22);
+      T.move('#tcLook', 21, a[0] + 40, a[1]);
+      T.move('.tcBtn[data-act="fire"]', 22, b[0] + 25, b[1]);
+      QA.tick(1);
+      const depois = T.look();
+      T.up('#tcLook', 21, a[0] + 40, a[1]);
+      T.up('.tcBtn[data-act="fire"]', 22, b[0] + 25, b[1]);
+      QA.tick(2);
+      G.gun.reloading = false; G.gun.mag = guarda.mag; G.gun.reserve = guarda.reserve;
+      return { dyaw: depois.yaw - antes.yaw, sens: G.Touch.lookSens };
+    });
+    assert.ok(Math.abs(r.dyaw - (-65 * r.sens)) < 1e-6, `40 + 25 px deviam somar: ${r.dyaw}`);
+  });
+
+  it('(a) dado o ajuste do segundo ATIRAR, então ele aparece à esquerda, atira e mira', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G;
+      const sel = '.tcBtn[data-act="fireL"]';
+      const liga = v => { const el = document.getElementById('setTFireL'); el.value = String(v); el.dispatchEvent(new Event('change')); };
+      const antesDoAjuste = T.visible('tcBtnsL');
+      liga(1);
+      const ligado = T.visible('tcBtnsL');
+      const rect = T.rect(sel), stick = T.rect('#tcMove');
+      QA.reset();
+      QA.tick(90);
+      const guarda = { mag: G.gun.mag, reserve: G.gun.reserve };
+      G.gun.mag = G.gun.magSize;
+      const mag0 = G.gun.mag;
+      const p = T.semLobby(() => T.hit(...T.at(sel)));
+      let d = T.down(sel, 41);
+      QA.tick(12);
+      const gastou = mag0 - G.gun.mag;
+      T.up(sel, 41, d[0], d[1]);
+      QA.tick(90);
+      G.gun.mag = 0;                              // gatilho seco: o giro sem recuo
+      const y0 = T.look().yaw;
+      d = T.down(sel, 41);
+      T.move(sel, 41, d[0] + 30, d[1]);
+      QA.tick(1);
+      const out = { antesDoAjuste, ligado, alvo: p, gastou,
+        dyaw: T.look().yaw - y0, sens: G.Touch.lookSens,
+        esquerda: rect.right < innerWidth / 2, sobreStick: rect.left < stick.right && rect.bottom > stick.top && rect.top < stick.bottom && rect.right > stick.left };
+      T.up(sel, 41, d[0] + 30, d[1]);
+      QA.tick(2);
+      out.soltou = !G.mouse.shooting;
+      liga(0);
+      out.desligado = !T.visible('tcBtnsL');
+      G.gun.reloading = false; G.gun.mag = guarda.mag; G.gun.reserve = guarda.reserve;
+      return out;
+    });
+    assert.equal(r.antesDoAjuste, false, 'o segundo ATIRAR nasceu visível (padrão é desligado)');
+    assert.equal(r.ligado, true, 'ligar o ajuste não mostrou o botão');
+    assert.equal(r.alvo, 'tcBtn', `o dedo no segundo ATIRAR caiu em ${r.alvo}`);
+    assert.equal(r.esquerda, true, 'o segundo ATIRAR não está na metade esquerda');
+    assert.equal(r.sobreStick, false, 'o segundo ATIRAR cobre o analógico');
+    assert.ok(r.gastou > 0, 'o segundo ATIRAR não disparou');
+    assert.ok(Math.abs(r.dyaw - (-30 * r.sens)) < 1e-6, `arrastar o segundo ATIRAR não mirou: ${r.dyaw}`);
+    assert.equal(r.soltou, true);
+    assert.equal(r.desligado, true);
+  });
+
+  /* ================================================================
+     P1-5 — VERTICAL MAIS LENTO: o ângulo de um arrasto DIAGONAL é o da conta
+     (atan(razão × dy/dx)), sem torção — o VR já pagou por zona morta por
+     eixo que torcia a diagonal (9,79°).
+     ================================================================ */
+  it('dado um arrasto DIAGONAL, então a câmera gira no ângulo atan(0,6 × dy/dx)', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G;
+      const out = [];
+      for (const [dx, dy] of [[80, -80], [100, -40], [-60, 90]]) {
+        QA.reset();
+        QA.tick(90);                                // a mola do recuo do caso anterior assenta
+        const a = T.look();
+        const p = T.down('#tcLook', 51);
+        T.move('#tcLook', 51, p[0] + dx, p[1] + dy);
+        QA.tick(1);
+        const b = T.look();
+        T.up('#tcLook', 51, p[0] + dx, p[1] + dy);
+        QA.tick(1);
+        out.push({ dx, dy, dyaw: b.yaw - a.yaw, dpitch: b.pitch - a.pitch });
+      }
+      return { out, ratio: G.Touch.cfg.ratioY, sens: G.Touch.lookSens };
+    });
+    assert.equal(r.ratio, 0.6, 'razão Y/X padrão devia ser 0,6 (Lyra)');
+    for (const m of r.out) {
+      const esperado = Math.atan2(Math.abs(m.dy) * 0.6, Math.abs(m.dx)) * 180 / Math.PI;
+      const medido = Math.atan2(Math.abs(m.dpitch), Math.abs(m.dyaw)) * 180 / Math.PI;
+      console.log(`  [P1-5] arrasto (${m.dx}, ${m.dy}) px: girou a ${medido.toFixed(3)}°, a conta pede ${esperado.toFixed(3)}°`);
+      assert.ok(Math.abs(medido - esperado) < 0.01, `(${m.dx},${m.dy}): ${medido}° ≠ ${esperado}°`);
+      assert.ok(Math.abs(Math.abs(m.dyaw) - Math.abs(m.dx) * r.sens) < 1e-6, 'o eixo horizontal perdeu escala');
+    }
+  });
+
+  /* ================================================================
+     P1-4 — ADS pela RAZÃO DAS TANGENTES, arma por arma. A régua é o FOV de
+     mira declarado de cada arma (js/weapons.js / js/weaponrig.js), não o
+     código de sensibilidade: esperado = N × sens × tan(adsFov/2)/tan(37,5°).
+     ================================================================ */
+  it('(f) dado o ADS de cada arma, então o arrasto gira pela razão das tangentes', async () => {
+    const r = await play(() => {
+      const QA = window.QA, T = window.TQA, G = QA.G;
+      const medir = () => {
+        const a = T.look();
+        const p = T.down('#tcLook', 61);
+        T.move('#tcLook', 61, p[0] - 50, p[1]);
+        QA.tick(1);
+        const b = T.look();
+        T.up('#tcLook', 61, p[0] - 50, p[1]);
+        QA.tick(1);
+        return b.yaw - a.yaw;
+      };
+      const out = [];
+      /* as travas VOLTAM no fim: destrancar tudo e não devolver esvaziou o
+         caso da troca de arma ("nunca para numa trancada" sem trancada
+         nenhuma) e deixou a bazuca na mão do caso da cinemática */
+      const travas = G.arsenal.map(w => !!w.locked);
+      for (let i = 0; i < G.arsenal.length; i++) {
+        G.arsenal[i].locked = false;
+        QA.reset();
+        G.switchWeapon(i);
+        QA.tick(40);
+        const miras = i === 0 ? 3 : 1;             // fuzil: ferro, red dot, luneta 2x (T)
+        for (let m = 0; m < miras; m++) {
+          if (m > 0) { T.tap('.tcBtn[data-act="sight"]', 62); QA.tick(2); }
+          T.tap('.tcBtn[data-act="ads"]', 63);
+          QA.tick(70);                              // FOV assenta (damp 11/s)
+          const fov = G.gun.melee ? 75 : G.gun.adsFov;
+          out.push({ nome: G.gun.name, fov, fovCam: QA.MP.camera.fov, dyaw: medir(),
+            ps: QA.G.controls.pointerSpeed });
+          T.tap('.tcBtn[data-act="ads"]', 63);
+          QA.tick(30);
+        }
+        if (i === 0) { T.tap('.tcBtn[data-act="sight"]', 62); QA.tick(2); }  // volta pra alça
+      }
+      QA.reset();
+      G.switchWeapon(0);
+      QA.tick(10);
+      G.arsenal.forEach((w, i) => { w.locked = travas[i]; });
+      return { out, sens: G.Touch.lookSens };
+    });
+    const tan = f => Math.tan(f * Math.PI / 360);
+    for (const m of r.out) {
+      const ideal = tan(m.fov) / tan(75);
+      const esperado = 50 * r.sens * ideal;
+      const degrau = m.fov < 75 ? (m.fov < 40 ? 0.36 : 0.75) : 1;
+      console.log(`  [f] ${m.nome.padEnd(22)} FOV ${String(m.fov).padStart(2)}°: escala ${(m.dyaw / (50 * r.sens)).toFixed(4)}` +
+        ` (tangente ${ideal.toFixed(4)}; o degrau antigo dava ${degrau})`);
+      assert.ok(Math.abs(m.fovCam - m.fov) < 0.05, `cenário inválido: ${m.nome} não assentou o FOV (${m.fovCam})`);
+      assert.ok(Math.abs(m.dyaw - esperado) < esperado * 0.005,
+        `${m.nome} (${m.fov}°): girou ${m.dyaw} rad, a razão das tangentes pede ${esperado}`);
+    }
+    assert.ok(r.out.some(m => m.fov === 48) && r.out.some(m => m.fov === 36), 'o red dot e a 2x não foram medidos');
   });
 
   it('dado o analógico no talo, então o jogador ANDA na direção da câmera e CORRE', async () => {

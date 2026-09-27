@@ -31,16 +31,30 @@
    frame, ANTES do applyFpsCamera — mesma matemática e mesma ordem YXZ
    que o PointerLockControls fazia no `mousemove`, que no celular não
    existe porque não existe pointer lock.
+
+   O GATILHO TAMBÉM MIRA (docs/mobile/referencia-mira-toque.md §6 P0-1).
+   Antes, o polegar direito escolhia entre mirar e atirar — nunca os dois,
+   e é isso que todo AAA de toque resolve (CoD Mobile: botão que segue o
+   dedo; Critical Ops: "FIRE BUTTON AIM SENSITIVITY"; PUBG: tiro dos dois
+   lados). O dedo que aperta ATIRAR alimenta o MESMO acumulador do olhar
+   enquanto arrasta, multiplicado por um fator próprio (0 desliga). Nada
+   muda no caminho do tiro.
    ================================================================ */
+import { TOUCH_DEFAULTS } from './config.js';
+import { tanRatio } from './aimassist.js';
 
 /* data-act do contrato com o HUD (index.html).
    `eat`/`sight`/`chat` existem porque KeyF (comer carne), KeyT (trocar
    acessório de mira) e Enter (chat do BR) não tinham NENHUM caminho de
    toque: no celular a carne entrava no inventário e nunca saía — uma
    mecânica de cura inteira morta —, a arma ficava presa na mira padrão e
-   o BR ficava mudo. */
+   o BR ficava mudo. `fireL` é o segundo ATIRAR, à esquerda (ajuste,
+   nasce desligado): PUBG Mobile o tem por padrão. */
 export const TOUCH_ACTS = Object.freeze(['fire', 'ads', 'jump', 'crouch', 'reload',
-  'nade', 'use', 'med', 'swap', 'inv', 'pause', 'eat', 'sight', 'chat']);
+  'nade', 'use', 'med', 'swap', 'inv', 'pause', 'eat', 'sight', 'chat', 'fireL']);
+
+/* os gatilhos: os únicos botões cujo arrasto também gira a câmera */
+const AIM_ACTS = new Set(['fire', 'fireL']);
 
 /* Raio útil do analógico em px de CSS. O analógico é FLUTUANTE: a origem
    é onde o dedo encostou, não o centro do desenho — polegar de celular
@@ -99,10 +113,16 @@ export function createTouchCore(options) {
   const dz = dzRaw > 0 && dzRaw < 0.9 ? dzRaw : STICK_DEADZONE;
   const rRaw = num(o.radius);
   const radius = rRaw > 0 ? rRaw : STICK_RADIUS;
+  /* fator do arrasto do gatilho sobre o olhar: 0 desliga, lixo vira 1 */
+  const fatorGatilho = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 1);
+  let fireLook = fatorGatilho(o.fireLook);
 
   /* Um dedo, uma função. `owners` é pointerId -> 'stick' | 'look' | act. */
   const owners = new Map();
   const held = new Set();
+  /* último ponto do dedo de cada GATILHO (pointerId -> {x, y}) — o arrasto
+     dele vira olhar. Aloca só no toque, nunca por pointermove. */
+  const drag = new Map();
   /* objetos FIXOS: o loop roda a 60 FPS num celular fraco e alocar por
      evento/frame no caminho quente paga GC exatamente no tiroteio */
   const move = { x: 0, y: 0, mag: 0, active: false };
@@ -184,19 +204,36 @@ export function createTouchCore(options) {
     return lookOut;
   }
 
-  function press(act, id) {
+  /* `x`/`y` (opcionais) = onde o dedo encostou. Só os gatilhos guardam: é a
+     origem do arrasto que mira — encostar não gira nada, igual ao olhar. */
+  function press(act, id, x, y) {
     if (!ACTS.has(act)) return false;
     if (owners.has(id)) return false;   // esse dedo já controla outra coisa
     if (held.has(act)) return false;    // botão já é de outro dedo
     held.add(act);
     owners.set(id, act);
+    if (AIM_ACTS.has(act)) drag.set(id, { x: num(x), y: num(y) });
     return true;
   }
   function release(act) {
     if (!ACTS.has(act) || !held.delete(act)) return false;
-    for (const [id, role] of owners) if (role === act) { owners.delete(id); break; }
+    for (const [id, role] of owners) if (role === act) { owners.delete(id); drag.delete(id); break; }
     return true;
   }
+  /* arrasto do dedo que segura um GATILHO: soma no mesmo acumulador do olhar */
+  function onPressMove(id, x, y) {
+    const p = drag.get(id);
+    if (!p || !AIM_ACTS.has(owners.get(id))) return false;
+    const nx = num(x), ny = num(y);
+    if (fireLook > 0) {
+      look.dx += (nx - p.x) * fireLook;
+      look.dy += (ny - p.y) * fireLook;
+    }
+    p.x = nx;
+    p.y = ny;
+    return true;
+  }
+  function setFireLook(k) { fireLook = fatorGatilho(k); }
   function releasePointer(id) {
     const role = owners.get(id);
     if (role === undefined) return null;
@@ -210,6 +247,7 @@ export function createTouchCore(options) {
   function releaseAll() {
     owners.clear();
     held.clear();
+    drag.clear();
     stickId = null;
     lookId = null;
     move.active = false;
@@ -222,6 +260,8 @@ export function createTouchCore(options) {
     onStickStart, onStickMove, onStickEnd,
     onLookStart, onLookMove, onLookEnd, takeLook,
     press, release, releasePointer, releaseAll,
+    onPressMove, setFireLook,
+    get fireLook() { return fireLook; },
     pressed: act => held.has(act),
     roleOf: id => { const r = owners.get(id); return r === undefined ? null : r; },
     getMove: () => move,
@@ -229,6 +269,81 @@ export function createTouchCore(options) {
     stickActive: () => stickId !== null,
     radius, deadzone: dz,
   };
+}
+
+/* ================================================================
+   SENSIBILIDADE DO TOQUE — puro (docs/mobile/referencia-mira-toque.md §3)
+   ================================================================ */
+
+/* px de arrasto -> radianos de giro. `ratioY` é a razão vertical/horizontal
+   (P1-5): 0,33 na Insomniac, 0,40 no Critical Ops, 0,60 no Lyra — o
+   músculo do movimento vertical do polegar é mais fraco. A razão escala SÓ o
+   eixo vertical, linearmente: um arrasto (dx, dy) gira no ângulo
+   atan(razão × dy/dx). Nada de zona morta aqui — é zona morta POR EIXO que
+   torce a diagonal (o VR já pagou por isso). `out` é reaproveitado. */
+export function lookRadians(dx, dy, sens, ratioY, scale, out) {
+  const o = out || { yaw: 0, pitch: 0 };
+  const k = num(sens) * num(scale);
+  o.yaw = -num(dx) * k;
+  o.pitch = -num(dy) * k * num(ratioY);
+  return o;
+}
+
+/* Escala do olhar pelo zoom (P1-4): tan(fov/2) / tan(fovQuadril/2) — "the
+   proper way to scale based off FOV changes" (Lyra, para toque E controle).
+   O degrau antigo (0,75 / 0,36 por um corte em 40°) deixava o red dot 29 %
+   mais rápido na tela que o quadril e a luneta 2x 15 % mais lenta. A base é
+   o FOV do QUADRIL NAQUELE MOMENTO (75, ou 85 correndo): abrir o FOV no
+   sprint não pode mexer na sensibilidade. `adsMult` é o ajuste do jogador,
+   misturado por `adsK` (0 quadril … 1 mirando) para nunca vazar pro quadril. */
+export function lookScale(fovNow, fovHip, adsK, adsMult) {
+  const k = num(adsK) < 0 ? 0 : num(adsK) > 1 ? 1 : num(adsK);
+  const m = typeof adsMult === 'number' && Number.isFinite(adsMult) && adsMult > 0 ? adsMult : 1;
+  return tanRatio(num(fovNow) || 75, num(fovHip) || 75) * (1 + (m - 1) * k);
+}
+
+/* Limites dos ajustes numéricos (o slider do menu anda dentro deles). */
+const TOUCH_RANGES = Object.freeze({
+  touchLook: [0.3, 2.5], touchRatioY: [0.3, 1], touchAds: [0.5, 1.5], touchFireLook: [0, 1.5],
+});
+function cfgNum(s, k) {
+  const raw = s[k];
+  const v = typeof raw === 'number' ? raw
+    : typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+  if (!Number.isFinite(v)) return TOUCH_DEFAULTS[k];
+  const [lo, hi] = TOUCH_RANGES[k];
+  return v < lo ? lo : v > hi ? hi : v;
+}
+/* liga/desliga: só 0/1 (ou booleano) contam. Lixo cai no PADRÃO — um
+   localStorage corrompido não pode desligar a assistência de ninguém. */
+function cfgFlag(s, k) {
+  const v = s[k];
+  if (v === true || v === 1 || v === '1') return true;
+  if (v === false || v === 0 || v === '0') return false;
+  return !!TOUCH_DEFAULTS[k];
+}
+/* SETTINGS (js/config.js, localStorage) -> configuração do toque, normalizada */
+export function touchConfig(settings) {
+  const s = settings && typeof settings === 'object' ? settings : {};
+  return {
+    look: cfgNum(s, 'touchLook'),
+    ratioY: cfgNum(s, 'touchRatioY'),
+    ads: cfgNum(s, 'touchAds'),
+    fireLook: cfgNum(s, 'touchFireLook'),
+    assist: cfgFlag(s, 'touchAssist'),
+    autoFire: cfgFlag(s, 'touchAutoFire'),
+    fireLeft: cfgFlag(s, 'touchFireLeft'),
+  };
+}
+/* Grava um ajuste de toque. O valor vale NA HORA (fica no objeto da sessão);
+   persistir é melhor esforço: aba privada ou cota cheia fazem o
+   `localStorage.setItem` lançar, e isso não pode derrubar o menu. */
+export function saveTouchSetting(settings, key, value, persist) {
+  if (!settings || typeof settings !== 'object' ||
+      !Object.prototype.hasOwnProperty.call(TOUCH_DEFAULTS, key)) return false;
+  settings[key] = value;
+  try { if (typeof persist === 'function') persist(); return true; }
+  catch (e) { return false; }
 }
 
 /* ================================================================
@@ -254,7 +369,8 @@ const KEY_OF = {
   chat: 'Enter',
 };
 
-const IDS = { root: 'touchUI', move: 'tcMove', knob: 'tcMoveKnob', look: 'tcLook', btns: 'tcBtns' };
+const IDS = { root: 'touchUI', move: 'tcMove', knob: 'tcMoveKnob', look: 'tcLook', btns: 'tcBtns',
+  btnsL: 'tcBtnsL' };   // segundo ATIRAR, à esquerda (fora do cluster: é do polegar ESQUERDO)
 /* aviso de orientação: o nó do aviso e o botão de escape (ver createOrientationGate) */
 const GATE_IDS = { gate: 'rotateGate', play: 'rgPlay' };
 
@@ -292,6 +408,7 @@ function buildFallback(doc) {
     use: 'E', med: '✚', swap: '⇄', inv: '☰', pause: '❚❚',
     eat: '🍖', sight: '🔭', chat: '💬' };
   for (const act of TOUCH_ACTS) {
+    if (act === 'fireL') continue;   // opcional e do lado esquerdo: o andaime não precisa
     const b = mk('div', '',
       'width:54px;height:54px;border-radius:50%;display:flex;align-items:center;' +
       'justify-content:center;font:600 15px/1 system-ui,sans-serif;color:#fff;' +
@@ -316,6 +433,10 @@ export function createTouchControls(deps) {
   const state = d.state || { started: false, paused: true };
   const setPaused = typeof d.setPaused === 'function' ? d.setPaused : () => {};
   const enabled = !!d.isMobile && !!win && !!doc && !!doc.body;
+  /* ajustes de toque: o objeto SETTINGS do jogo (js/config.js). Lido aqui e
+     reescrito por `bindSettings` — os dois lados olham o MESMO objeto. */
+  const settings = d.settings && typeof d.settings === 'object' ? d.settings : {};
+  let cfg = touchConfig(settings);
 
   /* DESLIGADO (desktop): nenhum listener, nenhum elemento, nenhuma classe. O
      objeto inerte tem a MESMA forma do ligado — `getMove()` devolve o estado
@@ -330,18 +451,32 @@ export function createTouchControls(deps) {
       takeLook: core.takeLook,
       setPlaying() {}, releaseAll() {}, frame() {},
       lookSens: LOOK_RAD_PER_CSS_PX,
+      /* sem toque não há ajuste de toque, escala de ADS nem tiro automático:
+         o mouse segue com o `pointerSpeed` de sempre */
+      cfg, lookScale: () => 1, setAutoFire() {}, bindSettings() {}, autoFire: false,
     };
   }
 
+  /* estado do tiro automático: o que a assistência pediu neste frame, e se
+     foi ele (e não um dedo) que segurou o gatilho — ver syncMouse */
+  let autoFire = false, autoHeld = false;
   const api = {
     core, enabled, fallback: false, el: null,
     getMove: core.getMove,
     takeLook: core.takeLook,
-    setPlaying, releaseAll, frame,
-    lookSens: LOOK_RAD_PER_CSS_PX,
+    setPlaying, releaseAll, frame, bindSettings,
+    /* rad/px do olhar JÁ com o ajuste do jogador (a razão Y/X e o zoom são
+       aplicados por quem gira a câmera: game.js applyTouchLook) */
+    get lookSens() { return LOOK_RAD_PER_CSS_PX * cfg.look; },
+    get cfg() { return cfg; },
+    lookScale: (fovNow, fovHip, adsK) => lookScale(fovNow, fovHip, adsK, cfg.ads),
+    setAutoFire(on) { autoFire = !!on; },
+    get autoFire() { return autoFire; },
   };
   const html = doc.documentElement;
   html.classList.add('mobile');
+  core.setFireLook(cfg.fireLook);
+  html.classList.toggle('fireL', cfg.fireLeft);
 
   let root = doc.getElementById(IDS.root);
   if (!root) { root = buildFallback(doc); api.fallback = true; }
@@ -349,11 +484,12 @@ export function createTouchControls(deps) {
   const knobEl = doc.getElementById(IDS.knob);
   const lookEl = doc.getElementById(IDS.look);
   const btnsEl = doc.getElementById(IDS.btns);
-  api.el = { root, move: moveEl, knob: knobEl, look: lookEl, btns: btnsEl };
+  const btnsLEl = doc.getElementById(IDS.btnsL);
+  api.el = { root, move: moveEl, knob: knobEl, look: lookEl, btns: btnsEl, btnsL: btnsLEl };
 
   /* `touch-action:none` é FUNCIONAL, não enfeite: sem ele o navegador
      rola/dá zoom e cancela a sequência de pointermove no meio do arrasto. */
-  for (const el of [moveEl, lookEl, btnsEl]) if (el) el.style.touchAction = 'none';
+  for (const el of [moveEl, lookEl, btnsEl, btnsLEl]) if (el) el.style.touchAction = 'none';
 
   const KeyEv = win.KeyboardEvent || (typeof KeyboardEvent !== 'undefined' ? KeyboardEvent : null);
   const WheelEv = win.WheelEvent || (typeof WheelEvent !== 'undefined' ? WheelEvent : null);
@@ -382,7 +518,7 @@ export function createTouchControls(deps) {
     switch (act) {
       /* fire/ads NÃO passam por teclado: o jogo lê estado de MOUSE
          (game.js:1919 `want = gun.auto ? mouse.shooting : mouse.clicked`) */
-      case 'fire': mouse.shooting = true; mouse.clicked = true; return;
+      case 'fire': case 'fireL': mouse.shooting = true; mouse.clicked = true; return;
       /* ADS é ALTERNADO de propósito: segurar consumiria um terceiro dedo
          permanente e mirar+girar+atirar junto ficaria impossível */
       case 'ads': adsOn = !adsOn; mouse.aiming = adsOn; return;
@@ -405,7 +541,8 @@ export function createTouchControls(deps) {
     }
   }
   function releaseAct(act) {
-    if (act === 'fire') { mouse.shooting = false; return; }
+    /* dois gatilhos (e o automático): soltar UM não solta o que o outro segura */
+    if (AIM_ACTS.has(act)) { mouse.shooting = core.pressed('fire') || core.pressed('fireL') || autoFire; return; }
     if (act === 'ads' || act === 'swap' || act === 'pause') return; // sem tecla casada
     const code = KEY_OF[act];
     if (code) sendKey('keyup', code);
@@ -430,7 +567,7 @@ export function createTouchControls(deps) {
     if (!ACTS.has(act)) return;
     e.preventDefault();               // sem isto vem mousedown de compatibilidade
     if (act !== 'pause' && !live()) return;
-    if (!core.press(act, e.pointerId)) return;
+    if (!core.press(act, e.pointerId, e.clientX, e.clientY)) return;
     pressedEl.set(act, btn);
     capture(btn, e.pointerId);
     pressAct(act);
@@ -479,6 +616,7 @@ export function createTouchControls(deps) {
     if (role === null) return;
     if (role === 'stick') core.onStickMove(e.pointerId, e.clientX - originX, e.clientY - originY);
     else if (role === 'look') core.onLookMove(e.pointerId, e.clientX, e.clientY);
+    else if (AIM_ACTS.has(role)) core.onPressMove(e.pointerId, e.clientX, e.clientY); // o gatilho mira
   }
   function onPointerUp(e) {
     const role = core.roleOf(e.pointerId);
@@ -492,6 +630,8 @@ export function createTouchControls(deps) {
     mouse.shooting = false;
     mouse.aiming = false;
     adsOn = false;
+    autoFire = false;
+    autoHeld = false;
     for (const el of pressedEl.values()) el.classList.remove('on');
     pressedEl.clear();
     if (moveEl) moveEl.classList.remove('on');
@@ -524,9 +664,19 @@ export function createTouchControls(deps) {
      · `mouse.clicked` NÃO é reimposto: é aresta de um toque só (semi-auto),
        e reimpor daria um tiro de graça por frame.
      · `ads` é ESTADO ALTERNADO, não dedo. Quem escreveu por fora manda; o
-       botão só passa a refletir a verdade. */
+       botão só passa a refletir a verdade.
+     · TIRO AUTOMÁTICO (ajuste, §6 P0-3): quem decide é a assistência
+       (js/aimassist.js — alvo VISÍVEL sob a cruz, no alcance da arma), via
+       `setAutoFire`. Aqui ele segura o gatilho como um dedo seguraria, e
+       arma o CLIQUE também: semiautomática lê a aresta, e a cadência de
+       shootUpdate (60/rpm) é que limita — o clique reimposto por frame não
+       vira tiro extra. Quando ele sai, solta só o que ELE segurou. */
   function syncMouse() {
-    if (core.pressed('fire') && !mouse.shooting) mouse.shooting = true;
+    const dedo = core.pressed('fire') || core.pressed('fireL');
+    if ((dedo || autoFire) && !mouse.shooting) mouse.shooting = true;
+    if (autoFire) mouse.clicked = true;
+    else if (autoHeld && !dedo) mouse.shooting = false;
+    autoHeld = autoFire;
     if (!!mouse.aiming !== adsOn) { adsOn = !!mouse.aiming; paint('ads'); }
   }
   /* O botão de chat só faz sentido no Battle Royale: o Enter que ele emula é
@@ -576,6 +726,7 @@ export function createTouchControls(deps) {
   }
 
   if (btnsEl) btnsEl.addEventListener('pointerdown', onBtnDown);
+  if (btnsLEl) btnsLEl.addEventListener('pointerdown', onBtnDown);
   if (moveEl) moveEl.addEventListener('pointerdown', onMoveDown);
   if (lookEl) lookEl.addEventListener('pointerdown', onLookDown);
   win.addEventListener('pointermove', onPointerMove);
@@ -584,6 +735,46 @@ export function createTouchControls(deps) {
   win.addEventListener('lostpointercapture', onPointerUp);
   win.addEventListener('blur', releaseAll);
   doc.addEventListener('visibilitychange', () => { if (doc.hidden) releaseAll(); });
+
+  /* ---- MENU: seção "Controles de toque" (index.html, só aparece com
+     html.mobile). Cada linha grava em SETTINGS e vale NA HORA; persistir é
+     melhor esforço (saveTouchSetting engole o erro de localStorage). O
+     slider anda em % (inteiros), o ajuste guarda a fração. ---- */
+  const LINHAS = [
+    ['setTLook', 'touchLook', 100], ['setTRatio', 'touchRatioY', 100],
+    ['setTAds', 'touchAds', 100], ['setTFire', 'touchFireLook', 100],
+    ['setTAssist', 'touchAssist', 1], ['setTAuto', 'touchAutoFire', 1],
+    ['setTFireL', 'touchFireLeft', 1],
+  ];
+  const CAMPO = { touchLook: 'look', touchRatioY: 'ratioY', touchAds: 'ads', touchFireLook: 'fireLook',
+    touchAssist: 'assist', touchAutoFire: 'autoFire', touchFireLeft: 'fireLeft' };
+  function mostrar(el, key, mul) {
+    const v = cfg[CAMPO[key]];
+    el.value = String(typeof v === 'boolean' ? (v ? 1 : 0) : Math.round(v * mul));
+    const saida = doc.getElementById(el.id + 'V');
+    if (saida) saida.textContent = mul === 100 ? `${Math.round(v * 100)}%` : '';
+  }
+  function aplicarCfg() {
+    cfg = touchConfig(settings);
+    core.setFireLook(cfg.fireLook);
+    html.classList.toggle('fireL', cfg.fireLeft);
+    if (!cfg.fireLeft) letGo('fireL');   // desligou com o dedo em cima: solta casado
+    if (!cfg.autoFire) autoFire = false;
+  }
+  function bindSettings(persist) {
+    for (const [id, key, mul] of LINHAS) {
+      const el = doc.getElementById(id);
+      if (!el) continue;
+      mostrar(el, key, mul);
+      const ev = el.tagName === 'SELECT' ? 'change' : 'input';
+      el.addEventListener(ev, () => {
+        const v = Number(el.value) / mul;
+        saveTouchSetting(settings, key, Number.isFinite(v) ? v : TOUCH_DEFAULTS[key], persist);
+        aplicarCfg();
+        mostrar(el, key, mul);
+      });
+    }
+  }
 
   return api;
 }

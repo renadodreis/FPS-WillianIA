@@ -238,8 +238,11 @@ describe('núcleo dos controles de toque — botões', () => {
        (trocar acessório de mira) e Enter (chat do BR) não tinham NENHUM
        caminho de toque: no celular a carne entrava no inventário e nunca
        saía. */
+    /* `fireL`: segundo ATIRAR, à esquerda (PUBG Mobile o tem por padrão; CoD
+       Mobile e Critical Ops permitem) — docs/mobile/referencia-mira-toque.md
+       §6 P0-1. Nasce desligado por ajuste. */
     const esperados = ['fire', 'ads', 'jump', 'crouch', 'reload', 'nade', 'use', 'med',
-      'swap', 'inv', 'pause', 'eat', 'sight', 'chat'];
+      'swap', 'inv', 'pause', 'eat', 'sight', 'chat', 'fireL'];
     assert.deepEqual([...TOUCH_ACTS].sort(), [...esperados].sort());
     for (const act of esperados) {
       const c = createTouchCore();
@@ -379,6 +382,169 @@ describe('núcleo dos controles de toque — constantes de câmera', () => {
       'sensibilidade baixa demais: a tela toda não vira meia volta');
     assert.ok(LOOK_RAD_PER_CSS_PX * 1000 < Math.PI * 3,
       'sensibilidade alta demais: a tela toda passa de uma volta e meia');
+  });
+});
+
+/* ================================================================
+   O BOTÃO ATIRAR TAMBÉM GIRA A CÂMERA (referência §6 P0-1).
+   Antes, o polegar direito escolhia entre mirar e atirar — nunca os dois.
+   O dedo que aperta ATIRAR passa a alimentar o MESMO acumulador do olhar
+   enquanto arrasta, com fator próprio (Critical Ops: "FIRE BUTTON AIM
+   SENSITIVITY"; 0 desliga).
+   ================================================================ */
+describe('núcleo dos controles de toque — ATIRAR que mira', () => {
+  it('dado o dedo no ATIRAR arrastando, então o olhar acumula o arrasto (fator 1,0)', () => {
+    const c = createTouchCore();
+    assert.equal(c.press('fire', 7, 100, 200), true);
+    assert.equal(c.pressed('fire'), true);
+    assert.equal(c.onPressMove(7, 140, 190), true);
+    c.onPressMove(7, 160, 185);
+    const l = c.takeLook();
+    assert.equal(l.dx, 60);
+    assert.equal(l.dy, -15);
+    assert.equal(c.pressed('fire'), true, 'arrastar soltou o gatilho');
+  });
+
+  it('dado o fator do botão, então o arrasto sai escalado (0 desliga)', () => {
+    const c = createTouchCore({ fireLook: 0.5 });
+    c.press('fire', 7, 0, 0);
+    c.onPressMove(7, 40, 20);
+    const l = c.takeLook();
+    assert.equal(l.dx, 20);
+    assert.equal(l.dy, 10);
+    c.setFireLook(0);
+    c.onPressMove(7, 90, 20);
+    assert.equal(c.takeLook().dx, 0, 'fator 0 continuou girando');
+    c.setFireLook(NaN);                     // lixo cai no padrão, não em NaN
+    c.onPressMove(7, 100, 20);
+    assert.equal(c.takeLook().dx, 10);
+  });
+
+  it('dado o encostar do dedo no ATIRAR, então não existe salto de delta', () => {
+    const c = createTouchCore();
+    c.press('fire', 7, 700, 300);
+    assert.equal(c.takeLook().dx, 0);
+    c.onPressMove(7, 700, 300);
+    assert.equal(c.takeLook().dx, 0);
+  });
+
+  it('dados o dedo do olhar E o do ATIRAR juntos, então os dois somam (e o analógico segue)', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, -STICK_RADIUS);
+    c.onLookStart(2, 500, 200);
+    c.press('fire', 3, 700, 300);
+    c.onLookMove(2, 530, 200);
+    c.onPressMove(3, 710, 300);
+    assert.equal(c.takeLook().dx, 40);
+    assert.ok(c.getMove().y > 0.9, 'o dedo do tiro matou o analógico');
+  });
+
+  it('dado o segundo ATIRAR (esquerda), então ele também mira e convive com o primeiro', () => {
+    const c = createTouchCore();
+    assert.equal(c.press('fire', 3, 0, 0), true);
+    assert.equal(c.press('fireL', 4, 0, 0), true, 'os dois gatilhos não podem se excluir');
+    c.onPressMove(4, -25, 0);
+    assert.equal(c.takeLook().dx, -25);
+  });
+
+  it('dado outro botão arrastado, então NÃO mira (só o gatilho gira)', () => {
+    const c = createTouchCore();
+    c.press('jump', 5, 0, 0);
+    assert.equal(c.onPressMove(5, 80, 0), false);
+    assert.equal(c.takeLook().dx, 0);
+  });
+
+  it('dado soltar e reapertar, então o delta parte do novo ponto', () => {
+    const c = createTouchCore();
+    c.press('fire', 7, 0, 0);
+    c.onPressMove(7, 10, 0);
+    c.takeLook();
+    assert.equal(c.releasePointer(7), 'fire');
+    assert.equal(c.onPressMove(7, 300, 0), false, 'dedo solto continuou mirando');
+    c.press('fire', 8, 600, 0);
+    c.onPressMove(8, 605, 0);
+    assert.equal(c.takeLook().dx, 5);
+  });
+
+  it('dado releaseAll, então o arrasto do gatilho não vaza', () => {
+    const c = createTouchCore();
+    c.press('fire', 7, 0, 0);
+    c.onPressMove(7, 50, 0);
+    c.releaseAll();
+    assert.equal(c.takeLook().dx, 0);
+    assert.equal(c.onPressMove(7, 90, 0), false);
+  });
+});
+
+/* ================================================================
+   SENSIBILIDADE — razão vertical/horizontal (P1-5) e ADS pela razão das
+   tangentes (P1-4). A conta esperada sai da GEOMETRIA (ângulo do arrasto e
+   tangente dos FOVs), não do código sob teste.
+   ================================================================ */
+describe('núcleo dos controles de toque — sensibilidade', () => {
+  let lookRadians, lookScale, touchConfig, TOUCH_DEFAULTS, saveTouchSetting;
+  before(async () => {
+    ({ lookRadians, lookScale, touchConfig, saveTouchSetting } = await import('../js/touchcontrols.js'));
+    ({ TOUCH_DEFAULTS } = await import('../js/config.js'));
+  });
+
+  it('dado um arrasto DIAGONAL, então o ângulo girado é atan(razão × dy/dx) — sem torção', () => {
+    const out = { yaw: 0, pitch: 0 };
+    for (const [dx, dy] of [[100, -100], [100, -50], [30, -90], [-70, 40]]) {
+      for (const ratio of [0.6, 0.4, 1]) {
+        lookRadians(dx, dy, 0.0032, ratio, 1, out);
+        const esperado = Math.atan2(Math.abs(dy) * ratio, Math.abs(dx)) * 180 / Math.PI;
+        const medido = Math.atan2(Math.abs(out.pitch), Math.abs(out.yaw)) * 180 / Math.PI;
+        assert.ok(Math.abs(medido - esperado) < 1e-9,
+          `(${dx},${dy}) razão ${ratio}: girou a ${medido}°, a conta pede ${esperado}°`);
+        // sinais: dedo pra direita vira pra direita (yaw −), dedo pra cima olha pra cima (pitch +)
+        assert.equal(Math.sign(out.yaw), -Math.sign(dx));
+        assert.equal(Math.sign(out.pitch), -Math.sign(dy));
+        assert.ok(Math.abs(Math.abs(out.yaw) - Math.abs(dx) * 0.0032) < 1e-12, 'o eixo X perdeu escala');
+      }
+    }
+  });
+
+  it('dado o ADS, então a escala é tan(fovADS/2)/tan(fovBase/2) (e 1 no quadril)', () => {
+    const tabela = [[62, 0.783], [55, 0.678], [48, 0.580], [36, 0.423], [26, 0.301]];
+    for (const [fov, ideal] of tabela)
+      assert.ok(Math.abs(lookScale(fov, 75, 1, 1) - ideal) < 0.0015, `${fov}°: ${lookScale(fov, 75, 1, 1)}`);
+    assert.equal(lookScale(75, 75, 0, 1), 1);
+    // correndo o FOV abre pra 85 — a base acompanha, a sensibilidade NÃO muda
+    assert.ok(Math.abs(lookScale(85, 85, 0, 1) - 1) < 1e-12);
+    // o ajuste de "sensibilidade na mira" multiplica só na mira
+    assert.ok(Math.abs(lookScale(48, 75, 1, 1.2) - 0.580 * 1.2) < 0.002);
+    assert.ok(Math.abs(lookScale(75, 75, 0, 1.2) - 1) < 1e-12, 'o ajuste de ADS vazou pro quadril');
+  });
+
+  it('dados ajustes lixo, então os padrões e os limites valem', () => {
+    const d = touchConfig({});
+    assert.equal(d.look, TOUCH_DEFAULTS.touchLook);
+    assert.equal(d.ratioY, 0.6, 'P1-5: razão padrão 0,6 (Lyra)');
+    assert.equal(d.assist, true, 'assistência nasce LIGADA no toque');
+    assert.equal(d.autoFire, false, 'tiro automático nasce DESLIGADO (decisão do dono)');
+    assert.equal(d.fireLeft, false);
+    assert.equal(d.fireLook, 1);
+    const lixo = touchConfig({ touchLook: 'abc', touchRatioY: 99, touchAds: -5, touchFireLook: null,
+      touchAssist: 'talvez', touchAutoFire: 1, touchFireLeft: '1' });
+    assert.equal(lixo.look, TOUCH_DEFAULTS.touchLook);
+    assert.equal(lixo.ratioY, 1, 'teto da razão');
+    assert.equal(lixo.ads, 0.5, 'piso do ADS');
+    assert.equal(lixo.fireLook, 1);
+    assert.equal(lixo.assist, true, 'lixo no liga/desliga não pode desligar a assistência');
+    assert.equal(lixo.autoFire, true);
+    assert.equal(lixo.fireLeft, true);
+    assert.equal(touchConfig(null).look, TOUCH_DEFAULTS.touchLook);
+  });
+
+  it('dado localStorage que lança (aba privada, cota cheia), então salvar não derruba nada', () => {
+    const s = {};
+    const ok = saveTouchSetting(s, 'touchRatioY', 0.45, () => { throw new Error('QuotaExceededError'); });
+    assert.equal(ok, false);
+    assert.equal(s.touchRatioY, 0.45, 'o valor vale na sessão mesmo sem persistir');
+    assert.equal(saveTouchSetting(s, 'touchRatioY', 0.5, () => {}), true);
+    assert.equal(saveTouchSetting(s, 'naoExiste', 1, () => {}), false, 'aceitou chave fora do contrato');
   });
 });
 
