@@ -381,7 +381,7 @@ function startMatch() {
   for (const [id, p] of players) {
     if (p.spectator) continue; // quem entrou tarde continua espectador
     p.alive = true; p.kills = 0; p.placement = 0;
-    p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true; p.landed = false; p.hitBy = {};
+    p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true; p.landed = false; p.hitBy = {}; p.pendingDrop = null;
     shipSlots[id] = slotIdx;
     const sl = ShipProto.slotLocal(slotIdx);
     p.shipLocalPrev = [sl[0], ShipProto.DIMS.floorY, sl[1]];
@@ -437,6 +437,41 @@ function endMatch(winnerId) {
     applyPendingBots(); // troca de "bots na sala" pedida durante a partida
     io.emit('nextMatch', { worldSeed: match.seed }); // browser recarrega; bots persistentes reconstroem o mapa
   }, NEXT_IN_S * 1000);
+}
+
+/* loot de morte: tipos conhecidos e tetos do que o jogo realmente solta
+   (br-game.js e scripts/bots.js: munição 60, colete 50, armas com o pente) */
+const DROP_TYPES = new Set(['weapon', 'ammo', 'armor', 'med', 'nade']);
+const DROP_CAP = { weaponAmmo: 300, ammo: 60, armor: 50 };
+const DROP_PENDING_MS = 5000;
+function sanitizeDropItems(list) {
+  let weapons = 0;
+  return list.slice(0, 10).map(it => {
+    if (!it || typeof it !== 'object') return null;
+    const type = clean(it.type).slice(0, 8);
+    if (!DROP_TYPES.has(type)) return null;
+    const o = { type };
+    if (type === 'weapon') {
+      if (!Number.isInteger(it.weapon) || it.weapon < 0 || it.weapon > 5 || ++weapons > 7) return null;
+      o.weapon = it.weapon;
+      o.ammo = Math.max(0, Math.min(DROP_CAP.weaponAmmo, Math.round(+it.ammo) || 0));
+    } else if (type === 'ammo' || type === 'armor') {
+      o.amount = Math.max(0, Math.min(DROP_CAP[type], Math.round(+it.amount) || 0));
+      if (!o.amount) return null;
+    }
+    const rar = clean(it.rarity).slice(0, 12);
+    if (rar) o.rarity = rar;
+    return o;
+  }).filter(Boolean);
+}
+function publishDrop(p, items) {
+  if (!p.canDrop || match.phase !== 'PLAYING' || !Array.isArray(p.pos)) return;
+  p.canDrop = false;
+  p.pendingDrop = null;
+  const pos = p.pos.slice(0, 3);
+  const id = 'drop' + (++match.dropSeq);
+  match.drops.set(id, { pos, items, taken: false });
+  io.emit('dropSpawn', { id, pos, items });
 }
 
 function checkVictory() {
@@ -918,6 +953,9 @@ io.on('connection', socket => {
     const victim = players.get(socket.id);
     if (!victim || !victim.alive) { if (typeof cb === 'function') cb({}); return; }
     victim.alive = false;
+    // loot que o cliente anunciou antes de morrer (ver deathDrop)
+    if (victim.pendingDrop && Date.now() - victim.pendingDrop.t < DROP_PENDING_MS) publishDrop(victim, victim.pendingDrop.items);
+    victim.pendingDrop = null;
     victim.placement = match.aliveCount; // morreu agora = posição atual
     match.lastDead = socket.id; // se todos caírem juntos, o último a morrer vence
     const allowedCauses = new Set([
@@ -977,32 +1015,21 @@ io.on('connection', socket => {
   });
 
   /* drop de morte: espalha itens no chão, primeiro a pegar leva */
+  /* LOOT DE MORTE: nasce da MORTE, no ponto em que o SERVIDOR viu o jogador,
+     com valores plausíveis. O cliente e os bots emitem o drop ANTES do `died`
+     (é a ordem deles): com o jogador vivo o drop fica pendente e sai no
+     `died` do mesmo socket. Morte decidida pelo servidor (zona, cidade,
+     inatividade) já zerou `alive` — aí o drop sai na hora. */
   socket.on('deathDrop', d => {
     const p = players.get(socket.id);
     if (!p || match.phase !== 'PLAYING') return;
-    // loot só vem de quem participa da partida (não de espectador). NÃO
-    // bloquear por !alive: morte por zona/cidade já zera alive antes do drop.
-    if (p.spectator) return;
-    if (!p.canDrop) return; // um drop por vida — sem spam de loot
-    if (!d || !Array.isArray(d.pos) || !Array.isArray(d.items)) return;
-    const pos = d.pos.slice(0, 3).map(Number);
-    if (!pos.every(Number.isFinite)) return;
-    p.canDrop = false;
-    const id = 'drop' + (++match.dropSeq);
-    // sanitiza o formato dos itens: só campos conhecidos, com limites
-    const items = d.items.slice(0, 8).map(it => {
-      if (!it || typeof it !== 'object') return null;
-      const o = { type: clean(it.type).slice(0, 8) };
-      if (Number.isInteger(it.weapon) && it.weapon >= 0 && it.weapon <= 5) o.weapon = it.weapon;
-      if (Number.isFinite(+it.ammo)) o.ammo = Math.max(0, Math.min(999, Math.round(+it.ammo)));
-      if (Number.isFinite(+it.amount)) o.amount = Math.max(0, Math.min(200, Math.round(+it.amount)));
-      const rar = clean(it.rarity).slice(0, 12);
-      if (rar) o.rarity = rar;
-      return o.type ? o : null;
-    }).filter(Boolean);
+    if (p.spectator) return;           // loot só de quem participa da partida
+    if (!p.canDrop) return;            // um drop por vida — sem spam de loot
+    if (!d || !Array.isArray(d.items)) return;
+    const items = sanitizeDropItems(d.items);
     if (!items.length) return;
-    match.drops.set(id, { pos, items, taken: false });
-    io.emit('dropSpawn', { id, pos, items });
+    if (p.alive) { p.pendingDrop = { items, t: Date.now() }; return; }
+    publishDrop(p, items);
   });
   socket.on('takeDrop', (d, cb) => {
     if (typeof cb !== 'function') return;

@@ -598,6 +598,8 @@ describe('Loot', () => {
     const drops = collect(b.s, 'dropSpawn');
     a.s.emit('deathDrop', { pos: [1, 0, 1], items: [{ type: 'med' }] });
     a.s.emit('deathDrop', { pos: [2, 0, 2], items: [{ type: 'med' }] }); // spam
+    a.s.emit('died', { cause: { type: 'environment' } }); // loot de morte sai na morte
+    a.s.emit('deathDrop', { pos: [3, 0, 3], items: [{ type: 'med' }] }); // spam depois de morto
     await sleep(400);
     assert.equal(drops.length, 1, `spawnou ${drops.length} drops`);
   });
@@ -621,22 +623,28 @@ describe('Loot', () => {
         'lixo', null,
       ],
     });
+    a.s.emit('died', { cause: { type: 'environment' } }); // loot de morte sai na morte
     const drop = await dropEv;
     for (const it of drop.items) {
       assert.ok(Object.keys(it).every(k => ['type', 'weapon', 'ammo', 'amount', 'rarity'].includes(k)),
         'campo desconhecido vazou: ' + JSON.stringify(Object.keys(it)));
       assert.ok(!/[<>]/.test(it.type + (it.rarity || '')), 'HTML vazou no item');
-      if (it.ammo !== undefined) assert.ok(it.ammo <= 999);
+      if (it.ammo !== undefined) assert.ok(it.ammo <= 300);
       if (it.weapon !== undefined) assert.ok(it.weapon >= 0 && it.weapon <= 5);
     }
-    assert.equal(drop.items.length, 2, 'itens-lixo deviam ser descartados');
+    // tipo fora da lista conhecida é descartado inteiro, junto com o lixo
+    assert.equal(drop.items.length, 1, 'itens-lixo deviam ser descartados');
   });
 
   it('dado um drop no chão, então só pega quem está perto — e uma vez só', async t => {
     const { clients } = await playing(t, 3);
     const [a, b, c] = clients;
     const dropEv = once(b.s, 'dropSpawn');
+    // o loot nasce onde o SERVIDOR viu o jogador morrer
+    a.s.emit('state', { pos: [50, 0, 50], rotY: 0 });
+    await sleep(150);
     a.s.emit('deathDrop', { pos: [50, 0, 50], items: [{ type: 'med' }] });
+    a.s.emit('died', { cause: { type: 'environment' } });
     const drop = await dropEv;
     // B está longe (pos padrão 0,0,0 → 70m do drop)
     const far = await ack(b.s, 'takeDrop', { id: drop.id });

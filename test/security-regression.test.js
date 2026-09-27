@@ -138,13 +138,69 @@ describe('Loot — só de participantes vivos da partida', () => {
   });
 
   it('dado um jogador que morreu na partida, então o deathDrop legítimo dele sai', async t => {
-    // Invariante de gameplay: o loot de morte precisa continuar caindo.
-    const { clients } = await playing(t, 2);
+    // Invariante de gameplay: o loot de morte precisa continuar caindo. O
+    // cliente e os bots emitem o drop ANTES do `died` — essa é a ordem real.
+    const { clients } = await playing(t, 3); // 3: a morte não encerra a partida
     const [a, b] = clients;
     const drops = collect(b.s, 'dropSpawn');
     a.s.emit('deathDrop', { pos: [1, 2, 3], items: [{ type: 'armor', amount: 50 }, { type: 'ammo', amount: 60 }] });
+    a.s.emit('died', { cause: { type: 'environment' } });
     await sleep(300);
     assert.equal(drops.length, 1, 'o loot de morte legítimo não pode sumir');
+  });
+
+  it('dado o servidor que já registrou a morte, então o deathDrop que chega depois também sai', async t => {
+    // morte decidida pelo servidor (zona, cidade, inatividade) chega antes do drop
+    const { clients } = await playing(t, 3); // 3: a morte não encerra a partida
+    const [a, b] = clients;
+    const drops = collect(b.s, 'dropSpawn');
+    a.s.emit('died', { cause: { type: 'gas' } });
+    await sleep(150);
+    a.s.emit('deathDrop', { pos: [1, 2, 3], items: [{ type: 'ammo', amount: 60 }] });
+    await sleep(300);
+    assert.equal(drops.length, 1, 'drop depois da morte registrada sumiu');
+  });
+
+  it('dado um jogador VIVO, então o deathDrop dele não cria loot', async t => {
+    // Loot de morte é da morte: sem `died`, nada aparece no chão.
+    const { clients } = await playing(t, 3); // 3: a morte não encerra a partida
+    const [a, b] = clients;
+    const drops = collect(b.s, 'dropSpawn');
+    a.s.emit('state', { pos: [40, 5, 40], rotY: 0 });
+    await sleep(100);
+    a.s.emit('deathDrop', { pos: [40, 5, 40], items: [{ type: 'ammo', amount: 60 }] });
+    await sleep(700);
+    assert.equal(drops.length, 0, 'jogador vivo criou loot de morte');
+  });
+
+  it('dado o loot de morte, então ele nasce onde o SERVIDOR viu o jogador, com valores plausíveis', async t => {
+    // O servidor não confia em posição nem em quantidade declaradas.
+    const { clients } = await playing(t, 3); // 3: a morte não encerra a partida
+    const [a, b] = clients;
+    const drops = collect(b.s, 'dropSpawn');
+    a.s.emit('state', { pos: [40, 5, 40], rotY: 0 });
+    await sleep(100);
+    a.s.emit('deathDrop', {
+      pos: [300, 5, -300],
+      items: [
+        { type: 'weapon', weapon: 3, ammo: 999 },
+        { type: 'armor', amount: 200 },
+        { type: 'ammo', amount: 200 },
+        { type: 'desconhecido', amount: 5 },
+      ],
+    });
+    a.s.emit('died', { cause: { type: 'environment' } });
+    await sleep(300);
+    assert.equal(drops.length, 1, 'o loot de morte não saiu');
+    const d = drops[0];
+    assert.ok(Math.hypot(d.pos[0] - 40, d.pos[2] - 40) < 1, `loot nasceu longe do jogador: ${JSON.stringify(d.pos)}`);
+    const arma = d.items.find(i => i.type === 'weapon');
+    const colete = d.items.find(i => i.type === 'armor');
+    const mun = d.items.find(i => i.type === 'ammo');
+    assert.ok(arma && arma.ammo <= 300, `munição da arma sem teto: ${JSON.stringify(arma)}`);
+    assert.ok(colete && colete.amount <= 50, `colete sem teto: ${JSON.stringify(colete)}`);
+    assert.ok(mun && mun.amount <= 60, `munição solta sem teto: ${JSON.stringify(mun)}`);
+    assert.ok(!d.items.some(i => i.type === 'desconhecido'), 'tipo desconhecido passou');
   });
 });
 

@@ -29,7 +29,14 @@ describe('BR — drops de morte e avatares remotos', { skip: !CHROME && 'Chrome 
       return camp && camp.dif > 8 ? camp : null;
     });
     if (!alvo) { t.skip('pré-condição não encontrada nesta seed'); return; }
+    /* o loot nasce onde o SERVIDOR viu o jogador morrer: o bot sobe ao andar
+       (o anti-teleporte re-ancora depois de 10 rejeições seguidas) e morre lá */
+    for (let i = 0; i < 12; i++) {
+      bot.emit('state', { pos: [alvo.x, alvo.floorY, alvo.z], rotY: 0 });
+      await new Promise(rr => setTimeout(rr, 60));
+    }
     bot.emit('deathDrop', { pos: [alvo.x, alvo.floorY, alvo.z], items: [{ type: 'med' }] });
+    bot.emit('died', { cause: { type: 'environment' } });
     const r = await h.play(async (alvoIn) => {
       const dbg = window.__BR_debug;
       const t0 = performance.now();
