@@ -108,11 +108,19 @@
       };
     }
 
+    /* PREFERÊNCIA NÃO DERRUBA NADA. Safari em aba privada (versões antigas),
+       cota cheia ou armazenamento bloqueado fazem o localStorage LANÇAR — e
+       aqui ele era chamado dentro dos ouvintes do nick e das cores: o nick não
+       chegava ao servidor e a prévia não trocava. Ler e gravar passam por
+       estes dois; perder a preferência é aceitável, perder o lobby não. */
+    const lerPref = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+    const gravarPref = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* sem armazém: vale só nesta sessão */ } };
+
     /* ---------- estado compartilhado com a parte 2 ---------- */
-    let nick = (localStorage.getItem('br_nick') || '').trim().slice(0, 14)
+    let nick = (lerPref('br_nick') || '').trim().slice(0, 14)
       || 'Recruta' + (100 + Math.floor(Math.random() * 900));
     let myColors;
-    try { myColors = JSON.parse(localStorage.getItem('br_colors')); } catch (e) { myColors = null; }
+    try { myColors = JSON.parse(lerPref('br_colors')); } catch (e) { myColors = null; }
     myColors = window.BRColors.sanitizeColors(myColors); // sempre 4 hex válidos (fonte única)
 
     const S = {
@@ -534,7 +542,7 @@
       S.myColors = window.BRColors.sanitizeColors(cols);
       const inputs = lobby.querySelectorAll('.brCol4');
       inputs.forEach(inp => { inp.value = S.myColors[+inp.dataset.i]; });
-      localStorage.setItem('br_colors', JSON.stringify(S.myColors));
+      gravarPref('br_colors', JSON.stringify(S.myColors));
       if (preview) preview.retint(S.myColors);
       sendHello();
     }
@@ -542,13 +550,13 @@
       const nickEl = document.getElementById('brNick');
       if (nickEl) nickEl.addEventListener('input', () => {
         S.nick = nickEl.value.trim().slice(0, 14) || S.nick;
-        localStorage.setItem('br_nick', S.nick);
+        gravarPref('br_nick', S.nick);
         sendHello();
       });
       for (const inp of lobby.querySelectorAll('.brCol4')) {
         inp.addEventListener('input', () => {
           S.myColors[+inp.dataset.i] = inp.value;
-          localStorage.setItem('br_colors', JSON.stringify(S.myColors));
+          gravarPref('br_colors', JSON.stringify(S.myColors));
           if (preview) preview.retint(S.myColors);
           sendHello();
         });

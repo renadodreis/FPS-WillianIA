@@ -74,6 +74,30 @@ describe('Boot com localStorage que lança (Safari privado, cota cheia)', { skip
     assert.deepEqual(r.erros, [], r.erros.join('\n'));
   });
 
+  /* O LOBBY TAMBÉM GRAVA: nick e cores iam para `localStorage.setItem` sem
+     `try` (multiplayer-client.js). Com o armazém hostil, digitar o nick ou
+     tocar numa paleta lançava dentro do ouvinte — o nick não chegava ao
+     servidor e a prévia não trocava de cor. `__lancamentos` subir prova que o
+     caminho que grava foi exercitado (o caso não passa por não ter gravado). */
+  it('dado o lobby com o armazém hostil, então nick e paleta funcionam e nada lança', async () => {
+    const r = await h.play(() => {
+      const antes = window.__lancamentos;
+      window.__MP_lobby.show();
+      const nick = document.getElementById('brNick');
+      nick.value = 'Hostil';
+      nick.dispatchEvent(new Event('input', { bubbles: true }));
+      const preset = document.querySelector('.brPreset');
+      if (preset) preset.click();
+      const cor = document.querySelector('.brCol4');
+      if (cor) { cor.value = '#123456'; cor.dispatchEvent(new Event('input', { bubbles: true })); }
+      return { tentou: window.__lancamentos - antes, preset: !!preset, cor: !!cor };
+    });
+    assert.ok(r.preset && r.cor, 'cenário inválido: lobby sem paleta/cor');
+    assert.ok(r.tentou >= 3, `cenário inválido: o lobby não tentou gravar (${r.tentou})`);
+    await new Promise(res => setTimeout(res, 300));
+    assert.deepEqual(h.pageErrors, [], `o lobby lançou com o armazém hostil: ${h.pageErrors.join(' | ')}`);
+  });
+
   it('dado o boot inteiro com o armazém hostil, então nenhum erro de página', () => {
     assert.deepEqual(h.pageErrors, [], 'erros de página:\n' + h.pageErrors.join('\n'));
   });
