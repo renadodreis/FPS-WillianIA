@@ -41,7 +41,12 @@ const f2 = x => (Number.isFinite(x) ? x.toFixed(2) : String(x));
 
 /* ---------------- dublê de servidor ---------------- */
 
-function makeSim({ seed, bots, terrain = null, plan = { zone: [] } }) {
+/* Chão plano EXPLÍCITO. `terrain: null` não é "chão plano": é o bot sem
+   terreno, que por contrato não enxerga ninguém (B12c,
+   test/bots-visada.test.js). */
+const FLAT = Object.freeze({ heightAt: () => 0 });
+
+function makeSim({ seed, bots, terrain = FLAT, plan = { zone: [] } }) {
   const rng = mulberry32(seed >>> 0);
   const world = Bots.createBotWorld();
   world.terrain = terrain;
@@ -365,7 +370,7 @@ describe('Bots: combate justo para quem joga no celular (laço real a 10 Hz)', (
       hidHits += hidden.hits.length;
       hidShots += shotsAtHuman(hidden).length;
       if (lockOnT(hidden, 'b0') != null) hidLocks++;
-      const flat = scenario(null, seed, 30).res;
+      const flat = scenario(FLAT, seed, 30).res;
       if (lockOnT(flat, 'b0') != null && shotsAtHuman(flat).length) flatEngaged++;
       if (flat.hits.length) flatHurt++;
     }
@@ -627,21 +632,286 @@ describe('Bots: combate justo para quem joga no celular (laço real a 10 Hz)', (
 
   it('memória: sem ver o humano, o bot vai à ÚLTIMA posição vista, não à atual', (t) => {
     let wrong = 0, right = 0;
+    // o bot segura a posição por 3,8 s (CHASE_AFTER_S, CS Easy) depois de a
+    // perda chegar pela reação (6,6 s); a perseguição se mede depois disso
+    const go = 6 + 0.6 + 3.8;
     for (let seed = 1; seed <= 20; seed++) {
       const A = { x: 0, z: 25 }, B = { x: 0, z: -25 }; // B fica atrás do bot: fora do cone
       const sim = makeSim({ seed, bots: [{ id: 'b0', x: 0, z: 0, mira: 0.9, yaw: yawTo({ x: 0, z: 0 }, A), wp: [0, 500] }] });
       const res = run(sim, {
         human: tt => ({ ...(tt < 6 ? A : B), rotY: 0 }),
-        duration: 10, humanHp: Infinity, stopOnDeath: false,
+        duration: go + 3, humanHp: Infinity, stopOnDeath: false,
       });
       const st = res.states.get('b0');
-      const at = tt => st.find(s => Math.abs(s.t - tt) < 1e-9);
-      const p0 = at(7), p1 = at(9);
+      const at = tt => st.find(s => Math.abs(s.t - Math.round(tt * 10) / 10) < 1e-9);
+      const p0 = at(go + 0.3), p1 = at(go + 2.3);
       const dz = p1.pos[2] - p0.pos[2];
       const firedAtB = res.shots.some(s => s.t >= 6.7 && s.target === HUMAN);
       if (dz > 3 && !firedAtB) right++; else wrong++;
     }
     t.diagnostic(`depois de o humano sumir atrás do bot: foi à última posição vista em ${right}/20; seguiu/atirou na posição atual em ${wrong}/20`);
     assert.equal(wrong, 0, 'o bot sabia onde estava um humano que ele não via');
+  });
+});
+
+/* ================================================================
+   RE-EXPOSIÇÃO — B1/B2 do laudo docs/mobile/validacao-7515734.md.
+
+   O tiroteio normal de BR é "espia, atira, se esconde, espia de novo". O
+   laudo mediu no processo real: o humano some 2 s atrás do relevo e volta ao
+   mesmo ponto → 1º disparo em 0,41–0,79 s e 1º dano da escopeta em 0,41 s a
+   14,5 m. As proteções (reação, atraso de ataque, janela de erro) só valiam
+   no PRIMEIRO contato.
+
+   Os limiares são os da régua e valem para contato novo E re-exposição:
+     B1 — 1º disparo contra o humano ≥ 1,3 s depois de ele aparecer;
+     B2 — 1º dano ≥ 1,3 + 1,0 + 0,0315·d s (d = distância quando ele aparece).
+
+   Âncora independente do bot: quando o humano está escondido e quando está à
+   vista quem diz é uma marcha de 2 cm do PRÓPRIO TESTE sobre a crista, não a
+   `lineOfSight` do bot; o t0 é o instante em que o humano volta ao ponto.
+   ================================================================ */
+
+/* crista ao longo de X em z = zc: 3 m de altura, σ = 1,5 m. Quem está no topo
+   (A) aparece; 6 m atrás (B) some. */
+function crest(zc) {
+  return { heightAt: (x, z) => 3 * Math.exp(-((z - zc) ** 2) / (2 * 1.5 * 1.5)) };
+}
+function seesFine(terrain, from, to) {
+  const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+  const n = Math.ceil(Math.hypot(dx, dy, dz) / 0.02);
+  for (let i = 1; i < n; i++) {
+    const k = i / n;
+    if (terrain.heightAt(from.x + dx * k, from.z + dz * k) > from.y + dy * k) return false;
+  }
+  return true;
+}
+/* olho do bot (pé + 1,5 m) → cabeça (1,6 m) OU tronco (1,0 m) do humano */
+function humanInSight(terrain, b, h) {
+  const eye = { x: b.x, y: b.y + 1.5, z: b.z };
+  const hy = terrain.heightAt(h.x, h.z);
+  return seesFine(terrain, eye, { x: h.x, y: hy + 1.6, z: h.z })
+    || seesFine(terrain, eye, { x: h.x, y: hy + 1.0, z: h.z });
+}
+
+/* Um bot a `start` m do topo da crista; o humano fica no topo (A) até `hideAt`,
+   desce 6 m para trás (B) por `hideFor` s e volta ao MESMO ponto A. */
+function peek({ seed, weapon, start, hideAt = 8, hideFor = 2, duration = 16 }) {
+  const terrain = crest(start);
+  const A = { x: 0, z: start }, B = { x: 0, z: start + 6 };
+  const sim = makeSim({
+    seed, terrain,
+    bots: [{ id: 'b0', x: 0, z: 0, weapon, mira: 0.9, yaw: yawTo({ x: 0, z: 0 }, A), wp: [0, 500] }],
+  });
+  const t0 = hideAt + hideFor;
+  const probe = { leaks: 0, visibleAtT0: null, dAtT0: null, dAtHide: null };
+  const at = tt => (tt >= hideAt - 1e-9 && tt < t0 - 1e-9 ? B : A);
+  const dA = b => Math.hypot(A.x - b.x, terrain.heightAt(A.x, A.z) - b.y, A.z - b.z);
+  const res = run(sim, {
+    human: tt => { const p = at(tt); return { ...p, rotY: yawTo(p, sim.world.bots[0]) }; },
+    duration, humanHp: Infinity, stopOnDeath: false,
+    onTick: (tt, s, h) => {
+      const b = s.world.bots[0];
+      const seen = humanInSight(terrain, b, h);
+      if (tt >= hideAt - 1e-9 && tt < t0 - 1e-9 && seen) probe.leaks++;
+      if (Math.abs(tt - hideAt) < 1e-9) probe.dAtHide = dA(b);
+      if (Math.abs(tt - t0) < 1e-9) { probe.visibleAtT0 = seen; probe.dAtT0 = dA(b); }
+    },
+  });
+  return { res, probe, t0, hideAt, A };
+}
+
+const missTime = d => 1.0 + 0.0315 * d;
+
+describe('Bots: re-exposição — quem some atrás do relevo e volta paga reação, atraso e janela de erro de novo (B1/B2)', () => {
+  // escopeta a ~14 m e DMR/sniper a ~30 m são as armas e distâncias do laudo
+  const CASES = [
+    { weapon: 'ESCOPETA', start: 20 },
+    { weapon: 'FUZIL', start: 30 },
+    { weapon: 'DMR', start: 36 },
+    { weapon: 'SNIPER', start: 36 },
+  ];
+  const N = 30;
+  const runs = new Map();
+  const collect = () => {
+    if (runs.size) return runs;
+    for (const c of CASES) {
+      const out = [];
+      for (let seed = 1; seed <= N; seed++) out.push({ seed, ...c, ...peek({ seed, weapon: c.weapon, start: c.start }) });
+      runs.set(c.weapon, out);
+    }
+    return runs;
+  };
+
+  it('o cenário exercita a re-exposição: o bot já atirava, o humano some de verdade e volta à vista', (t) => {
+    for (const [weapon, out] of collect()) {
+      const engaged = out.filter(r => shotsAtHuman(r.res).some(s => s.t < r.hideAt)).length;
+      const leaks = out.reduce((a, r) => a + r.probe.leaks, 0);
+      const back = out.filter(r => r.probe.visibleAtT0).length;
+      const d = out.map(r => r.probe.dAtT0), dh = out.map(r => r.probe.dAtHide);
+      t.diagnostic(`${weapon}: bot já atirava no humano antes de ele sumir em ${engaged}/${N}; ticks à vista durante o esconde ${leaks}; à vista ao voltar ${back}/${N}; distância ao sumir ${f2(Math.min(...dh))}–${f2(Math.max(...dh))} m, na volta ${f2(Math.min(...d))}–${f2(Math.max(...d))} m`);
+      assert.equal(engaged, N, `${weapon}: o bot não chegou a engajar antes do esconde em ${N - engaged}/${N}`);
+      assert.equal(leaks, 0, `${weapon}: a crista não escondeu o humano (âncora de 2 cm)`);
+      assert.equal(back, N, `${weapon}: o humano não estava à vista ao voltar`);
+    }
+  });
+
+  it('B1: o 1º disparo depois de o humano reaparecer leva ≥ 1,3 s — igual ao contato novo', (t) => {
+    const all = [], per = [];
+    for (const [weapon, out] of collect()) {
+      const fresh = [], again = [];
+      for (const r of out) {
+        const s0 = shotsAtHuman(r.res)[0];
+        if (s0) fresh.push(s0.t);
+        const s1 = shotsAtHuman(r.res).find(s => s.t >= r.t0 - 1e-9);
+        if (s1) again.push(s1.t - r.t0);
+      }
+      all.push(...again);
+      per.push({ weapon, fresh, again });
+      t.diagnostic(`${weapon}: contato novo 1º disparo mín ${f2(Math.min(...fresh))} s; re-exposição 1º disparo mín ${f2(Math.min(...again))} s, mediana ${f2(median(again))} s (${again.length}/${N}); abaixo de 1,3 s: ${again.filter(x => x < 1.3 - 1e-9).length}`);
+    }
+    const low = all.filter(x => x < 1.3 - 1e-9).length;
+    t.diagnostic(`todas as armas: re-exposição 1º disparo mín ${f2(Math.min(...all))} s, mediana ${f2(median(all))} s; abaixo de 1,3 s: ${low}/${all.length}`);
+    for (const { weapon, fresh, again } of per) {
+      assert.ok(Math.min(...fresh) >= 1.3 - 1e-9, `${weapon}: contato novo atirou em ${f2(Math.min(...fresh))} s`);
+      assert.ok(again.length >= N - 2, `${weapon}: só ${again.length}/${N} bots atiraram depois da volta — o caso não mede nada`);
+    }
+    assert.equal(low, 0, `o humano reapareceu e levou tiro antes de 1,3 s em ${low}/${all.length} (mín ${f2(Math.min(...all))} s)`);
+  });
+
+  it('B2: o 1º dano depois de o humano reaparecer leva ≥ 1,3 + missTime(d) — a janela de erro volta', (t) => {
+    // d: a leitura mais dura entre a distância de quando ele sumiu (a
+    // "nominal" do cenário) e a de quando ele voltou — um bot que avança
+    // durante o esconde encurta a própria janela (CoD4 usa a distância do
+    // momento), e a régua não diz qual das duas vale
+    let worstSlack = Infinity, violations = 0, n = 0;
+    for (const [weapon, out] of collect()) {
+      const firsts = [];
+      let bad = 0;
+      for (const r of out) {
+        const h = r.res.hits.find(x => x.t >= r.t0 - 1e-9);
+        if (!h) continue;
+        const dt = h.t - r.t0, lim = 1.3 + missTime(Math.max(r.probe.dAtT0, r.probe.dAtHide));
+        firsts.push(dt);
+        worstSlack = Math.min(worstSlack, dt - lim);
+        if (dt < lim - 1e-9) bad++;
+        n++;
+      }
+      violations += bad;
+      t.diagnostic(`${weapon}: re-exposição 1º dano mín ${f2(Math.min(...firsts))} s, mediana ${f2(median(firsts))} s (${firsts.length}/${N} com dano em 6 s); antes do limite: ${bad}`);
+    }
+    t.diagnostic(`todas as armas: ${violations} violações em ${n}; menor folga ${f2(worstSlack)} s`);
+    assert.ok(n >= 60, `só ${n} re-exposições tiveram dano — o caso não exercita a janela`);
+    assert.equal(violations, 0, `${violations} re-exposições tomaram dano antes de 1,3 s + missTime(d) (pior folga ${f2(worstSlack)} s)`);
+  });
+
+  it('piscar de 0,1 s (um estado) não é re-exposição: o bot não recomeça a contagem', (t) => {
+    // controle do limiar: o CS só marca o inimigo como escondido depois de
+    // 0,25 s sem vê-lo (cs_bot_attack.cpp, m_isEnemyHidden) — sem isso o bot
+    // ficava mudo a cada vez que o humano passasse atrás de um toco
+    const gaps = [];
+    for (let seed = 1; seed <= N; seed++) {
+      const r = peek({ seed, weapon: 'FUZIL', start: 30, hideAt: 8, hideFor: 0.1, duration: 12 });
+      // maior intervalo entre disparos consecutivos contra o humano em volta do piscar
+      const ts = shotsAtHuman(r.res).map(s => s.t).filter(x => x >= 6 && x <= 11.5);
+      let worst = 0;
+      for (let i = 1; i < ts.length; i++) worst = Math.max(worst, ts[i] - ts[i - 1]);
+      if (ts.length >= 3) gaps.push(worst);
+    }
+    t.diagnostic(`piscar de 0,1 s: maior intervalo entre disparos de 6 a 11,5 s — máx ${f2(Math.max(...gaps))} s, mediana ${f2(median(gaps))} s (${gaps.length}/${N})`);
+    assert.equal(gaps.length, N, 'o bot parou de atirar depois de um piscar de 0,1 s');
+    assert.ok(Math.max(...gaps) <= 1.1 + 0.45 + 0.2 + 1e-9, `um piscar de 0,1 s custou ${f2(Math.max(...gaps))} s de silêncio (a cadência do fuzil é 1,1–1,55 s)`);
+  });
+
+  /* CS (states/cs_bot_attack.cpp): "if we haven't seen our enemy for a long
+     time, chase after them" — chaseTime = 2 + 2·(1 − Aggression), +3 s com
+     fuzil de precisão; CS2 Easy Aggression = 10 → 3,8 s. Halo (Isla): "the AI
+     will assume the player is still sitting where the AI last knew him to be".
+     Antes o bot disparava para a última posição no mesmo tick em que a
+     perdia: em 2 s de esconde chegava 9 m mais perto — em cima de quem se
+     escondeu, e com a janela de erro encurtada pela distância. */
+  it('perdeu de vista quem via: segura a posição, mirando onde o viu, antes de ir atrás (3,8 s; 6,8 s com luneta)', (t) => {
+    const REACT = 0.6;
+    const rows = [];
+    for (const { weapon, start, hold } of [{ weapon: 'FUZIL', start: 30, hold: 3.8 }, { weapon: 'DMR', start: 36, hold: 6.8 }]) {
+      let worstStill = 0, worstAim = 0, minGo = Infinity;
+      for (let seed = 1; seed <= 20; seed++) {
+        const r = peek({ seed, weapon, start, hideAt: 8, hideFor: 12, duration: 20 });
+        const st = r.res.states.get('b0');
+        const at = tt => st.find(s => Math.abs(s.t - tt) < 1e-9);
+        // parado de quando a perda chega (reação) até pouco antes do prazo
+        const a0 = 8 + REACT + 0.2, a1 = 8 + REACT + hold - 0.2;
+        const p0 = at(a0);
+        for (const s of st.filter(x => x.t >= a0 - 1e-9 && x.t <= a1 + 1e-9)) {
+          worstStill = Math.max(worstStill, Math.hypot(s.pos[0] - p0.pos[0], s.pos[2] - p0.pos[2]));
+          worstAim = Math.max(worstAim, angDiff(s.rotY, yawTo({ x: s.pos[0], z: s.pos[2] }, r.A)) / DEG);
+        }
+        // e depois do prazo ele vai: 1,5 s depois, andou para o ponto onde o viu
+        const p2 = at(Math.round((8 + REACT + hold + 1.5) * 10) / 10);
+        minGo = Math.min(minGo, Math.hypot(p0.pos[0] - r.A.x, p0.pos[2] - r.A.z) - Math.hypot(p2.pos[0] - r.A.x, p2.pos[2] - r.A.z));
+      }
+      rows.push({ weapon, worstStill, worstAim, minGo });
+      t.diagnostic(`${weapon}: parado ${f2(worstStill)} m no esconde (até ${f2(hold - 0.2)} s depois da reação), mira a ≤ ${f2(worstAim)}° de onde o viu; 1,5 s depois do prazo andou ≥ ${f2(minGo)} m até lá`);
+    }
+    for (const { weapon, worstStill, worstAim, minGo } of rows) {
+      assert.ok(worstStill <= 0.01, `${weapon}: o bot saiu andando ${f2(worstStill)} m antes do prazo de perseguição`);
+      assert.ok(worstAim <= 3, `${weapon}: enquanto segura, o bot deixou de mirar onde viu o humano (${f2(worstAim)}°)`);
+      assert.ok(minGo >= 3, `${weapon}: passado o prazo, o bot não foi atrás (${f2(minGo)} m)`);
+    }
+  });
+
+  it('enquanto segura, vira para onde OUVIU o humano escondido atirar — sem sair do lugar', (t) => {
+    // o humano some atrás da crista em A' (6 m atrás de A) e, aos 9 s, atira
+    // de C, 12 m ao lado, ainda escondido. O bot o perdeu aos 8,6 s e segura
+    // até ~12,3 s: tem de virar para C (onde o ouviu), não ficar olhando A.
+    // Sem isto o caso anterior não distingue "mira onde o viu" de "não mexe
+    // o corpo": nos dois o bot já olhava para A.
+    let worstAim = 0, worstStill = 0, aimOld = Infinity;
+    for (let seed = 1; seed <= 20; seed++) {
+      const start = 30, terrain = crest(start);
+      const A = { x: 0, z: start }, C = { x: 12, z: start + 6 };
+      const sim = makeSim({ seed, terrain, bots: [{ id: 'b0', x: 0, z: 0, mira: 0.9, yaw: yawTo({ x: 0, z: 0 }, A), wp: [0, 500] }] });
+      const pos = tt => (tt < 8 - 1e-9 ? A : C);
+      const res = run(sim, {
+        human: tt => { const p = pos(tt); return { ...p, rotY: yawTo(p, sim.world.bots[0]) }; },
+        duration: 12, humanHp: Infinity, stopOnDeath: false,
+        onTick: (tt, s, h) => {
+          if (Math.abs(tt - 9) < 1e-9) humanFires(s, h, tt, { toPos: [C.x, 0, C.z + 40] });
+          if (tt >= 8.6 - 1e-9 && humanInSight(terrain, s.world.bots[0], h)) worstStill = Infinity; // C tem de estar escondido
+        },
+      });
+      const st = res.states.get('b0');
+      const p0 = st.find(s => Math.abs(s.t - 8.8) < 1e-9);
+      for (const s of st.filter(x => x.t >= 9.8 - 1e-9 && x.t <= 11.8 + 1e-9)) {
+        worstAim = Math.max(worstAim, angDiff(s.rotY, yawTo({ x: s.pos[0], z: s.pos[2] }, C)) / DEG);
+        aimOld = Math.min(aimOld, angDiff(s.rotY, yawTo({ x: s.pos[0], z: s.pos[2] }, A)) / DEG);
+        worstStill = Math.max(worstStill, Math.hypot(s.pos[0] - p0.pos[0], s.pos[2] - p0.pos[2]));
+      }
+    }
+    t.diagnostic(`ouviu de C enquanto segurava: mira a ≤ ${f2(worstAim)}° de C (e a ≥ ${f2(aimOld)}° de A, onde o viu); andou ${f2(worstStill)} m`);
+    assert.ok(worstStill <= 0.01, `o bot saiu do lugar (${f2(worstStill)} m) — ou C não estava escondido`);
+    assert.ok(worstAim <= 3, `o bot não virou para onde ouviu o humano (${f2(worstAim)}° de C)`);
+  });
+
+  it('quem o bot só OUVIU (nunca viu) ele vai investigar na hora — o prazo é só para quem ele perdeu de vista', (t) => {
+    // morro de 6 m entre o bot (de costas) e o humano, que atira aos 2 s
+    const hill = { heightAt: (x, z) => 6 * Math.exp(-((z - 20) ** 2) / (2 * 2 * 2)) };
+    let moved = Infinity, shots = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      const hp = { x: 0, z: 40 };
+      const sim = makeSim({ seed, terrain: hill, bots: [{ id: 'b0', x: 0, z: 0, mira: 0.9, yaw: yawTo({ x: 0, z: 0 }, { x: 0, z: -1 }), wp: [0, -500] }] });
+      const res = run(sim, {
+        human: () => ({ ...hp, rotY: yawTo(hp, sim.world.bots[0]) }),
+        duration: 5, humanHp: Infinity, stopOnDeath: false,
+        onTick: (tt, s, h) => { if (Math.abs(tt - 2) < 1e-9) humanFires(s, h, tt, { toPos: [0, 0, 0] }); },
+      });
+      const st = res.states.get('b0');
+      const z = tt => st.find(s => Math.abs(s.t - tt) < 1e-9).pos[2];
+      moved = Math.min(moved, z(4.5) - z(2.7));
+      shots += shotsAtHuman(res).length;
+    }
+    t.diagnostic(`ouviu o tiro atrás do morro: andou ≥ ${f2(moved)} m na direção dele entre 2,7 e 4,5 s; disparos contra ele ${shots}`);
+    assert.ok(moved >= 5, `o bot não foi investigar o tiro que ouviu (${f2(moved)} m)`);
+    assert.equal(shots, 0, 'o bot atirou em quem só ouviu, atrás do morro');
   });
 });

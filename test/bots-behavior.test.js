@@ -273,6 +273,8 @@ describe('Bots gerenciados', () => {
     const bot = {
       aware: new Map([['h', { perceived: true }]]), targetId: 'h', engageT: 40,
       missUntil: 99, lastShotT: 50, hurtT: 45,
+      // re-exposição pendente da rodada anterior (B1/B2)
+      targetSeenT: 48, targetHidden: true, reacquireT: 49, reacquireDelay: 0.9, missRearm: true,
     };
     resetBotForMatch(bot);
     assert.equal(bot.aware.size, 0);
@@ -281,6 +283,10 @@ describe('Bots gerenciados', () => {
     assert.equal(bot.missUntil, -Infinity);
     assert.equal(bot.lastShotT, -Infinity);
     assert.equal(bot.hurtT, -Infinity);
+    assert.equal(bot.targetSeenT, -Infinity);
+    assert.equal(bot.targetHidden, false);
+    assert.equal(bot.reacquireT, null, 'o atraso de reaquisição da rodada anterior seguraria o 1º tiro desta');
+    assert.equal(bot.missRearm, false);
   });
 
   it('não consome a janela de cadência enquanto não existe alvo atacável', () => {

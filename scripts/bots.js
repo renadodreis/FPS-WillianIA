@@ -59,6 +59,14 @@ const AI = {
   NOTICE_MOVING_MULT: 2, NOTICE_MOVING_SPEED: 1.5, NOTICE_COMBAT_MULT: 2, NOTICE_DECAY_PER_S: 0.5,
   COMBAT_WINDOW_S: 5,
   MEMORY_S: 10,             // sem ver por ~10 s, desiste (TLOU) [LASTRO]
+  // Perdeu de vista quem via: SEGURA a posição mirando onde o viu antes de ir
+  // atrás. CS, states/cs_bot_attack.cpp: "if we haven't seen our enemy for a
+  // long time, chase after them" — chaseTime = 2 + 2·(1 − Aggression), e
+  // +3 s com fuzil de precisão ("if we are sniping, be very patient"); CS2
+  // Easy tem Aggression = 10 → 3,8 s [LASTRO]. Halo (Isla): "the AI will
+  // assume the player is still sitting where the AI last knew him to be"
+  // [LASTRO]. Quem o bot só OUVIU vai investigar na hora (CS: `!m_haveSeenEnemy`).
+  CHASE_AFTER_S: 2 + 2 * (1 - 0.10), CHASE_SCOPED_EXTRA_S: 3,
   ALERT_S: 2,               // ouviu/levou tiro: cone de 360° para quem atirou (Quake III f = 360) [LASTRO]
   HEAR_M: 70,               // raio de audição do tiro [INFERÊNCIA, 60–80 m sugerido]
   HEAR_OFFSCREEN_MULT: 0.5, // fora da tela de quem atirou, ouve pela metade (Splinter Cell) [LASTRO]
@@ -69,11 +77,35 @@ const AI = {
   REACTION_S: 0.6, HISTORY: 20,
   // Atraso do 1º disparo depois de adquirir (CS 1.6 Fair/Easy AttackDelay) [LASTRO].
   ATTACK_DELAY_MIN_S: 1.0, ATTACK_DELAY_MAX_S: 1.5,
-  REACQUIRE_S: 3,           // alvo sumido por 3 s volta a pagar o atraso [INFERÊNCIA]
+  // RE-EXPOSIÇÃO — quem some atrás da cobertura e volta (laudo 7515734, B1/B2:
+  // antes o bot atirava 0,6 s depois da volta e acertava a escopeta junto).
+  // CS, states/cs_bot_attack.cpp: sem ver o inimigo por mais de 0,25 s ele
+  // vira "escondido" (`m_isEnemyHidden`); ao reaparecer, "if the enemy is
+  // coming out of hiding, we need time to react" — `m_reacquireTimestamp =
+  // now + ReactionTime` e só então `FireWeaponAtEnemy()` [LASTRO]. Aqui a
+  // reação já é a fila (o bot só re-vê pela amostra de REACTION_S atrás); em
+  // cima dela vem um atraso de reaquisição de 0,70–1,0 s. 0,70 é o AttackDelay
+  // do CS2 Easy — o mesmo que a régua soma aos 0,6 s de reação para chegar
+  // aos 1,3 s de B1 — e 1,0 o do CS 1.6 Fair [LASTRO nos números; INFERÊNCIA
+  // em cobrá-los de novo na volta: o CS só cobra a reação].
+  REACQUIRE_HIDDEN_S: 0.25,
+  REACQUIRE_DELAY_MIN_S: 0.7, REACQUIRE_DELAY_MAX_S: 1.0,
+  // sumido por mais de 3 s é engajamento NOVO: atraso cheio e foco do zero
+  // (CS: `seenRecentTime = 3.0f` — depois disso o bot para de mirar nele) [INFERÊNCIA]
+  REACQUIRE_S: 3,
 
   // Janela de erro obrigatório no começo do engajamento (CoD4 missTime Easy:
   // 1,0 s + 0,8/1000 por unidade; 1 un. = 2,54 cm → 0,0315 s/m) [LASTRO no
-  // formato, INFERÊNCIA na conversão]; rearma após 3 s sem atirar [LASTRO].
+  // formato, INFERÊNCIA na conversão]. Ela rearma a cada rajada, a não ser
+  // que a IA tenha atirado no jogador nos últimos 3 s ("we can only start
+  // missing again if it's been a few seconds since we last shot") — E o
+  // CoD4 zera esse bloqueio quando a IA faz outra coisa que não atirar:
+  // `didSomethingOtherThanShooting()` ("make sure the next time
+  // resetAccuracyAndPause() is called, we reset our misstime for sure"),
+  // chamado ao virar para encarar (combat.gsc), ao sair da cobertura para
+  // atirar (`shootAsTold`, corner.gsc/cover_wall.gsc), ao recarregar e ao
+  // trocar de postura [LASTRO]. Aqui o equivalente é a re-exposição: o alvo
+  // sumiu, o bot parou de atirar (segurou a posição ou foi atrás) e o re-vê.
   MISS_BASE_S: 1.0, MISS_PER_M_S: 0.0315, MISS_DEBOUNCE_S: 3,
   // DMR/sniper: primeiros disparos num alvo novo além de 12,7 m erram (CoD4;
   // no fácil, dois) [LASTRO].
@@ -145,16 +177,49 @@ function inViewCone(yaw, dx, dz, d) {
   return cos >= Math.cos(viewHalfAngleDeg(d) * DEG) - 1e-12;
 }
 
-/* Linha de visada contra o HEIGHTMAP (o bot não tem paredes: P3). Marcha de
-   2 m do olho ao ponto; bloqueia se o terreno passa acima da reta. */
+/* Linha de visada contra o HEIGHTMAP (o bot não tem paredes: B7/P3); bloqueia
+   se o chão passa acima da reta olho → ponto em qualquer lugar dela.
+
+   Na grade do terreno (`terrain.losGrid`, a MESMA do cliente: createBotTerrain)
+   a visada é EXATA. `heightAt` interpola o triângulo da célula (js/terrain.js),
+   então ao longo da reta o chão é linear por trechos, com quebra onde a reta
+   cruza x = i·cell, z = j·cell ou a diagonal fx + fz = k. A diferença
+   chão − reta também é linear por trechos: se passa de zero em algum ponto,
+   passa numa quebra ou numa ponta — basta testar essas. Custa ~2 pontos por
+   célula atravessada, o mesmo da antiga marcha de 2 m, que pulava cristas
+   finas (laudo 7515734, B6: o bot via 0,44 % dos pares que o cliente esconde).
+   Fora da grade (borda do mundo, altura analítica) e em dublês de teste:
+   marcha de LOS_MARCH_M.
+
+   SEM TERRENO NÃO HÁ VISADA (B12c). Antes, `terrain` nulo devolvia true: o bot
+   enxergava através de tudo, em silêncio — foi assim que os bots rodaram em
+   produção quando o `three` faltou. Agora ele não enxerga ninguém: ouve tiro
+   e vai investigar, mas não vira nem atira (atirar exige ver). A falha
+   aparece no log (`[bots] terreno indisponível`, startBots). */
+const LOS_MARCH_M = 0.5;
 function lineOfSight(terrain, from, to) {
-  if (!terrain || typeof terrain.heightAt !== 'function') return true;
+  if (!terrain || typeof terrain.heightAt !== 'function') return false;
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
-  const steps = Math.ceil(Math.hypot(dx, dz) / 2);
-  for (let i = 1; i < steps; i++) {
-    const k = i / steps;
-    if (terrain.heightAt(from.x + dx * k, from.z + dz * k) > from.y + dy * k) return false;
+  const above = k => terrain.heightAt(from.x + dx * k, from.z + dz * k) <= from.y + dy * k;
+  if (!above(0) || !above(1)) return false;
+  const g = terrain.losGrid;
+  if (g) {
+    const ax = (from.x + g.half) / g.cell, az = (from.z + g.half) / g.cell;
+    const bx = (to.x + g.half) / g.cell, bz = (to.z + g.half) / g.cell;
+    if (Math.min(ax, az, bx, bz) >= 0 && Math.max(ax, az, bx, bz) < g.segs) {
+      return gridCrossingsClear(ax, bx, above) && gridCrossingsClear(az, bz, above)
+        && gridCrossingsClear(ax + az, bx + bz, above);
+    }
   }
+  const n = Math.max(1, Math.ceil(Math.hypot(dx, dz) / LOS_MARCH_M));
+  for (let i = 1; i < n; i++) if (!above(i / n)) return false;
+  return true;
+}
+/* uma família de retas da grade (coordenada `a` inteira): testa cada cruzamento */
+function gridCrossingsClear(a0, a1, above) {
+  if (a1 === a0) return true;
+  const lo = Math.min(a0, a1), hi = Math.max(a0, a1), inv = 1 / (a1 - a0);
+  for (let n = Math.floor(lo) + 1; n < hi; n++) if (!above((n - a0) * inv)) return false;
   return true;
 }
 
@@ -311,15 +376,35 @@ function countAttackers(bots, self) {
 
 /* Engajamento: `engageT` = quando o alvo atual passou a ser VISTO (depois da
    reação). É dele que contam o atraso do 1º disparo e o foco da mira. Trocar
-   de alvo, ou perdê-lo de vista por REACQUIRE_S, recomeça. */
+   de alvo, ou perdê-lo de vista por REACQUIRE_S, recomeça do zero.
+
+   Re-exposição: o alvo atual sumiu por mais de REACQUIRE_HIDDEN_S (medido num
+   tick em que ele NÃO estava à vista, como o `notSeenEnemyTime > 0.25f` do CS
+   — um piscar de um tick não conta) e voltou. A volta paga um atraso de
+   reaquisição (`reacquireT` + `reacquireDelay`) e rearma a janela de erro
+   (`missRearm`); o foco da mira continua o do engajamento. Tudo isso em cima
+   da fila de reação: `target.seen` já é o que o bot via REACTION_S atrás. */
 function updateEngagement(bot, target, t, rng) {
   const id = target ? target.id : null;
-  if (id !== bot.targetId) { bot.targetId = id; bot.engageT = null; }
-  if (!target || !target.seen) return;
+  if (id !== bot.targetId) {
+    bot.targetId = id; bot.engageT = null; bot.targetHidden = false; bot.targetSeenT = -Infinity;
+  }
+  if (!target) return;
+  if (!target.seen) {
+    if (bot.engageT != null && t - (bot.targetSeenT ?? -Infinity) > AI.REACQUIRE_HIDDEN_S) bot.targetHidden = true;
+    return;
+  }
   if (bot.engageT == null || t - (bot.targetSeenT ?? -Infinity) > AI.REACQUIRE_S) {
     bot.engageT = t;
     bot.attackDelay = AI.ATTACK_DELAY_MIN_S + rng() * (AI.ATTACK_DELAY_MAX_S - AI.ATTACK_DELAY_MIN_S);
+    bot.reacquireT = null;
+    bot.missRearm = true;
+  } else if (bot.targetHidden) {
+    bot.reacquireT = t;
+    bot.reacquireDelay = AI.REACQUIRE_DELAY_MIN_S + rng() * (AI.REACQUIRE_DELAY_MAX_S - AI.REACQUIRE_DELAY_MIN_S);
+    bot.missRearm = true;
   }
+  bot.targetHidden = false;
   bot.targetSeenT = t;
 }
 
@@ -394,10 +479,14 @@ function decideShot(bot, target, action, ctx) {
   const profile = WEAPON_PROFILES[weapon] || WEAPON_PROFILES.FUZIL;
   const d = Math.hypot(target.x - bot.x, (target.y || 0) - (bot.y || 0), target.z - bot.z);
   const ranged = action.type === 'shoot';
-  if (ranged && (bot.missTargetId !== target.id || t - (bot.lastShotT ?? -Infinity) > AI.MISS_DEBOUNCE_S)) {
+  // alvo novo ou 3 s sem atirar: janela E luneta; re-exposição (`missRearm`):
+  // só a janela — a regra da luneta do CoD4 é por inimigo NOVO (`lastMissedEnemy`)
+  const fresh = bot.missTargetId !== target.id || t - (bot.lastShotT ?? -Infinity) > AI.MISS_DEBOUNCE_S;
+  if (ranged && (fresh || bot.missRearm)) {
     bot.missTargetId = target.id;
     bot.missUntil = t + AI.MISS_BASE_S + AI.MISS_PER_M_S * d;
-    bot.scopedMisses = profile.scoped && d > AI.SCOPED_FIRST_MISS_M ? AI.SCOPED_FIRST_MISSES : 0;
+    if (fresh) bot.scopedMisses = profile.scoped && d > AI.SCOPED_FIRST_MISS_M ? AI.SCOPED_FIRST_MISSES : 0;
+    bot.missRearm = false;
   }
   bot.lastShotT = t;
   if (ranged && bot.scopedMisses > 0) { bot.scopedMisses--; return { hit: false, why: 'luneta' }; }
@@ -455,10 +544,11 @@ function movementYaw(dx, dz) {
   return Math.atan2(-dx, -dz);
 }
 
-/* atirando: o corpo vira para o alvo; andando: para onde anda; parado: mantém
+/* atirando, ou segurando a posição de quem sumiu: o corpo vira para o alvo
+   (visto, ou onde foi visto); andando: para onde anda; parado: mantém
    (antes, parado virava atan2(-0, -0) = -π e o bot "estalava" para +Z) */
 function combatFacingYaw(bot, target, action, moveDx, moveDz) {
-  if (target && action && (action.type === 'shoot' || action.type === 'melee'))
+  if (target && action && (action.type === 'shoot' || action.type === 'melee' || action.type === 'hold'))
     return movementYaw(target.x - bot.x, target.z - bot.z);
   if (Math.hypot(moveDx, moveDz) > 1e-4 || !Number.isFinite(bot.yaw)) return movementYaw(moveDx, moveDz);
   return bot.yaw;
@@ -480,12 +570,19 @@ function applyLoot(loadout, items) {
   return loadout;
 }
 
-/* alvo LEMBRADO (não visto na amostra de reação) não se ataca: vai-se até a
-   última posição conhecida */
-function chooseCombatAction(bot, target) {
+/* alvo LEMBRADO (não visto na amostra de reação) não se ataca. Se o bot o via
+   e o perdeu, segura a posição mirando a última posição conhecida por
+   CHASE_AFTER_S (`hold`) e depois vai até ela (`chase`); se só o ouviu, vai
+   na hora. Sem `t`, sem prazo: vai na hora. */
+function chooseCombatAction(bot, target, t) {
   if (!target) return { type: 'patrol', distance: Infinity, weapon: bot.weapon || 'FACA' };
   const distance = Math.hypot(target.x - bot.x, target.z - bot.z);
-  if (target.seen === false) return { type: 'chase', distance, weapon: bot.weapon || 'FACA' };
+  if (target.seen === false) {
+    const lostFor = t - (bot.targetId === target.id ? (bot.targetSeenT ?? -Infinity) : -Infinity);
+    const scoped = !!(WEAPON_PROFILES[bot.weapon] || {}).scoped;
+    const patience = AI.CHASE_AFTER_S + (scoped ? AI.CHASE_SCOPED_EXTRA_S : 0);
+    return { type: lostFor < patience ? 'hold' : 'chase', distance, weapon: bot.weapon || 'FACA' };
+  }
   const hasRanged = bot.weapon && bot.weapon !== 'FACA' && bot.ammo > 0;
   if (hasRanged) {
     const range = (WEAPON_PROFILES[bot.weapon] || WEAPON_PROFILES.FUZIL).range;
@@ -494,10 +591,12 @@ function chooseCombatAction(bot, target) {
   return { type: distance <= 2.8 ? 'melee' : 'chase', distance, weapon: 'FACA' };
 }
 
-/* cadência + atraso do 1º disparo depois de adquirir o alvo */
+/* cadência + atraso do 1º disparo depois de adquirir o alvo + atraso de
+   reaquisição quando ele volta de trás da cobertura */
 function canAttemptAttack(bot, target, action, t, jitter = 0) {
   if (!target || !action || (action.type !== 'melee' && action.type !== 'shoot')) return false;
   if (bot.engageT != null && t - bot.engageT < (bot.attackDelay || 0)) return false;
+  if (bot.reacquireT != null && t - bot.reacquireT < (bot.reacquireDelay || 0)) return false;
   const profile = WEAPON_PROFILES[action.weapon || bot.weapon] || WEAPON_PROFILES.FACA;
   return t - bot.lastShot > profile.cooldown + jitter;
 }
@@ -533,6 +632,9 @@ async function createBotTerrain(worldSeed) {
   // Os módulos são carregados antes do seed no cliente também; só a construção
   // do SimplexNoise deve consumir a sequência determinística da partida.
   const terrainModule = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'terrain.js')).href);
+  // a MESMA grade do cliente (game.js: buildHeightGrid(CFG.WORLD_SIZE,
+  // CFG.TERRAIN_SEGS)) — a visada exata do bot depende de conhecer a malha
+  const { CFG } = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'config.js')).href);
   const previousRandom = Math.random;
   Math.random = mulberry32(Number(worldSeed) >>> 0);
   try {
@@ -540,7 +642,8 @@ async function createBotTerrain(worldSeed) {
       lerp: (a, b, t) => a + (b - a) * t,
       clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
     });
-    terrain.buildHeightGrid(1100);
+    terrain.buildHeightGrid(CFG.WORLD_SIZE, CFG.TERRAIN_SEGS);
+    terrain.losGrid = { half: CFG.WORLD_SIZE / 2, cell: CFG.WORLD_SIZE / CFG.TERRAIN_SEGS, segs: CFG.TERRAIN_SEGS };
     return terrain;
   } finally {
     Math.random = previousRandom;
@@ -602,8 +705,12 @@ function resetBotForMatch(bot) {
   bot.engageT = null;
   bot.attackDelay = 0;
   bot.targetSeenT = -Infinity;
+  bot.targetHidden = false;
+  bot.reacquireT = null;
+  bot.reacquireDelay = 0;
   bot.missTargetId = null;
   bot.missUntil = -Infinity;
+  bot.missRearm = false;
   bot.scopedMisses = 0;
   bot.lastShotT = -Infinity;
   bot.hurtT = -Infinity;
@@ -747,7 +854,7 @@ function tickPlayingBot(world, b, zone, t, dt, rng) {
     t, engaged: countAttackers(world.bots, b),
   });
   updateEngagement(b, target, t, rng);
-  const action = chooseCombatAction(b, target);
+  const action = chooseCombatAction(b, target, t);
   if (action.weapon === 'FACA' && b.weapon !== 'FACA' && b.ammo <= 0) {
     b.weapon = 'FACA';
     b.ammo = Infinity;
@@ -784,6 +891,8 @@ function tickPlayingBot(world, b, zone, t, dt, rng) {
     }
   } else if (action.type === 'chase') {
     b.wp = [target.x, target.z];
+  } else if (action.type === 'hold') {
+    b.wp = [b.x, b.z];
   } else if (action.type === 'shoot' || action.type === 'melee') {
     // corpo a corpo também para: antes a faca caía no ramo da patrulha e o
     // bot saía andando para um waypoint aleatório no meio da facada
@@ -868,6 +977,9 @@ function startBots(N, URL) {
     const numericSeed = Number(worldSeed) >>> 0;
     if (terrainPromise && loadedWorldSeed === numericSeed) return terrainPromise;
     loadedWorldSeed = numericSeed;
+    // mapa novo: o terreno do anterior não vale (visada e altura erradas).
+    // Até o novo carregar, sem terreno = sem visada (lineOfSight, B12c)
+    world.terrain = null;
     terrainPromise = createBotTerrain(numericSeed)
       .then(t => {
         world.terrain = t;
@@ -878,7 +990,11 @@ function startBots(N, URL) {
         }
         return t;
       })
-      .catch(err => { console.warn('[bots] terreno indisponível:', err.message); return null; });
+      .catch(err => {
+        // stderr herdado pelo server.js (B12a): a falha chega no log dele
+        console.error(`[bots] terreno indisponível: ${err.message} — sem terreno os bots NÃO enxergam ninguém (sem linha de visada) e não atiram`);
+        return null;
+      });
     return terrainPromise;
   }
 
