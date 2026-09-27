@@ -1043,7 +1043,9 @@
     left: calc(var(--hudL) + var(--mm) + 10px); gap: 6px; }
   html.mobile .invItem { padding: 3px 8px; font-size: 12px; }
   html.mobile .invItem .ic { font-size: 13px; }
-  html.mobile .invItem small { font-size: 9px; }
+  /* a letra da TECLA (G/Q) não existe no celular: o botão do cluster já
+     tem o mesmo ícone do contador, então a letra só promete tecla ausente */
+  html.mobile .invItem small { display: none; }
 
   /* --- coluna esquerda, sob o minimapa: missão (solo) / mapa da zona (BR),
          e o killfeed embaixo. O killfeed sai da direita porque lá moram o

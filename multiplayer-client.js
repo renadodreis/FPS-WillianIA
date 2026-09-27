@@ -164,6 +164,10 @@
         font-size: 11.5px; opacity: .9; line-height: 1.7; }
       .brKeys b { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16);
         border-radius: 4px; padding: 0 6px; font-weight: 700; }
+      /* a lista certa é a do APARELHO: no celular não existe WASD/SHIFT/ENTER.
+         \`html.mobile\` é escrita por js/touchcontrols.js no boot. */
+      .brKeysToque, html.mobile .brKeysDesk { display: none; }
+      html.mobile .brKeysToque { display: grid; }
       #gasTint { position: fixed; inset: 0; pointer-events: none; z-index: 35; opacity: 0;
         transition: opacity .6s; background: radial-gradient(ellipse at center,
         rgba(255,40,20,0) 42%, rgba(220,30,10,.38) 100%); }
@@ -342,7 +346,7 @@
               pro loot lendário, fuja do <b>gás</b> e seja o último vivo. 🏆
             </div>
             <div class="brH">CONTROLES</div>
-            <div class="brKeys">
+            <div class="brKeys brKeysDesk">
               <span><b>WASD</b> mover</span><span><b>SHIFT</b> correr</span>
               <span><b>ESPAÇO</b> pular/paraquedas</span><span><b>CTRL</b> agachar/deslizar</span>
               <span><b>🖱</b> atirar · dir. mirar</span><span><b>R</b> recarregar</span>
@@ -350,6 +354,16 @@
               <span><b>Q</b> kit médico</span><span><b>F</b> comer carne</span>
               <span><b>E</b> veículo / baú</span><span><b>T</b> troca de mira</span>
               <span><b>TAB</b> inventário</span><span><b>ENTER</b> chat da sala</span>
+            </div>
+            <div class="brKeys brKeysToque">
+              <span><b>analógico</b> mover · no talo corre</span><span><b>arrastar</b> à direita mira</span>
+              <span><b>◉</b> atirar</span><span><b>MIRA</b> liga/desliga mira</span>
+              <span><b>⇧</b> pular/paraquedas</span><span><b>⇩</b> agachar (segure)</span>
+              <span><b>⟳</b> recarregar</span><span><b>⇄</b> troca de arma</span>
+              <span><b>●</b> granada</span><span><b>✚</b> kit médico</span>
+              <span><b>🍖</b> comer carne</span><span><b>🔭</b> troca de mira</span>
+              <span><b>USAR</b> veículo / baú</span><span><b>INV</b> inventário</span>
+              <span><b>💬</b> chat da sala</span><span><b>≡</b> pausa</span>
             </div>
             <div class="brH">REGRAS DA SALA <span style="opacity:.5">(só o anfitrião altera)</span></div>
             <div id="brFlags" style="font-size:12.5px;line-height:1.9">

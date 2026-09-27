@@ -22,6 +22,11 @@
       return WEAPON_CODES.find(code => raw === code || raw.startsWith(code + ' ')) || 'FACA';
     };
     const localWeaponCode = () => WEAPON_CODES[A.indexOf(G.gun)] || weaponCode(G.gun && G.gun.name);
+    /* NOME DA TECLA DE PULO NO HUD. No celular não existe ESPAÇO: o mesmo
+       Space chega pelo botão ⇧ do cluster de toque (js/touchcontrols.js), e
+       anunciar tecla que o aparelho não tem é o mesmo defeito que o
+       js/interact.js já resolveu para USAR/✚/●. */
+    const PULO = G.isMobile ? 'botão ⇧' : '[ESPAÇO]';
     // Quem entra durante PLAYING recebe apenas `init`, não `matchStart`.
     // Aplicar as flags aqui mantém o mesmo PvE para late join e participantes.
     window.__BR_zumbis = !!(S.flags && S.flags.zumbis);
@@ -878,7 +883,7 @@
       if (!S.chuteOpen && P.pos.y - gy < 120) {
         S.chuteOpen = true;
         window.__FP_pose = 'chute'; // mãos do rig seguram as alças
-        UI.hint('🪂 paraquedas aberto — WASD pra planar', 2500);
+        UI.hint(`🪂 paraquedas aberto — ${G.isMobile ? 'analógico' : 'WASD'} pra planar`, 2500);
       }
       if (P.pos.y <= gy + 0.4) { // pousou
         P.pos.y = gy + 0.2;
@@ -898,7 +903,7 @@
       shipLocalPos = null; // estado da cabine morre aqui; a pos MUNDIAL fica intacta
       fallVy = -4;
       window.__FP_pose = 'fall'; // braços abertos na queda livre
-      UI.hint('🌀 caindo — [ESPAÇO] abre o paraquedas antes', 3000);
+      UI.hint(`🌀 caindo — ${PULO} abre o paraquedas antes`, 3000);
     }
 
     /* =============== céu sincronizado: dia/noite e clima iguais pra todos ===============
@@ -1399,7 +1404,7 @@
       const list = aliveTargets();
       const cur = list.length ? list[spectIdx % list.length] : null;
       UI.spectBar.innerHTML = cur
-        ? `👁 ESPECTANDO <b>${esc(cur.nick)}</b> · [ESPAÇO] troca · ${list.length} vivos`
+        ? `👁 ESPECTANDO <b>${esc(cur.nick)}</b> · ${PULO} troca · ${list.length} vivos`
         : '👁 ESPECTADOR · aguardando o fim da partida';
     }
     function spectStep() {
@@ -1544,7 +1549,7 @@
         S.jumped = false; S.chuteOpen = false;
         window.__BR_freeze = true;
         MP.player.invulnUntil = MP.state.gameTime + 6;
-        UI.hint('🛸 NA NAVE — [ESPAÇO] pra pular quando quiser');
+        UI.hint(`🛸 NA NAVE — ${PULO} pra pular quando quiser`);
       }
       hintLock();
     }
@@ -2053,7 +2058,7 @@
           if (!window.__BR_shipManual) shipWalk(dt, _shipPose);
           shipProject(_shipPose);
           if (tm >= S.plan.ship.flyTime) jumpFromShip(); // fim da rota: todo mundo pula
-          UI.hint(`🛸 NA NAVE — [ESPAÇO] pra pular · auto em ${Math.max(0, S.plan.ship.flyTime - tm).toFixed(0)}s`);
+          UI.hint(`🛸 NA NAVE — ${PULO} pra pular · auto em ${Math.max(0, S.plan.ship.flyTime - tm).toFixed(0)}s`);
         }
       }
 

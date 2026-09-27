@@ -5,7 +5,8 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 export function createHeli(deps) {
-  const { CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos } = deps;
+  const { CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos,
+    isMobile = false } = deps;
   const group = new THREE.Group();
   const body = csmMat(new THREE.MeshStandardMaterial({ color: 0x2b5e8c, metalness: 0.5, roughness: 0.3 }));
   const dark = csmMat(new THREE.MeshStandardMaterial({ color: 0x1a1d22, roughness: 0.6 }));
@@ -93,7 +94,8 @@ export function createHeli(deps) {
     mouse.shooting = false; mouse.aiming = false;
     SFX.carDoor();
     chaseCamPos.copy(camera.position);
-    centerMsg('ESPAÇO sobe · CTRL desce · WASD voa', 2600);
+    // celular: ⇧/⇩ são os botões de pular/agachar, que emitem o mesmo Space/Ctrl
+    centerMsg(isMobile ? '⇧ sobe · ⇩ desce · analógico voa' : 'ESPAÇO sobe · CTRL desce · WASD voa', 2600);
     return true;
   }
   function exit() {

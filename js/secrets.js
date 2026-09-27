@@ -37,6 +37,7 @@ export function createSecrets(deps) {
     scene, player, SFX, FX, csmMat, Structures, heightAt, CITY,
     centerMsg, showBanner, extraTargets, arsenal, unlockWeapon, state, MapToys, platforms,
     addStaticBox, // (x,y,z,hx,hy,hz,sourceId) => cria corpo CANNON estático urbano
+    isMobile = false, // celular: o HUD cita o botão USAR, não a tecla E (ver js/interact.js)
   } = deps;
 
   /* todos os props dos segredos moram num grupo só: QA de perf liga/desliga
@@ -182,7 +183,7 @@ export function createSecrets(deps) {
         lid.rotation.x = -0.95; lid.position.y = it.gy + 1.12; lid.position.z = pz - 0.42;
         _a.set(px, it.gy + 1.1, pz); FX.confetti(_a, 12);
         if (SFX.pop) SFX.pop(_a);
-        if (centerMsg) centerMsg('🔓 O cofre abriu — [E] para pegar', 3000);
+        if (centerMsg) centerMsg(`🔓 O cofre abriu — ${isMobile ? 'USAR' : '[E]'} para pegar`, 3000);
         return true;
       },
     };

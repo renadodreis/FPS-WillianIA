@@ -982,6 +982,38 @@ describe('Controles de toque — chat do BR no celular',
       assert.equal(r.visivel, true, 'chat aberto e o campo de texto continuou escondido');
       assert.equal(r.fechou, true, 'o segundo toque não fechou/enviou');
     });
+
+    /* O BR tinha a MESMA promessa de tecla ausente que o interact.js já
+       consertou: "[ESPAÇO] pra pular" na nave, "WASD pra planar" no
+       paraquedas e a lista de controles do lobby toda em teclado. */
+    it('dado o BR no celular, então nave, queda e lobby citam BOTÕES, não teclas', async () => {
+      const r = await h.play(() => {
+        const QA = window.QA, S = window.__BR_debug.S;
+        const box = document.getElementById('brHint');
+        const fase = S.phase;
+        const dicas = [];
+        try {
+          S.phase = 'SHIP';
+          QA.tick(3);
+          dicas.push(box ? box.textContent : '(sem #brHint)');
+        } finally {
+          S.phase = fase;
+        }
+        const vis = sel => {
+          const el = document.querySelector(sel);
+          return el ? getComputedStyle(el).display : '(ausente)';
+        };
+        return { dicas, toque: vis('.brKeysToque'), desk: vis('.brKeysDesk'),
+          textoToque: (document.querySelector('.brKeysToque') || {}).textContent || '' };
+      });
+      for (const d of r.dicas) {
+        assert.ok(!/\[ESPAÇO\]|WASD/.test(d), `dica do BR anuncia tecla no celular: "${d}"`);
+        assert.ok(/⇧/.test(d), `dica da nave não cita o botão de pular: "${d}"`);
+      }
+      assert.notEqual(r.toque, 'none', 'lista de controles de TOQUE escondida no celular');
+      assert.equal(r.desk, 'none', 'lista de TECLADO aparece no lobby do celular');
+      assert.ok(!/WASD|SHIFT|ENTER/.test(r.textoToque), `lista de toque cita tecla: "${r.textoToque}"`);
+    });
   });
 
 describe('Controles de toque — desktop não muda', { skip: !CHROME && 'Chrome não encontrado' }, () => {

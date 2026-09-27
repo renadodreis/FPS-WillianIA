@@ -2874,7 +2874,7 @@ const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat });
 
 const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY, stampTrack: Grass.stampTrack });
 
-const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos });
+const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos, isMobile: __mobile });
 
 /* ================== entrar/sair + câmera de perseguição ================== */
 let driveBlend = 0;
@@ -4813,7 +4813,7 @@ MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, 
    viram prêmio de exploração. Depende de MapToys (xilofone) e das torres
    subíveis, então vem por último; geometria em noSeed, como o resto. */
 Secrets = createSecrets({ scene, player, SFX, FX, csmMat, Structures, heightAt, CITY,
-  centerMsg, showBanner, extraTargets, arsenal, unlockWeapon, state, MapToys, platforms,
+  centerMsg, showBanner, extraTargets, arsenal, unlockWeapon, state, MapToys, platforms, isMobile: __mobile,
   /* props urbanos criados DEPOIS do laço de corpos do boot precisam do seu
      próprio corpo CANNON — sem ele o jogador e a bala param, mas o CARRO
      ATRAVESSA. updateAABB() é obrigatório: o CANNON calcula o AABB no
