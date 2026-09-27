@@ -12,8 +12,9 @@ import { CSM } from 'three/addons/csm/CSM.js';
 import { CFG, SETTINGS, persistSettings, applyMobileCfg, MOBILE_RES_FLOOR,
   MOBILE_PHYSICS_MAX_STEPS, MOBILE_GRASS_REBUILD_BUDGET } from './js/config.js';
 import { isMobileEnv } from './js/mobile.js';
-import { createTouchControls, createOrientationGate, clampPitch, LOOK_RAD_PER_CSS_PX,
+import { createTouchControls, createOrientationGate, clampPitch, lookRadians,
   SPRINT_MAG as TOUCH_SPRINT_MAG } from './js/touchcontrols.js';
+import { createAimAssist, weaponClass } from './js/aimassist.js';
 import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } from './js/utils.js';
 import { createTerrain } from './js/terrain.js';
 import { createBiomes } from './js/biomes.js';
@@ -1599,7 +1600,7 @@ function setPaused(p) {
    objeto inerte: nenhum listener, nenhum elemento, nada muda no
    desktop. Ver js/touchcontrols.js.
    ================================================================ */
-const Touch = createTouchControls({ isMobile: __mobile, mouse, state, setPaused });
+const Touch = createTouchControls({ isMobile: __mobile, mouse, state, setPaused, settings: SETTINGS });
 /* HUD com nome de TECLA: no celular não existe "E". Só o JS resolve texto (o
    CSS não reescreve conteúdo), e o botão equivalente se chama USAR. */
 if (__mobile) {
@@ -1953,17 +1954,59 @@ function setOpacityOnce(el, value) { styleOnce(el, 'opacity', value); }
    eventos viraria jitter e trabalho fora do frame. Roll (`_euler.z`) é
    propriedade do applyFpsCamera (shake/lean/morte) — não se escreve aqui.
    ================================================================ */
-function applyTouchLook() {
+/* ASSISTÊNCIA DE MIRA DO TOQUE (js/aimassist.js — núcleo puro). A linha de
+   visada é o MESMO `rayBlockedAt` que decide se o tiro passa: nunca assiste
+   quem a parede/terreno esconde. Vetores soltos, nada de Object3D (o UUID
+   consome o `Math.random` seedado do worldgen). */
+const _aaOlho = new THREE.Vector3(), _aaDir = new THREE.Vector3();
+const _aaVazio = [];
+const _aaLists = [_aaVazio, _aaVazio, _aaVazio, _aaVazio];
+const _aaGiro = { yaw: 0, pitch: 0 };
+const AimAssist = createAimAssist({
+  root: scene, heightAt, grassTop: 1.4 * CFG.GRASS_HEIGHT, // topo da lâmina mais alta (js/grass.js)
+  los(e, c, r) {
+    _aaOlho.set(e.x, e.y, e.z);
+    _aaDir.set(c.x - e.x, c.y - e.y, c.z - e.z);
+    const len = _aaDir.length();
+    if (len < 1e-3) return true;
+    _aaDir.multiplyScalar(1 / len);
+    return rayBlockedAt(_aaOlho, _aaDir, len) >= len - r;
+  },
+});
+const _aaQuadro = { dt: 0, eye: null, yaw: 0, pitch: 0, fov: 75, aspect: 1, inYaw: 0, inPitch: 0,
+  strafe: 0, ads: 0, weapon: 'rifle', assist: false, autoFire: false, canFire: false, maxRange: 0,
+  lists: _aaLists };
+function applyTouchLook(dt) {
+  if (!Touch.enabled) return;   // desktop: o mouse é do PointerLockControls, intocado
   const look = Touch.takeLook();
-  if (!look.dx && !look.dy) return;
-  /* sensibilidade reduzida na mira: reusa o MESMO multiplicador que o mouse
-     usa (`controls.pointerSpeed`, escrito por applyFpsCamera:1547 a partir do
-     ADS e do zoom da arma). Um frame de atraso, zero cálculo duplicado. */
-  const ps = controls.pointerSpeed > 0 ? controls.pointerSpeed : 1;
-  const sens = LOOK_RAD_PER_CSS_PX * ps;
+  const cfg = Touch.cfg;
+  /* sensibilidade: ajuste do jogador × razão Y/X × razão das tangentes do
+     zoom (P1-4/P1-5). A base do zoom é o FOV do quadril do momento (85
+     correndo), para o sprint não mexer na sensibilidade. O `pointerSpeed`
+     do mouse (degrau 0,75/0,36) não é mais lido aqui. */
+  const adsK = adsT * adsT * (3 - 2 * adsT);
+  const k = Touch.lookScale(fovCur, state.driving ? 72 : lerp(75, 85, sprintT), adsK);
+  lookRadians(look.dx, look.dy, Touch.lookSens, cfg.ratioY, k, _aaGiro);
   _euler.setFromQuaternion(camera.quaternion);
-  _euler.y -= look.dx * sens;
-  _euler.x = clampPitch(_euler.x - look.dy * sens);
+  let dYaw = _aaGiro.yaw, dPitch = _aaGiro.pitch;
+  // XR e mouse nunca recebem assistência; veículo e morte também não
+  if ((cfg.assist || cfg.autoFire) && !XR.presenting && !state.driving && !state.flying && !player.dead) {
+    const q = _aaQuadro;
+    q.dt = dt; q.eye = camera.position; q.yaw = _euler.y; q.pitch = _euler.x;
+    q.fov = camera.fov; q.aspect = camera.aspect; q.inYaw = dYaw; q.inPitch = dPitch;
+    q.strafe = Touch.getMove().x; q.ads = adsK; q.weapon = weaponClass(gun);
+    q.assist = cfg.assist; q.autoFire = cfg.autoFire; q.canFire = gun.mag > 0 && !gun.reloading;
+    // alcance visível: metade da faixa da neblina (a névoa engole o resto)
+    q.maxRange = scene.fog ? scene.fog.near + (scene.fog.far - scene.fog.near) * 0.5 : 0;
+    _aaLists[0] = window.__MP_remotePlayers || _aaVazio;
+    _aaLists[1] = extraTargets; _aaLists[2] = Bosses; _aaLists[3] = Enemies.list;
+    const r = AimAssist.step(q);
+    dYaw = r.yaw; dPitch = r.pitch;
+    Touch.setAutoFire(r.fire);
+  } else Touch.setAutoFire(false);
+  if (!dYaw && !dPitch) return;
+  _euler.y += dYaw;
+  _euler.x = clampPitch(_euler.x + dPitch);
   camera.quaternion.setFromEuler(_euler);
   // o balanço da arma é alimentado pelo MESMO sinal que o mousemove daria
   mouse.swayX += look.dx;
@@ -4100,6 +4143,7 @@ function tick(forceDt) {
        câmera. Descartar por frame é o mesmo que recusar acumular, e mantém a
        cinemática dona da câmera sem tocar nela nem nos projéteis. */
     Touch.takeLook();
+    Touch.setAutoFire(false); // o automático não sobrevive à cinemática (tiro velho no fim dela)
     /* O RIG CONTINUA SEGUINDO O CORPO DURANTE A CINEMÁTICA. Ela é dona da
        CÂMERA, não dos PÉS: o jogador de headset continua andando pelo quarto
        dele, e a cinemática é justamente onde ele fica parado assistindo e se
@@ -4110,7 +4154,7 @@ function tick(forceDt) {
        escreve a câmera, que é filha dele. */
     if (xrOn) placeRigXR();
   } else {
-    applyTouchLook(); // ANTES do applyFpsCamera: ele só soma delta de recuo
+    applyTouchLook(dt); // ANTES do applyFpsCamera: ele só soma delta de recuo
     applyFpsCamera(dt, t);
     carCameraUpdate(dt);
   }
@@ -4731,6 +4775,7 @@ $('mpPanel').addEventListener('click', e => e.stopPropagation());
   sb.onchange = () => { SETTINGS.bloom = +sb.value; bloomPass.enabled = SETTINGS.bloom === 1; persistSettings(); };
   saa.onchange = () => { SETTINGS.aa = +saa.value; smaaPass.enabled = SETTINGS.aa === 1; persistSettings(); };
   sp.onchange = () => { SETTINGS.ping = +sp.value; persistSettings(); };
+  Touch.bindSettings(persistSettings); // seção "Controles de toque" (só no celular; no desktop é no-op)
 }
 /* DAQUI PRA FRENTE O MENU TEM DONO: os handlers existem, então os botões
    podem destravar. Antes deste ponto eles ficam com o motivo na etiqueta
@@ -4960,6 +5005,7 @@ window.__game = {
   setPaused, // ÚNICO escritor de state.paused (QA/testes usam este caminho)
   isMobile: __mobile, // br-game.js pula o pointer lock com isto (script clássico)
   Touch,              // QA: núcleo do toque, elementos e estado do analógico
+  AimAssist,          // QA: assistência de mira do toque (last = saída do último frame)
   Orient,             // QA: aviso de orientação (bloqueio, escape em retrato)
   controls,           // QA: pointerSpeed é o multiplicador de ADS do olhar
   MenuCam, // QA/captura: goTo('cidade'|'castelo'|'vulcao'|'carro')
