@@ -2634,9 +2634,18 @@ function fire(t) {
        medido em sessão. Pior que no hitscan: erro de ORIGEM em projétil não
        fecha em distância nenhuma, então não dá nem para compensar mirando mais
        alto. E é o caminho do BR, que é o modo jogado de verdade.
-       Fora de XR nada muda: `_rayOrig` é a própria origem da mira. */
+
+       A primeira versão desta correção valeu SÓ EM XR ("fora de XR nada
+       muda") e a frase estava errada: fora de XR o ramo continuava passando
+       `_v3`, a boca, com a direção da CÂMERA — duas retas paralelas separadas
+       pelo deslocamento da arma na tela. Medido no desktop e no celular:
+       29–31 cm no quadril (26 cm à direita, 15 cm abaixo) e 6–20 cm na mira,
+       igual em 10, 25 e 50 m. Mirar na cabeça acertava o ombro, e no celular,
+       onde se atira do quadril, isso era a mira inteira. Agora a origem é
+       `_rayOrig` nos dois modos (fora de XR, o olho); o DESENHO continua
+       saindo da boca (`vis` em br-game.js). test/br-mira-projetil.test.js. */
     if (window.__BR_ballistics && gun.projSpeed) {
-      window.__BR_ballistics(XR.presenting ? _rayOrig : _v3, _rayDir, gun);
+      window.__BR_ballistics(_rayOrig, _rayDir, gun);
       continue;
     }
 
