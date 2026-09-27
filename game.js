@@ -2065,27 +2065,58 @@ function placeRigXR() {
   } else XR.place(player.pos.x, player.pos.y, player.pos.z, xrYaw);
 }
 
-function applyFpsCamera(dt, t) {
+/* ================================================================
+   A VISTA DO QUADRO É RESOLVIDA ANTES DO TIRO (fora de XR, a pé).
+
+   O `tick()` rodava `shootUpdate` antes de `applyTouchLook` e de
+   `applyFpsCamera`, e a posição da câmera só era escrita lá. O disparo lia a
+   câmera do QUADRO ANTERIOR: sem o giro do dedo daquele quadro (0,733° =
+   64 cm a 50 m arrastando o ATIRAR a 44 °/s), sem o puxão da assistência
+   (0,26°), com a origem um passo atrás andando de lado (8,7–9,7 cm) — e a
+   mola do recuo, integrada DEPOIS do tiro, desenhava a retícula num lugar e
+   mandava a bala para o outro (0,46° no fuzil, 1,9° na bazuca). Medido pelo
+   validador (laudo `7515734`, M1/A7) e por test/mira-quadro.test.js.
+
+   Agora a vista é resolvida em duas metades, e a primeira roda ANTES do tiro:
+   · `orientarVista` — olhar do toque já aplicado, molas do recuo, respiração
+     da luneta, tremor e inclinação: a ORIENTAÇÃO final do quadro;
+   · `posicionarOlho` — altura do olho, bob, mergulho do pouso e tremor: a
+     POSIÇÃO final do quadro.
+   O coice do próprio tiro entra na mola e aparece no quadro SEGUINTE (a arma
+   dá o tranco no mesmo quadro — `kickZ`/`kickRot` continuam na metade da
+   arma). É o que faz a bala sair pela retícula desenhada em TODO tiro da
+   rajada, não só no primeiro.
+
+   O mouse do desktop gira a câmera no próprio `mousemove` (PointerLockControls)
+   e continua girando: nada nele atrasava, e nada piora.
+
+   EM XR NADA MUDA DE ORDEM. O contrato de frame do XR (corpo depois da arma,
+   `XRArma.aplicar` depois da câmera) mora mais abaixo, e o tiro em XR sai da
+   MÃO, não da câmera. Veículo, helicóptero, a mistura de câmera da saída do
+   carro (`driveBlend`) e a cinemática da cidade também ficam na ordem antiga:
+   lá a câmera é de outro dono. */
+let _shakeX = 0, _shakeY = 0;
+/* overlay de luneta: só miras tipo 'overlay' (DMR/snipers/luneta 2x), e só
+   quando o ADS está quase completo — o jogador nunca fica sem referência */
+function escopoK() {
+  const activeSight = WeaponRig.activeSight(gun);
+  return (activeSight && activeSight.reticle === 'overlay') ? clamp((adsT - 0.7) / 0.3, 0, 1) : 0;
+}
+function orientarVista(dt, t) {
   // ---- screen shake (trauma decai, intensidade = trauma²) ----
   trauma = Math.max(0, trauma - dt * 1.7);
   const sh = trauma * trauma;
   const shakeRoll = (Math.sin(t * 41) * 0.5 + Math.sin(t * 23.7) * 0.5) * sh * 0.05;
-  const shakeX = Math.sin(t * 37.2) * sh * 0.05;
-  const shakeY = Math.cos(t * 43.7) * sh * 0.05;
+  _shakeX = Math.sin(t * 37.2) * sh * 0.05;
+  _shakeY = Math.cos(t * 43.7) * sh * 0.05;
 
-  // ---- molas do recoil ----
+  // ---- molas do recoil (o que já estava no ar; o coice deste quadro vem depois) ----
   recoil.pitchVel += (-recoil.pitch * 210 - recoil.pitchVel * 15) * dt;
   recoil.pitch += recoil.pitchVel * dt;
   recoil.yawVel += (-recoil.yaw * 210 - recoil.yawVel * 15) * dt;
   recoil.yaw += recoil.yawVel * dt;
-  recoil.kickZ = damp(recoil.kickZ, 0, 13, dt);
-  recoil.kickRot = damp(recoil.kickRot, 0, 11, dt);
 
-  // overlay de luneta: só miras tipo 'overlay' (DMR/snipers/luneta 2x),
-  // e só quando o ADS está quase completo — o jogador nunca fica sem referência
-  const activeSight = WeaponRig.activeSight(gun);
-  const scopedK = (activeSight && activeSight.reticle === 'overlay') ? clamp((adsT - 0.7) / 0.3, 0, 1) : 0;
-  const breath = (Math.sin(t * 1.5) * 0.0011 + Math.sin(t * 0.83) * 0.0007) * scopedK;
+  const breath = (Math.sin(t * 1.5) * 0.0011 + Math.sin(t * 0.83) * 0.0007) * escopoK();
 
   // aplica delta do recoil + respiração na rotação da câmera (compatível com PointerLock)
   _euler.setFromQuaternion(camera.quaternion);
@@ -2109,21 +2140,39 @@ function applyFpsCamera(dt, t) {
      jogador é a mesma armadilha, e giro artificial é da Fase 3 (snap turn). */
   if (XR.presenting) placeRigXR();
   else camera.quaternion.setFromEuler(_euler);
+}
 
-  // ---- posição do olho: altura (agachar), bob, dip de pouso, shake ----
+/* ---- posição do olho: altura (agachar), bob, dip de pouso, shake ----
+   Idempotente dentro do quadro: roda antes do tiro e de novo na metade da
+   arma, e as duas escritas coincidem — a não ser que algo mova o jogador
+   depois do disparo (o canhão do circo, a cama elástica), e aí a tela mostra
+   onde ele terminou o quadro, como sempre mostrou. */
+function posicionarOlho() {
+  // altura do olho, bob e dip só existem fora do VR: no headset a altura vem
+  // do aparelho (`local-floor`) e agachar é agachar de verdade
+  if (XR.presenting) return;
   const eyeH = lerp(1.62, 1.04, player.crouchT) * (1 - deathK * 0.78); // cai no chão ao morrer
   const bobScale = 1 - adsT * 0.82;
   const bobY = Math.sin(player.bobTime * 2) * 0.046 * player.bobAmp * bobScale;
   const bobX = Math.cos(player.bobTime) * 0.034 * player.bobAmp * bobScale;
-  if (!XR.presenting) {
-    // altura do olho, bob e dip só existem fora do VR: no headset a altura vem
-    // do aparelho (`local-floor`) e agachar é agachar de verdade
-    _v2.set(1, 0, 0).applyQuaternion(camera.quaternion);
-    camera.position.copy(player.pos);
-    camera.position.y += eyeH + bobY * 0.55 + player.landDip;
-    camera.position.addScaledVector(_v2, bobX * 0.4 + shakeX);
-    camera.position.y += shakeY;
-  }
+  _v2.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  camera.position.copy(player.pos);
+  camera.position.y += eyeH + bobY * 0.55 + player.landDip;
+  camera.position.addScaledVector(_v2, bobX * 0.4 + _shakeX);
+  camera.position.y += _shakeY;
+}
+
+/* `vistaPronta`: o `tick()` já resolveu a orientação deste quadro ANTES do
+   tiro (ver `orientarVista`). Aqui só falta a metade da ARMA. */
+function applyFpsCamera(dt, t, vistaPronta = false) {
+  if (!vistaPronta) orientarVista(dt, t);
+  posicionarOlho();
+  recoil.kickZ = damp(recoil.kickZ, 0, 13, dt);
+  recoil.kickRot = damp(recoil.kickRot, 0, 11, dt);
+  const scopedK = escopoK();
+  const bobScale = 1 - adsT * 0.82;
+  const bobY = Math.sin(player.bobTime * 2) * 0.046 * player.bobAmp * bobScale;
+  const bobX = Math.cos(player.bobTime) * 0.034 * player.bobAmp * bobScale;
 
   // ---- sway da arma (acompanha o mouse com atraso) ----
   const swTX = clamp(-mouse.swayX * 0.0021, -0.09, 0.09);
@@ -2550,27 +2599,24 @@ function fire(t) {
     muzzle.getWorldPosition(_v3);
     // voando, o tiro sai do HELICÓPTERO, não da câmera de perseguição (10m atrás)
     if (state.flying) { _v3.copy(Heli.group.position); _v3.y += 1.6; _rayOrig.copy(_v3); }
-    // convergência: o foguete nasce na BOCA REAL do tubo mas voa até o ponto
-    // mirado na linha central (primeiro obstáculo ou zero de 120 m). Parede
-    // colada na boca continua sendo atingida — a colisão parte do muzzle.
-    /* EM XR A BAZUCA NÃO ZERA. A zeragem por `rayBlockedAt` converge o foguete
-       do tubo para o primeiro obstáculo à frente — e a distância desse
-       obstáculo MUDA a cada tiro. Medido em sessão: zeragem indo de 5,60 a
-       120,00 m entre dois disparos, ângulo de até 2,4172°, 2,23 m de desvio a
-       100 m. Ângulo que anda sozinho não dá para compensar na mão. O foguete
-       passa a sair paralelo à linha de mira, com o afastamento constante da
-       altura da alça — e ele tem estilhaço, então centímetros não decidem
-       nada; o que decidia era a deriva.
-       No monitor a zeragem fica: lá o cano está a centímetros do eixo da
-       câmera, o erro é pequeno, e mudar isso mexeria na mira do PC sem
-       necessidade. */
-    if (XR.presenting) {
-      _v1.copy(_rayOrig).addScaledVector(_rayDir, 120);
-    } else {
-      const zeroD = Math.max(4, Math.min(rayBlockedAt(_rayOrig, _rayDir, 240), 120));
-      _v1.copy(_rayOrig).addScaledVector(_rayDir, zeroD);
-      _rayDir.copy(_v1).sub(_v3).normalize();
-    }
+    /* A BAZUCA NÃO ZERA, EM MODO NENHUM. A zeragem por `rayBlockedAt`
+       convergia o foguete do tubo para o primeiro obstáculo à frente — e a
+       distância desse obstáculo MUDA a cada tiro. Medido em sessão XR: zeragem
+       indo de 5,60 a 120,00 m entre dois disparos, ângulo de até 2,4172°,
+       2,23 m de desvio a 100 m. Ângulo que anda sozinho não dá para compensar
+       na mão, e o CLAUDE.md a proíbe ("zeragem dinâmica é proibida").
+       O conserto entrou só em XR, com o argumento de que "no monitor o cano
+       está a centímetros do eixo da câmera". Não está: medido pelo validador
+       (laudo `7515734`) no celular, 23,7 → 20,4 → 15,0 cm a 10/25/50 m no
+       quadril, 12,0 → 7,6 na mira — o foguete CONVERGIA para o zero de 120 m
+       em céu aberto e para a parede mais próxima em qualquer outro lugar.
+       Agora é o contrato em todo modo: nasce na BOCA e voa PARALELO à linha de
+       mira, com o afastamento constante (a altura da alça na mira; o
+       deslocamento da arma no quadril). Ele tem 7,5 m de estilhaço:
+       centímetros constantes não decidem nada; o que decidia era a deriva.
+       `_v1` é só o ponto de 120 m da linha de mira, para o `shotFired`
+       replicado (o mesmo que o XR já mandava). */
+    _v1.copy(_rayOrig).addScaledVector(_rayDir, 120);
     // BR: até aqui a bazuca do outro jogador era INVISÍVEL E MUDA — o
     // lançamento não gerava evento nenhum (o shotHit só nasce no acerto).
     // Reaproveita o `shotFired` que já existe: os outros clientes ouvem o
@@ -4098,6 +4144,16 @@ function tick(forceDt) {
      para onde caiu (o tombo da câmera é do applyFpsCamera, que segue rodando). */
   if (!player.dead && !state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
   devolverRejeicaoXR();
+  /* A CÂMERA DESTE QUADRO ANTES DO TIRO: o disparo sai pela mesma câmera que
+     este quadro desenha (ver `orientarVista`). Fora de XR, a pé, sem a câmera
+     de perseguição no meio. Decidido UMA vez: se o quadro entrar no carro
+     depois do tiro, a metade da arma não reorienta a vista de novo. */
+  const vistaAntesDoTiro = !xrOn && !state.cinematic && !state.driving && !state.flying && driveBlend < 0.002;
+  if (vistaAntesDoTiro) {
+    applyTouchLook(dt);
+    orientarVista(dt, t);
+    posicionarOlho();
+  }
   shootUpdate(dt, t);
   stepPhysics(dt, intendedDt);
   Car.update(dt, t);
@@ -4170,8 +4226,10 @@ function tick(forceDt) {
        escreve a câmera, que é filha dele. */
     if (xrOn) placeRigXR();
   } else {
-    applyTouchLook(dt); // ANTES do applyFpsCamera: ele só soma delta de recuo
-    applyFpsCamera(dt, t);
+    /* ANTES do applyFpsCamera: ele só soma delta de recuo. A pé, fora de XR,
+       os dois já rodaram antes do tiro (`vistaAntesDoTiro`). */
+    if (!vistaAntesDoTiro) applyTouchLook(dt);
+    applyFpsCamera(dt, t, vistaAntesDoTiro);
     carCameraUpdate(dt);
   }
   /* DEPOIS do applyFpsCamera, e isso é contrato: a pose de desktop (hipV, bob,
