@@ -33,7 +33,12 @@ quebrou o jogo antes.
   mira feita só no hitscan deixou o BR errando 9,10 cm no fuzil e 20,00 cm no
   plasma, constante em toda distância — e erro de ORIGEM em projétil não fecha em
   distância nenhuma, então nem dá para compensar mirando mais alto. Ao mexer em
-  mira, meça os três.
+  mira, meça os três. **E meça nos DOIS modos:** o conserto do BR entrou atrás
+  de `XR.presenting` com o comentário "fora de XR nada muda" — e fora de XR a
+  bala seguia saindo da boca. Desktop e celular erraram 29–31 cm no quadril por
+  um mês (mirar na cabeça passava entre a cabeça e o ombro).
+  `test/br-mira-projetil.test.js` mede em pixel de tela contra o centro do
+  canvas.
 - **`Box3.setFromObject` num `SkinnedMesh` devolve caixa CONGELADA.** O
   `computeBoundingBox` do three É ciente da pose (passa por `applyBoneTransform`),
   mas o resultado é gravado em `mesh.boundingBox` e **nunca invalidado** — a
@@ -228,6 +233,27 @@ separadas**, mais um validador independente medindo a **árvore principal**.
   `camera.quaternion` é a pose da cabeça **relativa ao rig** — ler direto dá erro
   de até 180°, e já custou movimento invertido e o `rotY` errado mandado ao
   servidor. A fonte única certa é `vistaMundo()` / `yawDaVista()`.
+
+## Frente celular (toque)
+
+O dono joga no CELULAR. Registro em `docs/mobile/`: `referencia-mira-toque.md`
+e `referencia-bots.md` (fonte + citação literal), `criterio-aaa.md` (a régua,
+escrita pelo validador — quem constrói não edita).
+
+- **A assistência de mira NUNCA assiste quem o jogador não vê.** Parte do alvo
+  só conta se está desenhada (no grafo da cena), no frustum/alcance da névoa,
+  com o MESMO `rayBlockedAt` do tiro livre, e acima do topo da grama. Assistir
+  alguém atrás da parede ou no mato é a mesma família do wallhack de grama.
+  Mouse, XR, veículo e morte ficam sem assistência. Ela age na CÂMERA (alcança
+  os três caminhos do tiro sem mexer no protocolo), nunca no projétil.
+- **Postura não é replicada** (o `state` não leva agachado/deitado): o avatar
+  remoto aparece sempre em pé. Quem replicar postura tem de revisitar a
+  assistência, a grama e a percepção dos bots juntos.
+- **Bots (`scripts/bots.js`) pensam em funções puras (`tickBots`) que o laço
+  real chama** — o teste mede o código que roda. As constantes ficam no objeto
+  `AI`, cada uma com a fonte. A queixa "apelão" era onisciência + prioridade ao
+  humano + reação zero; o PUBG 12.1 cometeu o mesmo erro e reverteu por hotfix.
+  O stderr dos bots agora chega no log do servidor.
 
 ## Fluxo de trabalho (git flow)
 
