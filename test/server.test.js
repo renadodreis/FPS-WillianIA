@@ -783,6 +783,30 @@ describe('Regras da sala (flags do anfitrião)', () => {
     assert.ok(f && f.bots === 4, `a escolha do host não foi anunciada: ${JSON.stringify(f)}`);
   });
 
+  /* O PROCESSO DOS BOTS NÃO PODE MORRER CALADO. Ele era spawnado com
+     `stdio: 'ignore'`: um crash do scripts/bots.js em produção (ou um
+     console.warn de terreno indisponível — já aconteceu, os bots rodaram sem
+     relevo) sumia sem rastro. CLAUDE.md: "falha silenciosa por construção é
+     pior que falha barulhenta". O dublê escreve no stderr e sai com código 3;
+     os dois têm de chegar no log do servidor. */
+  it('dado o processo dos bots falhando, então o stderr e o código de saída chegam no log do servidor', async t => {
+    const dubleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fps-bots-duble-'));
+    t.after(() => fs.rmSync(dubleDir, { recursive: true, force: true }));
+    const duble = path.join(dubleDir, 'bots-que-quebram.js');
+    fs.writeFileSync(duble, "process.stderr.write('SENTINELA-BOTS-STDERR\\n'); setTimeout(() => process.exit(3), 50);\n");
+    const srv = await spawnServer({ BOTS_SCRIPT: duble }); t.after(() => srv.stop());
+    let log = '';
+    srv.proc.stdout.on('data', d => { log += d; });
+    srv.proc.stderr.on('data', d => { log += d; });
+    const a = await connect(srv.port); t.after(() => a.s.close());
+    a.s.emit('hello', { nick: 'HostQA' });
+    await ack(a.s, 'claimHost', { code: 'QA123' });
+    a.s.emit('setFlags', { bots: 1 });
+    for (let i = 0; i < 40 && !(log.includes('SENTINELA-BOTS-STDERR') && /\[BOTS\].*c[óo]digo 3/.test(log)); i++) await sleep(100);
+    assert.ok(log.includes('SENTINELA-BOTS-STDERR'), `stderr do processo dos bots sumiu. Log do servidor:\n${log}`);
+    assert.match(log, /\[BOTS\].*c[óo]digo 3/, `saída com erro dos bots não foi registrada. Log:\n${log}`);
+  });
+
   it('dado GOLEM desligado, então a partida nasce com boss morto e o baú lendário não abre', async t => {
     const srv = await spawnServer(); t.after(() => srv.stop());
     const a = await connect(srv.port); t.after(() => a.s.close());

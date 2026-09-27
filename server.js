@@ -1089,9 +1089,22 @@ function syncBots() {
   if (botsProc) { try { botsProc.kill(); } catch (e) { /* já morto */ } botsProc = null; }
   const n = match.flags.bots | 0;
   if (n > 0 && require.main === module) {
-    botsProc = require('child_process').spawn(process.execPath,
-      [path.join(__dirname, 'scripts', 'bots.js'), String(n), `http://localhost:${PORT}`],
-      { stdio: 'ignore' });
+    /* stderr HERDADO, de propósito: com `stdio: 'ignore'` um crash dos bots
+       (ou o aviso de terreno indisponível, que já fez os bots rodarem em
+       produção sem relevo) sumia sem rastro. O stdout continua descartado —
+       é o diário por bot ("pulando aos 30s"), ruído no log do container.
+       BOTS_SCRIPT só existe para o teste trocar o processo por um dublê. */
+    const script = process.env.BOTS_SCRIPT || path.join(__dirname, 'scripts', 'bots.js');
+    const proc = require('child_process').spawn(process.execPath,
+      [script, String(n), `http://localhost:${PORT}`],
+      { stdio: ['ignore', 'ignore', 'inherit'] });
+    proc.on('exit', (code, signal) => {
+      // morte pedida por nós (syncBots/exit) chega com sinal e não é falha
+      if (code !== 0 && code !== null) console.error(`[BOTS] processo dos bots saiu com código ${code}`);
+      else if (signal && proc === botsProc) console.error(`[BOTS] processo dos bots morto por ${signal}`);
+      if (proc === botsProc) botsProc = null;
+    });
+    botsProc = proc;
     console.log(`[BOTS] ${n} bots entrando na sala`);
   }
 }
