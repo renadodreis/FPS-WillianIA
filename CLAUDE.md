@@ -246,6 +246,17 @@ escrita pelo validador — quem constrói não edita).
   alguém atrás da parede ou no mato é a mesma família do wallhack de grama.
   Mouse, XR, veículo e morte ficam sem assistência. Ela age na CÂMERA (alcança
   os três caminhos do tiro sem mexer no protocolo), nunca no projétil.
+  O `rayBlockedAt` NÃO basta: ele não conhece veículo, copa, tenda nem o alvo
+  do estande — atrás do caminhão militar a assistência agia em 22 de 26
+  esconderijos com 0 px na tela. `js/oclusao.js` testa o que está DESENHADO.
+  **Escolha o esconderijo de teste pela TELA (pixels), nunca pela linha de
+  visada do produto** — senão o teste compara a reta consigo mesma.
+- **Ordem do quadro a pé (fora de XR): olhar do toque ANTES do tiro.** O tiro
+  saía pela câmera do quadro ANTERIOR: 0,73° (64 cm a 50 m) arrastando o
+  ATIRAR, 8,9 cm andando de lado. XR mantém a ordem antiga (contrato de frame
+  do corpo/arma).
+- **Bot sem terreno é CEGO** (ouve e investiga, não atira) e grita no stderr.
+  Antes, `lineOfSight(null)` via através de tudo.
 - **Postura não é replicada** (o `state` não leva agachado/deitado): o avatar
   remoto aparece sempre em pé. Quem replicar postura tem de revisitar a
   assistência, a grama e a percepção dos bots juntos.
