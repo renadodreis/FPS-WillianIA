@@ -1502,11 +1502,18 @@
         A[i].locked = i !== KNIFE;
         if (!A[i].melee) { A[i].reserve = 0; A[i].mag = A[i].magSize; }
       }
-      // balística BR (projéteis com queda) — fuzil, DMR, plasma e sniper leve
-      A[0].projSpeed = 200; A[0].projDrop = 6.5;
-      A[2].projSpeed = 310; A[2].projDrop = 5;
+      /* balística BR (projéteis com queda) — fuzil, DMR, plasma e sniper leve.
+         As balas de fuzil nasceram a 200–310 m/s: alvo correndo a 50 m pedia
+         1,25 m de antecipação, e a 100 m o fuzil caía 81 cm — no dedo isso é
+         mira impossível. Faixa do gênero (docs/mobile/referencia-mira-toque.md):
+         Apex R-301 736 m/s, PUBG M416 ~880 m/s, fuzis do Fortnite hitscan. A
+         queda fica: a 300 m a sniper ainda cai ~35 cm, que é a habilidade que
+         sobra de propósito. O plasma é arma de ENERGIA, lento por desenho.
+         test/br-mira-projetil.test.js */
+      A[0].projSpeed = 720; A[0].projDrop = 6.5;
+      A[2].projSpeed = 800; A[2].projDrop = 5;
       A[4].projSpeed = 120; A[4].projDrop = 1.5;
-      if (A[6]) { A[6].projSpeed = 290; A[6].projDrop = 5.5; }
+      if (A[6]) { A[6].projSpeed = 850; A[6].projDrop = 5.5; }
       G.switchWeapon(KNIFE);
       const inv = G.inventory;
       inv.medkits = 0; inv.nades = 0; inv.meat = 0;

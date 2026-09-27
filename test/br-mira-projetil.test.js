@@ -112,4 +112,45 @@ describe('BR: o projétil sai pela linha de mira (fora de VR)', { skip: !CHROME 
     }
     assert.deepEqual(ruins, [], 'a bala tem de cruzar o centro da tela (≤ 1 cm e ≤ 1 px):\n' + ruins.join('\n'));
   });
+
+  /* VELOCIDADE DE BALA DE FUZIL É DE GÊNERO, NÃO DE GOSTO. O BR nasceu com o
+     fuzil a 200 m/s: um alvo correndo a 5 m/s a 50 m pedia 1,25 m de
+     antecipação — impraticável no dedo. Referências (docs/mobile/
+     referencia-mira-toque.md): Fortnite, "assault rifles ... are all
+     hitscan"; Apex R-301, "projectile_launch_speed: 29000 ... equals to 736
+     meters per second"; PUBG M416 ~880 m/s. O plasma fica de fora: é arma
+     de energia, lenta por desenho, e o traçante dela é o próprio projétil.
+     A velocidade medida é a do projétil ENTREGUE ao br-game (não a tabela). */
+  it('dado fuzil/DMR/sniper no BR, então a bala chega a 100 m em ≤ 0,15 s e cai ≤ 10 cm', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G, MP = window.QA.MP;
+      const vistos = [];
+      const original = window.__BR_ballistics;
+      window.__BR_ballistics = (o, d, gun) => { vistos.push({ v: gun.projSpeed, g: gun.projDrop || 6 }); return original(o, d, gun); };
+      const out = [];
+      try {
+        for (const i of [0, 2, 6]) {
+          const g = G.arsenal[i];
+          if (!g) continue;
+          window.QA.reset();
+          g.locked = false;
+          G.switchWeapon(i);
+          window.QA.tick(40);
+          const P = MP.player.pos;
+          window.QA.aimAt(P.x + 50, P.y + 1.62, P.z);
+          vistos.length = 0;
+          try { G.mouse.shooting = true; G.mouse.clicked = true; window.QA.tick(1); }
+          finally { G.mouse.shooting = false; G.mouse.clicked = false; }
+          const s = vistos[0];
+          out.push(s ? { arma: g.name, t100: 100 / s.v, queda100: 0.5 * s.g * (100 / s.v) ** 2 }
+            : { arma: g.name, erro: 'nenhum projétil' });
+        }
+      } finally { window.__BR_ballistics = original; }
+      return out;
+    });
+    assert.equal(r.length, 3, 'esperava fuzil, DMR e sniper');
+    const ruins = r.filter(m => m.erro || m.t100 > 0.15 || m.queda100 > 0.10)
+      .map(m => m.erro ? `${m.arma}: ${m.erro}` : `${m.arma}: ${m.t100.toFixed(3)} s e ${(m.queda100 * 100).toFixed(1)} cm a 100 m`);
+    assert.deepEqual(ruins, [], 'bala de fuzil lenta demais para o gênero:\n' + ruins.join('\n'));
+  });
 });
