@@ -2000,6 +2000,8 @@ const Oclusao = createOclusao({
   raiz: scene, heightAt,
   // não é parede: a arma e o corpo presos à câmera, e o chão (marcha própria)
   ignorar: o => o === camera || o === terrainMesh,
+  // a grama: camada própria (cada lâmina desenhada, como o shader a põe) — cobre, mas não é parede
+  grama: o => o.material === Grass.material,
   // alvo não tampa a si mesmo: as MESMAS listas que a assistência percorre
   * alvos() {
     yield* (window.__MP_remotePlayers || _aaVazio); yield* extraTargets; yield* Bosses; yield* Enemies.list;
@@ -2008,6 +2010,16 @@ const Oclusao = createOclusao({
 });
 const AimAssist = createAimAssist({
   root: scene, heightAt, grassTop: 1.4 * CFG.GRASS_HEIGHT, // topo da lâmina mais alta (js/grass.js)
+  /* A8(e): o automático só dispara em alvo de COMBATE. `extraTargets` mistura
+     esqueletos, zumbis e bichos com os discos do campo de tiro e o cadeado do
+     cofre; as outras listas (jogadores, chefes, inimigos) são só combate.
+     Cervo é caça, não inimigo — fica sem automático; lobo ataca, entra. */
+  combate: t => t.combate === true || !extraTargets.includes(t) || Night.list.includes(t) ||
+    Skeletons.list.includes(t) || (t.predator === true && Animals.list.includes(t)),
+  /* A2: a grama desenhada no CAMINHO inteiro decide se uma parte põe o alvo
+     à vista (crista gramada escondia a cabeça; e a regra de altura no pé
+     deixava o agachado invisível até na rua) */
+  grama: (e, c, r) => Oclusao.gramaCobre(e, c, r),
   los(e, c, r, t) {
     _aaOlho.set(e.x, e.y, e.z);
     _aaDir.set(c.x - e.x, c.y - e.y, c.z - e.z);
@@ -5074,6 +5086,23 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, Structures, heig
    mesmo padrão do canhão — geometria em noSeed, pontos espalhados via pickSpot
    evitando estruturas e o canhão. */
 MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, slopeAt, WATER_LEVEL, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state, cannonSpot: Cannon.spot });
+
+/* ATRAÇÕES EM CHÃO LIMPO. Canhão e atrações nascem DEPOIS do refill que
+   abre as clareiras da grama, e nenhuma delas limpava o mato: com o layout
+   novo (2a7dae6) o campo de tiro caiu no meio da grama — os discos sobem a
+   ~0,8 m e a lâmina vai de 0,62 a 1,33 m, os alvos do minijogo ficavam
+   escondidos (4611 de 4611 lâminas de pé sob ele). O estande leva raio maior:
+   cobre a alavanca, a pista dos discos e a linha entre as duas. Refazer chunk
+   não desloca o mundo (grass.js: `chunkRng` próprio). test/maptoys.test.js */
+{
+  const clareiras = [];
+  for (const [nome, s] of Object.entries(MapToys.spots)) {
+    if (s) clareiras.push({ x: s.x, z: s.z, r: nome === 'gallery' ? 8 : 4.5 });
+  }
+  if (Cannon.pos) clareiras.push({ x: Cannon.pos.x, z: Cannon.pos.z, r: 6 });
+  grassClearings.push(...clareiras);
+  Grass.refreshNear(clareiras);
+}
 
 /* Segredos: as 3 armas que nasciam trancadas sem fonte nenhuma no solo
    viram prêmio de exploração. Depende de MapToys (xilofone) e das torres
