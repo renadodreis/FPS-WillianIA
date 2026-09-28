@@ -399,13 +399,28 @@
     // hook de QA: por que o último acerto passou ou não. Objeto REUSADO —
     // nada é alocado por tiro no caminho quente.
     const lastVerdict = { ok: false, reason: null, weapon: null, dist: 0, originDist: 0 };
+    /* ORIGEM DO ACERTO — a mesma base que o `state` manda. Voando, o `state`
+       leva a posição do HELICÓPTERO e o tiro sai de `Heli.group.position +
+       1,6 m` (game.js); `MP.player.pos`, voando, é o CHÃO debaixo dele
+       (js/heli.js recentra a grama por ali). Com o chão como origem, acima de
+       ~6,5 m de altura a origem ficava a mais de 5 m de onde o servidor põe o
+       atirador, e o portão daqui e o `shotHit` de lá recusavam todo acerto
+       dado de cima. A pé e no carro (o carro escreve `player.pos`) segue o
+       pé + 1,5 m de sempre. */
+    function origemDoAcerto() {
+      if (G.state.flying) {
+        const g = G.Heli.group.position;
+        return [g.x, g.y + 1.6, g.z];
+      }
+      return [MP.player.pos.x, MP.player.pos.y + 1.5, MP.player.pos.z];
+    }
     function flushHits() {
       hitFlush = false;
       syncSentPos();
       const now = Date.now();
       const weapon = localWeaponCode();
       const running = matchRunning(), alive = !MP.player.dead, mineImmune = iAmImmune();
-      const fromPos = [MP.player.pos.x, MP.player.pos.y + 1.5, MP.player.pos.z];
+      const fromPos = origemDoAcerto();
       const originDist = dist3(sentPos, fromPos[0], fromPos[1], fromPos[2]);
       let head = false, any = false;
       for (const [tid, e] of pendingHits) {
