@@ -19,6 +19,19 @@ Escreve o que reprova.
 > escopo de **B1/B2** delimitado para não contradizê-lo. Nenhum outro limiar foi
 > tocado. O motivo está escrito em cada critério. Denominador: **54** (61 no total).
 
+> **Revisão 2026-09-28 (tarde) — relato do dono jogando no celular, virou régua.**
+> Seis frases, escritas aqui como ele disse, e os critérios que as medem:
+> (1) *"a sensibilidade ali na movimentação deve ser melhorada"* → **M7**, **C11**;
+> (2) *"o ET está muito forte pra matar ele"* → **P1**;
+> (3) *"a mira não fica vermelha quando apontada aos inimigos"* → **C12**;
+> (4) *"precisa ver nos prédios, se temos bugs, como os bichos te matarem através
+> da parede"* → **P2**, **P4** (e B7, que já existia);
+> (5) *"eles não deveriam conseguir te pegar ou te dar dano se você está no
+> helicóptero"* → **P3**;
+> (6) *"os baús não estavam abrindo no celular e nem estavam conseguindo entrar e
+> sair do carro"* → **E15** (e E4, que já existia).
+> Nenhum limiar antigo foi tocado. Denominador: **62** (69 no total).
+
 ---
 
 ## 0. As regras que governam este documento
@@ -31,7 +44,7 @@ A queixa do dono, que é a razão de esta régua existir, jogando **no celular**
 Regras, herdadas da régua do VR (`docs/vr/criterio-aaa.md`) sem margem:
 
 1. **Um critério reprovado reprova a entrega inteira.** Não existe "passou em
-   53 de 54", não existe "esse é menor", não existe média.
+   61 de 62", não existe "esse é menor", não existe média.
 2. **Teste verde não prova tela certa.** Todo critério traz o campo **"por que a
    suíte atual não pega"**. Critério que não sabe responder isso não entra.
 3. **Todo critério traz o defeito a reinjetar.** Se a sonda ou o teste não fica
@@ -271,6 +284,33 @@ de servidor, não no processo real contra o `server.js` real. É o buraco de
   helicóptero contra ela.
 - **Reinjetar:** tirar o deslocamento da origem para o helicóptero (o tiro sai
   da câmera de perseguição) → vermelho voando.
+
+### M7 · O dedo DE VERDADE gira o que o menu promete — e a aceleração, se ligada, não depende do quadro *(novo, 2026-09-28)*
+- **Relato do dono:** *"a sensibilidade ali na movimentação deve ser melhorada"*.
+  M3 mede o olhar com `PointerEvent` sintético e tique manual; o dono joga com o
+  pipeline do navegador (eventos agrupados, 120–240 Hz de amostragem no
+  aparelho) e o laço no rAF. Este critério mede ESSE caminho.
+- **Mede:** Δyaw (graus) por px de arrasto no `#tcLook` feito pelo toque do
+  DevTools (`Input.dispatchTouchEvent`), com o jogo rodando no próprio rAF (sem
+  tique manual); com a "Aceleração do olhar" do menu em 0 % e em 100 %.
+- **Limiar:** (a) aceleração 0 % (o padrão): 300 px arrastados em 0,15 s e em
+  1,5 s dão o mesmo giro ± 2 %, igual a 300 × s ± 2 % (s = o valor do menu, M3);
+  (b) aceleração 100 %: arrasto lento (≤ 300 px/s) com ganho 1 ± 5 %; arrasto
+  rápido (≥ 1 500 px/s) com ganho entre 1,5 e 2,0; (c) o mesmo arrasto no mesmo
+  tempo dá o mesmo giro ± 5 % com o laço a ~30 e a ~60 quadros/s (CPU
+  estrangulada pelo DevTools); (d) a faixa do slider de olhar vai de ≤ 0,5× a
+  ≥ 2× o padrão.
+- **Fonte:** relato do dono (2026-09-28); Critical Ops 1.70, *"Fixed aim
+  acceleration being dependent on framerate"* (referência de mira de toque §3.1);
+  linear no padrão (M3e). Os números 300/1 500 px/s e o teto 2,0 são os de
+  `LOOK_ACCEL` (libpointing, Casiez et al. — citados pelo construtor em
+  `8506731`, **não conferidos pelo validador**); ± 2 % no toque real é
+  **[INFERÊNCIA]** (arredondamento de coordenada do evento).
+- **Por que a suíte não pega:** M3 e o teste de toque usam `PointerEvent`
+  sintético e tique manual — o agrupamento de eventos e o relógio do evento
+  nunca passam.
+- **Reinjetar:** medir a velocidade do dedo pelo `dt` do QUADRO em vez do relógio
+  do evento → (c) vermelho; ganho fixo 2 → (b) vermelho no lento.
 
 ---
 
@@ -614,6 +654,46 @@ quaternion com ela DESLIGADA pelo menu, mesmo cenário, mesmo seed, mesma entrad
   `tryToggleCar`, não pelo botão USAR.
 - **Reinjetar:** não emitir o `keyup` do volante ao sair do veículo → KeyW preso.
 
+### C11 · O analógico anda o que o teclado anda, e corre onde o polegar chega *(novo, 2026-09-28)*
+- **Relato do dono:** *"a sensibilidade ali na movimentação deve ser melhorada"*.
+- **Mede:** velocidade estável a pé (m/s) pelo toque do DevTools no analógico,
+  com o laço no rAF, contra a do `W` do teclado (`Input.dispatchKeyEvent`) na
+  MESMA partida e no mesmo chão; deflexão em que a corrida liga; raio de curso.
+- **Limiar:** (a) no topo da faixa de andar (logo abaixo do limiar de corrida) a
+  velocidade é a do `W` ± 5 %; (b) em meio curso (0,5) ≥ 50 % da do `W`, e
+  monotônica (C6); (c) a corrida liga com deflexão ≤ 0,80; (d) o "Curso do
+  analógico" do menu muda o raio medido (px de dedo até o talo) na proporção
+  mostrada ± 2 px.
+- **Fonte:** relato do dono; 0,80 = Apple WWDC26 *"Make your game great with
+  touch"* (`if magnitude > 0.8`) — citado pelo construtor em `8506731`, **não
+  conferido pelo validador**; paridade com o teclado **[INFERÊNCIA]**: o mesmo
+  boneco, o mesmo mundo, e o celular não pode ser o controle mais lento.
+- **Por que a suíte não pega:** C6 mede direção e forma da curva, não a
+  velocidade contra o teclado nem o toque real.
+- **Reinjetar:** voltar o vetor de andar = deflexão → (a) vermelho (85 % do `W`,
+  número de `8506731`); limiar de corrida 0,85 → (c) vermelho.
+
+### C12 · A retícula fica vermelha sobre o inimigo que a tela mostra, no alcance — e só nele *(novo, 2026-09-28)*
+- **Relato do dono:** *"a mira não fica vermelha quando apontada aos inimigos"*.
+- **Mede:** cor da `#crosshair` (estilo computado) quadro a quadro, com o centro
+  da tela entrando e saindo da silhueta de cada tipo de alvo.
+- **Limiar:** (a) no quadril, vermelha no MESMO quadro (≤ 1) em que o centro
+  entra na silhueta de um inimigo **visível** (âncora de pixels de A2) dentro do
+  alcance da arma: jogador remoto, bot, lobo, zumbi, esqueleto, Visitante,
+  golem; (b) branca sobre o que não é inimigo (disco do campo de tiro, cadeado
+  do cofre, cervo), sobre inimigo com **0 px** na tela (parede, veículo, copa,
+  crista) e além do alcance da arma; (c) volta a branca em ≤ 0,1 s depois de
+  sair; (d) em ADS com alça ou luneta a retícula some (M6) — pintar a mira 3D
+  da arma é **decisão do dono**, declarada no laudo, sem portão.
+- **Fonte:** relato do dono; `docs/mobile/referencia-reticula.md` — Halo
+  (*"the reticle will change to red if moved over an enemy"*, e só no alcance),
+  Destiny 2, CoD (`cg_crosshairEnemyColor "1"`), Quake III (traço parado por
+  sólido e fade de saída). O alcance por arma é **[INFERÊNCIA]** da referência.
+- **Por que a suíte não pega:** a oclusão é conferida com a régua do produto
+  (`rayBlockedAt` + `js/oclusao.js`), não com pixels.
+- **Reinjetar:** vermelho sem checar visibilidade → (b) vermelho atrás da parede;
+  sem checar a categoria → (b) vermelho no disco.
+
 ---
 
 ## 5. B — Bots
@@ -878,6 +958,61 @@ N ≥ 30 engajamentos por caso (≥ 500 disparos nos casos de taxa), seeds decla
 
 ---
 
+## 5b. P — PvE: bichos, zumbis, o Visitante (ET) *(nova, 2026-09-28)*
+
+Tudo aqui vem do relato do dono jogando no celular. O caminho que conta é o
+jogo rodando no rAF (sem tique manual), com o PvE vivo no mundo da seed; no BR,
+com as flags da sala (animais, zumbis, Visitante, golem).
+
+### P1 · O Visitante (ET) morre antes de matar quem o enfrenta
+- **Relato do dono:** *"o ET está muito forte pra matar ele"*.
+- **Mede:** disparos e tempo (s, com recargas) para matar o Visitante com o
+  fuzil a 20 m acertando 80 % no corpo; o mesmo com a DMR; e o tempo em que ele
+  mata um jogador parado, de frente, na mesma distância (sem colete).
+- **Limiar:** (a) TTK do Visitante pelo fuzil < TTK do jogador pelo Visitante,
+  no mesmo cenário; (b) ≤ 2 pentes do fuzil (60 disparos).
+- **Fonte:** relato do dono. (a) é a tradução do relato em grandeza
+  **[INFERÊNCIA]**; (b) é **decisão do dono, provisória** — o número de
+  `2b377ed` ("fuzil a 80 %: 6,6 s, dois pentes"); o dono pode trocar.
+- **Reinjetar:** vida 1900 (a de antes) → (b) vermelho (93 disparos, número de
+  `2b377ed`).
+
+### P2 · Bicho não fere através de parede nem de prédio
+- **Relato do dono:** *"os bichos te matarem através da parede"*.
+- **Mede:** dano de PvE no jogador (`playerDamage` com a causa) em 60 s, com o
+  jogador parado dentro de uma construção ou atrás de uma parede e o PvE ativo
+  do outro lado — lobo, zumbi, esqueleto, fantasma, Visitante (orbe), golem; no
+  solo também soldado, Executivo e Guardião; e o controle: o mesmo PvE com o
+  jogador em céu aberto.
+- **Limiar:** 0 de dano com parede entre os dois (âncora: o `rayBlockedAt` do
+  cliente bloqueado do PvE ao corpo do jogador); controle > 0.
+- **Fonte:** relato do dono; a bala do jogador para na parede (`rayBlockedAt`) —
+  o golpe do bicho não pode ter regra mais frouxa **[INFERÊNCIA]**.
+- **Reinjetar:** golpe/tiro de PvE sem checar obstáculo → vermelho.
+
+### P3 · No helicóptero, nenhum bicho alcança
+- **Relato do dono:** *"eles não deveriam conseguir te pegar ou te dar dano se
+  você está no helicóptero"*.
+- **Mede:** dano de PvE em 60 s com o jogador VOANDO (≥ 3 m acima do chão) e PvE
+  ativo a ≤ 20 m; o controle: o mesmo PvE com o jogador a pé.
+- **Limiar:** 0 de dano de PvE voando; controle > 0. Dano de BOT e de jogador no
+  helicóptero é PvP (servidor) e fica fora — medido e declarado.
+- **Fonte:** relato do dono.
+- **Reinjetar:** tirar o portão do voo do dano de PvE → vermelho.
+
+### P4 · Prédio é sólido para o jogador e está no chão
+- **Relato do dono:** *"precisa ver nos prédios, se temos bugs"*.
+- **Mede:** (a) andando pelo analógico contra cada parede externa de construção
+  num raio de 60 m da cidade, em 8 rumos, se o jogador passa para o outro lado;
+  (b) o vão (m) entre a base de cada construção e o terreno nos cantos.
+- **Limiar:** (a) 0 travessias; (b) vão ≤ 0,10 m em todo canto (nada flutua).
+- **Fonte:** relato do dono; a tradução em (a)/(b) é **[INFERÊNCIA]** — "bugs nos
+  prédios" é amplo, e estas são as duas classes que o próprio histórico da base
+  registra (`702079d`: construções flutuando; colisão de parede).
+- **Reinjetar:** tirar a colisão de uma parede → (a) vermelho.
+
+---
+
 ## 6. D — Desempenho e invariantes
 
 ### D1 · (APARELHO) 60 fps no celular
@@ -1098,23 +1233,37 @@ humano, a rodada não está validada.
 
 **Aprova:** 22 de 22. **Reprova:** 21.
 
+### E15 · Baú e carro pelo toque, no BR *(novo, 2026-09-28)*
+- **Relato do dono:** *"os baús não estavam abrindo no celular e nem estavam
+  conseguindo entrar e sair do carro"*.
+- **Limiar:** a partir da nave, só por toque (a regra de E: nada de
+  `QA.reset`/`teleportToCar`/`tryToggleCar`): (a) cair perto de um baú, chegar a
+  ele e abri-lo por USAR ou pelo aviso tocável — o item entra no inventário;
+  (b) nenhum baú que não abre visível no BR (o baú de enfeite do solo);
+  (c) chegar a um carro, entrar, andar e sair por USAR ou pelo aviso — e depois
+  de sair, C10; (d) a ação sai no PRIMEIRO toque dentro do alcance.
+- **Fonte:** relato do dono.
+- **Por que a suíte não pega:** o teste de toque do baú/carro sai de perto do
+  alvo por atalho de posição.
+
 ---
 
 ## 8. Placar — o que entra no denominador
 
 | Área | Critérios | Automatizáveis | Só aparelho / humano |
 |---|---|--:|---|
-| M — Mira e tiro | M1–M6 | 6 | — |
+| M — Mira e tiro | M1–M7 | 7 | — |
 | A — Assistência | A1–A9 | 8 | A9 (humano) |
-| C — Controles e HUD | C1–C10 | 10 | — |
+| C — Controles e HUD | C1–C12 | 12 | — |
 | B — Bots | B1–B14 | 13 | B13 (humano) |
+| P — PvE | P1–P4 | 4 | — |
 | D — Desempenho | D1–D8 | 5 | D1, D7, D8 (aparelho) |
-| E — Estados | E1–E14 | 12 | E13 (aparelho), E14 (humano + aparelho) |
-| **Total** | **61** | **54** | **7** |
+| E — Estados | E1–E15 | 13 | E13 (aparelho), E14 (humano + aparelho) |
+| **Total** | **69** | **62** | **7** |
 
-**Denominador honesto: 54** (era 53 até a revisão de 2026-09-28, que acrescentou B14). Os 7 da última coluna só fecham com o aparelho ligado
+**Denominador honesto: 62** (53 → 54 com B14 e → 62 com M7, C11, C12, P1–P4 e E15, revisões de 2026-09-28). Os 7 da última coluna só fecham com o aparelho ligado
 ou com um humano, e nenhum placar pode contá-los como verdes sem isso. **A entrega
-só está aprovada com 61 de 61** — os 54 automatizáveis verdes são condição
+só está aprovada com 69 de 69** — os 62 automatizáveis verdes são condição
 necessária, não suficiente.
 
 Sete critérios são **regressão** do que já foi corrigido e têm de continuar
@@ -1220,5 +1369,5 @@ arquivada no laudo da rodada.
 ### Passo 6 — veredito
 Uma linha por critério (M1…E14), verde/vermelho/não medido, com o número medido e a
 condição ao lado. Laudo em `docs/mobile/validacao-<commit>.md`, com o placar sobre
-**54**, os defeitos novos medidos e quantos deles nasceram de uma correção.
+**62**, os defeitos novos medidos e quantos deles nasceram de uma correção.
 Sem "quase", sem "só falta", sem média.
