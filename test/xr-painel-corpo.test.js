@@ -219,7 +219,12 @@ async function instalarSonda() {
       let alvo = null, dm = Infinity;
       for (const w of ws) {
         if (w.noCollide) continue;
-        if (w.y1 - w.y0 < 2 || Math.min(w.x1 - w.x0, w.z1 - w.z0) < 1) continue;
+        /* caixa alta E topo acima do chão (a mesma correção de
+           test/xr-parede.test.js): com as peças de chão descendo até o
+           terreno (js/paredes.js), o caixote de 1,4 m da base ganhou caixa de
+           2,1 m e passaria no filtro só pela altura da caixa */
+        const topo = w.y1 - MP.heightAt((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
+        if (w.y1 - w.y0 < 2 || topo < 2 || Math.min(w.x1 - w.x0, w.z1 - w.z0) < 1) continue;
         const d = Math.hypot((w.x0 + w.x1) / 2 - MP.player.pos.x, (w.z0 + w.z1) / 2 - MP.player.pos.z);
         if (d < dm) { dm = d; alvo = w; }
       }

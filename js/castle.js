@@ -3,6 +3,9 @@
    colisores e pisos; o GLB é apenas o adapter visual assíncrono. */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+/* Portão e aterro da rampa: fonte ÚNICA em js/paredes.js (o servidor e os
+   bots montam as mesmas caixas). Aqui entram como colisor e como desenho. */
+import { medirAterroDaRampa, fundacaoDoPortaoEAterro } from './paredes.js';
 
 const MODEL_URL = '/assets/models/boss-castle.v2.optimized.glb';
 const FOOTPRINT_HALF = 19.18;
@@ -142,10 +145,15 @@ export function measureCastleSite({ center, heightAt }) {
     approachY,
     rampSlopeDegrees,
     rampMaxSlopeDegrees,
+    ...medirAterroDaRampa({ center: measuredCenter, heightAt }),
   };
 }
 
-function rampGeometry(innerY, outerY) {
+/* Soleira + rampa como ATERRO: a pista em cima e o corpo descendo até
+   `bottomY` (abaixo do chão mais baixo do corredor — js/paredes.js,
+   medirAterroDaRampa). Antes era uma laje de 0,28 m flutuando sobre o vazio
+   (até 4,98 m medidos); o colisor do aterro sai de fundacaoDoPortaoEAterro. */
+function rampGeometry(innerY, outerY, bottomY = null) {
   const zThreshold = COURTYARD_HALF, z0 = GATE_INNER_Z, z1 = RAMP_OUTER_Z;
   const x0 = -RAMP_HALF, x1 = RAMP_HALF;
   const thickness = 0.28;
@@ -165,22 +173,29 @@ function rampGeometry(innerY, outerY) {
       y: rampHeight(innerY, outerY, t),
     });
   }
+  // o fundo nunca sobe acima da face de baixo da laje antiga
+  const laje = Math.min(innerY - thickness, ...nodes.map(n => n.y - thickness));
+  const bottom = Number.isFinite(bottomY) ? Math.min(bottomY, laje) : laje;
 
   quad(
     point(x0, innerY, zThreshold), point(x0, innerY, z0),
     point(x1, innerY, z0), point(x1, innerY, zThreshold),
   );
   quad(
-    point(x1, innerY - thickness, zThreshold), point(x1, innerY - thickness, z0),
-    point(x0, innerY - thickness, z0), point(x0, innerY - thickness, zThreshold),
+    point(x1, bottom, zThreshold), point(x1, bottom, z0),
+    point(x0, bottom, z0), point(x0, bottom, zThreshold),
   );
   quad(
-    point(x0, innerY, zThreshold), point(x0, innerY - thickness, zThreshold),
-    point(x0, innerY - thickness, z0), point(x0, innerY, z0),
+    point(x0, innerY, zThreshold), point(x0, bottom, zThreshold),
+    point(x0, bottom, z0), point(x0, innerY, z0),
   );
   quad(
     point(x1, innerY, zThreshold), point(x1, innerY, z0),
-    point(x1, innerY - thickness, z0), point(x1, innerY - thickness, zThreshold),
+    point(x1, bottom, z0), point(x1, bottom, zThreshold),
+  );
+  quad( // tampa interna (dentro da pegada: fecha o sólido)
+    point(x1, innerY, zThreshold), point(x1, bottom, zThreshold),
+    point(x0, bottom, zThreshold), point(x0, innerY, zThreshold),
   );
 
   for (let i = 0; i < RAMP_SEGMENTS; i++) {
@@ -190,22 +205,22 @@ function rampGeometry(innerY, outerY) {
       point(x1, b.y, b.z), point(x1, a.y, a.z),
     );
     quad(
-      point(x1, a.y - thickness, a.z), point(x1, b.y - thickness, b.z),
-      point(x0, b.y - thickness, b.z), point(x0, a.y - thickness, a.z),
+      point(x1, bottom, a.z), point(x1, bottom, b.z),
+      point(x0, bottom, b.z), point(x0, bottom, a.z),
     );
     quad(
-      point(x0, a.y, a.z), point(x0, a.y - thickness, a.z),
-      point(x0, b.y - thickness, b.z), point(x0, b.y, b.z),
+      point(x0, a.y, a.z), point(x0, bottom, a.z),
+      point(x0, bottom, b.z), point(x0, b.y, b.z),
     );
     quad(
       point(x1, a.y, a.z), point(x1, b.y, b.z),
-      point(x1, b.y - thickness, b.z), point(x1, a.y - thickness, a.z),
+      point(x1, bottom, b.z), point(x1, bottom, a.z),
     );
   }
   const last = nodes[nodes.length - 1];
   quad(
-    point(x0, last.y, last.z), point(x0, last.y - thickness, last.z),
-    point(x1, last.y - thickness, last.z), point(x1, last.y, last.z),
+    point(x0, last.y, last.z), point(x0, bottom, last.z),
+    point(x1, bottom, last.z), point(x1, last.y, last.z),
   );
 
   const geometry = new THREE.BufferGeometry();
@@ -340,7 +355,7 @@ function createFallbackVisual({
   });
 }
 
-function createFoundationVisual({ center, originY, foundationBottom, approachY, scene, csmMat, noSeed }) {
+function createFoundationVisual({ center, originY, foundationBottom, approachY, rampBottom, gatePiece, scene, csmMat, noSeed }) {
   const guarded = typeof noSeed === 'function' ? noSeed : fn => fn();
   return guarded(() => {
     const root = new THREE.Group();
@@ -373,6 +388,13 @@ function createFoundationVisual({ center, originY, foundationBottom, approachY, 
       [GATE_HALF, FOOTPRINT_HALF, bottom, top,
         FOOTPRINT_HALF - edge, FOOTPRINT_HALF],
     ];
+    // Portão: a fundação passa POR BAIXO da soleira (o colisor
+    // `foundation-gate`). Sem ela o vão ±2,30 m ficava aberto do terreno até
+    // a base do GLB (-1,10): até 4 m de buraco para debaixo do pátio.
+    if (gatePiece) {
+      skirtBoxes.push([gatePiece.x0, gatePiece.x1, Math.min(bottom, gatePiece.y0),
+        gatePiece.y1, gatePiece.z0, gatePiece.z1]);
+    }
     const skirt = new THREE.InstancedMesh(
       new THREE.BoxGeometry(1, 1, 1),
       material,
@@ -392,7 +414,8 @@ function createFoundationVisual({ center, originY, foundationBottom, approachY, 
     root.add(skirt);
 
     const ramp = new THREE.Mesh(
-      rampGeometry(FLOOR_LOCAL_Y, approachY - originY),
+      rampGeometry(FLOOR_LOCAL_Y, approachY - originY,
+        Number.isFinite(rampBottom) ? rampBottom - originY : null),
       rampMaterial,
     );
     // Uma única geometria cobre a soleira plana (18,30..19,24) e a rampa,
@@ -626,6 +649,11 @@ export function createCastle({
     edge0, FOOTPRINT_HALF);
   wall('foundation-front-right', GATE_HALF, FOOTPRINT_HALF, bottomLocal, FLOOR_LOCAL_Y,
     edge0, FOOTPRINT_HALF);
+  // Por baixo do portão e sob a rampa: fundação e aterro (js/paredes.js).
+  // O vão de passagem do portão continua sem AABB na altura de quem passa.
+  const extraFoundation = fundacaoDoPortaoEAterro(placement);
+  for (const f of extraFoundation)
+    wall(f.part, f.x0, f.x1, f.y0, f.y1, f.z0, f.z1, f.noCollide ? { noCollide: true } : {});
 
   // Muralha externa e duas torres frontais.
   wall('wall-left', -17.45, -16.55, 0, 7.1, -17.45, 17.45);
@@ -771,6 +799,8 @@ export function createCastle({
     originY,
     foundationBottom,
     approachY,
+    rampBottom: placement.rampBottom,
+    gatePiece: extraFoundation.find(f => f.part === 'foundation-gate'),
     scene,
     csmMat,
     noSeed,

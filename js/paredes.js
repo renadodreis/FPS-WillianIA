@@ -95,6 +95,15 @@ const CASTELO = Object.freeze({
   RAMP_HALF: 2,
   RAMP_EASE_FRACTION: 0.25,
   SAMPLE_STEP: 0.25,
+  // aterro da rampa (fundacaoDoPortaoEAterro)
+  THRESHOLD_T: 0.28,     // espessura da laje da soleira/rampa (rampGeometry e vehicleSurfaces)
+  ATERRO_TRECHOS: 12,    // degraus do aterro sob a rampa
+  ATERRO_SOBE: 0.1,      // collide() deixa passar quem pisa até 0,12 m abaixo do topo
+  // quem sobe na rampa pelo FIM dela, vindo do terreno: raio, degrau que o
+  // groundAt deixa subir (js/terrain.js: 0,65 m; o Colosso sonda 0,8 m acima
+  // do corpo, js/boss.js) e a faixa em x por onde ele chega
+  ATERRO_JOGADOR: { raio: 0.45, degrau: 0.65, faixa: 2 },
+  ATERRO_COLOSSO: { raio: 1.6, degrau: 1.45, faixa: 2.3 - 1.5 }, // o Colosso só passa no portão a ±0,8 m do eixo
 });
 export const MAX_RAMPA_CASTELO_GRAUS = 30;
 
@@ -175,7 +184,103 @@ export function medirSitioCastelo({ center, heightAt }) {
   return {
     center: measuredCenter, terrain, originY, floorY, foundationBottom,
     approachY, rampSlopeDegrees, rampMaxSlopeDegrees,
+    ...medirAterroDaRampa({ center: measuredCenter, heightAt }),
   };
+}
+
+/* ---------------- castelo: portão e aterro da rampa ----------------
+   O anel da fundação fecha o perímetro do castelo do chão até o piso — MENOS
+   o vão de ±2,30 m do portão, que precisa ficar aberto na altura de quem
+   passa. Por baixo da soleira, porém, ele ficava aberto até o terreno: o
+   castelo assenta no ponto MAIS ALTO da pegada, o pátio é plataforma (não
+   parede) e quem anda no terreno — bicho, zumbi, soldado — entrava debaixo
+   do pátio em 12 de 12 sementes medidas (vão sob a soleira até 5,14 m). E a
+   rampa era uma laje de 0,28 m flutuando sobre um vazio de até 4,98 m.
+
+   Conserto (o que o gênero faz: construção "rígida" enche a fundação até o
+   chão — Minecraft Wiki, Village/Structure (old): "Village buildings and
+   farms never generate 'floating', instead filling in a foundation down to
+   ground level when necessary"):
+     • `foundation-gate`: a fundação atravessa o portão POR BAIXO da soleira
+       (topo = face de baixo da laje), o vão de passagem continua livre;
+     • aterro sob a rampa, em degraus: cada trecho é um AABB do fundo até
+       logo abaixo da pista. collide() deixa passar quem está a até 0,12 m
+       abaixo do topo, então o topo de cada degrau desce até a pista mais
+       BAIXA que um corpo do tamanho do Colosso (1,5 m) alcança encostando
+       nele — quem sobe a rampa nunca é empurrado, quem anda no terreno por
+       baixo é;
+     • o que sobra entre o degrau e a pista vira laje `noCollide` (barra
+       bala, não empurra corpo — a mesma regra das lajes da Torre Nexus).
+   Resíduo medido e assumido: o Colosso sobe na rampa vindo do terreno em
+   frente ao fim dela por um degrau de até 1,45 m, então os degraus que ele
+   alcança dali (os últimos ~2,2 m) ficam baixos; onde o chão cai de lado sob
+   o fim da rampa sobra vão de até 1,14 m (sementes 138 e 555; ≤ 0,81 m nas
+   outras dez de test/predios-assentamento). Antes desse trecho, ≤ 0,42 m.
+   O desenho (castle.js: saia da fundação e rampGeometry) segue estes números. */
+export function medirAterroDaRampa({ center, heightAt }) {
+  const C = CASTELO;
+  const zi = C.FOOTPRINT_HALF, zo = C.RAMP_OUTER_Z, len = zo - zi, n = C.ATERRO_TRECHOS;
+  // o chão sob o aterro, do portão ao fim da rampa
+  const sob = amostraRetangulo(heightAt, center.x, center.z + zi + len / 2, C.RAMP_HALF, len / 2);
+  // o chão EM FRENTE ao fim da rampa em que pisa quem vai subir nela e já
+  // encosta no degrau i (jogador em toda a largura, Colosso na faixa dele);
+  // null = daquele chão ninguém alcança o degrau
+  const emFrente = (i, quem) => {
+    const alcance = zi + len * (i + 1) / n + quem.raio - zo;
+    return alcance > 0
+      ? amostraRetangulo(heightAt, center.x, center.z + zo + alcance / 2, quem.faixa, alcance / 2).min
+      : null;
+  };
+  const rampFoot = [];
+  for (let i = 0; i < n; i++)
+    rampFoot.push({ jogador: emFrente(i, C.ATERRO_JOGADOR), colosso: emFrente(i, C.ATERRO_COLOSSO) });
+  return { rampBottom: sob.min - C.FOUNDATION_BURY - C.BASE_CLEARANCE, rampFoot };
+}
+
+/* altura da pista em z local (pátio/soleira até GATE_INNER_Z, rampa até
+   RAMP_OUTER_Z) e o mínimo dela num intervalo: a pista é monótona em cada
+   pedaço, então o mínimo está nas pontas ou na emenda */
+function pistaEm(medida, zLocal) {
+  const C = CASTELO;
+  const t = (Math.min(zLocal, C.RAMP_OUTER_Z) - C.GATE_INNER_Z) / (C.RAMP_OUTER_Z - C.GATE_INNER_Z);
+  return t <= 0 ? medida.floorY : medida.floorY + (medida.approachY - medida.floorY) * progressoRampa(t);
+}
+function pistaMinima(medida, z0, z1) {
+  const e = CASTELO.GATE_INNER_Z;
+  return Math.min(pistaEm(medida, z0), pistaEm(medida, z1), e > z0 && e < z1 ? pistaEm(medida, e) : Infinity);
+}
+
+/* peças novas da fundação, em coordenadas LOCAIS (x,z relativos ao centro,
+   y relativo a originY), na ordem em que entram na lista de paredes */
+export function fundacaoDoPortaoEAterro(medida) {
+  const C = CASTELO, o = medida.originY;
+  const FH = C.FOOTPRINT_HALF, edge0 = FH - 0.46;
+  const out = [{ part: 'foundation-gate', x0: -C.GATE_HALF, x1: C.GATE_HALF,
+    y0: medida.foundationBottom - o, y1: C.FLOOR_LOCAL_Y - C.THRESHOLD_T, z0: edge0, z1: FH }];
+  const fundo = medida.rampBottom - o;
+  const n = C.ATERRO_TRECHOS, len = C.RAMP_OUTER_Z - FH;
+  for (let i = 0; i < n; i++) {
+    const z0 = FH + len * i / n, z1 = FH + len * (i + 1) / n;
+    const pista = pistaMinima(medida, z0, z1) - o;
+    // o chão mais baixo em que pisa um corpo que encosta neste degrau sem
+    // poder ser empurrado: quem está NA pista (até o Colosso, em qualquer
+    // ponto dela) e, perto do fim, quem vai subir vindo do terreno em frente —
+    // só de onde o degrau do groundAt alcança a pista (quem está mais embaixo
+    // dá de cara com a cabeceira do aterro, e é para dar)
+    const fim = pistaEm(medida, C.RAMP_OUTER_Z);
+    let pe = Infinity;
+    for (const [quem, y] of [[C.ATERRO_JOGADOR, medida.rampFoot[i].jogador], [C.ATERRO_COLOSSO, medida.rampFoot[i].colosso]])
+      if (y !== null) pe = Math.min(pe, Math.max(y, fim - quem.degrau));
+    const R = C.ATERRO_COLOSSO.raio;
+    const alcance = Math.min(pistaMinima(medida, z0 - R, z1 + R), pe) - o;
+    const topo = Math.min(alcance + C.ATERRO_SOBE, pista - C.THRESHOLD_T);
+    if (topo - fundo >= 0.05)
+      out.push({ part: `foundation-ramp-${i}`, x0: -C.RAMP_HALF, x1: C.RAMP_HALF, y0: fundo, y1: topo, z0, z1 });
+    const base = Math.max(topo, fundo);
+    if (pista - base >= 0.05)
+      out.push({ part: `foundation-ramp-fill-${i}`, x0: -C.RAMP_HALF, x1: C.RAMP_HALF, y0: base, y1: pista, z0, z1, noCollide: true });
+  }
+  return out;
 }
 
 /* colisores do castelo, na ordem e com a aritmética de createCastle */
@@ -198,6 +303,8 @@ export function paredesDoCastelo(medida) {
   wall('foundation-back', -FH, FH, bottomLocal, C.FLOOR_LOCAL_Y, -FH, -edge0);
   wall('foundation-front-left', -FH, -C.GATE_HALF, bottomLocal, C.FLOOR_LOCAL_Y, edge0, FH);
   wall('foundation-front-right', C.GATE_HALF, FH, bottomLocal, C.FLOOR_LOCAL_Y, edge0, FH);
+  for (const f of fundacaoDoPortaoEAterro(medida))
+    wall(f.part, f.x0, f.x1, f.y0, f.y1, f.z0, f.z1, f.noCollide ? { noCollide: true } : {});
   wall('wall-left', -17.45, -16.55, 0, 7.1, -17.45, 17.45);
   wall('wall-right', 16.55, 17.45, 0, 7.1, -17.45, 17.45);
   wall('wall-back', -17.45, 17.45, 0, 7.1, -17.45, -16.55);
@@ -321,11 +428,104 @@ export function caixaDaPeca(p, extra) {
   return extra ? Object.assign(b, extra) : b;
 }
 
+/* ---------------- assentamento: nada flutua, nada que precisa aparecer afunda ----------------
+   Cada construção nasce na altura do terreno no CENTRO dela. Em encosta a
+   caixa ficava acima do chão numa ponta — medido em 12 sementes: muro de
+   base até 8,20 m no ar (e, do outro lado, até 5,22 m ENTERRADO), sacos de
+   areia 2,68 m, caixote 2,04 m, cabana 0,83 m, ruína 0,69 m. Bicho, jogador
+   e bala passavam por baixo, e o desenho (a mesma peça) mostrava o vão.
+
+   O que o gênero faz, e o que foi escolhido (Minecraft Wiki):
+     • construção RÍGIDA enche a fundação até o chão — "Village buildings and
+       farms never generate 'floating', instead filling in a foundation down
+       to ground level when necessary" (Village/Structure (old)). Aqui:
+       `fundar` desce a base da peça até o ponto mais BAIXO do relevo sob a
+       pegada dela (menos ENTERRO), sem mexer no topo — porta, janela e
+       telhado ficam onde estavam.
+     • o que acompanha o chão segue o relevo — projeção "terrain_matching",
+       "to match the terrain height (like a village road)" (Template pool).
+       Aqui: o muro da base vira TRECHOS, cada um assentado no chão dele
+       (`trechosDoMuro`), e sacos e caixotes assentam no chão de cada um
+       (`assentar`) em vez do centro da base, a 10 m dali.
+   Recusados: nivelar o terreno (o relevo é reconstruído pelos bots e pelo
+   servidor a partir da semente — mexer nele quebra a paridade) e escolher
+   sítio mais plano (mudaria o layout de novo; ver o cabeçalho).
+   Nada daqui sorteia: o relevo é amostrado, e a amostragem é a mesma no
+   cliente e no Node (paridade em test/paredes-paridade.test.js). */
+export const ASSENTO = Object.freeze({
+  ENTERRO: 0.3,       // a fundação desce isto ABAIXO do ponto mais baixo da pegada
+  PASSO: 0.25,        // amostragem do relevo (a do sítio do castelo)
+  // muro: desnível máximo do chão ao longo de um trecho, até o trecho mais
+  // curto que se aceita. As bases ficam em encosta de verdade (declive
+  // 0,3–0,5 é comum): 0,6 m / 2 m davam 63 trechos por base; 1 m / 3 m dão
+  // ~34 e o muro fica entre 2,1 e 3,75 m acima do chão (12 sementes)
+  DEGRAU_MAX: 1,
+  TRECHO_MIN: 3,
+});
+
+function relevoSob(heightAt, x0, x1, z0, z1) {
+  const P = ASSENTO.PASSO;
+  const nx = Math.max(1, Math.ceil((x1 - x0) / P)), nz = Math.max(1, Math.ceil((z1 - z0) / P));
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i <= nx; i++) {
+    const x = x0 + (x1 - x0) * i / nx;
+    for (let k = 0; k <= nz; k++) {
+      const y = heightAt(x, z0 + (z1 - z0) * k / nz);
+      if (y < min) min = y;
+      if (y > max) max = y;
+    }
+  }
+  return { min, max };
+}
+const relevoDaPeca = (heightAt, p) => relevoSob(heightAt, p.x - p.w / 2, p.x + p.w / 2, p.z - p.d / 2, p.z + p.d / 2);
+const entre = (p, y0, y1) => ({ ...p, h: y1 - y0, y: (y0 + y1) / 2 });
+
+/* peça rígida: a base desce até o chão mais baixo da pegada, o topo fica */
+function fundar(p, heightAt) {
+  if (!heightAt) return p;
+  const topo = p.y + p.h / 2, base = p.y - p.h / 2;
+  return entre(p, Math.min(base, relevoDaPeca(heightAt, p).min - ASSENTO.ENTERRO), topo);
+}
+/* peça pequena que tem de ficar INTEIRA de fora (caixote, saco de areia):
+   assenta no chão mais alto da pegada dela e a fundação desce até o mais baixo */
+function assentar(p, heightAt, visivel) {
+  if (!heightAt) return p;
+  const r = relevoDaPeca(heightAt, p);
+  return entre(p, r.min - ASSENTO.ENTERRO, r.max + visivel);
+}
+/* muro que acompanha a encosta: o menor número de trechos iguais em que o
+   chão ao longo da linha do muro varia até DEGRAU_MAX (ou o trecho chega a
+   TRECHO_MIN); cada trecho tem `visivel` de altura acima do chão mais alto
+   da pegada dele e a fundação desce até o mais baixo */
+function trechosDoMuro(p, heightAt, visivel) {
+  if (!heightAt) return [p];
+  const emX = p.w >= p.d, L = emX ? p.w : p.d;
+  const nMax = Math.max(1, Math.floor(L / ASSENTO.TRECHO_MIN));
+  const trecho = (k, n) => {
+    const a0 = (emX ? p.x : p.z) - L / 2 + L * k / n, a1 = (emX ? p.x : p.z) - L / 2 + L * (k + 1) / n;
+    return emX ? { ...p, w: a1 - a0, x: (a0 + a1) / 2 } : { ...p, d: a1 - a0, z: (a0 + a1) / 2 };
+  };
+  const linha = t => (emX ? relevoSob(heightAt, t.x - t.w / 2, t.x + t.w / 2, t.z, t.z)
+    : relevoSob(heightAt, t.x, t.x, t.z - t.d / 2, t.z + t.d / 2));
+  let n = 1;
+  for (; n < nMax; n++) {
+    let ok = true;
+    for (let k = 0; k < n && ok; k++) { const f = linha(trecho(k, n)); ok = f.max - f.min <= ASSENTO.DEGRAU_MAX; }
+    if (ok) break;
+  }
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const t = trecho(k, n), f = relevoDaPeca(heightAt, t);
+    out.push(entre(t, f.min - ASSENTO.ENTERRO, f.max + visivel));
+  }
+  return out;
+}
+
 export const TORRE_H = 6.2;
-export function pecasTorre(cx, cz, y) {
+export function pecasTorre(cx, cz, y, heightAt) {
   const H = TORRE_H, out = [];
   for (const [ox, oz] of [[-1.4, -1.4], [1.4, -1.4], [-1.4, 1.4], [1.4, 1.4]])
-    out.push(peca(0.34, H + 2, 0.34, cx + ox, y + H / 2 - 1, cz + oz, 0x6b4a2e));
+    out.push(fundar(peca(0.34, H + 2, 0.34, cx + ox, y + H / 2 - 1, cz + oz, 0x6b4a2e), heightAt));
   out.push(peca(3.4, 0.2, 0.2, cx, y + 2.3, cz - 1.4, 0x8a6238, false));
   out.push(peca(3.4, 0.2, 0.2, cx, y + 2.3, cz + 1.4, 0x8a6238, false));
   out.push(peca(0.2, 0.2, 3.4, cx - 1.4, y + 3.6, cz, 0x8a6238, false));
@@ -345,23 +545,24 @@ export const CABANA_H = 2.7;
 export function dimensoesCabana(flip) {
   return { W: flip ? 4.4 : 5.4, D: flip ? 5.4 : 4.4, H: CABANA_H };
 }
-export function pecasCabana(cx, cz, y, flip) {
+export function pecasCabana(cx, cz, y, flip, heightAt) {
   const { W, D, H } = dimensoesCabana(flip);
   const out = [];
-  out.push(peca(W + 0.7, 0.34, D + 0.7, cx, y + 0.05, cz, 0x6e6a63, false));          // base
-  out.push(peca(W, H, 0.26, cx, y + H / 2 + 0.15, cz - D / 2, 0x8a6238));             // fundo
-  out.push(peca(0.26, H, D, cx - W / 2, y + H / 2 + 0.15, cz, 0x8a6238));             // lateral esq
-  out.push(peca(0.26, H, D, cx + W / 2, y + H / 2 + 0.15, cz, 0x8a6238));             // lateral dir
+  const chao = p => out.push(fundar(p, heightAt));
+  chao(peca(W + 0.7, 0.34, D + 0.7, cx, y + 0.05, cz, 0x6e6a63, false));             // base (vira embasamento)
+  chao(peca(W, H, 0.26, cx, y + H / 2 + 0.15, cz - D / 2, 0x8a6238));                // fundo
+  chao(peca(0.26, H, D, cx - W / 2, y + H / 2 + 0.15, cz, 0x8a6238));                // lateral esq
+  chao(peca(0.26, H, D, cx + W / 2, y + H / 2 + 0.15, cz, 0x8a6238));                // lateral dir
   const doorW = 1.2, segW = (W - doorW) / 2;                                          // frente com porta
-  out.push(peca(segW, H, 0.26, cx - (doorW + segW) / 2, y + H / 2 + 0.15, cz + D / 2, 0x8a6238));
-  out.push(peca(segW, H, 0.26, cx + (doorW + segW) / 2, y + H / 2 + 0.15, cz + D / 2, 0x8a6238));
+  chao(peca(segW, H, 0.26, cx - (doorW + segW) / 2, y + H / 2 + 0.15, cz + D / 2, 0x8a6238));
+  chao(peca(segW, H, 0.26, cx + (doorW + segW) / 2, y + H / 2 + 0.15, cz + D / 2, 0x8a6238));
   out.push(peca(doorW + 0.3, 0.45, 0.3, cx, y + H + 0.05, cz + D / 2, 0x6b4a2e, false));
   out.push(peca(W + 0.8, 0.18, D + 0.8, cx, y + H + 0.35, cz, 0x6b4a2e));             // forro
   out.push(peca(0.5, 1.5, 0.5, cx + W * 0.28, y + H + 1.1, cz - D * 0.18, 0x6e6a63, false)); // chaminé
   return out;
 }
 
-export function pecasRuina(cx, cz, y, alturas) {
+export function pecasRuina(cx, cz, y, alturas, heightAt) {
   const [a0, a1, a2, a3] = alturas;
   return [
     peca(4.6, a0, 0.42, cx, y + 0.7, cz - 2, 0x9a958c),
@@ -369,21 +570,24 @@ export function pecasRuina(cx, cz, y, alturas) {
     peca(2, a2, 0.42, cx + 1, y + 0.4, cz + 1.8, 0x6e6a63),
     peca(0.7, 3, 0.7, cx + 2.1, y + 1.5, cz + 1.9, 0x9a958c),
     peca(0.7, a3, 0.7, cx - 2.1, y + 0.6, cz + 1.9, 0x6e6a63),
-  ];
+  ].map(p => fundar(p, heightAt));
 }
 
-export function pecasBase(cx, cz, y) {
+/* `heightAt` ausente = chão plano na altura `y` (os testes de PvE montam a
+   base assim, na origem); presente = cada peça assenta no chão dela */
+export function pecasBase(cx, cz, y, heightAt) {
   const W2 = 21, D2 = 15, H2 = 2.4, out = [];
-  out.push(peca(W2 * 2, H2, 0.7, cx, y + H2 / 2 - 0.3, cz - D2, 0x4a5240));
-  out.push(peca(0.7, H2, D2 * 2, cx - W2, y + H2 / 2 - 0.3, cz, 0x4a5240));
-  out.push(peca(0.7, H2, D2 * 2, cx + W2, y + H2 / 2 - 0.3, cz, 0x4a5240));
+  const muro = (w, d, x, z) => out.push(...trechosDoMuro(peca(w, H2, d, x, y + H2 / 2 - 0.3, z, 0x4a5240), heightAt, H2 - 0.3));
+  muro(W2 * 2, 0.7, cx, cz - D2);
+  muro(0.7, D2 * 2, cx - W2, cz);
+  muro(0.7, D2 * 2, cx + W2, cz);
   const g2 = 6;
-  out.push(peca(W2 - g2 / 2, H2, 0.7, cx - (g2 / 2 + (W2 - g2 / 2) / 2), y + H2 / 2 - 0.3, cz + D2, 0x4a5240));
-  out.push(peca(W2 - g2 / 2, H2, 0.7, cx + (g2 / 2 + (W2 - g2 / 2) / 2), y + H2 / 2 - 0.3, cz + D2, 0x4a5240));
+  muro(W2 - g2 / 2, 0.7, cx - (g2 / 2 + (W2 - g2 / 2) / 2), cz + D2);
+  muro(W2 - g2 / 2, 0.7, cx + (g2 / 2 + (W2 - g2 / 2) / 2), cz + D2);
   // sacos de areia + caixotes
-  for (let i = 0; i < 5; i++) out.push(peca(2.2, 0.8, 0.6, cx - 4 + i * 2.4, y + 0.4, cz + D2 - 3, 0x8a7a58));
-  out.push(peca(1.4, 1.4, 1.4, cx + 6, y + 0.7, cz - 8, 0x6b5a38));
-  out.push(peca(1.2, 1.2, 1.2, cx + 7.6, y + 0.6, cz - 7.2, 0x6b5a38));
+  for (let i = 0; i < 5; i++) out.push(assentar(peca(2.2, 0.8, 0.6, cx - 4 + i * 2.4, y + 0.4, cz + D2 - 3, 0x8a7a58), heightAt, 0.8));
+  out.push(assentar(peca(1.4, 1.4, 1.4, cx + 6, y + 0.7, cz - 8, 0x6b5a38), heightAt, 1.4));
+  out.push(assentar(peca(1.2, 1.2, 1.2, cx + 7.6, y + 0.6, cz - 7.2, 0x6b5a38), heightAt, 1.2));
   return out;
 }
 
@@ -544,10 +748,10 @@ export function construirMundoSolido({ worldSeed, heightAt, slopeAt, WATER_LEVEL
   const solidas = (pecas, origem) => { for (const p of pecas) if (p.solida) add(caixaDaPeca(p), origem); };
 
   const pecas = {
-    torres: plano.torres.map(t => pecasTorre(t.x, t.z, t.y)),
-    cabanas: plano.cabanas.map(c => pecasCabana(c.x, c.z, c.y, c.flip)),
-    ruinas: plano.ruinas.map(r => pecasRuina(r.x, r.z, r.y, r.alturas)),
-    bases: plano.bases.map(b => pecasBase(b.x, b.z, b.y)),
+    torres: plano.torres.map(t => pecasTorre(t.x, t.z, t.y, heightAt)),
+    cabanas: plano.cabanas.map(c => pecasCabana(c.x, c.z, c.y, c.flip, heightAt)),
+    ruinas: plano.ruinas.map(r => pecasRuina(r.x, r.z, r.y, r.alturas, heightAt)),
+    bases: plano.bases.map(b => pecasBase(b.x, b.z, b.y, heightAt)),
   };
   pecas.torres.forEach((p, i) => solidas(p, `torre#${i}`));
   pecas.cabanas.forEach((p, i) => solidas(p, `cabana#${i}`));

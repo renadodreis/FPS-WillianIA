@@ -629,14 +629,17 @@ function criarEstruturas(deps, noSeed) {
      e o giro do caminhão, do mesmo sorteio (plano). Aqui: tendas e vagas. */
   const baseSites = [];
   function mbase(b, pecas) {
-    const cx = b.x, cz = b.z, y = b.y;
+    const cx = b.x, cz = b.z;
     baseSites.push({ x: cx, z: cz, cleared: false });
     desenhar(pecas);
-    // tendas militares (prismas)
+    // tendas militares (prismas) — no chão DELAS, não no do centro da base:
+    // a 12 m dali, em encosta, o beiral ficava até 3,19 m no ar (ou a
+    // cumeeira 2,76 m enterrada). Só desenho: tenda não é parede.
     for (const [ox, oz] of [[-12, -6], [-12, 4], [12, -5]]) {
-      const t1 = new THREE.BoxGeometry(5.5, 0.16, 4.4); t1.rotateZ(0.7); t1.translate(cx + ox - 1.25, y + 1.25, cz + oz);
+      const ty = heightAt(cx + ox, cz + oz);
+      const t1 = new THREE.BoxGeometry(5.5, 0.16, 4.4); t1.rotateZ(0.7); t1.translate(cx + ox - 1.25, ty + 1.25, cz + oz);
       paintGeometry(t1, _sc.setHex(0x55603f)); geos.push(t1);
-      const t2 = new THREE.BoxGeometry(5.5, 0.16, 4.4); t2.rotateZ(-0.7); t2.translate(cx + ox + 1.25, y + 1.25, cz + oz);
+      const t2 = new THREE.BoxGeometry(5.5, 0.16, 4.4); t2.rotateZ(-0.7); t2.translate(cx + ox + 1.25, ty + 1.25, cz + oz);
       paintGeometry(t2, _sc.setHex(0x55603f)); geos.push(t2);
     }
     // guardas + caminhão
@@ -649,6 +652,7 @@ function criarEstruturas(deps, noSeed) {
 
   const merged = BufferGeometryUtils.mergeGeometries(geos);
   const mesh = new THREE.Mesh(merged, csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.02 })));
+  mesh.name = 'estruturas'; // QA: test/predios-desenho.test.js mede o vão nesta malha
   mesh.castShadow = mesh.receiveShadow = true;
   scene.add(mesh);
   // O forte antigo continua sendo construído acima, numa fonte separada e

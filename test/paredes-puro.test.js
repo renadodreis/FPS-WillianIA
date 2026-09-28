@@ -169,7 +169,11 @@ describe('planta nova mantém os invariantes (varredura em Node)', () => {
     }
     assert.deepEqual(falhas, []);
     assert.ok(ms / 120 < 200, `construirMundoSolido custou ${(ms / 120).toFixed(1)} ms por semente`);
-    assert.equal(contagem, 303, 'a semente 424242 devia ter 303 paredes (sem o cofre)');
+    // Era 303. O assentamento no terreno (js/paredes.js, test/predios-assentamento)
+    // somou 78: o muro das 2 bases virou 25 + 38 trechos que acompanham a
+    // encosta (eram 5 + 5 caixas inteiras) e o castelo ganhou a fundação sob
+    // o portão + 12 degraus de aterro e 12 lajes de bala sob a rampa.
+    assert.equal(contagem, 381, 'a semente 424242 devia ter 381 paredes (sem o cofre)');
   });
 });
 

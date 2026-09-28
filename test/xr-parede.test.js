@@ -731,7 +731,14 @@ describe('dentro da sessão: a parede segura o corpo e escurece a vista',
         let alvo = null, dm = Infinity;
         for (const w of ws) {
           if (w.noCollide) continue;
-          if (w.y1 - w.y0 < 2 || Math.min(w.x1 - w.x0, w.z1 - w.z0) < 1) continue;
+          /* "mais alto que a cabeça" é caixa alta E topo acima do chão: desde
+             que as peças de chão descem até o terreno (js/paredes.js,
+             assentamento), o caixote de 1,4 m da base tem caixa de 2,1 m — e
+             o teste escolhia ele, com a cabeça passando POR CIMA (31 frames
+             de "vazamento" que eram só céu). Só a altura acima do chão, por
+             sua vez, deixa entrar o forro da cabana (laje de 0,18 m no alto). */
+          const topo = w.y1 - MP.heightAt((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2);
+          if (w.y1 - w.y0 < 2 || topo < 2 || Math.min(w.x1 - w.x0, w.z1 - w.z0) < 1) continue;
           const d = Math.hypot((w.x0 + w.x1) / 2 - MP.player.pos.x, (w.z0 + w.z1) / 2 - MP.player.pos.z);
           if (d < dm) { dm = d; alvo = w; }
         }
