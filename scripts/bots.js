@@ -107,6 +107,32 @@ const AI = {
   // trocar de postura [LASTRO]. Aqui o equivalente é a re-exposição: o alvo
   // sumiu, o bot parou de atirar (segurou a posição ou foi atrás) e o re-vê.
   MISS_BASE_S: 1.0, MISS_PER_M_S: 0.0315, MISS_DEBOUNCE_S: 3,
+  // PROTEÇÃO QUE SE ESGOTA (B14 — decisão do dono, 2026-09-28: "a 1ª
+  // re-espiada continua protegida; espiar de novo em seguida vai perdendo a
+  // proteção"). Antes, TODA volta rearmava a janela: quem espiava 3 s / 2 s
+  // pagava reação + reaquisição + janela (~3,1–3,4 s a 24 m) e ficava imune
+  // (laudo 6aeda6c §5: 282 exposições, 0 mortes). Agora só as
+  // REEXPOSE_PROTECTED primeiras voltas SEGUIDAS (escondido ≤ REACQUIRE_S) do
+  // mesmo engajamento rearmam a janela; da seguinte em diante ela não rearma
+  // — nem pela volta, nem pelo silêncio do esconde (MISS_DEBOUNCE_S).
+  // Lastro do mecanismo: CoD4 `_gameskill.gsc` — a cada disparo contra o
+  // jogador `set_accuracy_based_on_situation()` chama `resetMissDebounceTime()`
+  // (`missTimeDebounce = gettime() + 3000`) e `setMissTime()` sai sem rearmar
+  // "if ( self.a.missTimeDebounce > gettime() )": "we can only start missing
+  // again if it's been a few seconds since we last shot" — quem está atirando
+  // em você não volta a errar de propósito [LASTRO]. A 1ª volta rearma por
+  // equivaler a `didSomethingOtherThanShooting()` (o bot segurou a posição)
+  // [INFERÊNCIA, de d04d318]. Contar o "seguida" pelo ESCONDE (≤ REACQUIRE_S,
+  // a definição de B14) e não pelo relógio literal do CoD4 (3 s desde o último
+  // disparo) [INFERÊNCIA, medida]: no ciclo 3 s / 2 s o último disparo cai no
+  // fim da exposição e o 1º da volta ≥ 1,4 s depois dela — o silêncio passa
+  // SEMPRE de 3 s, e com o relógio literal a janela rearmava em toda volta
+  // (0 de 480 exposições com dano, test/bots-combate.test.js). Fora do
+  // esconde nada muda: 3 s sem atirar com o alvo à vista (fora de alcance)
+  // rearmam como antes. UMA volta protegida [DECISÃO do dono, B14 (a)/(c)].
+  // Reação (fila) e reaquisição NÃO se esgotam: toda volta ainda dá ≥ 1,3 s
+  // de aviso antes do 1º disparo — o que se esgota é o erro de propósito.
+  REEXPOSE_PROTECTED: 1,
   // DMR/sniper: primeiros disparos num alvo novo além de 12,7 m erram (CoD4;
   // no fácil, dois) [LASTRO].
   SCOPED_FIRST_MISSES: 2, SCOPED_FIRST_MISS_M: 12.7,
@@ -435,9 +461,12 @@ function countAttackers(bots, self) {
    Re-exposição: o alvo atual sumiu por mais de REACQUIRE_HIDDEN_S (medido num
    tick em que ele NÃO estava à vista, como o `notSeenEnemyTime > 0.25f` do CS
    — um piscar de um tick não conta) e voltou. A volta paga um atraso de
-   reaquisição (`reacquireT` + `reacquireDelay`) e rearma a janela de erro
-   (`missRearm`); o foco da mira continua o do engajamento. Tudo isso em cima
-   da fila de reação: `target.seen` já é o que o bot via REACTION_S atrás. */
+   reaquisição (`reacquireT` + `reacquireDelay`) e, só nas REEXPOSE_PROTECTED
+   primeiras voltas seguidas (`reexposures`), rearma a janela de erro
+   (`missRearm`); nas seguintes a janela fica gasta (`missDebounced`: nem o
+   silêncio do esconde a rearma — B14). O foco da mira continua o do
+   engajamento. Tudo isso em cima da fila de reação: `target.seen` já é o que
+   o bot via REACTION_S atrás. */
 function updateEngagement(bot, target, t, rng) {
   const id = target ? target.id : null;
   if (id !== bot.targetId) {
@@ -453,10 +482,14 @@ function updateEngagement(bot, target, t, rng) {
     bot.attackDelay = AI.ATTACK_DELAY_MIN_S + rng() * (AI.ATTACK_DELAY_MAX_S - AI.ATTACK_DELAY_MIN_S);
     bot.reacquireT = null;
     bot.missRearm = true;
+    bot.reexposures = 0;
+    bot.missDebounced = false;
   } else if (bot.targetHidden) {
     bot.reacquireT = t;
     bot.reacquireDelay = AI.REACQUIRE_DELAY_MIN_S + rng() * (AI.REACQUIRE_DELAY_MAX_S - AI.REACQUIRE_DELAY_MIN_S);
-    bot.missRearm = true;
+    bot.reexposures = (bot.reexposures || 0) + 1;
+    bot.missRearm = bot.reexposures <= AI.REEXPOSE_PROTECTED;
+    bot.missDebounced = !bot.missRearm;
   }
   bot.targetHidden = false;
   bot.targetSeenT = t;
@@ -549,9 +582,12 @@ function decideShot(bot, target, action, ctx) {
   const profile = WEAPON_PROFILES[weapon] || WEAPON_PROFILES.FUZIL;
   const d = Math.hypot(target.x - bot.x, (target.y || 0) - (bot.y || 0), target.z - bot.z);
   const ranged = action.type === 'shoot';
-  // alvo novo ou 3 s sem atirar: janela E luneta; re-exposição (`missRearm`):
-  // só a janela — a regra da luneta do CoD4 é por inimigo NOVO (`lastMissedEnemy`)
-  const fresh = bot.missTargetId !== target.id || t - (bot.lastShotT ?? -Infinity) > AI.MISS_DEBOUNCE_S;
+  // alvo novo ou 3 s sem atirar: janela E luneta; re-exposição protegida
+  // (`missRearm`): só a janela — a regra da luneta do CoD4 é por inimigo NOVO
+  // (`lastMissedEnemy`); volta seguinte à protegida (`missDebounced`): o
+  // silêncio foi o esconde, não conta como "3 s sem atirar" (B14)
+  const silent = t - (bot.lastShotT ?? -Infinity) > AI.MISS_DEBOUNCE_S && !bot.missDebounced;
+  const fresh = bot.missTargetId !== target.id || silent;
   if (ranged && (fresh || bot.missRearm)) {
     bot.missTargetId = target.id;
     bot.missUntil = t + AI.MISS_BASE_S + AI.MISS_PER_M_S * d;
@@ -559,6 +595,7 @@ function decideShot(bot, target, action, ctx) {
     bot.missRearm = false;
   }
   bot.lastShotT = t;
+  bot.missDebounced = false;
   if (ranged && bot.scopedMisses > 0) { bot.scopedMisses--; return { hit: false, why: 'luneta' }; }
   if (ranged && t < bot.missUntil) return { hit: false, why: 'janela' };
   const eye = { x: bot.x, y: (bot.y || 0) + AI.EYE_H, z: bot.z };
@@ -784,6 +821,8 @@ function resetBotForMatch(bot) {
   bot.missTargetId = null;
   bot.missUntil = -Infinity;
   bot.missRearm = false;
+  bot.reexposures = 0;
+  bot.missDebounced = false;
   bot.scopedMisses = 0;
   bot.lastShotT = -Infinity;
   bot.hurtT = -Infinity;

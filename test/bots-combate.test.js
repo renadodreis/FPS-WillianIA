@@ -915,3 +915,260 @@ describe('Bots: re-exposição — quem some atrás do relevo e volta paga reaç
     assert.equal(shots, 0, 'o bot atirou em quem só ouviu, atrás do morro');
   });
 });
+
+/* ================================================================
+   B14 — QUEM ESPIA NÃO É IMUNE: a proteção da re-exposição se esgota.
+
+   Decisão do dono (2026-09-28, docs/mobile/criterio-aaa.md B14): a 1ª volta
+   de trás da cobertura continua protegida como B1/B2 mandam; espiar de novo
+   em seguida vai perdendo a proteção. O laudo `validacao-6aeda6c.md` §5 mediu
+   o espiador de 3 s exposto / 2 s escondido IMUNE no caminho real: fuzil a
+   24 m, 36 exposições, 0 de dano — cada volta pagava reação + reaquisição +
+   janela de erro rearmada (~3,1–3,4 s), mais que os 3 s de exposição.
+
+   Cenário da régua: humano parado em pé de frente para o bot, sem colete e
+   sem revidar, 3 s no topo da crista (A, à vista) / 2 s 6 m atrás dela (B,
+   escondido), até 12 ciclos (60 s), fuzil a ~24 m, N ≥ 30. O bot é sentinela:
+   só a POSIÇÃO é presa (a patrulha dele andaria e mudaria a distância no meio
+   da medida); virar, perceber, reagir e atirar são do `tickBots`.
+   Âncora independente do bot: à vista / escondido quem diz é a marcha de 2 cm
+   do próprio teste (`humanInSight`), não a `lineOfSight` do bot.
+   TTK do espiador = relógio de parede desde o começo da 1ª exposição até
+   somar 100 de dano aplicado (conta o tempo escondido).
+   ================================================================ */
+
+const SPY_D = 24;
+/* `n` ciclos de `expose` s à vista / `hide` s escondido */
+const spyCycles = (n, expose = 3, hide = 2) => Array.from({ length: n }, () => [[true, expose], [false, hide]]).flat();
+
+/* Roda um espiador. `segs` = [[à vista?, duração s, onde?], ...] (à vista é
+   A, a não ser que `onde` diga outro ponto à vista; `terrain` troca a crista
+   quando o caso precisa de outro relevo). Devolve, por exposição, o dano, o
+   1º disparo e o 1º dano do bot contados da volta. */
+function spyRun({ seed, weapon = 'FUZIL', d = SPY_D, segs, mira = null, humanHp = 100, terrain = crest(d) }) {
+  const A = { x: 0, z: d }, B = { x: 0, z: d + 6 };
+  const post = { x: 0, z: 0 };
+  const sim = makeSim({ seed, terrain, bots: [{ id: 'b0', ...post, weapon, mira, yaw: yawTo(post, A), wp: [0, 500] }] });
+  const spans = [];
+  let end = 0;
+  for (const [vis, dur, where] of segs) { spans.push({ vis, t0: end, t1: end + dur, p: vis ? (where || A) : B }); end += dur; }
+  const spanAt = tt => spans.find(s => tt >= s.t0 - 1e-9 && tt < s.t1 - 1e-9) || spans[spans.length - 1];
+  const probe = { leaks: 0, blind: 0 };
+  const res = run(sim, {
+    human: tt => { const p = spanAt(tt).p; return { ...p, rotY: yawTo(p, post) }; },
+    duration: end, humanHp, stopOnDeath: true,
+    onTick: (tt, s, h) => {
+      const b = s.world.bots[0];
+      b.x = post.x; b.z = post.z; b.y = terrain.heightAt(post.x, post.z);
+      const seen = humanInSight(terrain, b, h);
+      if (spanAt(tt).vis && !seen) probe.blind++;
+      if (!spanAt(tt).vis && seen) probe.leaks++;
+    },
+  });
+  const inSpan = (s, x) => x.t >= s.t0 - 1e-9 && x.t < s.t1 - 1e-9;
+  const expos = spans.filter(s => s.vis).map(s => {
+    const shot = shotsAtHuman(res).find(x => inSpan(s, x));
+    const hits = res.hits.filter(x => inSpan(s, x));
+    return {
+      t0: s.t0, t1: s.t1, dmg: hits.reduce((a, x) => a + x.dmg, 0),
+      firstShot: shot ? shot.t - s.t0 : null, firstHit: hits.length ? hits[0].t - s.t0 : null,
+    };
+  });
+  const d3 = Math.hypot(A.z - post.z, terrain.heightAt(A.x, A.z) - terrain.heightAt(post.x, post.z));
+  return { res, expos, probe, ttk: res.deathT, d3, mira: sim.world.bots[0].mira };
+}
+
+describe('Bots: quem espia não é imune — a proteção da re-exposição se esgota (B14)', () => {
+  const N = 40;
+  const CYCLES = 12, PERIOD = 5;
+  const cache = new Map();
+  const memo = (key, fn) => { if (!cache.has(key)) cache.set(key, fn()); return cache.get(key); };
+  /* espiador e parado com a MESMA semente: o mesmo bot (mesma pontaria sorteada) */
+  const pairs = (weapon = 'FUZIL', d = SPY_D, mira = null) => memo(`${weapon}|${d}|${mira}`, () => {
+    const out = [];
+    for (let seed = 1; seed <= N; seed++) {
+      out.push({
+        seed,
+        spy: spyRun({ seed, weapon, d, mira, segs: spyCycles(CYCLES) }),
+        still: spyRun({ seed, weapon, d, mira, segs: [[true, CYCLES * PERIOD]] }),
+      });
+    }
+    return out;
+  });
+  const ttkStats = out => {
+    const spy = out.map(r => r.spy.ttk ?? Infinity), still = out.map(r => r.still.ttk ?? Infinity);
+    return { spy, still, mSpy: median(spy), mStill: median(still), dead: spy.filter(Number.isFinite).length };
+  };
+  /* chega à 6ª exposição = vivo no começo dela (t = 5 × 5 s) */
+  const reach6 = out => out.filter(r => r.spy.ttk == null || r.spy.ttk >= 5 * PERIOD - 1e-9);
+  const hurt3to6 = r => r.spy.expos.slice(2, 6).some(e => e.dmg > 0);
+
+  it('o cenário exercita a espiada: à vista nas exposições, escondido nos intervalos, a ~24 m, e o bot atira em toda volta', (t) => {
+    const out = pairs();
+    const leaks = out.reduce((a, r) => a + r.spy.probe.leaks, 0);
+    const blind = out.reduce((a, r) => a + r.spy.probe.blind + r.still.probe.blind, 0);
+    let volta = 0, voltaComTiro = 0;
+    for (const r of out) for (const e of r.spy.expos.slice(1)) {
+      if (r.spy.ttk != null && e.t0 >= r.spy.ttk) break;
+      volta++;
+      if (e.firstShot != null) voltaComTiro++;
+    }
+    const d3 = out[0].spy.d3, miras = out.map(r => r.spy.mira);
+    t.diagnostic(`distância ${f2(d3)} m; pontaria sorteada ${f2(Math.min(...miras))}–${f2(Math.max(...miras))}; ticks à vista durante o esconde ${leaks}; ticks escondido durante a exposição ${blind}; voltas com disparo do bot ${voltaComTiro}/${volta}`);
+    assert.equal(leaks, 0, 'a crista não escondeu o espiador (âncora de 2 cm)');
+    assert.equal(blind, 0, 'o espiador não estava à vista durante a exposição');
+    assert.ok(d3 > 23.5 && d3 < 24.5, `distância fora da régua: ${f2(d3)} m`);
+    assert.equal(voltaComTiro, volta, `o bot não atirou em ${volta - voltaComTiro} de ${volta} voltas — o caso não mede proteção, mede silêncio`);
+  });
+
+  it('(a) a 1ª re-exposição continua protegida: 1º disparo ≥ 1,3 s e 1º dano ≥ 1,3 s + missTime(d) contados da volta', (t) => {
+    // a 2ª exposição (a 1ª re-exposição) dura 8 s: com 3 s o dano nunca caberia
+    // antes de 1,3 + missTime(24 m) = 3,06 s e o caso não testaria o limiar
+    const shots = [], firsts = [];
+    let bad = 0, worst = Infinity;
+    for (let seed = 1; seed <= N; seed++) {
+      const r = spyRun({ seed, segs: [[true, 3], [false, 2], [true, 8]], humanHp: Infinity });
+      const e = r.expos[1], lim = 1.3 + missTime(r.d3);
+      if (e.firstShot != null) shots.push(e.firstShot);
+      if (e.firstHit != null) {
+        firsts.push(e.firstHit);
+        worst = Math.min(worst, e.firstHit - lim);
+        if (e.firstHit < lim - 1e-9) bad++;
+      }
+    }
+    t.diagnostic(`1ª re-exposição: 1º disparo mín ${f2(Math.min(...shots))} s, mediana ${f2(median(shots))} s (${shots.length}/${N}); 1º dano mín ${f2(Math.min(...firsts))} s, mediana ${f2(median(firsts))} s (${firsts.length}/${N} com dano em 8 s); limite 1,3 + missTime = ${f2(1.3 + missTime(SPY_D))} s; antes do limite: ${bad}; menor folga ${f2(worst)} s`);
+    assert.equal(shots.length, N, 'o bot não atirou em toda 1ª re-exposição');
+    assert.ok(Math.min(...shots) >= 1.3 - 1e-9, `1ª re-exposição: 1º disparo em ${f2(Math.min(...shots))} s (B1: ≥ 1,3 s)`);
+    assert.ok(firsts.length >= N * 0.75, `só ${firsts.length}/${N} tomaram dano em 8 s — o caso não exercita a janela`);
+    assert.equal(bad, 0, `1ª re-exposição: ${bad} tomaram dano antes de 1,3 s + missTime(d) (pior folga ${f2(worst)} s)`);
+  });
+
+  it('(b) a proteção se esgota: TTK mediano do espiador é finito em 12 ciclos e ≤ 3 × o TTK mediano parado', (t) => {
+    const s = ttkStats(pairs());
+    const exposWithDmg = pairs().reduce((a, r) => a + r.spy.expos.filter(e => e.dmg > 0).length, 0);
+    const expos = pairs().reduce((a, r) => a + r.spy.expos.filter(e => r.spy.ttk == null || e.t0 < r.spy.ttk).length, 0);
+    t.diagnostic(`fuzil ${SPY_D} m, 3 s / 2 s, ${N} espiadores: TTK espião mediana ${f2(s.mSpy)} s (mortos em 60 s: ${s.dead}/${N}); parado mediana ${f2(s.mStill)} s; razão ${f2(s.mSpy / s.mStill)} (teto 3); exposições com dano ${exposWithDmg}/${expos}`);
+    assert.ok(Number.isFinite(s.mSpy), `espiar deixou o humano imune: ${N - s.dead}/${N} vivos depois de 12 ciclos, ${exposWithDmg} de ${expos} exposições com dano`);
+    assert.ok(s.mSpy <= 3 * s.mStill, `TTK do espiador ${f2(s.mSpy)} s > 3 × o parado (${f2(s.mStill)} s)`);
+  });
+
+  it('(c) pelo menos uma re-exposição é protegida, e não todas: ≥ 80 % de quem chega à 6ª exposição toma dano entre a 3ª e a 6ª', (t) => {
+    const r6 = reach6(pairs());
+    const hurt = r6.filter(hurt3to6).length;
+    const per = [1, 2, 3, 4, 5].map(k => pairs().filter(r => (r.spy.expos[k] || {}).dmg > 0).length);
+    t.diagnostic(`chegaram à 6ª exposição ${r6.length}/${N}; com dano entre a 3ª e a 6ª ${hurt}/${r6.length}; espiadores com dano na 2ª…6ª exposição: ${per.join(' / ')}`);
+    assert.ok(r6.length >= 10, `só ${r6.length} espiadores chegaram à 6ª exposição — amostra pequena`);
+    assert.ok(hurt >= 0.8 * r6.length, `só ${hurt}/${r6.length} tomaram dano entre a 3ª e a 6ª exposição`);
+    assert.equal(per[0], 0, `${per[0]} espiadores tomaram dano na 1ª re-exposição de 3 s — ela deixou de ser protegida`);
+  });
+
+  it('o aviso nunca some: em TODA volta o 1º disparo leva ≥ 1,3 s (reação + reaquisição) — o que se esgota é só a janela de erro', (t) => {
+    // não é a régua (B14 libera da 2ª volta em diante): é o que impede o bot
+    // de voltar a ser apelão — quem espia sempre tem 1,3 s para ver o bot
+    // antes da bala, e espiar continua valendo mais que ficar parado
+    const firsts = [], hits = [];
+    for (const r of pairs()) for (const e of r.spy.expos.slice(2)) {
+      if (e.firstShot != null) firsts.push(e.firstShot);
+      if (e.firstHit != null) hits.push(e.firstHit);
+    }
+    const s = ttkStats(pairs());
+    t.diagnostic(`da 2ª re-exposição em diante: 1º disparo mín ${f2(Math.min(...firsts))} s, mediana ${f2(median(firsts))} s (${firsts.length}); 1º dano mín ${f2(Math.min(...hits))} s, mediana ${f2(median(hits))} s (${hits.length}); TTK espião ${f2(s.mSpy)} s × parado ${f2(s.mStill)} s`);
+    assert.ok(firsts.length >= N, 'poucas voltas com disparo para medir');
+    assert.ok(Math.min(...firsts) >= 1.3 - 1e-9, `numa volta o bot atirou em ${f2(Math.min(...firsts))} s — sem tempo de ver o bot`);
+    assert.ok(s.mSpy > s.mStill, `espiar ficou PIOR que ficar parado: TTK ${f2(s.mSpy)} s × ${f2(s.mStill)} s`);
+  });
+
+  it('esconder mais de 3 s é engajamento NOVO: a proteção gasta volta inteira — no contato e na 1ª volta dele (B1/B2)', (t) => {
+    // três voltas seguidas gastam a proteção; 4 s escondido passa de
+    // REACQUIRE_S ("acima disso é engajamento NOVO e paga tudo de novo", B14).
+    // A exposição medida dura 8 s para o limiar do dano poder ser testado:
+    // (1) o contato novo logo depois dos 4 s; (2) a 1ª volta DESSE contato
+    // (3 s à vista, 2 s escondido, volta) — a contagem de voltas recomeça
+    const gasta = [[true, 3], [false, 2], [true, 3], [false, 2], [true, 3], [false, 4]];
+    const cases = [
+      { nome: 'contato novo', segs: [...gasta, [true, 8]], k: 3 },
+      { nome: '1ª volta do contato novo', segs: [...gasta, [true, 3], [false, 2], [true, 8]], k: 4 },
+    ];
+    for (const c of cases) {
+      const shots = [], firsts = [];
+      let bad = 0, worst = Infinity, gastou = 0;
+      for (let seed = 1; seed <= N; seed++) {
+        const r = spyRun({ seed, segs: c.segs, humanHp: Infinity });
+        if (r.expos[2].firstHit != null) gastou++;
+        const e = r.expos[c.k], lim = 1.3 + missTime(r.d3);
+        if (e.firstShot != null) shots.push(e.firstShot);
+        if (e.firstHit != null) {
+          firsts.push(e.firstHit);
+          worst = Math.min(worst, e.firstHit - lim);
+          if (e.firstHit < lim - 1e-9) bad++;
+        }
+      }
+      c.out = { shots, firsts, bad, worst, gastou };
+      t.diagnostic(`${c.nome}: proteção gasta antes (dano na 3ª exposição) em ${gastou}/${N}; 1º disparo mín ${f2(Math.min(...shots))} s (${shots.length}/${N}); 1º dano mín ${f2(Math.min(...firsts))} s, mediana ${f2(median(firsts))} s (${firsts.length}/${N}); antes de 1,3 + missTime: ${bad}; menor folga ${f2(worst)} s`);
+    }
+    for (const { nome, out: { shots, firsts, bad, worst, gastou } } of cases) {
+      assert.ok(gastou >= N / 2, `${nome}: a proteção não chegou a se gastar (${gastou}/${N}) — o caso não mede a volta dela`);
+      assert.ok(firsts.length >= N * 0.75, `${nome}: só ${firsts.length}/${N} tomaram dano em 8 s — o caso não exercita a janela`);
+      assert.ok(Math.min(...shots) >= 1.3 - 1e-9, `${nome}: 1º disparo em ${f2(Math.min(...shots))} s`);
+      assert.equal(bad, 0, `${nome}: ${bad} tomaram dano antes de 1,3 s + missTime(d) (pior folga ${f2(worst)} s)`);
+    }
+  });
+
+  it('o que se esgota são as VOLTAS: 3 s sem atirar com o espiador à vista (fora de alcance) rearmam a janela como antes', (t) => {
+    // CoD4 literal: "we can only start missing again if it's been a few
+    // seconds since we last shot". Gasta a proteção, deixa o bot atirar na
+    // volta gasta, e o humano fica 5 s À VISTA fora do alcance do fuzil — num
+    // platô de 8 m a 95 m, na MESMA direção de A (dentro do cone: de lado, o
+    // bot o perderia de vista e a volta viraria esconde) — e volta a A. O bot
+    // não atira lá e não o perde de vista: o 1º dano na volta a A tem de
+    // esperar missTime(d) contado do 1º disparo, como em qualquer silêncio.
+    const cr = crest(SPY_D);
+    const terrain = { heightAt: (x, z) => cr.heightAt(x, z) + 8 * Math.min(1, Math.max(0, (z - 88) / 4)) };
+    const FAR = { x: 0, z: 95 };
+    const segs = [[true, 3], [false, 2], [true, 3], [false, 2], [true, 3], [false, 2], [true, 3], [true, 5, FAR], [true, 8]];
+    const gaps = [];
+    let silentOk = 0, bad = 0, gastou = 0, worst = Infinity, blind = 0, lost = 0;
+    for (let seed = 1; seed <= N; seed++) {
+      const r = spyRun({ seed, segs, humanHp: Infinity, terrain });
+      blind += r.probe.blind;
+      if (r.expos[2].firstHit != null || r.expos[3].firstHit != null) gastou++;
+      const far = r.expos[4], back = r.expos[5];
+      // silêncio de verdade: nenhum disparo no humano do meio do "longe" até a volta
+      const quiet = shotsAtHuman(r.res).filter(s => s.t >= far.t0 + 1.0 - 1e-9 && s.t < far.t1 - 1e-9).length;
+      if (quiet === 0) silentOk++;
+      // e o bot não o perdeu de vista: quem volta de um esconde paga ≥ 1,3 s
+      // (reação + reaquisição) antes do 1º disparo; aqui só a reação (0,6 s)
+      if (back.firstShot == null || back.firstShot >= 1.2) lost++;
+      if (back.firstShot == null || back.firstHit == null) continue;
+      const lim = missTime(r.d3) - 0.1;
+      const gap = back.firstHit - back.firstShot;
+      gaps.push(gap);
+      worst = Math.min(worst, gap - lim);
+      if (gap < lim - 1e-9) bad++;
+    }
+    t.diagnostic(`proteção gasta em ${gastou}/${N}; silêncio À VISTA fora de alcance em ${silentOk}/${N}; ticks escondido enquanto à vista ${blind}; bot perdeu de vista (1º disparo na volta ≥ 1,2 s) em ${lost}/${N}; na volta a A: 1º disparo → 1º dano mín ${f2(Math.min(...gaps))} s, mediana ${f2(median(gaps))} s (${gaps.length}/${N}); antes de missTime(d): ${bad}; menor folga ${f2(worst)} s`);
+    assert.equal(blind, 0, 'o humano "longe" não estava à vista — o caso viraria esconde');
+    assert.equal(silentOk, N, 'o bot atirou enquanto o humano estava fora de alcance — não houve silêncio');
+    assert.equal(lost, 0, `o bot perdeu o humano de vista em ${lost}/${N} — a volta a A viraria re-exposição, não silêncio à vista`);
+    assert.ok(gastou >= N / 2, `a proteção não chegou a se gastar (${gastou}/${N})`);
+    assert.ok(gaps.length >= N * 0.75, `só ${gaps.length}/${N} tomaram dano na volta a A — o caso não exercita a janela`);
+    assert.equal(bad, 0, `${bad} tomaram dano antes de missTime(d) depois de 3 s de silêncio à vista (pior folga ${f2(worst)} s)`);
+  });
+
+  it('medido e declarado, sem portão: pontaria máxima, DMR a 24 m, escopeta a 15 m, e o esconde acima de 3 s (engajamento novo)', (t) => {
+    const rows = [
+      ['fuzil 24 m, pontaria 0,9', pairs('FUZIL', SPY_D, 0.9)],
+      ['DMR 24 m', pairs('DMR', SPY_D)],
+      ['escopeta 15 m', pairs('ESCOPETA', 15)],
+    ];
+    for (const [nome, out] of rows) {
+      const s = ttkStats(out), r6 = reach6(out);
+      t.diagnostic(`${nome}: TTK espião ${f2(s.mSpy)} s (mortos ${s.dead}/${N}), parado ${f2(s.mStill)} s, razão ${f2(s.mSpy / s.mStill)}; dano entre a 3ª e a 6ª ${r6.filter(hurt3to6).length}/${r6.length}`);
+    }
+    // escondido 3,2 s passa de REACQUIRE_S: a régua chama de engajamento NOVO
+    // ("paga tudo de novo"), e B2 manda 1,3 + missTime(24 m) = 3,06 s > 3 s
+    const longo = [];
+    for (let seed = 1; seed <= N; seed++) longo.push(spyRun({ seed, segs: spyCycles(CYCLES, 3, 3.2) }).ttk ?? Infinity);
+    t.diagnostic(`fuzil 24 m, 3 s / 3,2 s: TTK espião mediana ${f2(median(longo))} s (mortos em ${f2(CYCLES * 6.2)} s: ${longo.filter(Number.isFinite).length}/${N}) — esconde > 3 s é engajamento novo por definição da régua`);
+  });
+});
