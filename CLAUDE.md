@@ -251,10 +251,13 @@ escrita pelo validador — quem constrói não edita).
   esconderijos com 0 px na tela. `js/oclusao.js` testa o que está DESENHADO.
   **Escolha o esconderijo de teste pela TELA (pixels), nunca pela linha de
   visada do produto** — senão o teste compara a reta consigo mesma.
-- **Ordem do quadro a pé (fora de XR): olhar do toque ANTES do tiro.** O tiro
-  saía pela câmera do quadro ANTERIOR: 0,73° (64 cm a 50 m) arrastando o
-  ATIRAR, 8,9 cm andando de lado. XR mantém a ordem antiga (contrato de frame
-  do corpo/arma).
+- **Ordem do quadro fora de XR e fora do carro (a pé, voando e na volta da
+  câmera): olhar, vista e veículo ANTES do tiro.** O tiro saía pela câmera do
+  quadro ANTERIOR: 0,73° (64 cm a 50 m) arrastando o ATIRAR, 8,9 cm andando de
+  lado, 72 cm no 1º tiro do helicóptero. Voando, a bala nasce onde a linha de
+  mira passa pelo helicóptero (a câmera de perseguição fica 10 m atrás). XR
+  mantém a ordem antiga (contrato de frame do corpo/arma); dirigindo também
+  (física, e não se atira dirigindo).
 - **Bot sem terreno é CEGO** (ouve e investiga, não atira) e grita no stderr.
   Antes, `lineOfSight(null)` via através de tudo.
 - **Postura não é replicada** (o `state` não leva agachado/deitado): o avatar
