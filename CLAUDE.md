@@ -274,6 +274,11 @@ escrita pelo validador — quem constrói não edita).
   `AI`, cada uma com a fonte. A queixa "apelão" era onisciência + prioridade ao
   humano + reação zero; o PUBG 12.1 cometeu o mesmo erro e reverteu por hotfix.
   O stderr dos bots agora chega no log do servidor.
+  **Re-espiada (decisão do dono, B14):** reação e reaquisição valem em TODA
+  volta; a janela de erro só rearma na 1ª volta seguida (escondido ≤ 3 s) do
+  engajamento. O relógio literal do CoD4 (3 s desde o último disparo) devolve a
+  imunidade no ciclo 3 s/2 s — medido. Quem se esconde > 3 s vira engajamento
+  novo a cada volta e continua imune (consequência da régua B2).
 
 ## Fluxo de trabalho (git flow)
 
