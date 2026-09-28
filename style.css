@@ -39,6 +39,10 @@
   #crosshair .dot { position: absolute; width: 2px; height: 2px; left: -1px; top: -1px; background: rgba(240,250,255,0.95); border-radius: 50%; }
   #crosshair.hidden { opacity: 0; }
   #crosshair { --gap: 8px; transition: opacity .12s; }
+  /* VERMELHA sobre o inimigo que a tela mostra, no alcance da arma (game.js,
+     reticulaDoQuadro; docs/mobile/referencia-reticula.md). Troca seca: quem
+     segura a cor na saída é a histerese do núcleo, não uma transição de CSS */
+  #crosshair.inimigo .l, #crosshair.inimigo .dot { background: rgba(255,52,40,0.96); }
 
   /* Hit marker */
   #hitmarker { position: fixed; left: 50%; top: 50%; width: 0; height: 0; z-index: 12; opacity: 0; }

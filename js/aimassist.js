@@ -448,3 +448,167 @@ export function createAimAssist(deps) {
      a medida do teste é a câmera contra a posição do alvo, não isto) */
   return { step, reset, get losCalls() { return losCalls; }, get last() { return out; } };
 }
+
+/* ================================================================
+   RETÍCULA VERMELHA — "posso atirar" (docs/mobile/referencia-reticula.md).
+
+   A cruz fica vermelha quando a LINHA DE MIRA (no jogo, as mesmas
+   `miraOrigem`/`miraDirecao` do `fire()`) entra na esfera de acerto de um
+   alvo de COMBATE, dentro do alcance útil da arma, e o jogador VÊ o que ela
+   aponta. Halo: "the reticle will change to red if moved over an enemy";
+   "if the enemy is not in range for that particular weapon, the reticle will
+   still remain as blue" (referência §1).
+
+   É uma CONSULTA, não assistência: não mexe na câmera, no tiro nem no
+   `createAimAssist` acima. Reusa dele o que decide quem é quem — `isRendered`,
+   a categoria `combate` e as mesmas `los`/`grama` injetadas (no jogo:
+   `rayBlockedAt` do tiro + js/oclusao.js).
+
+   NUNCA VIRA WALLHACK. Pintar a cruz sobre alguém que a tela não mostra é a
+   mesma informação vazada da assistência que "gruda" atrás da parede — a
+   família do wallhack de grama que já foi deployado. Por isso a régua aqui é
+   MAIS estrita que a da assistência, e sem folga nenhuma:
+     1. a esfera sob a cruz é a do alvo MAIS PERTO na linha (o tiro pega o da
+        frente: disco na frente do inimigo = branca);
+     2. o alvo é de combate e está desenhado (pendurado na cena, visível);
+     3. a linha da cruz, do olho até o ponto dela MAIS PERTO do centro da
+        parte (dentro do corpo, não na casca da esfera), está livre — no
+        mundo do tiro e no que a tela desenha, sem folga; a grama, até meio
+        raio antes desse ponto (a folga da assistência: lâmina DENTRO do
+        corpo não cobre nada, o corpo é que a cobre);
+     4. o CENTRO da parte também é visto do olho (`los` sem folga, grama com a
+        mesma folga). A esfera é maior que o corpo: sem isto, a casca que
+        vaza para o lado de cá de uma parede oblíqua, de um chassi ou de uma
+        touceira acenderia a cruz sobre o obstáculo.
+   Na dúvida, branca: o custo de errar para o lado seguro é a cruz não
+   avermelhar num canto; o do outro lado é informação que a tela não deu.
+
+   HISTERESE SÓ NA SAÍDA: acende no primeiro quadro, apaga `SEGURA` segundos
+   depois do último (o "fade timer" do Quake III, referência §3) — e só
+   quando a cruz saiu para o NADA ou para além do alcance. Sobre alvo
+   escondido ou neutro, morte do alvo e vista inativa apagam na hora.
+   ================================================================ */
+export const RETICULA = Object.freeze({
+  /* m: raio do cone de espalhamento no limite do alcance. É a régua do
+     `autoRange` do fuzil acima (0,014 rad × 60 m) — INFERÊNCIA: no limite,
+     1 tiro em 4 do cone cai dentro do raio do tronco (0,42 m). */
+  RAIO_UTIL: 0.84,
+  TETO: 240,       // m: o hitscan do `fire()` não passa disso
+  FACA: 2.6,       // m: o golpe da faca (`__BR_melee`, br-game.js)
+  SEGURA: 0.1,     // s: quanto a cruz fica vermelha depois de sair do alvo
+});
+
+/* Alcance útil: onde o cone da arma (o MESMO `lerp(spreadHip, spreadAds,
+   adsT)` do `fire()`, sem o movimento) abre `RAIO_UTIL`. Cresce na mira,
+   como o "red reticle range" do Halo ("whether the player is hip-firing or
+   zoomed in"). Faca: o golpe. */
+export function alcanceUtil(gun, adsT) {
+  const g = gun && typeof gun === 'object' ? gun : {};
+  if (g.melee) return RETICULA.FACA;
+  const hip = Number.isFinite(+g.spreadHip) ? +g.spreadHip : 0;
+  const mira = Number.isFinite(+g.spreadAds) ? +g.spreadAds : hip;
+  const s = lerp(hip, mira, clamp01(+adsT || 0));
+  return s > 0 ? Math.min(RETICULA.TETO, RETICULA.RAIO_UTIL / s) : RETICULA.TETO;
+}
+
+export function createReticula(deps) {
+  const d = deps && typeof deps === 'object' ? deps : {};
+  const los = typeof d.los === 'function' ? d.los : () => false;      // sem visada: nada é visto
+  const grama = typeof d.grama === 'function' ? d.grama : null;
+  const heightAt = typeof d.heightAt === 'function' ? d.heightAt : () => 0;
+  const grassTop = typeof d.grassTop === 'number' && Number.isFinite(d.grassTop) ? d.grassTop : AIM.GRASS_TOP;
+  const combate = typeof d.combate === 'function' ? d.combate : t => t.combate === true;
+  const root = d.root || null;
+  /* a grama cobre a linha até `p`? Sem a camada, a regra de ALTURA da
+     assistência (a parte acima do topo da lâmina mais alta) */
+  const coberto = (e, p, r, c) => (grama ? grama(e, p, r) : c.y - heightAt(c.x, c.z) < grassTop);
+
+  const E = { x: 0, y: 0, z: 0 }, M = { x: 0, y: 0, z: 0 }, C = { x: 0, y: 0, z: 0 };
+  let segura = 0, alvoSeguro = null;
+  const out = { vermelha: false, alvo: null, dist: 0, motivo: '', consultas: 0 };
+
+  function reset() { segura = 0; alvoSeguro = null; out.vermelha = false; }
+
+  /* a esfera que a linha da cruz toca PRIMEIRO, entre todos os alvos vivos
+     (o `fire()` escolhe o acerto do mesmo jeito); `b` recebe o resultado */
+  const b = { t: null, tIn: Infinity, proj: 0, x: 0, y: 0, z: 0, r: 0 };
+  function primeiraEsfera(lists, ex, ey, ez, dx, dy, dz) {
+    b.t = null; b.tIn = Infinity;
+    for (let li = 0; li < lists.length; li++) {
+      const list = lists[li];
+      if (!list || typeof list[Symbol.iterator] !== 'function') continue;
+      for (const t of list) {
+        if (!t || !t.alive || t.enabled === false || t.ship === true) continue;
+        if (typeof t.hitSpheres !== 'function') continue;
+        const sph = t.hitSpheres();
+        if (!sph || !sph.length) continue;
+        for (let i = 0; i < sph.length; i++) {
+          const s = sph[i];
+          if (!s || !s.c) continue;
+          const sx = +s.c.x, sy = +s.c.y, sz = +s.c.z, r = +s.r > 0 ? +s.r : 0;
+          if (!Number.isFinite(sx + sy + sz)) continue;
+          const vx = sx - ex, vy = sy - ey, vz = sz - ez;
+          const proj = vx * dx + vy * dy + vz * dz;
+          if (proj < 0) continue;
+          const d2 = vx * vx + vy * vy + vz * vz - proj * proj;
+          if (d2 >= r * r) continue;
+          const tIn = Math.max(0, proj - Math.sqrt(r * r - d2));
+          if (tIn < b.tIn) { b.tIn = tIn; b.t = t; b.proj = proj; b.x = sx; b.y = sy; b.z = sz; b.r = r; }
+        }
+      }
+    }
+  }
+
+  function step(f) {
+    const dt = Math.min(0.1, Math.max(0, +f.dt || 0));
+    out.alvo = null; out.dist = 0; out.motivo = ''; out.consultas = 0;
+    if (!f.ativa) { reset(); out.motivo = 'inativa'; return out; }
+
+    const eye = f.eye || E, dir = f.dir || E;
+    const ex = +eye.x || 0, ey = +eye.y || 0, ez = +eye.z || 0;
+    let dx = +dir.x || 0, dy = +dir.y || 0, dz = +dir.z || 0;
+    const dl = Math.hypot(dx, dy, dz);
+    let achou = null;
+    if (dl > 1e-9) {
+      dx /= dl; dy /= dl; dz /= dl;
+      primeiraEsfera(Array.isArray(f.lists) ? f.lists : [], ex, ey, ez, dx, dy, dz);
+      const range = +f.range > 0 ? +f.range : 0;
+      if (!b.t) out.motivo = 'nada';
+      else if (b.tIn > range) out.motivo = 'alcance';
+      else if (!combate(b.t)) out.motivo = 'neutro';
+      else if (!isRendered(b.t.group || b.t.mesh, root)) out.motivo = 'oculto';
+      else {
+        /* 3 e 4: a linha da cruz até o ponto dela mais perto do centro da
+           parte, e o próprio centro — o corpo do alvo não tampa a si mesmo */
+        E.x = ex; E.y = ey; E.z = ez;
+        M.x = ex + dx * b.proj; M.y = ey + dy * b.proj; M.z = ez + dz * b.proj;
+        C.x = b.x; C.y = b.y; C.z = b.z;
+        out.consultas = 1;
+        if (!los(E, M, 0, b.t)) out.motivo = 'tampado';
+        else if (++out.consultas && coberto(E, M, b.r, C)) out.motivo = 'grama';
+        else if (++out.consultas && !los(E, C, 0, b.t)) out.motivo = 'tampado-centro';
+        else if (++out.consultas && coberto(E, C, b.r, C)) out.motivo = 'grama-centro';
+        else { achou = b.t; out.alvo = b.t; out.dist = b.tIn; out.motivo = 'inimigo'; }
+      }
+    }
+
+    /* A histerese só cobre a cruz que SAIU do alvo (céu, chão — nada sob
+       ela) ou o alvo na borda do alcance. Nunca a cruz sobre alguém que a
+       tela não mostra ou que não é inimigo: sem isto, varrer de um inimigo
+       visível para outro atrás da parede deixava a cruz vermelha sobre a
+       parede por `SEGURA` segundos — e o que a cruz pinta é onde ela ESTÁ. */
+    if (achou) { segura = RETICULA.SEGURA; alvoSeguro = achou; }
+    else if (out.motivo !== 'nada' && out.motivo !== 'alcance') segura = 0;
+    else {
+      segura = Math.max(0, segura - dt);
+      if (alvoSeguro && (!alvoSeguro.alive || alvoSeguro.enabled === false)) segura = 0;
+    }
+    out.vermelha = !!achou || segura > 1e-9;
+    if (!out.vermelha) alvoSeguro = null;
+    return out;
+  }
+
+  /* `last`: a saída do último quadro (QA lê o MOTIVO para validar o cenário;
+     a medida dos testes de tela é a cor computada da retícula) */
+  return { step, reset, get last() { return out; } };
+}

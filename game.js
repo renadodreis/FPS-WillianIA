@@ -14,7 +14,7 @@ import { CFG, SETTINGS, persistSettings, applyMobileCfg, MOBILE_RES_FLOOR,
 import { isMobileEnv } from './js/mobile.js';
 import { createTouchControls, createOrientationGate, clampPitch, lookRadians,
   SPRINT_MAG as TOUCH_SPRINT_MAG } from './js/touchcontrols.js';
-import { createAimAssist, weaponClass } from './js/aimassist.js';
+import { createAimAssist, weaponClass, createReticula, alcanceUtil } from './js/aimassist.js';
 import { createOclusao } from './js/oclusao.js';
 import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } from './js/utils.js';
 import { createTerrain } from './js/terrain.js';
@@ -2024,28 +2024,97 @@ const Oclusao = createOclusao({
   },
   agora: () => performance.now(),
 });
+/* A oclusão se atualiza UMA vez por quadro, quem pedir primeiro: a
+   assistência do toque (antes do tiro) ou a retícula (antes do render). Duas
+   chamadas no mesmo quadro pagariam o orçamento de rasterização (2 ms) e o da
+   grama (1 ms) em dobro. */
+let _quadroN = 0, _oclusaoN = -1;
+function oclusaoDoQuadro() {
+  if (_oclusaoN === _quadroN) return;
+  _oclusaoN = _quadroN;
+  Oclusao.atualizar();
+}
+/* A8(e): o automático só dispara em alvo de COMBATE. `extraTargets` mistura
+   esqueletos, zumbis e bichos com os discos do campo de tiro e o cadeado do
+   cofre; as outras listas (jogadores, chefes, inimigos) são só combate.
+   Cervo é caça, não inimigo — fica sem automático; lobo ataca, entra.
+   A retícula vermelha usa a MESMA categoria. */
+const ehCombate = t => t.combate === true || !extraTargets.includes(t) || Night.list.includes(t) ||
+  Skeletons.list.includes(t) || (t.predator === true && Animals.list.includes(t));
+/* A2: a grama desenhada no CAMINHO inteiro decide se uma parte põe o alvo
+   à vista (crista gramada escondia a cabeça; e a regra de altura no pé
+   deixava o agachado invisível até na rua) */
+const gramaNoCaminho = (e, c, r) => Oclusao.gramaCobre(e, c, r);
+/* a linha de visada da assistência e da retícula: o `rayBlockedAt` do tiro,
+   e depois dele o que a tela desenha (o corpo do alvo não tampa a si mesmo) */
+function linhaDeVisada(e, c, r, t) {
+  _aaOlho.set(e.x, e.y, e.z);
+  _aaDir.set(c.x - e.x, c.y - e.y, c.z - e.z);
+  const len = _aaDir.length();
+  if (len < 1e-3) return true;
+  _aaDir.multiplyScalar(1 / len);
+  if (rayBlockedAt(_aaOlho, _aaDir, len) < len - r) return false;
+  return !Oclusao.tampa(e, c, r, t && (t.group || t.mesh));
+}
 const AimAssist = createAimAssist({
   root: scene, heightAt, grassTop: 1.4 * CFG.GRASS_HEIGHT, // topo da lâmina mais alta (js/grass.js)
-  /* A8(e): o automático só dispara em alvo de COMBATE. `extraTargets` mistura
-     esqueletos, zumbis e bichos com os discos do campo de tiro e o cadeado do
-     cofre; as outras listas (jogadores, chefes, inimigos) são só combate.
-     Cervo é caça, não inimigo — fica sem automático; lobo ataca, entra. */
-  combate: t => t.combate === true || !extraTargets.includes(t) || Night.list.includes(t) ||
-    Skeletons.list.includes(t) || (t.predator === true && Animals.list.includes(t)),
-  /* A2: a grama desenhada no CAMINHO inteiro decide se uma parte põe o alvo
-     à vista (crista gramada escondia a cabeça; e a regra de altura no pé
-     deixava o agachado invisível até na rua) */
-  grama: (e, c, r) => Oclusao.gramaCobre(e, c, r),
-  los(e, c, r, t) {
-    _aaOlho.set(e.x, e.y, e.z);
-    _aaDir.set(c.x - e.x, c.y - e.y, c.z - e.z);
-    const len = _aaDir.length();
-    if (len < 1e-3) return true;
-    _aaDir.multiplyScalar(1 / len);
-    if (rayBlockedAt(_aaOlho, _aaDir, len) < len - r) return false;
-    return !Oclusao.tampa(e, c, r, t && (t.group || t.mesh));
-  },
+  combate: ehCombate,
+  grama: gramaNoCaminho,
+  los: linhaDeVisada,
 });
+
+/* ================================================================
+   RETÍCULA VERMELHA — "posso atirar" (js/aimassist.js, `createReticula`;
+   docs/mobile/referencia-reticula.md). Relato do dono: "a mira não fica
+   vermelha quando apontada aos inimigos".
+
+   A cruz avermelha quando a LINHA DE MIRA do tiro (`miraOrigem`/
+   `miraDirecao`, as mesmas do `fire()`) entra na esfera de acerto de um alvo
+   de COMBATE que a tela mostra, dentro do alcance útil da arma (cresce na
+   mira, como no Halo) e da névoa. Desktop e celular, quadril e ADS — mas no
+   ADS com alça a cruz do HUD já some (M6): lá a referência é a mira da arma,
+   que nem CoD nem Destiny pintam.
+
+   NUNCA VIRA WALLHACK: a visibilidade é a régua da assistência, mais
+   estrita (ver o núcleo) — `rayBlockedAt` do tiro + js/oclusao.js
+   (desenhado, veículo, copa, painel, grama). Por isso a oclusão é
+   atualizada aqui também: no desktop ninguém mais a alimenta, e sem ela o
+   caminhão e a copa não existem para a consulta.
+
+   FORA: XR (não há retícula de tela no headset — a cruz é DOM e o DOM não
+   entra na sessão), veículo e voo (no helicóptero a câmera de perseguição
+   fica 10 m atrás e a linha de mira atravessa o próprio helicóptero; a cruz
+   fica branca, sem mentir), morte, pausa, nave, queda, espectador e
+   cinemática — o mesmo portão do tiro. Chamada UMA vez por quadro, antes do
+   render, com a câmera que a tela vai mostrar. */
+const Reticula = createReticula({
+  root: scene, heightAt, grassTop: 1.4 * CFG.GRASS_HEIGHT,
+  combate: ehCombate, grama: gramaNoCaminho, los: linhaDeVisada,
+});
+const _rtOlho = new THREE.Vector3(), _rtDir = new THREE.Vector3();
+const _rtLists = [_aaVazio, _aaVazio, _aaVazio, _aaVazio];
+const _rtQuadro = { dt: 0, ativa: false, eye: _rtOlho, dir: _rtDir, range: 0, lists: _rtLists };
+let _reticulaVermelha = false;
+function reticulaDoQuadro(dt) {
+  const q = _rtQuadro;
+  q.dt = dt;
+  q.ativa = state.started && !XR.presenting && !state.flying && !tiroBloqueado() && !window.__BR_espectador;
+  if (q.ativa) {
+    oclusaoDoQuadro();
+    miraOrigem(_rtOlho);
+    miraDirecao(_rtDir);
+    // o alcance da arma, e nunca além do que a névoa deixa ver (a régua da assistência)
+    const neblina = scene.fog ? scene.fog.near + (scene.fog.far - scene.fog.near) * 0.5 : Infinity;
+    q.range = Math.min(alcanceUtil(gun, adsT), neblina);
+    _rtLists[0] = window.__MP_remotePlayers || _aaVazio;
+    _rtLists[1] = extraTargets; _rtLists[2] = Bosses; _rtLists[3] = Enemies.list;
+  }
+  const r = Reticula.step(q);
+  if (r.vermelha !== _reticulaVermelha) {
+    _reticulaVermelha = r.vermelha;
+    ui.crosshair.classList.toggle('inimigo', r.vermelha);
+  }
+}
 const _aaQuadro = { dt: 0, eye: null, yaw: 0, pitch: 0, fov: 75, aspect: 1, inYaw: 0, inPitch: 0,
   strafe: 0, ads: 0, weapon: 'rifle', assist: false, autoFire: false, canFire: false, maxRange: 0,
   lists: _aaLists };
@@ -2056,7 +2125,7 @@ function applyTouchLook(dt) {
   /* a grade de oclusão se monta aos poucos (orçamento por quadro) desde que
      a assistência está LIGADA, não só quando o dedo mexe: senão o primeiro
      arrasto do combate cairia com tudo pendente (e pendente = não assiste) */
-  if ((cfg.assist || cfg.autoFire) && !XR.presenting) Oclusao.atualizar();
+  if ((cfg.assist || cfg.autoFire) && !XR.presenting) oclusaoDoQuadro();
   /* sensibilidade: ajuste do jogador × razão Y/X × razão das tangentes do
      zoom (P1-4/P1-5). A base do zoom é o FOV do quadril do momento (85
      correndo), para o sprint não mexer na sensibilidade. O `pointerSpeed`
@@ -3956,6 +4025,7 @@ function renderFrame() {
 }
 function tick(forceDt) {
   const now = performance.now();
+  _quadroN++;   // a oclusão se atualiza uma vez por quadro (oclusaoDoQuadro)
   const frameDt = forceDt !== undefined ? forceDt : (now - lastNow) / 1000;
   const simFrameDt = forceDt !== undefined ? frameDt : Math.min(frameDt, 0.05);
   const dt = simFrameDt * timeScale;
@@ -4289,6 +4359,7 @@ function tick(forceDt) {
     Volcano.update(dt, menuT);
     if (sky.material.uniforms.time) sky.material.uniforms.time.value = menuT;
     camera.updateMatrixWorld();
+    reticulaDoQuadro(dt);   // menu/pausa: apaga (a cruz não pode voltar vermelha do quadro velho)
     renderFrame();
     // menu/lobby/pausa: melhor janela que existe pra linkar shader
     if (forceDt === undefined) prewarmIfIdle(now);
@@ -4461,6 +4532,9 @@ function tick(forceDt) {
   /* render */
   if (sky.material.uniforms.time) sky.material.uniforms.time.value = t; // nuvens andando
   camera.updateMatrixWorld();
+  /* a retícula DEPOIS de tudo que anda neste quadro (alvos, veículos, grama,
+     LOD das árvores) e com a câmera que a tela vai mostrar */
+  reticulaDoQuadro(dt);
   perf.simMs = performance.now() - now; // CPU do jogo; o resto do frame é render
   renderFrame();
 
@@ -5274,6 +5348,9 @@ window.__game = {
   Touch,              // QA: núcleo do toque, elementos e estado do analógico
   AimAssist,          // QA: assistência de mira do toque (last = saída do último frame)
   Oclusao,            // QA: o que a tela desenha e a bala não conhece (estado(), prontoJa())
+  Reticula,           // QA: retícula vermelha (last = motivo do último quadro; a medida é a cor da cruz)
+  reticulaDoQuadro,   // QA/custo: a fiação da retícula de um quadro
+  get adsT() { return adsT; }, // QA: quanto a mira (ADS) engatou — 0 quadril, 1 mirando
   Orient,             // QA: aviso de orientação (bloqueio, escape em retrato)
   controls,           // QA: pointerSpeed é o multiplicador de ADS do olhar
   MenuCam, // QA/captura: goTo('cidade'|'castelo'|'vulcao'|'carro')
