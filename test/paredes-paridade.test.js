@@ -28,7 +28,7 @@
    createStructures (noSeed); da primeira à última troca o contador não
    pode andar.
 
-   Portas 4060–4065 (faixa desta frente).
+   Portas 4060–4066 (faixa desta frente).
    ================================================================ */
 'use strict';
 const { describe, it, before, after } = require('node:test');
@@ -96,6 +96,36 @@ const armadilha = (pilha = false) => `(() => {
   });
 })();`;
 
+/* CONSUMIDOR ASSÍNCRONO no meio do boot. Entre o terreno/grama e as
+   construções o game.js cede a vez uma única vez (`await bootFase(...)`,
+   setTimeout 0) — e o que rodar ali come do Math.random SEEDADO. Medido
+   nesta entrega: uma queda do socket nessa janela faz o socket.io agendar a
+   reconexão com jitter (`Backoff.duration` → Math.random) e o stream anda 1
+   a 2 sorteios; no código antigo as construções mudavam de lugar entre duas
+   cargas da MESMA semente (visto na 987654). Aqui o consumo é direto e
+   determinístico: `n` sorteios num setTimeout 0 armado quando o `init`
+   chega, o mesmo instante da janela. Vai DEPOIS da armadilha. */
+const consumidorAssincrono = n => `(() => {
+  const P = { pedidas: ${n}, comidas: null, antes: null };
+  window.__PERTURBA = P;
+  let init;
+  Object.defineProperty(window, '__MP_init', {
+    configurable: true,
+    get() { return init; },
+    set(v) {
+      init = v;
+      if (P.antes !== null) return;
+      P.antes = -1;
+      setTimeout(() => {
+        const T = window.__RNG_PAREDES;
+        P.antes = T.semeadas;
+        for (let i = 0; i < P.pedidas; i++) Math.random();
+        P.comidas = T.semeadas - P.antes; // só conta o que saiu do stream seedado
+      }, 0);
+    },
+  });
+})();`;
+
 /* AUTOCONTIDA: o puppeteer serializa só o corpo */
 function lerDoJogo() {
   const S = window.__game.Structures;
@@ -108,6 +138,7 @@ function lerDoJogo() {
     trocas: T ? T.trocas : null,
     semeadas: T ? T.semeadas : null,
     deEstruturas: T ? T.deEstruturas : null,
+    perturbacao: window.__PERTURBA || null,
     semente: window.__MP_init && window.__MP_init.worldSeed,
   };
 }
@@ -214,6 +245,32 @@ describe('paredes: cliente (jogo real) × Node (caminho dos bots)', { skip: !CHR
       });
     });
   }
+});
+
+describe('paredes: consumidor assíncrono no boot não move os prédios', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  const N = 7;
+  let h, jogo, node;
+  before(async () => {
+    h = await bootGame({ port: 4066, worldSeed: '424242', autoStart: false,
+      initScripts: [armadilha(false), consumidorAssincrono(N)] });
+    jogo = await h.play(lerDoJogo);
+    node = await doNode('424242');
+  });
+  after(async () => { if (h) await h.close(); });
+
+  it(`pré-condição: ${N} sorteios saíram do stream SEEDADO antes de createStructures`, () => {
+    const P = jogo.perturbacao;
+    assert.ok(P && P.comidas !== null, 'o consumidor assíncrono não rodou');
+    assert.equal(P.comidas, N, `o consumidor comeu ${P.comidas} do stream seedado (o Math.random não era o seedado?)`);
+    assert.ok(jogo.trocas.length >= 1 && jogo.trocas[0].i >= P.antes + N,
+      `a janela não ficou antes das construções: consumo em ${P.antes}, entrada em ${jogo.trocas[0] && jogo.trocas[0].i}`);
+  });
+
+  it('Structures.walls continua == construtor puro no Node (o Node não sabe do consumo)', () => {
+    const r = comparar(jogo.paredes, node.paredes, node.origens);
+    assert.equal(r.diferentes, 0, laudo(r));
+    assert.equal(comparar(jogo.escombros, node.escombros).diferentes, 0, 'escombros mudaram');
+  });
 });
 
 /* A comparação acima só vale se ela PODE falhar. Sem navegador: o mesmo
