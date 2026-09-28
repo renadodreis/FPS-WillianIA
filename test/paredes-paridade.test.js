@@ -140,8 +140,18 @@ function lerDoJogo() {
     deEstruturas: T ? T.deEstruturas : null,
     perturbacao: window.__PERTURBA || null,
     semente: window.__MP_init && window.__MP_init.worldSeed,
+    /* o que o stream seedado gera DEPOIS das construções: se algo de fora
+       comer dele no meio do boot, é isto que muda de lugar */
+    mundo: (() => {
+      const g = window.__game, pos = o => o && o.position ? [o.position.x, o.position.z].map(v => +v.toFixed(3)) : null;
+      return {
+        inimigos: (g.Enemies.list || []).map(e => pos(e.group)),
+        bichos: (g.Animals.list || []).map(a => pos(a.group || a.mesh)),
+      };
+    })(),
   };
 }
+let mundoControle = null;   // semente 424242 no desktop, SEM consumidor (preenchido abaixo)
 
 const simples = w => ({ x0: w.x0, x1: w.x1, y0: w.y0, y1: w.y1, z0: w.z0, z1: w.z1,
   city: !!w.city, noCollide: !!w.noCollide, castle: !!w.castle });
@@ -206,6 +216,7 @@ describe('paredes: cliente (jogo real) × Node (caminho dos bots)', { skip: !CHR
         h = await bootGame({ port: porta, worldSeed: semente, autoStart: false, query, initScripts: [armadilha(pilha)] });
         jogo = await h.play(lerDoJogo);
         node = await doNode(semente);
+        if (semente === '424242' && !query) mundoControle = jogo.mundo;
       });
       after(async () => { if (h) await h.close(); });
 
@@ -258,12 +269,20 @@ describe('paredes: consumidor assíncrono no boot não move os prédios', { skip
   });
   after(async () => { if (h) await h.close(); });
 
-  it(`pré-condição: ${N} sorteios saíram do stream SEEDADO antes de createStructures`, () => {
+  /* ERA pré-condição ("7 sorteios saíram do stream SEEDADO") e descrevia o
+     defeito: na pausa do boot quem rodasse comia do stream do mundo. Desde
+     que `bootFase` devolve o Math.random NATIVO durante a pausa, o consumidor
+     roda e come ZERO do stream seedado — é a afirmação do produto agora. */
+  it(`o consumidor assíncrono roda na pausa do boot e come ZERO do stream seedado`, () => {
     const P = jogo.perturbacao;
-    assert.ok(P && P.comidas !== null, 'o consumidor assíncrono não rodou');
-    assert.equal(P.comidas, N, `o consumidor comeu ${P.comidas} do stream seedado (o Math.random não era o seedado?)`);
-    assert.ok(jogo.trocas.length >= 1 && jogo.trocas[0].i >= P.antes + N,
-      `a janela não ficou antes das construções: consumo em ${P.antes}, entrada em ${jogo.trocas[0] && jogo.trocas[0].i}`);
+    assert.ok(P && P.comidas !== null, 'cenário inválido: o consumidor assíncrono não rodou');
+    assert.equal(P.comidas, 0, `o consumidor comeu ${P.comidas} do stream seedado na pausa do boot`);
+  });
+
+  it('o resto do mundo (inimigos, bichos) sai IDÊNTICO ao boot sem consumidor', () => {
+    assert.ok(mundoControle, 'cenário inválido: o boot de controle (424242, desktop) não rodou antes');
+    assert.ok(mundoControle.inimigos.length > 0 && mundoControle.bichos.length > 0, 'cenário inválido: mundo vazio');
+    assert.deepEqual(jogo.mundo, mundoControle, 'inimigos/bichos mudaram de lugar por causa de um consumidor assíncrono no boot');
   });
 
   it('Structures.walls continua == construtor puro no Node (o Node não sabe do consumo)', () => {

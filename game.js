@@ -203,11 +203,27 @@ function paintMenu() {
    pra continuar. `bootFases` é só o registro cru pra QA (test/carregamento-
    progresso.test.js) prezar que são fases DE VERDADE, não uma etiqueta
    estática mudando de cor. */
+/* A PAUSA DO BOOT NÃO PODE COMER DO SORTEIO DO MUNDO. Depois do `init` o
+   Math.random global vira o stream SEEDADO (mesma semente = mesmo mundo pra
+   todos), e o boot cede a vez algumas vezes (bootFase, setTimeout 0). O que
+   rodasse na pausa comia desse stream: o socket.io sorteia o atraso de
+   reconexão (Backoff) e o parâmetro anti-cache de cada requisição de polling.
+   Uma queda de conexão no carregamento punha inimigos, bichos e ÁRVORES em
+   outro lugar só para aquele cliente — árvore é cobertura. Durante a pausa o
+   Math.random volta a ser o NATIVO; na volta, o seedado continua de onde
+   parou. test/paredes-paridade.test.js ("consumidor assíncrono"). */
+const __randNativo = Math.random;
+async function cederVezNoBoot() {
+  const semeado = Math.random;
+  Math.random = __randNativo;
+  try { await new Promise(resolve => setTimeout(resolve, 0)); }
+  finally { Math.random = semeado; }
+}
 async function bootFase(label) {
   MenuGate.bootLabel = label;
   MenuGate.bootFases.push(label);
   paintMenu();
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await cederVezNoBoot();
 }
 /* ganchos do multiplayer-client.js: a sala online caiu / voltou (o BR pode
    chegar atrasado, e nesse caso o menu volta a ser dele) */
@@ -5021,7 +5037,7 @@ paintMenu();
    que falta é fiação de UI barata. Sem este `await`, o clique já valeria
    mas ninguém veria o botão destravar antes do módulo inteiro terminar
    (mesmo motivo do bootFase, só que aqui não muda etiqueta — só pinta). */
-await new Promise(resolve => setTimeout(resolve, 0));
+await cederVezNoBoot();
 
 /* ---- botão de VR ----
    Só nasce se `isSessionSupported('immersive-vr')` disser sim (ou se for um
