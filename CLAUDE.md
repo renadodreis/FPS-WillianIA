@@ -286,6 +286,12 @@ escrita pelo validador — quem constrói não edita).
   `cityDestruction` (`destroyed`; a cinemática ainda conta como de pé). O som
   atravessa parede. Árvore e rocha continuam invisíveis para o bot (sorteadas
   no stream global depois do terreno — o Node não as reconstrói).
+- **Construção se ASSENTA no terreno** (`js/paredes.js`): fundação até o ponto
+  mais baixo da pegada, muro de base em trechos que descem a encosta, caixote
+  no chão debaixo dele, portão e rampa do castelo com aterro. Antes, peça
+  montada na altura do centro flutuava até 8,2 m na encosta e bicho, jogador e
+  bala passavam por baixo. **Teste que escolhe parede pela altura da CAIXA
+  erra** (caixote com fundação tem caixa de 2,1 m): use altura acima do chão.
 
 ## Fluxo de trabalho (git flow)
 
