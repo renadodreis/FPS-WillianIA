@@ -279,6 +279,13 @@ escrita pelo validador — quem constrói não edita).
   engajamento. O relógio literal do CoD4 (3 s desde o último disparo) devolve a
   imunidade no ciclo 3 s/2 s — medido. Quem se esconde > 3 s vira engajamento
   novo a cada volta e continua imune (consequência da régua B2).
+  **Bots conhecem os prédios** (B7): `js/paredes.js` reconstrói em Node, pela
+  semente, as mesmas caixas do cliente (paridade testada). Terreno e paredes
+  carregam JUNTOS — se um falhar o bot fica cego e grita no stderr (terreno sem
+  paredes seria wallhack silencioso). A cidade troca de paredes no evento
+  `cityDestruction` (`destroyed`; a cinemática ainda conta como de pé). O som
+  atravessa parede. Árvore e rocha continuam invisíveis para o bot (sorteadas
+  no stream global depois do terreno — o Node não as reconstrói).
 
 ## Fluxo de trabalho (git flow)
 
