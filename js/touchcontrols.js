@@ -684,7 +684,7 @@ export function createTouchControls(deps) {
       core, enabled: false, fallback: false, el: null,
       getMove: core.getMove,
       takeLook: core.takeLook,
-      setPlaying() {}, releaseAll() {}, frame() {},
+      setPlaying() {}, releaseAll() {}, soltarBotoes() {}, frame() {},
       lookSens: LOOK_RAD_PER_CSS_PX,
       /* sem toque não há ajuste de toque, escala de ADS nem tiro automático:
          o mouse segue com o `pointerSpeed` de sempre */
@@ -733,7 +733,7 @@ export function createTouchControls(deps) {
     /* false se algum ponteiro que moveu mira/analógico desde o último
        takeLook não era dedo — game.js desliga assistência e automático */
     get lookIsTouch() { return dedoNoQuadro; },
-    setPlaying, releaseAll, frame, bindSettings,
+    setPlaying, releaseAll, soltarBotoes, frame, bindSettings,
     /* corrida travada pelo analógico (SPRINT_LOCK_R). O jogo não precisa ler:
        travado, o módulo sai 1 e o `mag > SPRINT_MAG` de sempre já corre. */
     get sprintLocked() { return core.locked(); },
@@ -1018,6 +1018,22 @@ export function createTouchControls(deps) {
     if (moveEl) moveEl.classList.remove('on');
     for (const code in veh) if (veh[code]) { veh[code] = false; sendKey('keyup', code); }
     core.releaseAll();
+  }
+
+  /* ENTRAR no veículo — decisão do dono (2026-09-28): "já entra dirigindo".
+     Solta os BOTÕES (tiro, pulo, mira, agachar…: o que servia a pé não pode
+     virar subida do helicóptero nem tiro da janela) e MANTÉM o analógico: no
+     quadro seguinte `frame(inVehicle)` o transforma em volante. Sair do
+     veículo continua `releaseAll` (senão o boneco sai andando sozinho). */
+  function soltarBotoes() {
+    for (const act of TOUCH_ACTS) letGo(act);
+    mouse.shooting = false;
+    mouse.aiming = false;
+    adsOn = false;
+    autoFire = false;
+    autoHeld = false;
+    for (const el of pressedEl.values()) el.classList.remove('on');
+    pressedEl.clear();
   }
 
   /* ---- por frame ---- */

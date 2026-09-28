@@ -76,7 +76,12 @@ describe('C10 — troca de veículo com o dedo na tela (celular V3)', { skip: !C
   });
   after(async () => { if (h) await h.close(); });
 
-  it('dado ENTRAR no carro pelo USAR com o polegar no analógico, então o carro não sai acelerando; um novo gesto dirige', async () => {
+  /* DECISÃO DO DONO (2026-09-28): "já entra dirigindo". Ao ENTRAR, o
+     polegar que estava no analógico passa a ser o volante na hora (antes o
+     contrato C10 exigia levantar e encostar de novo — "o carro não anda").
+     Ao SAIR continua soltando tudo (o boneco não sai andando). Botões
+     (tiro, pulo…) soltam nas duas trocas. */
+  it('dado ENTRAR no carro pelo USAR com o polegar no analógico, então JÁ SAI DIRIGINDO — e nenhum botão fica preso', async () => {
     const r = await h.play(() => {
       const QA = window.QA, G = QA.G, T = window.VTQA;
       QA.reset(); G.teleportToCar(); QA.tick(6);
@@ -104,10 +109,12 @@ describe('C10 — troca de veículo com o dedo na tela (celular V3)', { skip: !C
     assert.equal(r.dirigindo, true, 'cenário inválido: o USAR não pôs o jogador no carro');
     console.log(`  [entrar no carro] presos: [${r.presos.join(', ')}]; ${r.kmh.toFixed(2)} km/h 0,5 s depois, ` +
       `${r.kmhArrasto.toFixed(2)} arrastando o mesmo dedo; dedo novo: ${r.kmhNovo.toFixed(1)} km/h`);
-    assert.deepEqual(r.presos, [], 'ficou preso ao entrar no carro com o dedo na tela');
-    assert.ok(r.kmh < 1.8, `o carro saiu acelerando pelo polegar que andava: ${r.kmh.toFixed(2)} km/h (≥ 0,5 m/s)`);
-    assert.ok(r.kmhArrasto < 1.8, `o dedo esquecido voltou a comandar ao arrastar: ${r.kmhArrasto.toFixed(2)} km/h`);
-    assert.ok(r.kmhNovo > 5, `controle positivo falhou: um dedo NOVO no analógico não dirigiu (${r.kmhNovo.toFixed(2)} km/h)`);
+    // o volante é o analógico: W e o anel aceso SÃO o polegar; nada além disso
+    const botoes = r.presos.filter(p => p !== 'KeyW' && p !== '.on em tcMove');
+    assert.deepEqual(botoes, [], 'botão ficou preso ao entrar no carro com o dedo na tela');
+    assert.ok(r.kmh > 5, `entrou com o polegar no analógico e o carro não andou: ${r.kmh.toFixed(2)} km/h em 0,5 s`);
+    assert.ok(r.kmhArrasto > 5, `o polegar deixou de dirigir ao arrastar: ${r.kmhArrasto.toFixed(2)} km/h`);
+    assert.ok(r.kmhNovo > 5, `um dedo NOVO no analógico não dirigiu (${r.kmhNovo.toFixed(2)} km/h)`);
   });
 
   it('dado SAIR do carro pelo USAR com o polegar no analógico, então o boneco fica parado; um novo gesto anda', async () => {
@@ -149,13 +156,16 @@ describe('C10 — troca de veículo com o dedo na tela (celular V3)', { skip: !C
     assert.ok(r.andouNovo > 1, `controle positivo falhou: um dedo NOVO no analógico não andou (${r.andouNovo.toFixed(3)} m)`);
   });
 
-  it('dado ENTRAR no helicóptero pelo USAR com ⇧, analógico e ATIRAR apertados, então ele não sobe, não voa e não atira', async () => {
+  it('dado ENTRAR no helicóptero pelo USAR com ⇧, analógico e ATIRAR apertados, então o analógico JÁ VOA — mas ⇧ e ATIRAR de quando estava a pé não sobem nem atiram', async () => {
     const r = await h.play(() => {
       const QA = window.QA, G = QA.G, T = window.VTQA, P = T.MP.player;
       QA.reset();
       const g = G.arsenal[0]; g.locked = false; G.switchWeapon(0);
       g.mag = g.magSize; g.reserve = 999; g.reloading = false; QA.tick(40);
       const hp = G.Heli.group.position; P.pos.set(hp.x + 3, hp.y, hp.z); QA.tick(6);
+      /* o analógico agora VOA ao entrar: o helicóptero sai do heliponto — e o
+         caso seguinte monta o jogador ao lado dele. Devolvido no fim. */
+      const heli0 = { p: G.Heli.group.position.clone(), q: G.Heli.group.quaternion.clone() };
       const dedoTiro = T.segurar(T.btn('fire'), 5);
       const pulo = T.segurar(T.btn('jump'), 6);
       const polegar = T.segurar(T.stick(), 7, 0, -120);
@@ -184,14 +194,17 @@ describe('C10 — troca de veículo com o dedo na tela (celular V3)', { skip: !C
       pulo2.soltar(); tiro2.soltar(); QA.tick(2);
       if (G.state.flying) G.tryToggleCar();
       QA.tick(4);
+      G.Heli.group.position.copy(heli0.p); G.Heli.group.quaternion.copy(heli0.q);
+      QA.tick(2);
       return { voando, presos, subiu, voou, tiros, subiuNovo, tirosNovo };
     });
     assert.equal(r.voando, true, 'cenário inválido: o USAR não pôs o jogador no helicóptero');
     console.log(`  [entrar no heli] presos: [${r.presos.join(', ')}]; em 0,5 s subiu ${r.subiu.toFixed(3)} m, ` +
       `voou ${r.voou.toFixed(3)} m, ${r.tiros} tiros; dedos novos: subiu ${r.subiuNovo.toFixed(2)} m, ${r.tirosNovo} tiros`);
-    assert.deepEqual(r.presos, [], 'ficou preso ao entrar no helicóptero com o dedo na tela');
+    const botoes = r.presos.filter(p => p !== 'KeyW' && p !== '.on em tcMove');
+    assert.deepEqual(botoes, [], 'botão ficou preso ao entrar no helicóptero com o dedo na tela');
     assert.ok(Math.abs(r.subiu) < 0.25, `o ⇧ que pulava fez o helicóptero subir ${r.subiu.toFixed(3)} m`);
-    assert.ok(r.voou < 0.25, `o polegar que andava fez o helicóptero voar ${r.voou.toFixed(3)} m`);
+    assert.ok(r.voou > 0.25, `entrou com o polegar no analógico e o helicóptero não voou (${r.voou.toFixed(3)} m)`);
     assert.equal(r.tiros, 0, `o dedo que atirava a pé seguiu atirando do helicóptero (${r.tiros} tiros)`);
     assert.ok(r.subiuNovo > 1, `controle positivo falhou: ⇧ novo não subiu (${r.subiuNovo.toFixed(3)} m)`);
     assert.ok(r.tirosNovo > 0, 'controle positivo falhou: ATIRAR novo não atirou do helicóptero');

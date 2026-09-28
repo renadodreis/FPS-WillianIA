@@ -100,7 +100,7 @@ export function createHeli(deps) {
     chaseCamPos.copy(camera.position);
     // celular: ⇧/⇩ são os botões de pular/agachar, que emitem o mesmo Space/Ctrl
     centerMsg(isMobile ? '⇧ sobe · ⇩ desce · analógico voa' : 'ESPAÇO sobe · CTRL desce · WASD voa', 2600);
-    aoTrocar();
+    aoTrocar(true);   // entrando: o analógico já voa (decisão do dono)
     return true;
   }
   function exit() {

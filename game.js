@@ -3205,7 +3205,11 @@ const _lookM = new THREE.Matrix4();
    troca e não solta nada): aqui para o carro, e dentro de js/heli.js para o
    helicóptero — a saída dele pelo USAR vem de js/interact.js direto em
    `Heli.exit()`, sem passar por `tryToggleCar`. */
-function soltarToqueDaTroca() { Touch.releaseAll(); }
+/* Decisão do dono (2026-09-28): "já entra dirigindo" — ao ENTRAR só os
+   botões soltam e o analógico vira o volante na hora; ao SAIR solta tudo. */
+function soltarToqueDaTroca(entrando = false) {
+  if (entrando) Touch.soltarBotoes(); else Touch.releaseAll();
+}
 
 function tryToggleCar() {
   if (state.flying) { Heli.exit(); return; }
@@ -3247,7 +3251,7 @@ function tryToggleCar() {
       SFX.carDoor();
       SFX.engineStart();
       chaseCamPos.copy(camera.position); // a câmera parte de onde está (lerp suave)
-      soltarToqueDaTroca();
+      soltarToqueDaTroca(true);
     }
   }
 }
