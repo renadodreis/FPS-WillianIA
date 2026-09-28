@@ -648,7 +648,10 @@ describe('Assistência de mira no toque — celular', { skip: !CHROME && 'Chrome
         for (let k = 0; k < 16; k++) {
           const a = k * Math.PI / 8;
           QA.reset(cx + Math.sin(a) * dist, cz + Math.cos(a) * dist);
-          QA.tick(60);                               // a grama em volta do ponto se refaz
+          /* a grama em volta do ponto se refaz: espera a FILA zerar — com um
+             número fixo de quadros a busca parava em pontos diferentes a cada
+             rodada (9 m ou 12 m), conforme o que já tinha sido refeito */
+          for (let q = 0; q < 600 && (q < 10 || G.Grass.pendentes > 0); q++) QA.tick(1);
           mirar();
           QA.tick(1);
           px = A.px(d);

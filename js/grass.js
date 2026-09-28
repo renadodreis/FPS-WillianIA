@@ -645,5 +645,8 @@ export function createGrass(deps) {
   }
 
   return { update, material, PATCH_RADIUS, refreshAll, refreshNear, debugSample, debugChunkBytes, stampTrack,
+    /* QA: chunks ainda na fila de refazer — teste que salta o jogador espera
+       zerar antes de medir o que a grama cobre (senão mede grama velha) */
+    get pendentes() { return pending.length; },
     debugLod, debugAneis, debugBladeShapes, debugForceLod, debugCorteDeFade, debugCortes };
 }
