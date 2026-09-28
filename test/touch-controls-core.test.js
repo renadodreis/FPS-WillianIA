@@ -140,6 +140,69 @@ describe('núcleo dos controles de toque — analógico', () => {
   });
 });
 
+/* ================================================================
+   ANDAR PELO ANALÓGICO = ANDAR PELO TECLADO NO TOPO DA FAIXA.
+   Medido pelo caminho real (toque do DevTools, Galaxy S22 780×360): o
+   vetor de andar valia a própria deflexão, e a faixa de andar acaba no
+   limiar de corrida (era 0,85) — o dedo nunca passava de 0,85 × 5,2 = 4,42 m/s
+   andando, 85 % do W do teclado, e saltava para 8,6 correndo. Meio curso
+   dava 2,24 m/s. Quem joga no toque andava 15 % mais devagar que quem
+   joga no teclado na MESMA partida.
+   ================================================================ */
+describe('núcleo dos controles de toque — andar (paridade com o teclado)', () => {
+  const polegar = (c, frac, ang = 0) => {
+    const r = STICK_RADIUS * frac, a = ang * Math.PI / 180;
+    c.onStickMove(1, Math.sin(a) * r, -Math.cos(a) * r);
+    return c.getMove();
+  };
+  it('dado o dedo logo antes do limiar de corrida, então o vetor de andar é o do teclado (módulo 1) e ainda não corre', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    /* deflexão pós-zona-morta logo abaixo do limiar: m = (f − 0,12)/0,88 */
+    const f = (SPRINT_MAG - 0.001) * (1 - STICK_DEADZONE) + STICK_DEADZONE;
+    const m = polegar(c, f);
+    assert.ok(m.mag < SPRINT_MAG, `cenário inválido: já corre (mag ${m.mag})`);
+    const modulo = Math.hypot(m.x, m.y);
+    assert.ok(modulo > 0.998, `no topo da faixa de andar o vetor vale ${modulo.toFixed(4)} — o teclado anda 1`);
+  });
+  it('dada a faixa de andar, então a velocidade cresce sempre, com ≥ 5 patamares, e a zona morta segue 0,12', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    const mods = [];
+    const fLimiar = SPRINT_MAG * (1 - STICK_DEADZONE) + STICK_DEADZONE;
+    for (let f = 0; f <= fLimiar; f += 0.004) mods.push(Math.hypot(polegar(c, f).x, polegar(c, f).y));
+    for (let i = 1; i < mods.length; i++)
+      assert.ok(mods[i] >= mods[i - 1] - 1e-12, `a velocidade caiu entre ${(i - 1) * 0.004} e ${i * 0.004} do raio`);
+    const patamares = new Set(mods.filter(v => v > 0).map(v => v.toFixed(3))).size;
+    assert.ok(patamares >= 5, `só ${patamares} patamares de andar`);
+    /* a zona morta efetiva é a primeira deflexão que anda */
+    let dzEf = null;
+    for (let f = 0; f <= 0.3; f += 0.0005) { const m = polegar(c, f); if (Math.hypot(m.x, m.y) > 0) { dzEf = f; break; } }
+    assert.ok(Math.abs(dzEf - STICK_DEADZONE) <= 0.005, `zona morta efetiva ${dzEf}, declarada ${STICK_DEADZONE}`);
+  });
+  it('dada a faixa de andar, então a DIREÇÃO é exata em 16 rumos (a curva mexe só no módulo)', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    for (let k = 0; k < 16; k++) {
+      const ang = k * 22.5;
+      for (const f of [0.3, 0.6, 0.85]) {
+        const m = polegar(c, f, ang);
+        const medido = Math.atan2(m.x, m.y) * 180 / Math.PI;
+        const erro = Math.abs(((medido - ang + 540) % 360) - 180);
+        assert.ok(erro < 1e-6, `rumo ${ang}° a ${f} do raio saiu a ${medido.toFixed(3)}°`);
+      }
+    }
+  });
+  it('dado o volante e o desenho do knob, então eles leem a DEFLEXÃO do dedo (px, py), não o vetor de andar', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    const f = 0.5 * (1 - STICK_DEADZONE) + STICK_DEADZONE;   // deflexão 0,5
+    const m = polegar(c, f, 90);
+    assert.ok(Math.abs(m.px - 0.5) < 1e-9 && Math.abs(m.py) < 1e-9, `deflexão (${m.px}, ${m.py}), esperada (0,5; 0)`);
+    assert.ok(Math.abs(m.px - m.mag) < 1e-9, 'a deflexão não bate com mag');
+  });
+});
+
 describe('núcleo dos controles de toque — olhar', () => {
   it('dado um arrasto, então o delta acumulado é a soma dos passos', () => {
     const c = createTouchCore();
@@ -536,6 +599,13 @@ describe('núcleo dos controles de toque — sensibilidade', () => {
     assert.equal(lixo.autoFire, true);
     assert.equal(lixo.fireLeft, true);
     assert.equal(touchConfig(null).look, TOUCH_DEFAULTS.touchLook);
+    /* aceleração nasce 0 (linear, régua M3e) e curso nasce 100 % (58 px) */
+    assert.equal(d.accel, 0, 'a aceleração do olhar tem de nascer DESLIGADA (linear)');
+    assert.equal(d.stick, 1);
+    const fora = touchConfig({ touchLookAccel: 7, touchStick: 0.1 });
+    assert.equal(fora.accel, 1, 'teto da aceleração');
+    assert.equal(fora.stick, 0.6, 'piso do curso');
+    assert.equal(touchConfig({ touchLookAccel: 'x', touchStick: null }).accel, 0);
   });
 
   it('dado localStorage que lança (aba privada, cota cheia), então salvar não derruba nada', () => {
@@ -975,5 +1045,150 @@ describe('núcleo dos controles de toque — contagem de dedos donos', () => {
     c.press('ads', 4);
     c.releaseAll();
     assert.equal(c.ativos(), 0);
+  });
+});
+
+/* ================================================================
+   ACELERAÇÃO DO OLHAR — opção do menu, PADRÃO 0 (linear: régua M3e).
+   Com ela ligada, o ganho depende da VELOCIDADE DO DEDO, medida pelo
+   relógio do EVENTO de toque — nunca pelo dt do quadro. Critical Ops 1.70
+   publicou exatamente o defeito contrário: "Fixed aim acceleration being
+   dependent on framerate" (docs/mobile/referencia-mira-toque.md §3.1).
+   ================================================================ */
+describe('núcleo dos controles de toque — aceleração do olhar', () => {
+  let ganhoDoOlhar, LOOK_ACCEL;
+  before(async () => { ({ ganhoDoOlhar, LOOK_ACCEL } = await import('../js/touchcontrols.js')); });
+
+  /* um dedo que arrasta `px` na horizontal a `pxs` px/s, com um evento a
+     cada 1000/`hz` ms; `quadro` = de quantos em quantos eventos o jogo
+     consome (takeLook) — é a taxa de quadros */
+  function arrastar(c, px, pxs, hz, quadro = 1, t0 = 1000) {
+    const passos = Math.max(1, Math.round(px / pxs * hz)), dt = px / pxs * 1000 / passos;
+    c.onLookStart(9, 0, 0, t0);
+    let total = 0;
+    for (let i = 1; i <= passos; i++) {
+      c.onLookMove(9, px * i / passos, 0, t0 + dt * i);
+      if (i % quadro === 0) total += c.takeLook().dx;
+    }
+    total += c.takeLook().dx;
+    c.onLookEnd(9);
+    return total;
+  }
+
+  it('dado o PADRÃO (aceleração 0), então o giro é linear em qualquer velocidade de dedo', () => {
+    const c = createTouchCore();
+    for (const pxs of [30, 300, 3000, 30000]) {
+      const g = arrastar(c, 120, pxs, 120);
+      assert.ok(Math.abs(g - 120) < 1e-9, `a ${pxs} px/s o padrão acumulou ${g} px (linear pede 120)`);
+    }
+  });
+
+  it('dada a aceleração ligada, então o MESMO dedo dá o MESMO giro a 30, 60, 120 e 240 Hz de evento e de quadro', () => {
+    const c = createTouchCore();
+    c.setLookAccel(1);
+    for (const pxs of [80, 400, 1200, 4000]) {
+      const ref = arrastar(c, 180, pxs, 240, 4);
+      for (const [hz, quadro] of [[30, 1], [60, 1], [60, 2], [120, 2], [240, 1], [240, 8]]) {
+        const g = arrastar(c, 180, pxs, hz, quadro);
+        assert.ok(Math.abs(g / ref - 1) < 1e-3,
+          `${pxs} px/s: a ${hz} Hz (quadro a cada ${quadro}) girou ${g.toFixed(3)} px, a 240 Hz ${ref.toFixed(3)}`);
+      }
+    }
+  });
+
+  it('dada a aceleração ligada, então devagar gira IGUAL ao linear, rápido gira até 2×, e o ganho é monotônico e limitado', () => {
+    const vs = [];
+    for (let v = 0; v <= 20000; v += 25) vs.push(v);
+    const gs = vs.map(v => ganhoDoOlhar(v, 1));
+    for (let i = 1; i < gs.length; i++) assert.ok(gs[i] >= gs[i - 1] - 1e-12, `o ganho caiu em ${vs[i]} px/s`);
+    assert.ok(Math.abs(gs[0] - LOOK_ACCEL.ganhoLento) < 1e-9, `ganho parado ${gs[0]}`);
+    assert.ok(Math.abs(gs[gs.length - 1] - LOOK_ACCEL.ganhoRapido) < 1e-9, `ganho no talo ${gs[gs.length - 1]}`);
+    assert.equal(LOOK_ACCEL.ganhoLento, 1, 'devagar a mira fina tem de ficar a do linear');
+    assert.equal(LOOK_ACCEL.ganhoRapido, 2, 'o teto é o 2× das funções de Graham e Trankle & Deutschmann');
+    /* rampa entre 0,05 e 0,2 m/s (libpointing), em px de CSS pelo dp do Android */
+    const mm = 160 / 25.4;
+    assert.ok(Math.abs(LOOK_ACCEL.vLenta - 50 * mm) < 1 && Math.abs(LOOK_ACCEL.vRapida - 200 * mm) < 1,
+      `limiares ${LOOK_ACCEL.vLenta}/${LOOK_ACCEL.vRapida} px/s não são 0,05/0,2 m/s`);
+    assert.equal(ganhoDoOlhar(LOOK_ACCEL.vLenta * 0.99, 1), 1);
+    assert.ok(Math.abs(ganhoDoOlhar((LOOK_ACCEL.vLenta + LOOK_ACCEL.vRapida) / 2, 1) - 1.5) < 1e-12, 'a rampa não é linear');
+    // metade do ajuste = metade do caminho entre o linear e a curva cheia
+    for (const v of [0, LOOK_ACCEL.vLenta, (LOOK_ACCEL.vLenta + LOOK_ACCEL.vRapida) / 2, 1e5])
+      assert.ok(Math.abs(ganhoDoOlhar(v, 0.5) - (1 + (ganhoDoOlhar(v, 1) - 1) * 0.5)) < 1e-12);
+    assert.equal(ganhoDoOlhar(5000, 0), 1);
+    assert.equal(ganhoDoOlhar(NaN, 1), 1, 'velocidade lixo tem de dar ganho 1');
+  });
+
+  it('dado o dedo que mira pelo ATIRAR, então a mesma curva vale, vezes o fator do botão', () => {
+    const c = createTouchCore({ fireLook: 0.5 });
+    c.setLookAccel(1);
+    c.press('fire', 7, 0, 0, 1000);
+    for (let i = 1; i <= 30; i++) c.onPressMove(7, 4000 * i / 240, 0, 1000 + i * 1000 / 240);  // 4000 px/s
+    const rapido = c.takeLook().dx;
+    const esperado = 500 * 0.5 * ganhoDoOlhar(4000, 1);
+    assert.ok(Math.abs(rapido / esperado - 1) < 1e-6, `ATIRAR rápido: ${rapido} px, curva × fator pede ${esperado}`);
+  });
+
+  it('dado evento sem relógio (despachado sem timeStamp), então o ganho é 1 e nada vira NaN', () => {
+    const c = createTouchCore();
+    c.setLookAccel(1);
+    c.onLookStart(3, 0, 0);
+    c.onLookMove(3, 50, 0);
+    c.onLookMove(3, 80, 'x');
+    const l = c.takeLook();
+    assert.equal(l.dx, 80);
+    assert.equal(Number.isFinite(l.dy), true);
+    c.setLookAccel('lixo');
+    assert.equal(c.lookAccel, 0, 'ajuste lixo tem de cair no padrão (linear)');
+  });
+});
+
+/* ================================================================
+   LIMIAR DE CORRIDA E CURSO DO ANALÓGICO.
+   · Correr a partir de 0,8 de deflexão: Apple, WWDC26 "Make your game
+     great with touch" — "A small tilt means the character moves at a
+     normal pace. If it's a big tilt, the character will sprint", com
+     `if magnitude > 0.8`; o Touch Adaptation Kit da Microsoft troca andar
+     por correr em 0,75. Este jogo pedia 0,85 — o mais alto dos três.
+   · Curso (raio) ajustável: o polegar e a tela variam; o Touch Adaptation
+     Kit expõe o tamanho "to match user ergonomic preferences".
+   ================================================================ */
+describe('núcleo dos controles de toque — limiar de corrida e curso', () => {
+  it('dada deflexão de 0,82 (pós-zona-morta), então CORRE; a 0,78 ainda anda no topo', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    const bruto = m => (m * (1 - STICK_DEADZONE) + STICK_DEADZONE) * STICK_RADIUS;
+    c.onStickMove(1, 0, -bruto(0.82));
+    assert.ok(c.getMove().mag > SPRINT_MAG, `0,82 não corre (limiar ${SPRINT_MAG})`);
+    c.onStickMove(1, 0, -bruto(0.78));
+    const m = c.getMove();
+    assert.ok(m.mag < SPRINT_MAG, `0,78 já corre (limiar ${SPRINT_MAG})`);
+    assert.ok(Math.hypot(m.x, m.y) > 0.97, 'perto do limiar o andar tem de estar perto do teclado');
+  });
+  it('dado o curso ajustado para 40 px, então o talo chega em 40 px, a zona morta escala junto, e a trava também', () => {
+    const c = createTouchCore();
+    c.setRadius(40);
+    assert.equal(c.radius, 40);
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, -40);
+    assert.ok(Math.abs(c.getMove().mag - 1) < 1e-9, `40 px com curso 40 não é o talo (${c.getMove().mag})`);
+    c.onStickMove(1, 0, -40 * STICK_DEADZONE * 0.9);
+    assert.equal(c.getMove().mag, 0, 'a zona morta não acompanhou o curso');
+    c.onStickMove(1, 0, -40 * 1.62);
+    assert.equal(c.locked(), true, 'a trava não acompanhou o curso (1,6 × 40 px)');
+  });
+  it('dado curso lixo, então volta ao padrão sem lançar', () => {
+    const c = createTouchCore();
+    for (const lixo of [NaN, -5, 0, 'x', undefined]) {
+      c.setRadius(lixo);
+      assert.equal(c.radius, STICK_RADIUS, `curso ${String(lixo)} virou ${c.radius}`);
+    }
+  });
+  it('dado mudar o curso com o dedo parado, então o movimento é recalculado na hora (sem esperar o próximo pointermove)', () => {
+    const c = createTouchCore();
+    c.onStickStart(1, 0, 0);
+    c.onStickMove(1, 0, -29);
+    const antes = c.getMove().mag;
+    c.setRadius(29);
+    assert.ok(antes < 0.6 && Math.abs(c.getMove().mag - 1) < 1e-9, `mag ${antes} → ${c.getMove().mag}`);
   });
 });

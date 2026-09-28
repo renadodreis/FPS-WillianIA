@@ -321,7 +321,7 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
     const esperado = 120 * 0.0032 * 180 / Math.PI;   // 22,0016° — ganho de 100 % do menu
     console.log(`  [M3] 120 px: ${r.hz30.toFixed(4)}° a 30 Hz, ${r.hz60.toFixed(4)}° a 60 Hz, ` +
       `${r.hz120.toFixed(4)}° a 120 Hz, ${r.umEvento.toFixed(4)}° em 1 evento (conta: ${esperado.toFixed(4)}°)`);
-    assert.equal(r.menu, '100%', 'cenário inválido: a sensibilidade do menu não está em 100 %');
+    assert.match(r.menu, /^100% · meia tela \d+°$/, 'cenário inválido: a sensibilidade do menu não está em 100 %');
     for (const [nome, v] of [['30 Hz', r.hz30], ['60 Hz', r.hz60], ['120 Hz', r.hz120], ['1 evento', r.umEvento]])
       assert.ok(Math.abs(v - esperado) < esperado * 0.001,
         `${nome}: o mesmo arrasto girou ${v.toFixed(4)}°, a conta pede ${esperado.toFixed(4)}°`);
@@ -1433,7 +1433,8 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
     assert.ok(Math.abs(r.mexido / (50 * 0.0032 * 2) - 1) < 1e-3, `cenário inválido: 200 % não dobrou o giro (${r.mexido})`);
     assert.ok(Math.abs(r.padrao / (50 * 0.0032) - 1) < 1e-3, `restaurou e o giro ficou ${r.padrao} rad (padrão: ${50 * 0.0032})`);
     assert.deepEqual(r.valores, ['100', '60', '100', '100', '1', '0', '0'], 'os controles do menu não voltaram ao padrão');
-    assert.deepEqual(r.saidas, ['100%', '60%', '100%', '100%'], 'o número ao lado do slider não voltou');
+    assert.match(r.saidas[0], /^100% · meia tela \d+°$/, 'o número ao lado do slider do olhar não voltou');
+    assert.deepEqual(r.saidas.slice(1), ['60%', '100%', '100%'], 'o número ao lado do slider não voltou');
     assert.equal(r.fireL, false, 'restaurou e o segundo ATIRAR continuou na tela');
   });
 
@@ -1455,7 +1456,7 @@ describe('Controles de toque — modo celular', { skip: !CHROME && 'Chrome não 
     assert.equal(h.pageErrors.length, errosAntes, `localStorage lançando virou erro de página: ${h.pageErrors.slice(errosAntes).join(' | ')}`);
     assert.ok(Math.abs(r.mexido - 0.0032 * 1.5) < 1e-12, `o ajuste não valeu na sessão sem persistir (${r.mexido})`);
     assert.ok(Math.abs(r.restaurado - 0.0032) < 1e-12, `restaurar sem persistir não valeu na sessão (${r.restaurado})`);
-    assert.equal(r.saida, '100%');
+    assert.match(r.saida, /^100% · meia tela \d+°$/);
   });
 
   it('dado o modo celular, então nenhum erro de página apareceu no caminho', () => {
@@ -1763,7 +1764,7 @@ describe('Controles de toque — desktop não muda', { skip: !CHROME && 'Chrome 
     assert.equal(r.classeMobile, false, 'classe `mobile` vazou pro desktop');
     assert.equal(r.touchUIDisplay, 'none', '#touchUI visível no desktop');
     // canal analógico NEUTRO: é o `active` false que mantém playerUpdate idêntico
-    assert.deepEqual(r.move, { x: 0, y: 0, mag: 0, active: false });
+    assert.deepEqual(r.move, { x: 0, y: 0, mag: 0, px: 0, py: 0, active: false });
     assert.deepEqual(r.look, { dx: 0, dy: 0 });
   });
 

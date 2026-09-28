@@ -130,10 +130,15 @@ export function applyMobileCfg(cfg = CFG, overrides = MOBILE_CFG) {
    · touchFireLook  — quanto o dedo no ATIRAR gira a câmera (0 desliga)
    · touchAssist    — assistência de mira (ligada: é o padrão de todo AAA de toque)
    · touchAutoFire  — tiro automático: DESLIGADO até o dono decidir (§6 P0-3)
-   · touchFireLeft  — segundo ATIRAR à esquerda */
+   · touchFireLeft  — segundo ATIRAR à esquerda
+   · touchLookAccel — aceleração do olhar pela velocidade do dedo (0 = LINEAR,
+                      o padrão da régua M3e; 1 = curva cheia, ganho 1→2 entre
+                      0,05 e 0,2 m/s — js/touchcontrols.js, LOOK_ACCEL)
+   · touchStick     — curso do analógico, multiplicador dos 58 px de CSS */
 export const TOUCH_DEFAULTS = Object.freeze({
   touchLook: 1, touchRatioY: 0.6, touchAds: 1, touchFireLook: 1,
   touchAssist: 1, touchAutoFire: 0, touchFireLeft: 0,
+  touchLookAccel: 0, touchStick: 1,
 });
 export const SETTINGS = Object.assign({ vol: 0.5, res: 1.5, shadow: 1, bloom: 1, ping: 1, autores: 1, aa: 1,
   ...TOUCH_DEFAULTS },

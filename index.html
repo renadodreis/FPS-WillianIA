@@ -185,12 +185,16 @@
         <div class="srow"><span>Vertical ÷ horizontal <output id="setTRatioV">60%</output></span><input type="range" id="setTRatio" min="30" max="100" step="5" value="60"></div>
         <div class="srow"><span>Sensibilidade na mira <output id="setTAdsV">100%</output></span><input type="range" id="setTAds" min="50" max="150" step="5" value="100"></div>
         <div class="srow"><span>ATIRAR gira a câmera <output id="setTFireV">100%</output></span><input type="range" id="setTFire" min="0" max="150" step="5" value="100"></div>
+        <!-- aceleração do olhar: 0 = linear (padrão, régua M3e); ligada, o dedo
+             rápido gira até 2× (libpointing + Graham/Trankle; ver LOOK_ACCEL) -->
+        <div class="srow"><span>Aceleração do olhar <output id="setTAccelV">0%</output></span><input type="range" id="setTAccel" min="0" max="100" step="10" value="0"></div>
+        <div class="srow"><span>Curso do analógico <output id="setTStickV">100%</output></span><input type="range" id="setTStick" min="60" max="150" step="5" value="100"></div>
         <div class="srow"><span>Assistência de mira</span><select id="setTAssist"><option value="1" selected>Ligada</option><option value="0">Desligada</option></select></div>
         <div class="srow"><span>Tiro automático</span><select id="setTAuto"><option value="0" selected>Desligado</option><option value="1">Ligado</option></select></div>
         <div class="srow"><span>Segundo ATIRAR à esquerda</span><select id="setTFireL"><option value="0" selected>Não</option><option value="1">Sim</option></select></div>
-        <!-- critério C9: volta os sete ajustes de toque ao padrão (js/config.js),
+        <!-- critério C9: volta os ajustes de toque ao padrão (js/config.js),
              e só eles. Ligado por js/touchcontrols.js (bindSettings). É AÇÃO,
-             não ajuste: fica fora das linhas .srow (que são os sete ajustes). -->
+             não ajuste: fica fora das linhas .srow (que são os ajustes). -->
         <div class="sfim"><button type="button" id="setTReset">Restaurar padrão</button></div>
       </div>
       <div class="mbtn sec" id="btnBack" role="button" tabindex="0" style="margin-top:14px">VOLTAR</div>

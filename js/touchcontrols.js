@@ -79,8 +79,23 @@ export const STICK_RADIUS = 58;
 export const STICK_DEADZONE = 0.12;
 
 /* Correr no toque não tem botão: é o analógico no talo (mesma leitura de
-   um gatilho analógico de controle). Acima disto liga o `sprintHeld`. */
-export const SPRINT_MAG = 0.85;
+   um gatilho analógico de controle). Acima disto liga o `sprintHeld`.
+   0,8 é o da Apple (WWDC26 "Make your game great with touch": "A small tilt
+   means the character moves at a normal pace. If it's a big tilt, the
+   character will sprint", `if magnitude > 0.8`); o Touch Adaptation Kit da
+   Microsoft troca andar por correr em 0,75. Era 0,85 — o mais alto dos três,
+   e o que mais polegar pedia para correr (8,6 mm contra 9,1 mm no S22). */
+export const SPRINT_MAG = 0.8;
+
+/* Deflexão (0..1, pós-zona-morta) → módulo do vetor de ANDAR (0..1, onde 1
+   é o W do teclado). Acima do limiar de corrida é 1: o jogo corre pelo `mag`,
+   não por este módulo. Pura, sem estado, exportada para o teste medir. */
+export function andarDaDeflexao(m) {
+  const d = typeof m === 'number' && Number.isFinite(m) ? m : 0;
+  if (d <= 0) return 0;
+  if (d >= SPRINT_MAG) return 1;
+  return d / SPRINT_MAG;
+}
 
 /* TRAVA DE CORRIDA (docs/mobile/referencia-mira-toque.md §4.2/§4.3, P2-7).
    PUBG Mobile: "drag the "Cross" icon and hold in running mode"; Warzone
@@ -116,6 +131,48 @@ export const SPRINT_LOCK_CONE = 30;
    3x mais sensível que outro DPR 1 pro mesmo arrasto de dedo. */
 export const LOOK_RAD_PER_CSS_PX = 0.0032;
 
+/* ACELERAÇÃO DO OLHAR — OPÇÃO do menu, PADRÃO 0 = LINEAR.
+   Por que o padrão fica linear: a régua (docs/mobile/criterio-aaa.md M3e)
+   pede, e a Apple desenha o olhar por toque como touchpad 1:1 — "It moves
+   exactly as far as their finger moves, with no latency or drift"
+   (WWDC26 "Make your game great with touch"). Aceleração no toque só o
+   Critical Ops documenta (3 %), e ela teve o defeito "dependent on
+   framerate" (docs/mobile/referencia-mira-toque.md §3.1, P3-10).
+   Ligada, o ganho de cada pedaço de arrasto depende da VELOCIDADE DO DEDO,
+   medida pelo relógio do EVENTO de toque (timeStamp, amostra a amostra via
+   getCoalescedEvents na camada DOM) — nunca pelo dt do quadro.
+   A forma e os números têm fonte, e são de dispositivo RELATIVO de dedo/mão:
+   · rampa linear entre 0,05 e 0,2 m/s — `SigmoidFunction` da libpointing
+     (INRIA, Casiez & Roussel): "GMIN 1.0f, GMAX 6.0f, V1 0.05f, V2 0.2f";
+   · ganho de 1 a 2 — as duas funções que Casiez, Vogel, Balakrishnan e
+     Cockburn (HCI 2008) revisam: ganho 1 até 200 mm/s e 2 depois (Graham);
+     de 1 a 2 linear até 100 mm/s (Trankle & Deutschmann). O 6 da
+     libpointing é de CURSOR; câmera de FPS com 6× em flick é inusável
+     [INFERÊNCIA]. O mesmo artigo mede aceleração 3,3 % mais rápida que
+     ganho constante em apontamento.
+   · mm → px de CSS pelo dp do Android ("One dp is ... roughly equal to one
+     pixel on a medium-density screen (160 dpi ...)"; o Chrome do Android
+     tem 1 px de CSS = 1 dp): 6,3 px/mm → 0,05 m/s = 315 px/s, 0,2 m/s =
+     1260 px/s. No S22 do dono (≈422 ppi, DPR 3) 1 mm = 5,5 px de CSS: os
+     limiares caem em 0,057 e 0,23 m/s — a mesma ordem.
+   Devagar (mira fina) o ganho é 1 — a mira fina não muda; quem quer mais
+   fino baixa a sensibilidade base e deixa a aceleração devolver a volta
+   rápida. O ajuste do menu (0..1) mistura o linear com a curva cheia. */
+export const LOOK_ACCEL = Object.freeze({ vLenta: 315, vRapida: 1260, ganhoLento: 1, ganhoRapido: 2 });
+/* piso do intervalo entre dois eventos: 240 Hz de digitalizador = 4,2 ms
+   (Galaxy S22: "240Hz Touch Sampling Rate in Game Mode", Samsung). Dois
+   eventos com o MESMO relógio (sintético, ou sem relógio próprio) viram "o
+   mais rápido que um dedo real produz", nunca ÷0 */
+const ACCEL_DT_MIN_MS = 4;
+export function ganhoDoOlhar(vPxPorS, k) {
+  const kk = typeof k === 'number' && Number.isFinite(k) ? (k < 0 ? 0 : k > 1 ? 1 : k) : 0;
+  if (!(kk > 0) || typeof vPxPorS !== 'number' || !Number.isFinite(vPxPorS)) return 1;
+  const A = LOOK_ACCEL;
+  const t = (vPxPorS - A.vLenta) / (A.vRapida - A.vLenta);
+  const g = A.ganhoLento + (A.ganhoRapido - A.ganhoLento) * (t < 0 ? 0 : t > 1 ? 1 : t);
+  return 1 + (g - 1) * kk;
+}
+
 /* MESMO clamp de pitch de game.js:1402. Divergir daqui = câmera de
    cabeça pra baixo em um dos dois caminhos. */
 export const PITCH_LIMIT = 1.55;
@@ -146,8 +203,8 @@ export function createTouchCore(options) {
   const o = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
   const dzRaw = num(o.deadzone);
   const dz = dzRaw > 0 && dzRaw < 0.9 ? dzRaw : STICK_DEADZONE;
-  const rRaw = num(o.radius);
-  const radius = rRaw > 0 ? rRaw : STICK_RADIUS;
+  const cursoValido = v => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : STICK_RADIUS);
+  let radius = cursoValido(num(o.radius));
   /* fator do arrasto do gatilho sobre o olhar: 0 desliga, lixo vira 1 */
   const fatorGatilho = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 1);
   let fireLook = fatorGatilho(o.fireLook);
@@ -160,8 +217,23 @@ export function createTouchCore(options) {
   const drag = new Map();
   /* objetos FIXOS: o loop roda a 60 FPS num celular fraco e alocar por
      evento/frame no caminho quente paga GC exatamente no tiroteio */
-  const move = { x: 0, y: 0, mag: 0, active: false };
+  /* `x`/`y` = vetor de ANDAR (o que o jogo soma ao W/A/S/D); `px`/`py` =
+     DEFLEXÃO do dedo (0..1, pós-zona-morta), que é o que o knob desenha e o
+     volante quantiza; `mag` = módulo da deflexão (o limiar de corrida lê). */
+  const move = { x: 0, y: 0, mag: 0, px: 0, py: 0, active: false };
   const look = { dx: 0, dy: 0 };     // acumulador
+  /* aceleração do olhar (0 = linear, o padrão). `lastLookT` = relógio do
+     último evento do dedo do olhar; NaN = sem relógio (ganho 1). */
+  const ajusteAccel = v => (typeof v === 'number' && Number.isFinite(v) ? (v < 0 ? 0 : v > 1 ? 1 : v) : 0);
+  let accel = ajusteAccel(o.lookAccel);
+  let lastLookT = NaN;
+  /* ganho do pedaço (ddx, ddy) que chegou em `t`, desde o evento em `t0` */
+  function ganhoDoPedaco(ddx, ddy, t, t0) {
+    if (!(accel > 0) || typeof t !== 'number' || !Number.isFinite(t) || !Number.isFinite(t0)) return 1;
+    const dt = t - t0 > ACCEL_DT_MIN_MS ? t - t0 : ACCEL_DT_MIN_MS;
+    return ganhoDoOlhar(Math.hypot(ddx, ddy) * 1000 / dt, accel);
+  }
+  const relogio = t => (typeof t === 'number' && Number.isFinite(t) ? t : NaN);
   const lookOut = { dx: 0, dy: 0 };  // devolvido por takeLook()
   let stickId = null, lookId = null;
   let lastLookX = 0, lastLookY = 0;
@@ -170,12 +242,12 @@ export function createTouchCore(options) {
      sem travar (a camada DOM mostra o alvo). `rawX/rawY` guardam o último
      ponto do dedo para recalcular o movimento quando a trava é desligada por
      fora, sem esperar o próximo pointermove. */
-  const lockDist = radius * SPRINT_LOCK_R;
+  let lockDist = radius * SPRINT_LOCK_R;
   const coneCos = Math.cos(SPRINT_LOCK_CONE * Math.PI / 180);
   let travaOn = true, travado = false, perto = false;
   let rawX = 0, rawY = 0;
 
-  function zeroMove() { move.x = 0; move.y = 0; move.mag = 0; }
+  function zeroMove() { move.x = 0; move.y = 0; move.mag = 0; move.px = 0; move.py = 0; }
 
   /* px relativos à origem do analógico (y cresce pra BAIXO, como na tela)
      -> x = strafe (direita +), y = frente (+ = W), mag = 0..1 */
@@ -193,8 +265,9 @@ export function createTouchCore(options) {
     if (travado) {
       /* corrida CHEIA na direção do dedo; polegar descansando no centro =
          em frente (é o "auto sprint" do WZM, não um acelerador de meio curso) */
-      if (len <= radius * dz) { move.x = 0; move.y = 1; move.mag = 1; return; }
+      if (len <= radius * dz) { move.x = 0; move.y = 1; move.mag = 1; move.px = 0; move.py = 1; return; }
       move.x = dx / len; move.y = -dy / len; move.mag = 1;
+      move.px = move.x; move.py = move.y;
       return;
     }
     if (len <= 0) { zeroMove(); return; }
@@ -203,9 +276,18 @@ export function createTouchCore(options) {
     if (m <= dz) { zeroMove(); return; }     // zona morta radial
     m = (m - dz) / (1 - dz);                 // remapeia: borda da zona = 0
     const k = m / len;                       // normaliza E aplica a magnitude
-    move.x = dx * k;
-    move.y = -dy * k;                        // tela pra cima = frente
+    move.px = dx * k;
+    move.py = -dy * k;                       // tela pra cima = frente
     move.mag = m;
+    /* ANDAR: a faixa de andar vai da zona morta ao limiar de corrida, e o
+       TOPO dela anda o que o W do teclado anda (módulo 1). Antes o vetor
+       valia a própria deflexão: andando, o toque parava em 0,85 × 5,2 =
+       4,42 m/s (85 % do teclado, na mesma partida) e meio curso dava 2,24
+       m/s — medido no S22 pelo toque real. Só o MÓDULO muda: a direção é a
+       do dedo, sem torção (a lição da zona morta por eixo do VR). */
+    const a = andarDaDeflexao(m) / m;
+    move.x = move.px * a;
+    move.y = move.py * a;
   }
 
   function onStickStart(id, x, y) {
@@ -243,21 +325,28 @@ export function createTouchCore(options) {
     if (stickId !== null) setStick(rawX, rawY);
   }
 
-  function onLookStart(id, x, y) {
+  /* `t` (opcional) = relógio do evento de toque em ms (`timeStamp`). Só a
+     aceleração o lê; sem ele o ganho é 1. */
+  function onLookStart(id, x, y, t) {
     if (owners.has(id) || lookId !== null) return false;
     lookId = id;
     owners.set(id, 'look');
     lastLookX = num(x);
     lastLookY = num(y);   // encostar o dedo NÃO gira: delta parte daqui
+    lastLookT = relogio(t);
     return true;
   }
-  function onLookMove(id, x, y) {
+  function onLookMove(id, x, y, t) {
     if (lookId === null || id !== lookId) return false;
     const nx = num(x), ny = num(y);
-    look.dx += nx - lastLookX;
-    look.dy += ny - lastLookY;
+    const ddx = nx - lastLookX, ddy = ny - lastLookY;
+    const g = ganhoDoPedaco(ddx, ddy, t, lastLookT);
+    look.dx += ddx * g;
+    look.dy += ddy * g;
     lastLookX = nx;
     lastLookY = ny;
+    const tt = relogio(t);
+    if (Number.isFinite(tt)) lastLookT = tt;
     return true;
   }
   function onLookEnd(id) {
@@ -278,13 +367,13 @@ export function createTouchCore(options) {
 
   /* `x`/`y` (opcionais) = onde o dedo encostou. Só os gatilhos guardam: é a
      origem do arrasto que mira — encostar não gira nada, igual ao olhar. */
-  function press(act, id, x, y) {
+  function press(act, id, x, y, t) {
     if (!ACTS.has(act)) return false;
     if (owners.has(id)) return false;   // esse dedo já controla outra coisa
     if (held.has(act)) return false;    // botão já é de outro dedo
     held.add(act);
     owners.set(id, act);
-    if (AIM_ACTS.has(act)) drag.set(id, { x: num(x), y: num(y) });
+    if (AIM_ACTS.has(act)) drag.set(id, { x: num(x), y: num(y), t: relogio(t) });
     return true;
   }
   function release(act) {
@@ -293,19 +382,31 @@ export function createTouchCore(options) {
     return true;
   }
   /* arrasto do dedo que segura um GATILHO: soma no mesmo acumulador do olhar */
-  function onPressMove(id, x, y) {
+  function onPressMove(id, x, y, t) {
     const p = drag.get(id);
     if (!p || !AIM_ACTS.has(owners.get(id))) return false;
     const nx = num(x), ny = num(y);
     if (fireLook > 0) {
-      look.dx += (nx - p.x) * fireLook;
-      look.dy += (ny - p.y) * fireLook;
+      const ddx = nx - p.x, ddy = ny - p.y;
+      const g = ganhoDoPedaco(ddx, ddy, t, p.t) * fireLook;
+      look.dx += ddx * g;
+      look.dy += ddy * g;
     }
     p.x = nx;
     p.y = ny;
+    const tt = relogio(t);
+    if (Number.isFinite(tt)) p.t = tt;
     return true;
   }
   function setFireLook(k) { fireLook = fatorGatilho(k); }
+  function setLookAccel(k) { accel = ajusteAccel(k); }
+  /* CURSO do analógico (px de CSS do centro ao talo). A zona morta e a trava
+     são frações dele e acompanham; com o dedo parado, recalcula na hora. */
+  function setRadius(px) {
+    radius = cursoValido(px);
+    lockDist = radius * SPRINT_LOCK_R;
+    if (stickId !== null) setStick(rawX, rawY);
+  }
   function releasePointer(id) {
     const role = owners.get(id);
     if (role === undefined) return null;
@@ -334,8 +435,9 @@ export function createTouchCore(options) {
     onStickStart, onStickMove, onStickEnd,
     onLookStart, onLookMove, onLookEnd, takeLook,
     press, release, releasePointer, releaseAll,
-    onPressMove, setFireLook, setSprintLock,
+    onPressMove, setFireLook, setSprintLock, setLookAccel, setRadius,
     get fireLook() { return fireLook; },
+    get lookAccel() { return accel; },
     pressed: act => held.has(act),
     roleOf: id => { const r = owners.get(id); return r === undefined ? null : r; },
     getMove: () => move,
@@ -347,7 +449,8 @@ export function createTouchCore(options) {
     /* quantos dedos ainda são donos de alguma coisa (pointercancel: o último
        que sai é quem autoriza soltar a mira alternada — ver camada DOM) */
     ativos: () => owners.size,
-    radius, deadzone: dz,
+    get radius() { return radius; },
+    deadzone: dz,
   };
 }
 
@@ -421,6 +524,7 @@ export function lookScale(fovNow, fovHip, adsK, adsMult) {
 /* Limites dos ajustes numéricos (o slider do menu anda dentro deles). */
 const TOUCH_RANGES = Object.freeze({
   touchLook: [0.3, 2.5], touchRatioY: [0.3, 1], touchAds: [0.5, 1.5], touchFireLook: [0, 1.5],
+  touchLookAccel: [0, 1], touchStick: [0.6, 1.5],
 });
 function cfgNum(s, k) {
   const raw = s[k];
@@ -446,6 +550,8 @@ export function touchConfig(settings) {
     ratioY: cfgNum(s, 'touchRatioY'),
     ads: cfgNum(s, 'touchAds'),
     fireLook: cfgNum(s, 'touchFireLook'),
+    accel: cfgNum(s, 'touchLookAccel'),
+    stick: cfgNum(s, 'touchStick'),
     assist: cfgFlag(s, 'touchAssist'),
     autoFire: cfgFlag(s, 'touchAutoFire'),
     fireLeft: cfgFlag(s, 'touchFireLeft'),
@@ -642,6 +748,8 @@ export function createTouchControls(deps) {
   const html = doc.documentElement;
   html.classList.add('mobile');
   core.setFireLook(cfg.fireLook);
+  core.setLookAccel(cfg.accel);
+  core.setRadius(STICK_RADIUS * cfg.stick);
   html.classList.toggle('fireL', cfg.fireLeft);
 
   let root = doc.getElementById(IDS.root);
@@ -781,7 +889,7 @@ export function createTouchControls(deps) {
     if (btn.classList.contains('tcFora')) return;
     e.preventDefault();               // sem isto vem mousedown de compatibilidade
     if (act !== 'pause' && !live()) return;
-    if (!core.press(act, e.pointerId, e.clientX, e.clientY)) return;
+    if (!core.press(act, e.pointerId, e.clientX, e.clientY, e.timeStamp)) return;
     tipoDoPonteiro(e);
     pressedEl.set(act, btn);
     capture(btn, e.pointerId);
@@ -840,7 +948,7 @@ export function createTouchControls(deps) {
   function onLookDown(e) {
     if (!live()) return;
     e.preventDefault();
-    if (!core.onLookStart(e.pointerId, e.clientX, e.clientY)) return;
+    if (!core.onLookStart(e.pointerId, e.clientX, e.clientY, e.timeStamp)) return;
     tipoDoPonteiro(e);
     capture(lookEl, e.pointerId);
   }
@@ -859,9 +967,24 @@ export function createTouchControls(deps) {
     const role = core.roleOf(e.pointerId);
     if (role === null) return;
     if (naoDedo.has(e.pointerId)) naoDedoNoQuadro = true;
-    if (role === 'stick') core.onStickMove(e.pointerId, e.clientX - originX, e.clientY - originY);
-    else if (role === 'look') core.onLookMove(e.pointerId, e.clientX, e.clientY);
-    else if (AIM_ACTS.has(role)) core.onPressMove(e.pointerId, e.clientX, e.clientY); // o gatilho mira
+    if (role === 'stick') { core.onStickMove(e.pointerId, e.clientX - originX, e.clientY - originY); return; }
+    const olhar = role === 'look';
+    if (!olhar && !AIM_ACTS.has(role)) return;
+    /* COM ACELERAÇÃO, cada amostra do digitalizador conta com o PRÓPRIO
+       relógio: o navegador agrupa os pointermove por quadro (rAF), e ler só
+       o último faria a velocidade do dedo — e o ganho — depender da taxa de
+       quadros. `getCoalescedEvents` devolve as amostras cruas. Sem aceleração
+       (o padrão) a conta é linear e o agrupamento não muda nada: nem chama. */
+    const amostras = core.lookAccel > 0 && typeof e.getCoalescedEvents === 'function'
+      ? e.getCoalescedEvents() : null;
+    if (amostras && amostras.length) {
+      for (let i = 0; i < amostras.length; i++) {
+        const a = amostras[i];
+        if (olhar) core.onLookMove(e.pointerId, a.clientX, a.clientY, a.timeStamp);
+        else core.onPressMove(e.pointerId, a.clientX, a.clientY, a.timeStamp);
+      }
+    } else if (olhar) core.onLookMove(e.pointerId, e.clientX, e.clientY, e.timeStamp);
+    else core.onPressMove(e.pointerId, e.clientX, e.clientY, e.timeStamp); // o gatilho mira
   }
   function onPointerUp(e) {
     naoDedo.delete(e.pointerId);
@@ -998,7 +1121,7 @@ export function createTouchControls(deps) {
     /* dirigindo/voando, playerUpdate nem roda (game.js:2530) — quem lê
        input é js/car.js / js/heli.js, e os dois só entendem `keys` */
     const on = !!inVehicle && m.active;
-    const y = on ? m.y : 0, x = on ? m.x : 0;
+    const y = on ? m.py : 0, x = on ? m.px : 0;   // volante: a DEFLEXÃO do dedo
     setVeh('KeyW', hyst(veh.KeyW, y));
     setVeh('KeyS', hyst(veh.KeyS, -y));
     setVeh('KeyD', hyst(veh.KeyD, x));
@@ -1015,8 +1138,8 @@ export function createTouchControls(deps) {
     /* O CSS centra o knob por MARGEM NEGATIVA justamente pra deixar o
        `transform` inteiro pro JS (style.css:583). Uma escrita por frame e só
        quando o valor MUDA — mesmo motivo do styleOnce de game.js:1360. */
-    const kx = Math.round(knobOX + m.x * knobSpan);
-    const ky = Math.round(knobOY - m.y * knobSpan);
+    const kx = Math.round(knobOX + m.px * knobSpan);   // o knob desenha o DEDO
+    const ky = Math.round(knobOY - m.py * knobSpan);
     if (kx === knobX && ky === knobY) return;
     knobX = kx; knobY = ky;
     knobEl.style.transform = `translate3d(${kx}px,${ky}px,0)`;
@@ -1078,20 +1201,36 @@ export function createTouchControls(deps) {
   const LINHAS = [
     ['setTLook', 'touchLook', 100], ['setTRatio', 'touchRatioY', 100],
     ['setTAds', 'touchAds', 100], ['setTFire', 'touchFireLook', 100],
+    ['setTAccel', 'touchLookAccel', 100], ['setTStick', 'touchStick', 100],
     ['setTAssist', 'touchAssist', 1], ['setTAuto', 'touchAutoFire', 1],
     ['setTFireL', 'touchFireLeft', 1],
   ];
   const CAMPO = { touchLook: 'look', touchRatioY: 'ratioY', touchAds: 'ads', touchFireLook: 'fireLook',
+    touchLookAccel: 'accel', touchStick: 'stick',
     touchAssist: 'assist', touchAutoFire: 'autoFire', touchFireLeft: 'fireLeft' };
+  /* O OLHAR EM UNIDADE QUE O DEDO ENTENDE. "100 %" não diz nada; a régua
+     (M3a) pede que o giro medido bata com o que o MENU mostra. Quanto gira
+     um arrasto de MEIA LARGURA da tela — a área de mira em paisagem — sai
+     exato em qualquer aparelho (px de CSS × rad/px), sem supor densidade.
+     No S22 do dono (780 px de CSS) é 72° a 100 %. */
+  function grausMeiaTela(v) {
+    const w = (win.innerWidth || 0) / 2;
+    return Math.round(w * LOOK_RAD_PER_CSS_PX * v * 180 / Math.PI);
+  }
   function mostrar(el, key, mul) {
     const v = cfg[CAMPO[key]];
     el.value = String(typeof v === 'boolean' ? (v ? 1 : 0) : Math.round(v * mul));
     const saida = doc.getElementById(el.id + 'V');
-    if (saida) saida.textContent = mul === 100 ? `${Math.round(v * 100)}%` : '';
+    if (!saida) return;
+    if (mul !== 100) { saida.textContent = ''; return; }
+    const pct = `${Math.round(v * 100)}%`;
+    saida.textContent = key === 'touchLook' ? `${pct} · meia tela ${grausMeiaTela(v)}°` : pct;
   }
   function aplicarCfg() {
     cfg = touchConfig(settings);
     core.setFireLook(cfg.fireLook);
+    core.setLookAccel(cfg.accel);
+    core.setRadius(STICK_RADIUS * cfg.stick);
     html.classList.toggle('fireL', cfg.fireLeft);
     if (!cfg.fireLeft) letGo('fireL');   // desligou com o dedo em cima: solta casado
     if (!cfg.autoFire) autoFire = false;
@@ -1110,7 +1249,7 @@ export function createTouchControls(deps) {
       });
     }
     /* C9: "restaurar padrão" da seção de toque (CoD Mobile e WZM têm; aqui
-       era slider por slider, de memória). Vale na hora, repinta os sete
+       era slider por slider, de memória). Vale na hora, repinta os
        controles e persiste por melhor esforço (restaurarToque engole a cota). */
     const reset = doc.getElementById('setTReset');
     if (reset) {
