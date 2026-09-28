@@ -60,7 +60,9 @@ function instalar() {
       MP.scene.add(g);
       const sph = [[1.66, 0.28, 'head'], [1.10, 0.42, 'body'], [0.42, 0.34, 'body']]
         .map(([h, r, part]) => ({ c: new THREE.Vector3(), r, part, h }));
-      const t = { group: g, alive: true, enabled: true, acertos: 0, dy,
+      // `combate: true`: o boneco faz o papel de um INIMIGO (A8-e — o automático
+      // só dispara no que é alvo de combate; ver o caso do campo de tiro)
+      const t = { group: g, alive: true, enabled: true, acertos: 0, dy, combate: true,
         hitSpheres() {
           for (const s of sph) s.c.set(g.position.x, g.position.y + s.h, g.position.z);
           return sph;
@@ -96,10 +98,11 @@ function instalar() {
       x0 = Math.max(0, Math.floor(x0)); y0 = Math.max(0, Math.floor(y0)); x1 = Math.min(cw - 1, Math.ceil(x1)); y1 = Math.min(ch - 1, Math.ceil(y1));
       if (!(x1 >= x0 && y1 >= y0)) return 0;
       const w = x1 - x0 + 1, hh = y1 - y0 + 1, a = new Uint8Array(w * hh * 4), b = new Uint8Array(w * hh * 4);
-      const vis = t.group.visible;
-      t.group.visible = true; R.render(MP.scene, cam); gl.readPixels(x0, y0, w, hh, gl.RGBA, gl.UNSIGNED_BYTE, a);
-      t.group.visible = false; R.render(MP.scene, cam); gl.readPixels(x0, y0, w, hh, gl.RGBA, gl.UNSIGNED_BYTE, b);
-      t.group.visible = vis;
+      const obj = t.group || t.mesh;   // o disco do campo de tiro é uma malha solta
+      const vis = obj.visible;
+      obj.visible = true; R.render(MP.scene, cam); gl.readPixels(x0, y0, w, hh, gl.RGBA, gl.UNSIGNED_BYTE, a);
+      obj.visible = false; R.render(MP.scene, cam); gl.readPixels(x0, y0, w, hh, gl.RGBA, gl.UNSIGNED_BYTE, b);
+      obj.visible = vis;
       let n = 0;
       for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 6) n++;
       return n;
@@ -604,6 +607,74 @@ describe('Assistência de mira no toque — celular', { skip: !CHROME && 'Chrome
     assert.equal(r.gastou, 0, `disparou ${r.gastou} vezes com a cruz fora do alvo`);
     // controle: 0,1 m ao lado (dentro da cabeça) dispara — o caso exercita o limiar
     assert.ok((await autoFire({ desvio: 0.1 })).gastou > 0, 'cenário inválido: nem dentro da cabeça disparou');
+  });
+
+  /* A8(e) — docs/mobile/criterio-aaa.md: "0 com a retícula sobre algo que não
+     é jogador/bot/inimigo PvE". O validador (validacao-6aeda6c.md) mediu 10
+     disparos nos discos do CAMPO DE TIRO (js/maptoys.js): eles entram em
+     `extraTargets` durante o minijogo, a mesma lista dos esqueletos e zumbis.
+     Controle: o MESMO disco, declarado alvo de combate, dispara — só a
+     categoria muda entre os dois casos (geometria, tela e cruz iguais). */
+  function campoDeTiro(declararCombate) {
+    return play(declararCombate => {
+      const QA = window.QA, A = window.AQA, G = QA.G, MP = QA.MP;
+      A.limpar();
+      const lever = G.MapToys.gallery.leverPos;     // o painel fica 3,4 m atrás da alavanca
+      QA.reset(lever.x + 4.6, lever.z + 12);
+      QA.tick(20);
+      A.ajuste('setTAuto', 1);
+      G.MapToys.startGallery();
+      QA.tick(90);                                   // os discos sobem
+      const discos = G.extraTargets.filter(t => t.mesh && t.alive && t.enabled !== false);
+      if (!discos.length) return { discos: 0 };
+      const d = discos[0];
+      d.respawn = 1e9;                               // o disco não desce no meio da medida
+      if (declararCombate) d.combate = true;
+      const g = G.arsenal[0], trava = g.locked;
+      g.locked = false; G.switchWeapon(0); QA.tick(40);
+      g.mag = g.magSize; g.reserve = 999; g.reloading = false;
+      const o = MP.camera.position, c = d.mesh.position;
+      A.mirarYaw(Math.atan2(-(c.x - o.x), -(c.z - o.z)), Math.atan2(c.y - o.y, Math.hypot(c.x - o.x, c.z - o.z)));
+      const px = A.px(d);
+      /* o dedo mexe devagar no olhar (a assistência só age com o jogador
+         mirando) e nunca toca o gatilho */
+      const el = document.querySelector('#tcLook'), r = el.getBoundingClientRect();
+      let x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      const ev = (type, xx) => el.dispatchEvent(new PointerEvent(type, { pointerId: 41, pointerType: 'touch',
+        isPrimary: false, clientX: xx, clientY: y, bubbles: true, cancelable: true }));
+      ev('pointerdown', x);
+      const mag0 = g.mag;
+      let noDisco = 0;
+      for (let i = 0; i < 60; i++) {
+        x += (i % 20 < 10 ? 0.3 : -0.3); ev('pointermove', x);
+        QA.tick(1);
+        if (G.AimAssist.last.target === d) noDisco++;
+      }
+      ev('pointerup', x);
+      const out = { discos: discos.length, px, gastou: mag0 - g.mag, noDisco, dedo: G.Touch.core.pressed('fire'),
+        dist: +Math.hypot(c.x - o.x, c.y - o.y, c.z - o.z).toFixed(1) };
+      delete d.combate;
+      A.ajuste('setTAuto', 0);
+      QA.tick(2);
+      g.locked = trava;
+      return out;
+    }, declararCombate);
+  }
+
+  it('A8(e): dado o tiro automático e a cruz num disco do CAMPO DE TIRO, então NÃO dispara — e a assistência age nele', async () => {
+    const r = await campoDeTiro(false);
+    console.log(`  [auto:campo de tiro] ${r.discos} discos, ${r.px} px, ${r.dist} m · ${r.gastou} tiros · ` +
+      `assistência no disco em ${r.noDisco} de 60 quadros`);
+    assert.ok(r.discos > 0, 'cenário inválido: o campo de tiro não levantou disco');
+    assert.ok(r.px > 100, `cenário inválido: o disco não estava na tela (${r.px} px)`);
+    assert.equal(r.dedo, false, 'cenário inválido: tinha dedo no gatilho');
+    assert.equal(r.gastou, 0, `o automático disparou ${r.gastou} vezes num disco do campo de tiro`);
+    // decisão documentada em js/aimassist.js: o campo de tiro é treino de MIRA — a assistência age
+    assert.ok(r.noDisco >= 30, `a assistência deixou de agir no disco (${r.noDisco} de 60 quadros)`);
+    // CONTROLE: o mesmo disco, declarado alvo de combate, dispara (o caso exercita o portão)
+    const k = await campoDeTiro(true);
+    assert.ok(k.gastou > 0, `cenário inválido: nem declarado combate o disco levou tiro (${k.gastou})`);
   });
 
   it('dado o tiro automático e a bazuca, a DMR ou o ajuste desligado, então não dispara', async () => {

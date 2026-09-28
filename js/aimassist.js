@@ -43,9 +43,35 @@
         painel, tenda, castelo — o que a tela mostra e a bala atravessa ou
         nem conhece). `los(olho, ponto, raio, alvo)` recebe o alvo para que o
         corpo dele nunca tampe a si mesmo.
-   E o alvo só conta como visto se ao menos uma parte com linha livre estiver
-   ACIMA DO TOPO DA GRAMA: grama não é linha de visada (o raio atravessa), então
-   uma parte que a grama pode cobrir não prova nada sozinha.
+   E o alvo só conta como VISTO se ao menos uma parte com linha livre não
+   pode estar coberta pela GRAMA — que não é linha de visada (o raio
+   atravessa) mas esconde. Dois jeitos de saber, e o melhor manda:
+     · `grama(olho, ponto, r)` injetada: a grama DESENHADA no caminho inteiro
+       (js/oclusao.js, `gramaCobre`: lâmina por lâmina, como o shader a põe).
+       Ela resolve os dois defeitos da regra de altura: a grama NO CAMINHO
+       (A2, validacao-6aeda6c.md — a linha até a cabeça passava 0,19 m acima
+       de uma crista gramada, 0 px na tela, e a assistência agia) e o chão
+       SEM grama (o alvo agachado, cabeça a 1,08 m, nunca era "visto" nem na
+       rua: 0 de 8 rumos, medido pela frente de postura);
+     · sem ela, a regra de ALTURA: a parte a ≥ `grassTop` do chão do alvo
+       (1,33 m, o topo da lâmina mais alta).
+   A parte que a grama pode cobrir continua silhueta de quem JÁ está à vista,
+   mas não põe ninguém à vista.
+
+   TIRO AUTOMÁTICO SÓ EM ALVO DE COMBATE (A8-e, validacao-6aeda6c.md: 10
+   disparos nos discos do campo de tiro, que moram em `extraTargets` junto dos
+   esqueletos, zumbis e bichos). "Fire at any foe that enters your crosshairs"
+   (WZM, referência §2.5); "look at a target and have the selected weapon
+   fire" (Fortnite, §2.4). Quem é combate o JOGO diz (`combate(t)` injetado);
+   sem ele, só o alvo que se declara (`t.combate === true`). Na dúvida, não
+   atira: um alvo novo que ninguém classificou fica sem automático — defeito
+   que aparece na primeira partida, em vez de tiro sozinho no que não é
+   inimigo (o que, no BR, ainda denuncia a posição para os bots, B8).
+   A ASSISTÊNCIA (slow/pull) continua agindo no disco, e isso é decisão: o
+   campo de tiro existe para treinar a MIRA, e treinar sem a ajuda que o
+   combate tem ensina outra mão. O Lyra só assiste quem se declara alvo
+   (`IAimAssistTaggedTargetInterface`, §1.2) — o disco se declara alvo pelo
+   mesmo contrato `hitSpheres()` do tiro. O que A8(e) proíbe é o GATILHO.
    ================================================================ */
 
 const DEG = Math.PI / 180;
@@ -185,6 +211,10 @@ export function createAimAssist(deps) {
   const heightAt = typeof d.heightAt === 'function' ? d.heightAt : () => 0;
   const root = d.root || null;
   const grassTop = typeof d.grassTop === 'number' && Number.isFinite(d.grassTop) ? d.grassTop : AIM.GRASS_TOP;
+  // A8(e): quem é alvo de COMBATE (jogador, bot, chefe, inimigo PvE) — só nele o automático dispara
+  const combate = typeof d.combate === 'function' ? d.combate : t => t.combate === true;
+  // A2: a grama desenhada no CAMINHO até a parte; sem a camada, a regra de altura no pé do alvo
+  const grama = typeof d.grama === 'function' ? d.grama : null;
 
   /* pool de candidatos: nada de alocação por frame no caminho quente */
   const pool = [];
@@ -323,7 +353,7 @@ export function createAimAssist(deps) {
         losCalls++;
         if (!los(eyeP, cP, c.r[k], c.t)) continue;
         c.vis[k] = 1;
-        if (c.y[k] - heightAt(c.x[k], c.z[k]) >= grassTop) c.seen = true;
+        if (!c.seen && (grama ? !grama(eyeP, cP, c.r[k]) : c.y[k] - heightAt(c.x[k], c.z[k]) >= grassTop)) c.seen = true;
       }
       if (!c.seen) continue;
       for (let k = 0; k < c.n; k++) {
@@ -333,7 +363,7 @@ export function createAimAssist(deps) {
         // tiro automático: a cruz DENTRO da esfera (sem piso), no alcance da arma
         if (c.sep[k] <= c.ang[k] && c.dist[k] <= wa.autoRange) c.hit = true;
       }
-      if (c.hit) out.fire = fireOn;
+      if (c.hit && fireOn && combate(c.t)) out.fire = true;
       const isPrev = c.t === prevTarget;
       const sc = c.visGap - (isPrev ? hyst : 0);
       if (c.visGap <= outer + (isPrev ? hyst : 0) && (!best || sc < best.score)) { best = c; best.score = sc; }

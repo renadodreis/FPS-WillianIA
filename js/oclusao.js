@@ -39,6 +39,10 @@
    CAIXA dela, sólida; o conjunto de instâncias, pela esfera de cada
    instância. O que NÃO entra (e por quê) está em `candidata`.
 
+   A GRAMA tem camada própria (`gramaCobre`, mais abaixo): ela não é parede —
+   o tiro a atravessa, e um ponto dentro dela pode aparecer entre as lâminas —
+   mas pode cobrir. Quem decide "o alvo está À VISTA" pergunta às duas.
+
    CUSTO (medido no jogo, desktop, carga 2,6–3,4, ver
    test/aim-visibilidade.test.js): 9 raios por quadro — o teto da assistência,
    3 candidatos × 3 partes — custam 0,03–0,10 ms (campo, floresta, castelo,
@@ -56,6 +60,7 @@ export const OCL = Object.freeze({
   MAX_TRIS: 80000,      // malha maior que isso é terreno/céu: fica de fora
   REVARRER_S: 2,        // s entre varreduras da cena (malha nova, malha que saiu)
   ORCAMENTO_MS: 2,      // ms de rasterização por quadro (no BR, a montagem cabe na nave)
+  ORCAMENTO_GRAMA_MS: 1, // ms por quadro para o índice da grama (o chunk mais perto do jogador primeiro)
   IDX: 16,              // m: célula do índice grosso (segmento → malhas perto)
   IDX_MAX: 64,          // células de índice: malha maior que isso vai pra lista global
 });
@@ -431,6 +436,85 @@ function candidata(o) {
   return n > 0 && n <= OCL.MAX_TRIS;
 }
 
+/* ---------------- a GRAMA desenhada ----------------
+   A2 (validacao-6aeda6c.md): 1 de 33 casos da varredura com 0 px e a
+   assistência agindo. Reproduzido com a âncora de pixels: alvo a 37,5 m
+   atrás de uma crista, a linha do olho ao CENTRO da cabeça passa 0,188 m
+   acima do chão da crista — e 0 px; ESCONDENDO A GRAMA, 24 px. O que tampava
+   era a grama em cima da crista, e a regra de grama da assistência só olhava
+   o pé do alvo. (A esfera da cabeça maior que o boneco não entra: a linha vai
+   ao centro dela, que está dentro da cabeça desenhada.) Com o tapete já
+   repreenchido em volta do atirador — a sonda do laudo mede 12 quadros depois
+   de um salto, e o js/grass.js leva 57 para refazer os 169 chunks no celular
+   — eram 5 dos 40 alvos com 0 px (2 com o automático disparando).
+
+   A grama é ShaderMaterial instanciado, fora da grade de triângulos. Aqui
+   cada lâmina DESENHADA é lida da matriz de instância do chunk (como está na
+   tela, inclusive o chunk ainda não reciclado depois de um salto) e testada
+   como o vertex shader a desenha: ponto da geometria (xg, h, 0,18·h²), xg ∈
+   ±0,05·(1 − 0,82·h), levado ao mundo pela instância (tombo, giro, altura,
+   largura); depois
+     · vento   w·h² ao longo de `uWindDir`, |w| ≤ (0,85 + 0,275)·uWind +
+               balanço 0,055 — lidos do MATERIAL a cada consulta, então
+               tempestade e giro do vento valem na hora;
+     · dobra   bendAway: a até `raio` do jogador/carro, o vértice é empurrado
+               para FORA, na direção em que já estava (ver `dobraCobre`);
+     · borda   edgeFade zera a lâmina cuja raiz passa de 0,97·uPatchRadius
+               da câmera.
+   Vento e dobra só ABAIXAM a lâmina (0,16·uWind·h² e 0,3·h): a altura em pé
+   é o pior caso, e a faixa de h que pode estar na altura da linha sai disso.
+   Uma linha que passa entre as lâminas passa; na dúvida (chunk ainda sem
+   índice), o chunk inteiro cobre até a lâmina mais alta dele. */
+export const GRAMA = Object.freeze({
+  LAMINA: 0.49,         // m: o que a lâmina alcança da raiz sem vento (tombo 0,24 + curva 0,18 + meia-largura 0,0625)
+  VENTO: 1.125,         // × uWind: amplitude do vento no shader (0,85 + 0,275)
+  BALANCO: 0.055,       // m: balanço senoidal (também na direção do vento)
+  MIN: 0.05,            // m: lâmina colapsada (deserto, rua, lago: 0,0001–0,02) não cobre ninguém
+  FADE: 0.97,           // edgeFade: some a 0,97·uPatchRadius da câmera
+  EMPURRA: Object.freeze([                    // bendAway(src, raio, força) do vertex shader
+    Object.freeze({ u: 'uPlayerPos', raio: 1.5, forca: 1.05 }),
+    Object.freeze({ u: 'uCarPos', raio: 3.1, forca: 1.4 }),
+  ]),
+  EMPURRA_DY: 3,        // m: a dobra some a 3 m de desnível (smoothstep 0,5–3,0 do shader)
+  IDX: 8,               // m: célula do índice (ponto → chunks)
+  CEL: 1,               // m: célula do índice de lâminas de cada chunk
+});
+const num = (u, def = 0) => (u && Number.isFinite(+u.value) ? +u.value : def);
+
+/* O VENTO DO SHADER, em JS: hash12/vnoise do vertex shader do js/grass.js,
+   com a aritmética de float32 do GPU (Math.fround em cada operação). É o
+   `wind` do shader no ponto (x, z) do mundo (antes do vento) no tempo t:
+   (vnoise(xz·0,08 + t·(0,85; 0,55)) − 0,5)·1,7 + (vnoise(xz·0,33 − t·(1,6; 0,2)) − 0,5)·0,55.
+   Conferido contra o GPU de verdade, com o texto do shader do material
+   compilado de novo, em test/aim-visibilidade.test.js. */
+const F = Math.fround, K1 = F(0.1031), K2 = F(33.33);
+const fr = x => x - Math.floor(x);
+function hash12(px, py) {
+  const x = fr(F(px * K1)), y = fr(F(py * K1)), z = x;
+  const d = F(F(F(x * F(y + K2)) + F(y * F(z + K2))) + F(z * F(x + K2)));
+  const X = F(x + d), Y = F(y + d), Z = F(z + d);
+  return fr(F(F(X + Y) * Z));
+}
+function vnoise(px, py) {
+  const ix = Math.floor(px), iy = Math.floor(py);
+  let fx = px - ix, fy = py - iy;
+  fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+  const a = hash12(ix, iy), b = hash12(ix + 1, iy), c = hash12(ix, iy + 1), d = hash12(ix + 1, iy + 1);
+  const ab = a + (b - a) * fx, cd = c + (d - c) * fx;
+  return ab + (cd - ab) * fy;
+}
+const V1 = F(0.08), V2 = F(0.33), T1X = F(0.85), T1Z = F(0.55), T2X = F(1.6), T2Z = F(0.2);
+export function ventoGrama(x, z, t) {
+  const w1 = vnoise(F(F(x * V1) + F(t * T1X)), F(F(z * V1) + F(t * T1Z)));
+  const w2 = vnoise(F(F(x * V2) - F(t * T2X)), F(F(z * V2) - F(t * T2Z)));
+  return (w1 - 0.5) * 1.7 + (w2 - 0.5) * 0.55;
+}
+/* quanto o `wind` pode mudar por metro: o vnoise muda no máximo 1,5·√2 por
+   unidade de entrada (smoothstep' ≤ 1,5 nos dois eixos), vezes a frequência
+   e o peso de cada oitava */
+export const VENTO_LIPSCHITZ = 1.5 * Math.SQRT2 * (1.7 * 0.08 + 0.55 * 0.33);
+const VENTO_FOLGA = 0.02;             // float32 do GPU (medido no teste de tela) + folga
+
 /* ================================================================ */
 export function createOclusao(deps) {
   const d = deps && typeof deps === 'object' ? deps : {};
@@ -439,6 +523,7 @@ export function createOclusao(deps) {
   const ignorar = typeof d.ignorar === 'function' ? d.ignorar : () => false;
   const alvos = typeof d.alvos === 'function' ? d.alvos : () => [];
   const agora = typeof d.agora === 'function' ? d.agora : () => Date.now();
+  const ehGrama = typeof d.grama === 'function' ? d.grama : () => false;   // o chunk de grama (js/grass.js)
 
   const regs = new Map();           // objeto → registro
   const fila = [];                  // registros a rasterizar
@@ -446,7 +531,7 @@ export function createOclusao(deps) {
   const idx = new Map();            // célula do índice → Set de registros parados
   let ultimaVarredura = -Infinity, carimbo = 0, marca = 0;
   const stats = { malhas: 0, instancias: 0, pendentes: 0, celulas: 0, refs: 0, rasterMs: 0, raios: 0, raiosMs: 0,
-    bloqueios: { terreno: 0, malha: 0, pendente: 0 } };
+    bloqueios: { terreno: 0, malha: 0, pendente: 0, grama: 0 }, gramas: 0, gramaMontagens: 0, gramaMs: 0, gramaRaios: 0 };
 
   const _v = new Float64Array(3);
   const _m = new Float64Array(16), _i = new Float64Array(12);
@@ -608,6 +693,12 @@ export function createOclusao(deps) {
     while (pilha.length) {
       const o = pilha.pop(), vis = pilhaVis.pop();
       if (o !== raiz && (raizesAlvo.has(o) || ignorar(o))) continue;
+      if (o !== raiz && ehGrama(o)) {
+        let g = gramas.get(o);
+        if (!g && vis) g = registrarGrama(o);
+        if (g) g.visto = carimbo;
+        continue;
+      }
       let r = regs.get(o);
       if (!r && vis && !pequenas.has(o) && candidata(o)) r = registrar(o);
       if (r) r.visto = carimbo;
@@ -616,6 +707,7 @@ export function createOclusao(deps) {
     }
     // apagar durante a iteração de um Map é seguro (e não aloca cópia)
     for (const r of regs.values()) if (r.visto !== carimbo) remover(r);
+    for (const g of gramas.values()) if (g.visto !== carimbo) { desindexarGrama(g); gramas.delete(g.obj); }
   }
 
   /* ---- rasterização com orçamento ---- */
@@ -634,6 +726,27 @@ export function createOclusao(deps) {
     const t0 = agora();
     if (t0 - ultimaVarredura >= OCL.REVARRER_S * 1000) { ultimaVarredura = t0; varrer(); }
     for (const r of regs.values()) atualizaPose(r);
+    /* a grama reciclada (js/grass.js repreenche 3–6 chunks por quadro) é
+       remontada aqui, dentro do orçamento; o que sobrar, a consulta monta */
+    /* orçamento PRÓPRIO, contado daqui (a pose das malhas e das árvores
+       acima pode comer os 2 ms da rasterização inteiros — medido: com isso a
+       grama ficava pendente para sempre, e pendente cobre tudo), sempre pelo
+       menos um chunk por quadro, e o MAIS PERTO do jogador primeiro */
+    if (gramas.size) {
+      const tg = agora();
+      for (;;) {
+        let alvo = null, dAlvo = Infinity;
+        for (const g of gramas.values()) {
+          if (!(g.pend || gramaVelha(g)) || !renderizado(g.obj)) continue;
+          const src = uniformsDe(g).uPlayerPos, pp = src && src.value;
+          const d = pp && g.chaves ? distCaixa(g, +pp.x, +pp.z) : 0;
+          if (d < dAlvo) { dAlvo = d; alvo = g; }
+        }
+        if (!alvo) break;
+        montarGrama(alvo, true);
+        if (agora() - tg > OCL.ORCAMENTO_GRAMA_MS) break;
+      }
+    }
     if (fila.length) {
       const t1 = agora(), limite = t0 + OCL.ORCAMENTO_MS;
       while (fila.length && agora() <= limite) {
@@ -642,6 +755,485 @@ export function createOclusao(deps) {
       }
       stats.rasterMs += agora() - t1;
     }
+  }
+
+  /* ---- a camada da GRAMA (ver GRAMA, acima) ---- */
+  const gramas = new Map();          // chunk → registro
+  const gIdx = new Map();            // célula do índice → registros cuja caixa a toca
+  let gbx = new Float32Array(0), gbz = gbx, gbq = new Uint32Array(0), gcur = gbq;
+  function registrarGrama(o) {
+    const g = { obj: o, ver: NaN, n: -1, mw: new Float64Array(16).fill(NaN), pose: new Float64Array(26).fill(NaN), vis: true, pend: false, marca: 0,
+      bx0: 0, bx1: 0, bz0: 0, bz1: 0, yMin: Infinity, yMax: -Infinity, chaves: null, visto: carimbo,
+      arr: null, fase: null, lx0: 0, lz0: 0, bnx: 0, bnz: 0, off: null, ids: null, dat: null, celTopo: null };
+    gramas.set(o, g);
+    return g;
+  }
+  function uniformsDe(g) { const m = g.obj.material; return (m && m.uniforms) || {}; }
+  /* A matriz com que o PRÓXIMO render desenha o chunk. O fillChunk move o
+     chunk pela `position` e reescreve as instâncias na hora; a `matrixWorld`
+     só é recomposta no render. Ler as instâncias NOVAS com a matriz VELHA
+     punha a grama a 130 m de onde ela aparece (medido: chunk em (100, 100)
+     com matrixWorld em (−30, −30) depois de 60 quadros de QA.tick). Com
+     matrixAutoUpdate, compõe posição · giro · escala sob a matriz do pai. */
+  const _loc = new Float64Array(16), _mund = new Float64Array(16);
+  function mundoDe(o) {
+    const e = o.matrixWorld && o.matrixWorld.elements;
+    const p = o.position, q = o.quaternion, sc = o.scale;
+    if (!o.matrixAutoUpdate || !p || !q || !sc) return e || null;
+    const x = +q.x, y = +q.y, z = +q.z, w = +q.w, x2 = x + x, y2 = y + y, z2 = z + z;
+    const xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2, wx = w * x2, wy = w * y2, wz = w * z2;
+    const sx = +sc.x, sy = +sc.y, sz = +sc.z;
+    _loc[0] = (1 - (yy + zz)) * sx; _loc[1] = (xy + wz) * sx; _loc[2] = (xz - wy) * sx; _loc[3] = 0;
+    _loc[4] = (xy - wz) * sy; _loc[5] = (1 - (xx + zz)) * sy; _loc[6] = (yz + wx) * sy; _loc[7] = 0;
+    _loc[8] = (xz + wy) * sz; _loc[9] = (yz - wx) * sz; _loc[10] = (1 - (xx + yy)) * sz; _loc[11] = 0;
+    _loc[12] = +p.x; _loc[13] = +p.y; _loc[14] = +p.z; _loc[15] = 1;
+    const pe = o.parent && o.parent.matrixWorld && o.parent.matrixWorld.elements;
+    if (!pe) return _loc;
+    return multAfim(pe, 0, _loc, 0, _mund);
+  }
+  /* mudou o que está desenhado? (fillChunk reescreve as matrizes e move o chunk) */
+  function gramaVelha(g) {
+    const o = g.obj, im = o.instanceMatrix;
+    if (!im) return g.chaves !== null;
+    if (im.version !== g.ver || (o.count | 0) !== g.n) return true;
+    /* barato primeiro: posição/giro/escala e a matriz do pai (169 chunks por
+       quadro — compor a matriz de cada um só para comparar custava ~0,07 ms) */
+    const p = o.position, q = o.quaternion, sc = o.scale, c = g.pose;
+    if (o.matrixAutoUpdate && p && q && sc) {
+      if (p.x !== c[0] || p.y !== c[1] || p.z !== c[2] || q.x !== c[3] || q.y !== c[4] || q.z !== c[5] || q.w !== c[6] ||
+        sc.x !== c[7] || sc.y !== c[8] || sc.z !== c[9]) return true;
+      const pe = o.parent && o.parent.matrixWorld && o.parent.matrixWorld.elements;
+      if (pe) for (let i = 0; i < 16; i++) if (pe[i] !== c[10 + i]) return true;
+      return false;
+    }
+    const e = mundoDe(o);
+    if (!e) return g.chaves !== null;
+    for (let i = 0; i < 16; i++) if (e[i] !== g.mw[i]) return true;
+    return false;
+  }
+  function guardaPose(g) {
+    const o = g.obj, p = o.position, q = o.quaternion, sc = o.scale, c = g.pose;
+    if (!(o.matrixAutoUpdate && p && q && sc)) return;
+    c[0] = p.x; c[1] = p.y; c[2] = p.z; c[3] = q.x; c[4] = q.y; c[5] = q.z; c[6] = q.w; c[7] = sc.x; c[8] = sc.y; c[9] = sc.z;
+    const pe = o.parent && o.parent.matrixWorld && o.parent.matrixWorld.elements;
+    for (let i = 0; i < 16; i++) c[10 + i] = pe ? pe[i] : NaN;
+  }
+  function desindexarGrama(g) {
+    if (!g.chaves) return;
+    for (const k of g.chaves) { const l = gIdx.get(k); if (l) { const i = l.indexOf(g); if (i >= 0) l.splice(i, 1); if (!l.length) gIdx.delete(k); } }
+    g.chaves = null;
+  }
+  function indexarGrama(g) {
+    // o mesmo array a cada remontagem: o js/grass.js recicla chunks o tempo todo
+    g.chaves = g.chavesBuf || (g.chavesBuf = []);
+    g.chaves.length = 0;
+    const I = GRAMA.IDX;
+    for (let i = Math.floor(g.bx0 / I), i1 = Math.floor(g.bx1 / I); i <= i1; i++)
+      for (let j = Math.floor(g.bz0 / I), j1 = Math.floor(g.bz1 / I); j <= j1; j++) {
+        const k = chave(i, j);
+        let l = gIdx.get(k);
+        if (!l) { l = []; gIdx.set(k, l); }
+        l.push(g); g.chaves.push(k);
+      }
+  }
+  /* distância horizontal de (x, z) até a caixa das lâminas do chunk (0 dentro) */
+  function distCaixa(g, x, z) {
+    const dx = x < g.bx0 ? g.bx0 - x : x > g.bx1 ? x - g.bx1 : 0, dz = z < g.bz0 ? g.bz0 - z : z > g.bz1 ? z - g.bz1 : 0;
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+  /* Lê as lâminas do chunk. `completa` = falso: só a caixa e a lâmina mais
+     alta, e o chunk fica PENDENTE — na consulta ele cobre, inteiro, até ela
+     (na dúvida, não assiste). Completa: índice por célula de CEL m e, por
+     lâmina, o descarte barato (topo e o círculo que a contém parada). O
+     js/grass.js recicla até 3 chunks por quadro no celular; o `atualizar`
+     completa o mais perto do jogador primeiro, com orçamento próprio. */
+  function montarGrama(g, completa) {
+    const t0 = agora();
+    stats.gramaMontagens++;
+    const o = g.obj, im = o.instanceMatrix, a = im && im.array, e = mundoDe(o);
+    desindexarGrama(g);
+    g.ver = im ? im.version : NaN; g.n = o.count | 0;
+    if (e) for (let i = 0; i < 16; i++) g.mw[i] = e[i];
+    guardaPose(g);
+    g.pend = false; g.arr = null; g.yMin = Infinity; g.yMax = -Infinity;
+    const n = a && e ? Math.max(0, Math.min(o.count | 0, Math.floor(a.length / 16))) : 0;
+    if (gbx.length < n) { gbx = new Float32Array(n); gbz = new Float32Array(n); gbq = new Uint32Array(n); }
+    const bx = gbx, bz = gbz, bq = gbq, MIN = GRAMA.MIN;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, yLo = Infinity, yHi = -Infinity, m = 0;
+    const M = g.mw;
+    const e0 = M[0], e1 = M[1], e2 = M[2], e4 = M[4], e5 = M[5], e6 = M[6], e8 = M[8], e9 = M[9], e10 = M[10], e12 = M[12], e13 = M[13], e14 = M[14];
+    for (let q = 0, k = 0; q < n; q++, k += 16) {
+      const lx = a[k + 12], ly = a[k + 13], lz = a[k + 14], ax = a[k + 4], ay = a[k + 5], az = a[k + 6];
+      // raiz no mundo, e o eixo Y da lâmina no mundo (a geometria vai de y = 0 a 1)
+      const wx = e0 * lx + e4 * ly + e8 * lz + e12, wy = e1 * lx + e5 * ly + e9 * lz + e13, wz = e2 * lx + e6 * ly + e10 * lz + e14;
+      const cx = e0 * ax + e4 * ay + e8 * az, cy = e1 * ax + e5 * ay + e9 * az, cz = e2 * ax + e6 * ay + e10 * az;
+      const sLen = Math.sqrt(cx * cx + cy * cy + cz * cz);
+      const soma = wx + wy + wz;
+      if (!(sLen >= MIN) || soma !== soma || Math.abs(soma) === Infinity) continue;
+      bx[m] = wx; bz[m] = wz; bq[m] = q; m++;
+      if (wx < x0) x0 = wx; if (wx > x1) x1 = wx; if (wz < z0) z0 = wz; if (wz > z1) z1 = wz;
+      if (wy < yLo) yLo = wy;
+      if (wy + sLen + 0.05 > yHi) yHi = wy + sLen + 0.05;    // + a curva e a largura inclinadas
+    }
+    g.yMin = yLo; g.yMax = yHi;
+    if (m) {
+      const R = GRAMA.LAMINA;
+      g.bx0 = x0 - R; g.bx1 = x1 + R; g.bz0 = z0 - R; g.bz1 = z1 + R;
+      indexarGrama(g);
+      if (!completa) { g.pend = true; stats.gramaMs += agora() - t0; return; }
+      const CB = GRAMA.CEL, bnx = Math.floor((x1 - x0) / CB) + 1, bnz = Math.floor((z1 - z0) / CB) + 1, bt = bnx * bnz;
+      const off = g.off && g.off.length >= bt + 1 ? g.off : new Uint32Array(bt + 1);
+      const ids = g.ids && g.ids.length >= m ? g.ids : new Uint32Array(m);
+      const dat = g.dat && g.dat.length >= 4 * m ? g.dat : new Float32Array(4 * m);
+      const cel = g.celTopo && g.celTopo.length >= bt ? g.celTopo : new Float32Array(bt);
+      if (gcur.length < bt) gcur = new Uint32Array(bt);
+      off.fill(0, 0, bt + 1);
+      for (let q = 0; q < m; q++) off[Math.floor((bz[q] - z0) / CB) * bnx + Math.floor((bx[q] - x0) / CB) + 1]++;
+      for (let c = 0; c < bt; c++) { off[c + 1] += off[c]; gcur[c] = off[c]; }
+      for (let q = 0; q < m; q++) ids[gcur[Math.floor((bz[q] - z0) / CB) * bnx + Math.floor((bx[q] - x0) / CB)]++] = bq[q];
+      cel.fill(-Infinity, 0, bt);
+      for (let c = 0; c < bt; c++) for (let f = off[c]; f < off[c + 1]; f++) {
+        const k = ids[f] * 16;
+        const Bx = e0 * a[k + 12] + e4 * a[k + 13] + e8 * a[k + 14] + e12, By = e1 * a[k + 12] + e5 * a[k + 13] + e9 * a[k + 14] + e13,
+          Bz = e2 * a[k + 12] + e6 * a[k + 13] + e10 * a[k + 14] + e14;
+        const c0x = e0 * a[k] + e4 * a[k + 1] + e8 * a[k + 2], c0y = e1 * a[k] + e5 * a[k + 1] + e9 * a[k + 2], c0z = e2 * a[k] + e6 * a[k + 1] + e10 * a[k + 2];
+        const c1x = e0 * a[k + 4] + e4 * a[k + 5] + e8 * a[k + 6], c1y = e1 * a[k + 4] + e5 * a[k + 5] + e9 * a[k + 6], c1z = e2 * a[k + 4] + e6 * a[k + 5] + e10 * a[k + 6];
+        const c2x = e0 * a[k + 8] + e4 * a[k + 9] + e8 * a[k + 10], c2y = e1 * a[k + 8] + e5 * a[k + 9] + e9 * a[k + 10], c2z = e2 * a[k + 8] + e6 * a[k + 9] + e10 * a[k + 10];
+        const px = c1x + 0.18 * c2x, pz = c1z + 0.18 * c2z;
+        const topo = By + Math.max(0, c1y) + 0.18 * Math.max(0, c2y) + 0.05 * Math.abs(c0y);
+        dat[4 * f] = topo;
+        dat[4 * f + 1] = Bx + px / 2; dat[4 * f + 2] = Bz + pz / 2;
+        dat[4 * f + 3] = Math.sqrt(px * px + pz * pz) / 2 + 0.045 * Math.sqrt(c2x * c2x + c2z * c2z) +
+          0.05 * Math.sqrt(c0x * c0x + c0y * c0y + c0z * c0z) + 0.02;
+        if (topo > cel[c]) cel[c] = topo;
+      }
+      g.off = off; g.ids = ids; g.dat = dat; g.celTopo = cel; g.lx0 = x0; g.lz0 = z0; g.bnx = bnx; g.bnz = bnz; g.arr = a;
+      const ap = o.geometry && o.geometry.attributes && o.geometry.attributes.aPhase;
+      g.fase = ap && ap.array && ap.array.length >= n ? ap.array : null;
+    }
+    stats.gramaMs += agora() - t0;
+  }
+  const ultGrama = { t: 0, y: 0, via: -1, lamina: -1, obj: null, col: null, raiz: null, h: null, dist: 0, meia: 0, W: 0 };   // QA: onde a última consulta foi coberta (m do olho, altura, -1 lâmina / 0 jogador / 1 carro)
+  /* O vento: |w| ≤ W ao longo de `uWindDir` (sem direção no material:
+     qualquer direção — um disco). */
+  const vv = { W: 0, dx: 0, dz: 0, iso: false, uWind: 0, t: NaN };
+  function ventoDe(u) {
+    vv.uWind = Math.max(0, num(u.uWind));
+    vv.W = Math.max(0, GRAMA.VENTO * vv.uWind + GRAMA.BALANCO);
+    vv.t = num(u.uTime, NaN);             // o tempo que o shader usa (sem ele, o vento é só a cota)
+    const d = u.uWindDir && u.uWindDir.value, L = d ? Math.hypot(+d.x, +d.y) : 0;
+    vv.iso = !(L > 1e-9);
+    if (!vv.iso) { vv.dx = d.x / L; vv.dz = d.y / L; }
+  }
+  /* ---- a lâmina, como o shader a desenha ----
+     Polígono de consulta em QP (x, z): o trecho da linha em volta da amostra
+     (2 pontos) ou, dentro do disco de uma dobra, o leque empurrador → trecho
+     (3 pontos). A lâmina cobre se a região que o material dela pode ocupar na
+     faixa de altura da linha chega a menos da meia-largura dele do polígono. */
+  const QP = new Float64Array(6), PG = new Float64Array(8), _pend = [];
+  let eyeY = 0;                                   // a altura do olho da consulta (o edgeFade mede em 3D)
+  const fadeIni2 = (0.72 / GRAMA.FADE) * (0.72 / GRAMA.FADE);   // edgeFade começa a 0,72·uPatchRadius
+  // a dobra em teste (dobraCobre): o empurrador, o raio e a força — `empR` 0 = nenhuma
+  let empX = 0, empY = 0, empZ = 0, empR = 0, empF = 0, empYlo = 0, empYhi = 0;
+  const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  let qn = 2, gMarca = 0;
+  const orient = (ax, az, bx, bz, cx, cz) => (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+  function ptSeg2(px, pz, ax, az, bx, bz) {
+    const vx = bx - ax, vz = bz - az, L = vx * vx + vz * vz;
+    let t = L > 0 ? ((px - ax) * vx + (pz - az) * vz) / L : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const qx = ax + vx * t - px, qz = az + vz * t - pz;
+    return qx * qx + qz * qz;
+  }
+  function segSeg2(ax, az, bx, bz, cx, cz, dx, dz) {
+    const o1 = orient(ax, az, bx, bz, cx, cz), o2 = orient(ax, az, bx, bz, dx, dz);
+    const o3 = orient(cx, cz, dx, dz, ax, az), o4 = orient(cx, cz, dx, dz, bx, bz);
+    if (o1 * o2 < 0 && o3 * o4 < 0) return 0;
+    return Math.min(ptSeg2(ax, az, cx, cz, dx, dz), ptSeg2(bx, bz, cx, cz, dx, dz),
+      ptSeg2(cx, cz, ax, az, bx, bz), ptSeg2(dx, dz, ax, az, bx, bz));
+  }
+  // ponto dentro de polígono convexo (qualquer sentido); polígono degenerado: nunca
+  function dentro(px, pz, P, n) {
+    let pos = false, neg = false;
+    for (let i = 0; i < n; i++) {
+      const j = i + 1 === n ? 0 : i + 1;
+      const o = orient(P[2 * i], P[2 * i + 1], P[2 * j], P[2 * j + 1], px, pz);
+      if (o > 1e-12) pos = true; else if (o < -1e-12) neg = true;
+      if (pos && neg) return false;
+    }
+    return pos !== neg;
+  }
+  // distância² entre os convexos QP (qn pontos) e PG (4 pontos); 0 se se tocam
+  function distQP2() {
+    for (let i = 0; i < qn; i++) if (dentro(QP[2 * i], QP[2 * i + 1], PG, 4)) return 0;
+    if (qn === 3) for (let i = 0; i < 4; i++) if (dentro(PG[2 * i], PG[2 * i + 1], QP, 3)) return 0;
+    let d = Infinity;
+    const ne = qn === 2 ? 1 : 3;
+    for (let i = 0; i < ne; i++) {
+      const j = i + 1 === qn ? 0 : i + 1;
+      for (let a = 0; a < 4; a++) {
+        const b = a === 3 ? 0 : a + 1;
+        const v = segSeg2(QP[2 * i], QP[2 * i + 1], QP[2 * j], QP[2 * j + 1], PG[2 * a], PG[2 * a + 1], PG[2 * b], PG[2 * b + 1]);
+        if (v < d) { d = v; if (d === 0) return 0; }
+      }
+    }
+    return d;
+  }
+  function distPontoQP2(px, pz) {
+    if (qn === 3 && dentro(px, pz, QP, 3)) return 0;
+    let d = Infinity;
+    const ne = qn === 2 ? 1 : 3;
+    for (let i = 0; i < ne; i++) {
+      const j = i + 1 === qn ? 0 : i + 1;
+      const v = ptSeg2(px, pz, QP[2 * i], QP[2 * i + 1], QP[2 * j], QP[2 * j + 1]);
+      if (v < d) d = v;
+    }
+    return d;
+  }
+  /* A lâmina q do chunk g na faixa de altura [yMin, yMax]: acima de h1 ela
+     está acima da linha mesmo abaixada pelo vento (0,16·W·h²), abaixo de h0
+     não chega nela (cotas com h² ≤ h, conservadoras). A curva do centro de h0
+     a h1 fica a no máximo a flecha da corda; o vento leva o ponto h por
+     w·h² ≤ W·h1². Região: paralelogramo corda ⊕ [−W·h1², W·h1²]·dir,
+     engordado pela meia-largura e pela flecha. */
+  const FATIAS = 3;      // a faixa de h em pedaços: cada pedaço com o deslocamento do vento DELE (w·h²)
+  function laminaCobre(g, q, yMin, yMax, ex, ez, lim2) {
+    const a = g.arr, M = g.mw, k = q * 16;
+    const lx = a[k + 12], ly = a[k + 13], lz = a[k + 14];
+    const Bx = M[0] * lx + M[4] * ly + M[8] * lz + M[12], By = M[1] * lx + M[5] * ly + M[9] * lz + M[13],
+      Bz = M[2] * lx + M[6] * ly + M[10] * lz + M[14];
+    if ((Bx - ex) * (Bx - ex) + (Bz - ez) * (Bz - ez) > lim2) return false;   // edgeFade: raiz fora do tapete desenhado
+    /* na FAIXA DO edgeFade (raiz a mais de 0,72·uPatchRadius da câmera, em 3D
+       como o shader mede) a lâmina encolhe em x e y mas o vento e a curva
+       seguem o h da geometria: o ponto na altura da linha tem h MAIOR e anda
+       mais. Ali, a lâmina inteira (h de 0 a 1) — conservador, e só na borda */
+    const noFade = (Bx - ex) * (Bx - ex) + (By - eyeY) * (By - eyeY) + (Bz - ez) * (Bz - ez) > lim2 * fadeIni2;
+    const c0x = M[0] * a[k] + M[4] * a[k + 1] + M[8] * a[k + 2], c0y = M[1] * a[k] + M[5] * a[k + 1] + M[9] * a[k + 2],
+      c0z = M[2] * a[k] + M[6] * a[k + 1] + M[10] * a[k + 2];
+    const c1x = M[0] * a[k + 4] + M[4] * a[k + 5] + M[8] * a[k + 6], c1y = M[1] * a[k + 4] + M[5] * a[k + 5] + M[9] * a[k + 6],
+      c1z = M[2] * a[k + 4] + M[6] * a[k + 5] + M[10] * a[k + 6];
+    const c2x = M[0] * a[k + 8] + M[4] * a[k + 9] + M[8] * a[k + 10], c2y = M[1] * a[k + 8] + M[5] * a[k + 9] + M[9] * a[k + 10],
+      c2z = M[2] * a[k + 8] + M[6] * a[k + 9] + M[10] * a[k + 10];
+    const larg = 0.05 * Math.abs(c0y), c0 = Math.sqrt(c0x * c0x + c0y * c0y + c0z * c0z), c2h = Math.sqrt(c2x * c2x + c2z * c2z);
+    const c2a = 0.18 * Math.abs(c2y), den = c1y + c2a;
+    /* a faixa de h em que a lâmina pode estar na altura da linha: abaixo de
+       h0 ela não chega; acima de h1 ela está acima mesmo abaixada pelo vento
+       (0,16·|wind|·uWind·h²). Cotas com h² ≤ h, conservadoras */
+    let h0 = den > 1e-9 ? (yMin - By - larg) / den : 0;
+    h0 = noFade ? 0 : h0 < 0 ? 0 : h0 > 1 ? 1 : h0;
+    const faixaH1 = baixa => {
+      const d1 = c1y - c2a - baixa;
+      const h = d1 > 1e-9 ? (yMax - By + larg) / d1 : 1;
+      return h < h0 ? h0 : h > 1 ? 1 : h;
+    };
+    let h1 = noFade ? 1 : faixaH1(0.16 * GRAMA.VENTO * vv.uWind);
+    /* O VENTO desta lâmina, como o shader o calcula: `wind` no meio da corda
+       da faixa (± o quanto ele muda até o ponto mais longe dela, ± o
+       float32), mais o balanço dela (aPhase): D = wind·uWind + balanço, e o
+       ponto h anda D·h² ao longo de uWindDir. Sem o tempo ou a fase no
+       material, D ∈ ±W (a cota inteira). */
+    let Dlo = -vv.W, Dhi = vv.W, rDisco = 0;
+    const fase = g.fase;
+    if (vv.iso) { Dlo = Dhi = 0; rDisco = vv.W; } else if (vv.t === vv.t && fase && q < fase.length) {
+      const q0x = Bx + c1x * h0 + 0.18 * h0 * h0 * c2x, q0z = Bz + c1z * h0 + 0.18 * h0 * h0 * c2z;
+      const q1x = Bx + c1x * h1 + 0.18 * h1 * h1 * c2x, q1z = Bz + c1z * h1 + 0.18 * h1 * h1 * c2z;
+      const alcance = Math.sqrt((q1x - q0x) * (q1x - q0x) + (q1z - q0z) * (q1z - q0z)) / 2 +
+        0.18 * c2h * (h1 - h0) * (h1 - h0) / 4 + 0.05 * c0 + 0.02;
+      const w = ventoGrama((q0x + q1x) / 2, (q0z + q1z) / 2, vv.t), tol = VENTO_LIPSCHITZ * alcance + VENTO_FOLGA;
+      const sw = Math.sin(F(F(vv.t * F(2.3)) + F(fase[q] * F(6.2831)))) * 0.055;
+      Dlo = (w - tol) * vv.uWind + sw - 0.001; Dhi = (w + tol) * vv.uWind + sw + 0.001;
+      // o vento DESTE instante abaixa só 0,16·|wind|·uWind: a faixa de h fecha
+      if (!noFade) h1 = faixaH1(0.16 * Math.max(Math.abs(w - tol), Math.abs(w + tol)) * vv.uWind);
+    }
+    const n = h1 - h0 > 0.02 ? FATIAS : 1;
+    for (let f = 0; f < n; f++) {
+      const ha = h0 + (h1 - h0) * f / n, hb = h0 + (h1 - h0) * (f + 1) / n, ha2 = ha * ha, hb2 = hb * hb;
+      const q0x = Bx + c1x * ha + 0.18 * ha2 * c2x, q0z = Bz + c1z * ha + 0.18 * ha2 * c2z;
+      const q1x = Bx + c1x * hb + 0.18 * hb2 * c2x, q1z = Bz + c1z * hb + 0.18 * hb2 * c2z;
+      const meia = 0.05 * (1 - 0.82 * ha) * c0 + 0.18 * c2h * (hb - ha) * (hb - ha) / 4 + 0.01;
+      const dA = Math.min(Dlo * ha2, Dlo * hb2), dB = Math.max(Dhi * ha2, Dhi * hb2);
+      const ax = vv.dx * dA, az = vv.dz * dA, bx = vv.dx * dB, bz = vv.dz * dB;
+      PG[0] = q0x + ax; PG[1] = q0z + az; PG[2] = q1x + ax; PG[3] = q1z + az;
+      PG[4] = q1x + bx; PG[5] = q1z + bz; PG[6] = q0x + bx; PG[7] = q0z + bz;
+      const m = meia + rDisco * hb2;
+      if (empR > 0) {
+        /* dentro da DOBRA: o vértice só vai para FORA, e da distância d do
+           empurrador a no máximo d + força·(1 − smoothstep(0, raio, d)). E o
+           empurrão e a descida andam JUNTOS: ele desce 0,3·k e sai força·k (o
+           mesmo k = falloff·h·vf do shader) — para cair na altura da linha,
+           desce o quanto estava acima dela, e sai força/0,3 vezes isso. Se o
+           que a lâmina ocupa não chega, assim empurrado, à faixa de
+           distâncias do trecho [A, B], ela não cobre o trecho */
+        let dLo = Infinity, dHi = 0;
+        if (dentro(empX, empZ, PG, 4)) dLo = 0;
+        for (let i = 0; i < 4; i++) {
+          const j = i === 3 ? 0 : i + 1;
+          const e2 = ptSeg2(empX, empZ, PG[2 * i], PG[2 * i + 1], PG[2 * j], PG[2 * j + 1]);
+          if (e2 < dLo * dLo) dLo = Math.sqrt(e2);
+          const v = Math.hypot(PG[2 * i] - empX, PG[2 * i + 1] - empZ);
+          if (v > dHi) dHi = v;
+        }
+        dLo = Math.max(0, dLo - m); dHi += m;
+        /* k = falloff(d)·h·vf(desnível) — o shader o FIXA para cada vértice:
+           entre o menor (mais longe, mais baixo na lâmina, maior desnível) e o
+           maior. Quem está perto do jogador É empurrado, não pode ficar onde
+           estava */
+        const yb0 = By + (c1y - c2a) * ha - larg - 0.16 * GRAMA.VENTO * vv.uWind * hb2, yb1 = By + (c1y + c2a) * hb + larg;
+        const dy0 = yb0 - empY, dy1 = yb1 - empY;
+        const dyMin = dy0 > 0 ? dy0 : dy1 < 0 ? -dy1 : 0, dyMax = Math.max(Math.abs(dy0), Math.abs(dy1));
+        const kLo = (1 - sstep(0, empR, dHi)) * ha * (1 - sstep(0.5, 3.0, dyMax)),
+          kHi = (1 - sstep(0, empR, dLo)) * hb * (1 - sstep(0.5, 3.0, dyMin));
+        const r = empF / 0.3;
+        const eMin = Math.max(empF * kLo, r * (yb0 - empYhi)), eMax = Math.min(empF * kHi, r * (yb1 - empYlo));
+        if (eMax < eMin) continue;
+        const rMin = Math.sqrt(ptSeg2(empX, empZ, QP[2], QP[3], QP[4], QP[5])),
+          rMax = Math.max(Math.hypot(QP[2] - empX, QP[3] - empZ), Math.hypot(QP[4] - empX, QP[5] - empZ));
+        if (dHi + eMax < rMin || dLo + eMin > rMax) continue;
+      }
+      const d2 = distQP2();
+      if (d2 > m * m) continue;
+      ultGrama.lamina = q; ultGrama.obj = g.obj; ultGrama.raiz = [Bx, By, Bz]; ultGrama.h = [ha, hb];
+      ultGrama.dist = Math.sqrt(d2); ultGrama.meia = m; ultGrama.W = (dB - dA) / 2;
+      return true;
+    }
+    return false;
+  }
+  /* Alguma lâmina desenhada cobre o polígono QP na faixa [yMin, yMax]? Os
+     chunks que o índice põe perto; a célula cuja lâmina mais alta não chega a
+     yMin é pulada inteira; a lâmina, pelo topo e pelo círculo (+ vento) antes
+     do teste. O PENDENTE cobre a caixa dele inteira até a mais alta. */
+  function laminasCobrem(yMin, yMax, ex, ez) {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < qn; i++) {
+      const x = QP[2 * i], z = QP[2 * i + 1];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z;
+    }
+    const R = GRAMA.LAMINA + vv.W + 0.05, I = GRAMA.IDX, CB = GRAMA.CEL, Wp = vv.W + 0.01;
+    x0 -= R; x1 += R; z0 -= R; z1 += R;
+    /* chunk PENDENTE no caminho: monta agora (no máximo os que a linha toca —
+       medido: sem isso, logo depois de um salto o chunk por montar cobria a
+       caixa inteira e o alvo visível ao lado do caminhão perdia a assistência) */
+    gMarca++;
+    _pend.length = 0;
+    for (let ci = Math.floor(x0 / I), ci1 = Math.floor(x1 / I); ci <= ci1; ci++)
+      for (let cj = Math.floor(z0 / I), cj1 = Math.floor(z1 / I); cj <= cj1; cj++) {
+        const l = gIdx.get(chave(ci, cj));
+        if (l) for (let a = 0; a < l.length; a++) { const g = l[a]; if (g.marca !== gMarca) { g.marca = gMarca; if (g.vis && (g.pend || !g.arr)) _pend.push(g); } }
+      }
+    for (let a = 0; a < _pend.length; a++) montarGrama(_pend[a], true);
+    gMarca++;
+    for (let ci = Math.floor(x0 / I), ci1 = Math.floor(x1 / I); ci <= ci1; ci++)
+      for (let cj = Math.floor(z0 / I), cj1 = Math.floor(z1 / I); cj <= cj1; cj++) {
+        const l = gIdx.get(chave(ci, cj));
+        if (!l) continue;
+        for (let a = 0; a < l.length; a++) {
+          const g = l[a];
+          if (g.marca === gMarca || !g.vis || g.yMax <= yMin) continue;
+          g.marca = gMarca;
+          if (g.bx1 + vv.W < x0 + R || g.bx0 - vv.W > x1 - R || g.bz1 + vv.W < z0 + R || g.bz0 - vv.W > z1 - R) continue;
+          if (g.pend || !g.arr) return true;
+          const lim = GRAMA.FADE * num(uniformsDe(g).uPatchRadius, Infinity), lim2 = lim * lim;
+          const i0 = Math.max(0, Math.floor((x0 - g.lx0) / CB)), i1 = Math.min(g.bnx - 1, Math.floor((x1 - g.lx0) / CB));
+          const j0 = Math.max(0, Math.floor((z0 - g.lz0) / CB)), j1 = Math.min(g.bnz - 1, Math.floor((z1 - g.lz0) / CB));
+          const dat = g.dat, off = g.off, cel = g.celTopo;
+          for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+            const c = j * g.bnx + i;
+            if (cel[c] <= yMin) continue;                                        // nenhuma lâmina da célula chega
+            for (let f = off[c], ff = off[c + 1]; f < ff; f++) {
+              if (dat[4 * f] <= yMin) continue;                                  // a ponta não chega à linha
+              const rr = dat[4 * f + 3] + Wp;
+              if (distPontoQP2(dat[4 * f + 1], dat[4 * f + 2]) > rr * rr) continue;   // longe demais, até com vento
+              if (laminaCobre(g, g.ids[f], yMin, yMax, ex, ez, lim2)) return true;
+            }
+          }
+        }
+      }
+    return false;
+  }
+  /* A DOBRA (bendAway) é RADIAL: o shader empurra cada vértice para longe do
+     jogador/carro, na mesma direção em que ele já estava, e o vértice que
+     estava a `d` termina a d + força·(1 − smoothstep(0, raio, d)) — que nunca
+     passa de `raio` (conta: do jogador, o vértice a 1,4 m vai a 1,414 m; do
+     carro, o a 2,8 m vai a 2,84 m). Então dentro do disco da dobra a lâmina
+     que chega ao trecho [A, B] veio, depois do vento, do LEQUE empurrador →
+     trecho, mais perto do empurrador; fora do disco a dobra não põe nada.
+     E a dobra só ABAIXA (0,3·h): antes dela a lâmina estava até 0,3 m acima. */
+  function dobraCobre(y, yTopo, ax, az, bx, bz, ex, ez, u, yMin, yMax) {
+    for (let q = 0; q < GRAMA.EMPURRA.length; q++) {
+      const E = GRAMA.EMPURRA[q], src = u[E.u] && u[E.u].value;
+      if (!src || !Number.isFinite(src.x + src.y + src.z)) continue;
+      // a dobra some a 3 m de desnível entre o vértice e o empurrador
+      if (!(src.y > yMin - GRAMA.EMPURRA_DY) || !(src.y < yMax + GRAMA.EMPURRA_DY)) continue;
+      // o trecho [A, B] inteiro fora do disco da dobra: ela não põe nada ali
+      if (ptSeg2(+src.x, +src.z, ax, az, bx, bz) > E.raio * E.raio) continue;
+      QP[0] = +src.x; QP[1] = +src.z; QP[2] = ax; QP[3] = az; QP[4] = bx; QP[5] = bz; qn = 3;
+      // duas dobras no mesmo trecho somam: aí só o leque, sem a faixa radial de uma só
+      if (dobras < 2) { empX = +src.x; empY = +src.y; empZ = +src.z; empR = E.raio; empF = E.forca; empYlo = y; empYhi = yTopo; }
+      const cobre = laminasCobrem(y, yTopo + 0.3, ex, ez);
+      empR = 0;
+      if (cobre) { ultGrama.via = q; return true; }
+    }
+    return false;
+  }
+  /* quantas dobras ativas alcançam o trecho [A, B], e se ele está INTEIRO
+     dentro de alguma (aí todo vértice ali passou pela dobra, e o teste da
+     dobra — que inclui empurrão zero — é o teste inteiro) */
+  let dobras = 0, dentroDeDobra = false;
+  function contaDobras(ax, az, bx, bz, u, yMin, yMax) {
+    dobras = 0; dentroDeDobra = false;
+    for (let q = 0; q < GRAMA.EMPURRA.length; q++) {
+      const E = GRAMA.EMPURRA[q], src = u[E.u] && u[E.u].value;
+      if (!src || !Number.isFinite(src.x + src.y + src.z)) continue;
+      if (!(src.y > yMin - GRAMA.EMPURRA_DY) || !(src.y < yMax + GRAMA.EMPURRA_DY)) continue;
+      if (ptSeg2(+src.x, +src.z, ax, az, bx, bz) > E.raio * E.raio) continue;
+      dobras++;
+      if (Math.max(Math.hypot(ax - src.x, az - src.z), Math.hypot(bx - src.x, bz - src.z)) <= E.raio) dentroDeDobra = true;
+    }
+  }
+  /* O segmento olho → ponto `p` passa por onde a grama DESENHADA está?
+     Do plano próximo (como o `tampa`) até r/2 antes do centro da parte —
+     dentro dela para qualquer giro do boneco —, em trechos de PASSO_TERRENO.
+     Verdadeiro = a linha NÃO prova que o ponto aparece na tela. Não é oclusão
+     de tiro: o `tampa` segue sem grama. */
+  function gramaCobre(e, p, r) {
+    if (!gramas.size) return false;
+    const t0 = agora();
+    stats.gramaRaios++;
+    let yMin = Infinity, yMax = -Infinity, uRef = null;
+    for (const g of gramas.values()) {
+      g.vis = renderizado(g.obj);
+      if (!g.vis) continue;
+      if (gramaVelha(g)) montarGrama(g, false);        // só a caixa: a consulta monta o que tocar
+      if (!g.chaves) continue;
+      if (g.yMax > yMax) yMax = g.yMax;
+      if (g.yMin < yMin) yMin = g.yMin;
+      if (!uRef) uRef = uniformsDe(g);
+    }
+    const ex = +e.x, ey = +e.y, ez = +e.z;
+    eyeY = ey;
+    const dx = p.x - ex, dy = p.y - ey, dz = p.z - ez;
+    const len = Math.hypot(dx, dy, dz);
+    let res = false;
+    if (len > 1e-3 && uRef) {
+      ventoDe(uRef);
+      const ta = Math.min(1, OCL.PULO_OLHO / len), tb = Math.max(0, (len - Math.max(0, +r || 0) / 2) / len);
+      const passo = OCL.PASSO_TERRENO / len;
+      for (let tA = ta; !res && tA < tb; tA += passo) {
+        const tB = Math.min(tb, tA + passo);
+        const yA = ey + dy * tA, yB = ey + dy * tB, yLo = Math.min(yA, yB), yHi = Math.max(yA, yB);
+        if (yLo >= yMax) continue;                     // acima da lâmina mais alta do tapete
+        const ax = ex + dx * tA, az = ez + dz * tA, bx = ex + dx * tB, bz = ez + dz * tB;
+        ultGrama.via = -1;
+        contaDobras(ax, az, bx, bz, uRef, yMin, yMax);
+        QP[0] = ax; QP[1] = az; QP[2] = bx; QP[3] = bz; qn = 2;
+        res = (!(dentroDeDobra && dobras === 1) && laminasCobrem(yLo, yHi, ex, ez)) ||
+          dobraCobre(yLo, yHi, ax, az, bx, bz, ex, ez, uRef, yMin, yMax);
+        if (res) { ultGrama.t = tA * len; ultGrama.y = yLo; }
+      }
+    }
+    if (res) stats.bloqueios.grama++;
+    stats.raiosMs += agora() - t0;
+    return res;
   }
 
   /* ---- consulta ---- */
@@ -788,7 +1380,14 @@ export function createOclusao(deps) {
         for (const l of b.lst) if (l) bytes += 8 * l.length;
       }
     }
-    const e = { ...stats, bloqueios: { ...stats.bloqueios }, globais: globais.size, indice: idx.size, blocos, kb: Math.round(bytes / 1024) };
+    let gb = 0;
+    for (const g of gramas.values()) for (const b of [g.off, g.ids, g.dat, g.celTopo]) if (b) gb += b.byteLength;
+    stats.gramas = gramas.size;
+    let gp = 0;
+    for (const g of gramas.values()) if (g.pend) gp++;
+    stats.gramaPendentes = gp;
+    const e = { ...stats, bloqueios: { ...stats.bloqueios }, globais: globais.size, indice: idx.size, blocos, kb: Math.round(bytes / 1024),
+      gramaKb: Math.round(gb / 1024) };
     if (detalhe) {
       const nome = o => { const n = []; for (let p = o; p && p !== raiz && n.length < 4; p = p.parent) n.push(p.name || p.type || '?'); return n.join('<'); };
       e.top = [...regs.values()].map(r => ({ nome: nome(r.obj), inst: r.inst ? r.n : 0, tris: r.ntris, cel: +r.grade.cel.toFixed(3),
@@ -804,7 +1403,10 @@ export function createOclusao(deps) {
     const t1 = agora();
     while (fila.length) { rasterizar(fila[0], Infinity); fila.shift(); }
     stats.rasterMs += agora() - t1;
+    for (const g of gramas.values()) if (gramaVelha(g) || g.pend || (g.chaves && !g.arr)) montarGrama(g, true);
     ultimaVarredura = agora();
   }
-  return { atualizar, tampa, estado, prontoJa, quemTampou, get pendentes() { return fila.length; } };
+  return { atualizar, tampa, gramaCobre, ventoGrama, estado, prontoJa, quemTampou, get pendentes() { return fila.length; },
+    /* QA: onde a última `gramaCobre` verdadeira foi coberta (m do olho, altura da linha, topo, -1 grade / 0 jogador / 1 carro) */
+    get ultimaGrama() { return { ...ultGrama }; } };
 }

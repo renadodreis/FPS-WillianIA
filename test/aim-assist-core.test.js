@@ -26,14 +26,17 @@ const DEG = Math.PI / 180;
 const ROOT = { visible: true, parent: null };
 
 /* boneco com o MESMO desenho de esferas do jogador remoto (br-game.js):
-   cabeça r 0,28 a +1,66, tronco r 0,42 a +1,10, pernas r 0,34 a +0,42 */
+   cabeça r 0,28 a +1,66, tronco r 0,42 a +1,10, pernas r 0,34 a +0,42.
+   `combate: true` — ele faz o papel de um INIMIGO (A8-e: o automático só
+   dispara no que se declara alvo de combate); `opts.combate === false`
+   monta um alvo de treino (o disco do campo de tiro). */
 function boneco(x, z, y = 0, opts = {}) {
   const group = { visible: opts.visible !== false, parent: opts.parent === undefined ? ROOT : opts.parent,
     position: { x, y, z } };
   const partes = opts.partes || [[1.66, 0.28, 'head'], [1.10, 0.42, 'body'], [0.42, 0.34, 'body']];
   const sph = partes.map(([h, r, part]) => ({ c: { x: 0, y: 0, z: 0 }, r, part, h }));
   return {
-    alive: true, group,
+    alive: true, group, combate: opts.combate !== false,
     hitSpheres() {
       const p = this.group.position;
       for (const s of sph) { s.c.x = p.x; s.c.y = p.y + s.h; s.c.z = p.z; }
@@ -71,6 +74,8 @@ function nucleo(o = {}) {
     heightAt: o.heightAt || (() => 0),
     grassTop: o.grassTop === undefined ? 1.33 : o.grassTop,
     los: (e, c, r) => { chamadas++; return livre(e, c, r); },
+    ...(o.combate ? { combate: o.combate } : {}),
+    ...(o.grama ? { grama: o.grama } : {}),
   });
   return { aa, chamadas: () => chamadas, zera: () => { chamadas = 0; } };
 }
@@ -391,6 +396,65 @@ describe('assistência de mira — NUNCA em quem o jogador não vê', () => {
     assert.notEqual(r2.yaw, -0.004, 'cenário inválido: sem a regra de grama o bicho também não era assistido');
   });
 
+  /* A2 (validacao-6aeda6c.md, reproduzido com a âncora de pixels): a linha até
+     a cabeça passa 0,19 m acima de uma CRISTA com grama — 0 px na tela. A
+     regra de grama só olhava o pé do alvo; a grama NO CAMINHO é a camada de
+     js/oclusao.js (`gramaCobre`), injetada como `grama(olho, ponto, r)`. */
+  it('dada a grama cobrindo o caminho até o alvo (crista), então ele não conta como visto — 0 efeito', () => {
+    const naCrista = () => true;                   // a crista gramada cobre toda linha até ele
+    const { aa } = nucleo({ grama: naCrista });
+    const t = bonecoEm(30);
+    let maior = 0;
+    for (let i = 0; i < 40; i++) {
+      t.group.position.x += 5 / 60;
+      const r = aa.step(quadro([t], { inYaw: -0.004, autoFire: true }));
+      maior = Math.max(maior, Math.abs(r.yaw - (-0.004)));
+      assert.equal(r.fire, false, 'o automático disparou em quem a grama cobre');
+    }
+    assert.equal(maior, 0, `a grama cobria a cabeça e a vista mudou ${maior} rad`);
+    // CONTROLE: sem grama no caminho, o mesmo alvo é assistido (o caso exercita a regra)
+    const n2 = nucleo({ grama: () => false });
+    const r2 = assenta(n2.aa, quadro([bonecoEm(30)], { inYaw: -0.004 }));
+    assert.notEqual(r2.yaw, -0.004, 'cenário inválido: sem grama o alvo também não era assistido');
+  });
+
+  /* AGACHADO (frente de postura: cabeça 1,66 → 1,08 m, topo do boneco 1,33 m;
+     tronco e pernas aqui são a mesma proporção, a conferir na integração). A
+     regra de altura (parte ≥ 1,33 m do chão) o deixava invisível EM TODO
+     LUGAR — medido pela frente de postura: sem grama nenhuma, corpo 100 %
+     visível, 0 de 8 rumos com assistência. Com a camada da grama desenhada,
+     quem decide é ela. */
+  const agachado = o => bonecoEm(20, 0, Object.assign({ partes: [[1.08, 0.28, 'head'], [0.70, 0.42, 'body'], [0.30, 0.34, 'body']] }, o));
+  it('dado o alvo AGACHADO em chão SEM grama, então ele é visto e assistido (a regra de altura o cegava)', () => {
+    const olho = { eye: { x: 0, y: 1.62, z: 0 }, pitch: Math.atan2(0.70 - 1.62, 20), inYaw: -0.004 };
+    const semGrama = nucleo({ grama: () => false });
+    assert.notEqual(assenta(semGrama.aa, quadro([agachado()], olho)).yaw, -0.004, 'agachado sem grama nenhuma não foi assistido');
+    // o defeito, reproduzido: só a regra de altura
+    const soAltura = nucleo();
+    assert.equal(assenta(soAltura.aa, quadro([agachado()], olho)).yaw, -0.004, 'cenário: a regra de altura já via o agachado');
+  });
+
+  it('dado o alvo AGACHADO dentro do mato (a grama cobre as linhas até ele), então 0 efeito e nenhum tiro', () => {
+    const noMato = (e, c) => c.y < 1.40;          // a grama do lugar cobre qualquer linha que chega abaixo do topo dela
+    const { aa } = nucleo({ grama: noMato });
+    const t = agachado();
+    let maior = 0;
+    for (let i = 0; i < 40; i++) {
+      t.group.position.x += 5 / 60;
+      const r = aa.step(quadro([t], { eye: { x: 0, y: 1.62, z: 0 }, pitch: Math.atan2(0.70 - 1.62, 20), inYaw: -0.004, autoFire: true }));
+      maior = Math.max(maior, Math.abs(r.yaw - (-0.004)));
+      assert.equal(r.fire, false, 'o automático disparou num agachado que o mato cobre');
+    }
+    assert.equal(maior, 0, `agachado no mato e a vista mudou ${maior} rad`);
+  });
+
+  it('dada a grama só no caminho do TRONCO (a cabeça limpa), então o alvo é visto pela cabeça', () => {
+    const soBaixo = (e, c) => c.y < 1.4;
+    const { aa } = nucleo({ grama: soBaixo });
+    const r = assenta(aa, quadro([bonecoEm(30)], { inYaw: -0.004 }));
+    assert.notEqual(r.yaw, -0.004, 'a grama no caminho do tronco escondeu um alvo de cabeça à vista');
+  });
+
   it('dado só a CABEÇA visível (tronco atrás de mureta), então a silhueta é só a cabeça', () => {
     // mureta: bloqueia tudo que está abaixo de 1,4 m no alvo
     const livre = (e, c) => c.y > 1.4;
@@ -498,6 +562,57 @@ describe('tiro automático — só em alvo VISÍVEL, sob a cruz, no alcance da a
     const r = nucleo().aa.step(f([t], { assist: false, inYaw: -0.01 }));
     assert.equal(r.fire, true);
     assert.equal(r.yaw, -0.01, 'assistência desligada e o slow agiu');
+  });
+});
+
+/* A8(e) — docs/mobile/criterio-aaa.md: "0 [disparos] com a retícula sobre algo
+   que não é jogador/bot/inimigo PvE". O validador (validacao-6aeda6c.md) mediu
+   10 disparos nos discos do CAMPO DE TIRO (js/maptoys.js): eles moram em
+   `extraTargets`, a mesma lista dos esqueletos, zumbis e bichos. O automático
+   é do COMBATE ("fire at any foe that enters your crosshairs", WZM, referência
+   §2.5); a assistência (slow/pull) é da MIRA — e o campo de tiro é treino de
+   mira, então ela continua agindo no disco (a decisão está em js/aimassist.js). */
+describe('tiro automático — A8(e): só em alvo de COMBATE', () => {
+  const f = (alvos, o) => quadro(alvos, Object.assign({ autoFire: true }, o));
+
+  it('dado o disco do campo de tiro sob a cruz, então o automático NÃO dispara', () => {
+    const disco = bonecoEm(20, 0, { combate: false });
+    let tiros = 0;
+    const { aa } = nucleo();
+    for (let i = 0; i < 60; i++) if (aa.step(f([disco], { inYaw: -0.001 })).fire) tiros++;
+    assert.equal(tiros, 0, `o automático disparou ${tiros} vezes num alvo que não é de combate`);
+    // CONTROLE: o MESMO lugar com um alvo de combate dispara (o caso exercita o portão)
+    const inimigo = bonecoEm(20);
+    const n2 = nucleo();
+    let tiros2 = 0;
+    for (let i = 0; i < 60; i++) if (n2.aa.step(f([inimigo], { inYaw: -0.001 })).fire) tiros2++;
+    assert.equal(tiros2, 60, `cenário inválido: o inimigo sob a cruz disparou ${tiros2} de 60`);
+  });
+
+  it('dado o disco do campo de tiro, então a ASSISTÊNCIA age nele igual a um inimigo (treino de mira)', () => {
+    const giro = alvo => assenta(nucleo().aa, quadro([alvo], { inYaw: -0.01 })).yaw;
+    const noDisco = giro(bonecoEm(30, 0, { combate: false })), noInimigo = giro(bonecoEm(30));
+    // o slow cheio do quadril no centro: 0,30 (Lyra/2) — calculado da tabela, não lido do módulo
+    assert.ok(Math.abs(noInimigo - (-0.01 * (1 - 0.30))) < 1e-6, `cenário: slow no inimigo ${noInimigo}`);
+    assert.equal(noDisco, noInimigo, `a assistência tratou o disco diferente (${noDisco} × ${noInimigo})`);
+  });
+
+  it('dado o predicado de combate do jogo, então ele decide (e não a lista em que o alvo mora)', () => {
+    const disco = bonecoEm(20), inimigo = bonecoEm(20);
+    const combate = t => t === inimigo;
+    assert.equal(nucleo({ combate }).aa.step(f([disco])).fire, false, 'disparou no que o jogo diz que não é combate');
+    assert.equal(nucleo({ combate }).aa.step(f([inimigo])).fire, true, 'não disparou no que o jogo diz que é combate');
+  });
+
+  it('dado um alvo que não se declara nada, então o automático NÃO dispara (na dúvida, não atira)', () => {
+    const t = bonecoEm(20);
+    delete t.combate;
+    assert.equal(nucleo().aa.step(f([t])).fire, false, 'disparou num alvo sem categoria');
+  });
+
+  it('dado o disco na FRENTE de um inimigo, ambos sob a cruz, então dispara pelo inimigo', () => {
+    const disco = bonecoEm(12, 0, { combate: false }), inimigo = bonecoEm(25);
+    assert.equal(nucleo().aa.step(f([disco, inimigo])).fire, true);
   });
 });
 
