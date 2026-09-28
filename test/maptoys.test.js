@@ -210,6 +210,44 @@ describe('Atrações do mapa 🎪', () => {
       `o voo não atravessou as argolas (next ${r.before}→${r.after}, recorde ${r.best})`);
   });
 
+  /* CHÃO LIMPO SOB AS ATRAÇÕES. O canhão e as atrações nascem DEPOIS do
+     refill que abre as clareiras da grama — nenhuma delas limpava o mato.
+     Com o layout de 2a7dae6 o campo de tiro caiu no meio da grama: os discos
+     sobem a ~0,8 m do chão e a lâmina vai de 0,62 a 1,33 m, então o
+     minijogo ficava com os ALVOS escondidos. Âncora: as lâminas desenhadas
+     (matriz de cada instância), não a lista de clareiras. */
+  it('atrações e canhão nascem em chão limpo: nenhuma lâmina de grama de pé sob elas', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G;
+      const pontos = Object.entries(G.MapToys.spots).filter(([, s]) => s)
+        .map(([nome, s]) => ({ nome, x: s.x, z: s.z, r: nome === 'gallery' ? 6 : 3 }));
+      const cp = G.Cannon && G.Cannon.pos;
+      if (cp) pontos.push({ nome: 'canhão', x: cp.x, z: cp.z, r: 3 });
+      return pontos.map(p => {
+        /* a grama só existe em volta do jogador: sem visitar, a amostra vem
+           vazia e o caso passa sem medir nada (0 de 0) */
+        window.QA.reset(p.x + p.r + 3, p.z);
+        window.QA.tick(120);
+        let emPe = 0, total = 0;
+        for (let k = 0; k < 9; k++) {
+          const a = k * Math.PI * 2 / 9, d = k === 0 ? 0 : p.r * 0.7;
+          const amostra = G.Grass.debugSample(p.x + Math.sin(a) * d, p.z + Math.cos(a) * d, 20000) || [];
+          for (const l of amostra) {
+            if (Math.hypot(l.x - p.x, l.z - p.z) > p.r) continue;
+            total++;
+            if (l.sy > 0.05) emPe++;
+          }
+        }
+        return { nome: p.nome, emPe, total };
+      });
+    });
+    assert.ok(r.length >= 5, `cenário inválido: ${r.length} atrações`);
+    const vazias = r.filter(p => p.total < 20).map(p => `${p.nome}: ${p.total}`);
+    assert.deepEqual(vazias, [], 'cenário inválido: amostra de grama vazia sob atração (não mediu):\n' + vazias.join('\n'));
+    const sujas = r.filter(p => p.emPe > 0).map(p => `${p.nome}: ${p.emPe} de ${p.total} lâminas de pé`);
+    assert.deepEqual(sujas, [], 'grama de pé sob atração:\n' + sujas.join('\n'));
+  });
+
   it('não gerou erros de página (window.onerror)', async () => {
     const errs = await h.play(() => window.__game.errors.slice());
     assert.deepEqual(errs, [], `erros: ${errs.join(' | ')}`);

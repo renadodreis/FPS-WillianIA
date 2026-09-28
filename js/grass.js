@@ -520,6 +520,21 @@ export function createGrass(deps) {
   function refreshAll() {
     for (const ch of chunks) fillChunk(ch, ch.cx, ch.cz);
   }
+  /* Refaz só os chunks que tocam os círculos {x, z, r} — clareira criada
+     DEPOIS do refill do boot (canhão e atrações nascem depois dele). Não
+     desloca o mundo: fillChunk sorteia com `chunkRng` próprio por chunk, nunca
+     com o `Math.random` seedado. Chunk construído mais tarde já lê `clearings`
+     sozinho; este é só o acerto dos que já estão na tela. */
+  function refreshNear(circles) {
+    const h = SIZE / 2;
+    for (const ch of chunks) {
+      const wx = ch.cx * SIZE, wz = ch.cz * SIZE;
+      for (const c of circles) {
+        const dx = Math.max(Math.abs(c.x - wx) - h, 0), dz = Math.max(Math.abs(c.z - wz) - h, 0);
+        if (dx * dx + dz * dz < c.r * c.r) { fillChunk(ch, ch.cx, ch.cz); break; }
+      }
+    }
+  }
 
   /* QA: decodifica as N primeiras lâminas do chunk que contém (x,z) —
      posição mundial da raiz + escala Y. Só leitura. */
@@ -629,6 +644,6 @@ export function createGrass(deps) {
     return { completa: medir(baseBlade), reduzida: medir(loBlade), minima: medir(laminaMinima()) };
   }
 
-  return { update, material, PATCH_RADIUS, refreshAll, debugSample, debugChunkBytes, stampTrack,
+  return { update, material, PATCH_RADIUS, refreshAll, refreshNear, debugSample, debugChunkBytes, stampTrack,
     debugLod, debugAneis, debugBladeShapes, debugForceLod, debugCorteDeFade, debugCortes };
 }

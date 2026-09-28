@@ -634,8 +634,29 @@ describe('Assistência de mira no toque — celular', { skip: !CHROME && 'Chrome
       g.locked = false; G.switchWeapon(0); QA.tick(40);
       g.mag = g.magSize; g.reserve = 999; g.reloading = false;
       const o = MP.camera.position, c = d.mesh.position;
-      A.mirarYaw(Math.atan2(-(c.x - o.x), -(c.z - o.z)), Math.atan2(c.y - o.y, Math.hypot(c.x - o.x, c.z - o.z)));
-      const px = A.px(d);
+      const mirar = () => A.mirarYaw(Math.atan2(-(c.x - o.x), -(c.z - o.z)),
+        Math.atan2(c.y - o.y, Math.hypot(c.x - o.x, c.z - o.z)));
+      /* PONTO DE OBSERVAÇÃO ESCOLHIDO PELA TELA. O campo de tiro vem do sorteio
+         que corre depois das construções, então muda de lugar quando o layout
+         muda (2a7dae6): do ponto fixo antigo o disco ficou com 100 px e a
+         grama cobrindo a linha — a assistência parada ali está CERTA. O caso
+         exige disco bem visível e linha sem grama; procura esse ponto em volta
+         da alavanca em vez de assumir um. */
+      let px = 0;
+      const cx = c.x, cz = c.z;   // o estande também GIRA com o layout: círculo em volta do DISCO
+      achar: for (const dist of [12, 9, 15]) {
+        for (let k = 0; k < 16; k++) {
+          const a = k * Math.PI / 8;
+          QA.reset(cx + Math.sin(a) * dist, cz + Math.cos(a) * dist);
+          QA.tick(60);                               // a grama em volta do ponto se refaz
+          mirar();
+          QA.tick(1);
+          px = A.px(d);
+          if (px > 300 && !G.Oclusao.gramaCobre(o, c, 0.3)) break achar;
+        }
+      }
+      g.mag = g.magSize; g.reloading = false;
+      mirar();
       /* o dedo mexe devagar no olhar (a assistência só age com o jogador
          mirando) e nunca toca o gatilho */
       const el = document.querySelector('#tcLook'), r = el.getBoundingClientRect();
