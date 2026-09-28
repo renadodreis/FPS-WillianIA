@@ -23,6 +23,7 @@ import * as Climate from './js/climate.js';
 import { createCover } from './js/cover.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
+import { construirObstaculos, raioDoProp, sitioDoProp, VEGETACAO } from './js/obstaculos.js';
 import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
@@ -952,42 +953,35 @@ for (const surface of Structures.castle.vehicleSurfaces) {
   }
 }
 
+/* OBSTÁCULOS COMO DADO PURO (js/obstaculos.js): árvores, pedras, cactos, a
+   tenda e os POIs saem de sorteios PRÓPRIOS da semente — nada daqui consome
+   o Math.random seedado. Os bots chamam a MESMA função em Node e enxergam as
+   mesmas pedras e árvores (B7; paridade em test/obstaculos-paridade.test.js).
+   Este bloco só DESENHA e registra: quem muda obstáculo muda lá.
+   `Structures.sites` aqui ainda são só as construções (os POIs entram no
+   bloco assíncrono lá embaixo, quando o GLB chega). */
+const Obstaculos = construirObstaculos({
+  worldSeed: window.__MP_init && window.__MP_init.worldSeed,
+  heightAt, slopeAt, biomeAt, noise: (x, z) => simplex.noise(x, z),
+  WATER_LEVEL, CITY, VOLCANO, sitios: Structures.sites,
+  WORLD_SIZE: CFG.WORLD_SIZE, TREE_COUNT: CFG.TREE_COUNT, ROCK_COUNT: CFG.ROCK_COUNT,
+});
+/* registra no `obstaclesNear` exatamente o que o Node vê, família por família */
+function registrarObstaculos(sourceId) {
+  for (const o of Obstaculos.solidos) if (o.sourceId === sourceId) addObstacle(o.x, o.z, o.r, { category: o.category, sourceId });
+}
+
 const treeSpots = []; // posições das árvores (LOD + minimapa)
 {
-  const lim = CFG.WORLD_SIZE * 0.47;
-  let tries = 0;
-  while (treeSpots.length < CFG.TREE_COUNT && tries++ < CFG.TREE_COUNT * 30) {
-    const x = rand(-lim, lim), z = rand(-lim, lim);
-    if (Math.hypot(x, z) < 26) continue;                       // longe do spawn
-    if (slopeAt(x, z) > 0.5) continue;                         // sem árvore em barranco
-    const y = heightAt(x, z);
-    if (y < 0.8) continue;                                     // nem na areia
-    const bio = biomeAt(x, z);
-    if (bio < -0.18) continue;                                 // deserto: sem árvores
-    // bosques: ruído decide densidade; floresta é bem mais densa
-    if (simplex.noise(x * 0.006 + 50, z * 0.006 - 80) < (bio > 0.34 ? -0.3 : 0.05)) continue;
-    let nearBuild = false;
-    for (const st of Structures.sites) if (Math.hypot(x - st.x, z - st.z) < st.r + 4) { nearBuild = true; break; }
-    if (nearBuild) continue;
-    const sRand = rand(0.75, 1.5);
-    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
-                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r) ||
-                       Structures.castle.excludesGuardRoute(x, z);
-    const s = isExcluded ? 0.0001 : sRand;
-    // variação de cor: verdes, outono dourado e tons profundos por região
-    const cv = simplex.noise(x * 0.004 - 90, z * 0.004 + 60);
-    const tint = cv > 0.45 ? 0xffaa58 : cv > 0.3 ? 0xffd98a : cv < -0.45 ? 0x7ddf9a : 0xffffff;
-    const rot = rand(TAU);
-    treeSpots.push({ x, y: isExcluded ? -100 : y, z, s, rot, tint });
-    if (!isExcluded) {
-      addObstacle(x, z, 0.45 * s, { category: 'rigid', sourceId: 'tree' });
-      const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * s, 1.8, 0.32 * s)) });
-      body.position.set(x, y + 1.8, z);
-      body.userData = { category: 'rigid', sourceId: 'tree:' + treeSpots.length, hardForVehicle: true };
-      body.updateAABB(); // idem paredes: AABB ficava na origem
-      world.addBody(body);
-    }
+  for (const a of Obstaculos.arvores) {
+    treeSpots.push({ x: a.x, y: a.y, z: a.z, s: a.s, rot: a.rot, tint: a.tint });
+    const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * a.s, 1.8, 0.32 * a.s)) });
+    body.position.set(a.x, a.y + 1.8, a.z);
+    body.userData = { category: 'rigid', sourceId: 'tree:' + treeSpots.length, hardForVehicle: true };
+    body.updateAABB(); // idem paredes: AABB ficava na origem
+    world.addBody(body);
   }
+  registrarObstaculos('tree');
 }
 await bootFase('construções e árvores');
 
@@ -1076,20 +1070,16 @@ const Scenery = createScenery();
 /* pontos de interesse novos: MERCADO na beira da cidade, REFÚGIO NA ÁRVORE na
    floresta e barris espalhados — com colisão (player + veículos) e, por serem
    sites, os baús do Battle Royale nascem neles automaticamente.
-   RNG PRÓPRIO e determinístico: este bloco roda depois do load assíncrono dos
-   GLBs — se usasse o rand() semeado global, cada cliente consumiria a sequência
-   num ponto diferente (timing de rede) e o refúgio nasceria em lugares
-   DIFERENTES pra cada jogador, quebrando o mundo compartilhado */
+   A PLANTA (onde fica cada um, o giro, os barris) é de js/obstaculos.js
+   (`Obstaculos.pois`): o MESMO sorteio próprio de sempre (semente ^ 0xBEEF),
+   agora calculado na hora, síncrono — é assim que os bots sabem deles e que as
+   árvores já nascem fora deles. Aqui só chega o GLB (assíncrono, cada cliente
+   no seu tempo, por isso nada disto pode sortear no stream global). O colisor
+   e o sítio usam a medida REAL do GLB; o Node usa o espelho PROPS — se o
+   arquivo mudar, test/obstaculos-paridade.test.js acusa. */
 (async () => {
-  let poiSeed = ((window.__MP_init && window.__MP_init.worldSeed) >>> 0 || 424242) ^ 0xBEEF;
-  const poiRand = (a = 1, b) => {
-    poiSeed = (poiSeed + 0x6D2B79F5) | 0;
-    let x = Math.imul(poiSeed ^ (poiSeed >>> 15), 1 | poiSeed);
-    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
-    const r = ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-    return b === undefined ? r * a : a + r * (b - a);
-  };
-  const placeProp = (p, x, z, ry) => {
+  const P = Obstaculos.pois;
+  const placeProp = (p, x, z, ry, sourceId) => {
     p.root.position.set(x, heightAt(x, z), z);
     p.root.rotation.y = ry || 0;
     scene.add(p.root);
@@ -1100,43 +1090,32 @@ const Scenery = createScenery();
     body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), ry || 0);
     body.updateAABB();
     world.addBody(body);
-    addObstacle(x, z, Math.max(hx, hz) * 0.9); // player não atravessa
+    const meia = Math.max(p.size.x, p.size.z) / 2;
+    addObstacle(x, z, raioDoProp(meia), { category: 'rigid', sourceId }); // player e bala não atravessam
+    return meia;
   };
   try {
-    const cidade = Structures.sites.find(s => s.type === 'cidade');
-    const mx = cidade ? cidade.x + cidade.r + 16 : 60, mz = cidade ? cidade.z - 18 : 60;
     const mercado = await Scenery.prop('/assets/models/Cenários/mercado.glb', { height: 7 });
-    placeProp(mercado, mx, mz, 0.4);
-    Structures.sites.push({ x: mx, z: mz, r: Math.max(mercado.size.x, mercado.size.z) / 2 + 3, type: 'mercado' });
+    const mMeia = placeProp(mercado, P.mercado.x, P.mercado.z, P.mercado.ry, 'mercado');
+    Structures.sites.push(sitioDoProp(P.mercado.x, P.mercado.z, mMeia, 'mercado'));
 
-    // refúgio na árvore: primeiro canto de floresta plano que achar
-    let tx = 0, tz = 0;
-    for (let i = 0; i < 300; i++) {
-      const a = poiRand(TAU), r = poiRand(150, 420);
-      const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      if (biomeAt(x, z) > 0.4 && slopeAt(x, z) < 0.3 && heightAt(x, z) > WATER_LEVEL + 1.5 &&
-          !Structures.sites.some(s => Math.hypot(x - s.x, z - s.z) < s.r + 20)) { tx = x; tz = z; break; }
-    }
-    if (tx || tz) {
+    // refúgio na árvore: o primeiro canto de floresta plano que a planta achou
+    if (P.refugio) {
       const casa = await Scenery.prop('/assets/models/Cenários/low_poly_tree_house.glb', { height: 13 });
-      placeProp(casa, tx, tz, poiRand(TAU));
-      Structures.sites.push({ x: tx, z: tz, r: Math.max(casa.size.x, casa.size.z) / 2 + 3, type: 'refúgio' });
+      const cMeia = placeProp(casa, P.refugio.x, P.refugio.z, P.refugio.ry, 'refúgio');
+      Structures.sites.push(sitioDoProp(P.refugio.x, P.refugio.z, cMeia, 'refúgio'));
     }
 
-    // barris de madeira: cobertura leve perto dos POIs novos
+    // barris de madeira: cobertura leve perto dos POIs novos (sem refúgio, os
+    // 3 dele não existem — antes caíam em cima do acampamento inicial)
     const barril = await Scenery.prop('/assets/models/Cenários/wooden_barrel.glb', { height: 1.05 });
-    // sem refúgio (busca de clareira na floresta falhou) os 3 barris dele não
-    // existem: antes caíam em (4,2)/(-3,-4)/(2,-5) — em cima do acampamento inicial
-    const spots = [[mx + 5, mz + 4], [mx - 6, mz + 2], [mx + 3, mz - 6]];
-    if (tx || tz) spots.push([tx + 4, tz + 2], [tx - 3, tz - 4], [tx + 2, tz - 5]);
     const BARRIL_R = 0.42, BARRIL_H = 1.05;
-    for (const [bx, bz] of spots) {
+    for (const { x: bx, z: bz, ry } of P.barris) {
       const by = heightAt(bx, bz);
       const b = barril.root.clone(true);
       b.position.set(bx, by, bz);
-      b.rotation.y = poiRand(TAU);
+      b.rotation.y = ry;
       scene.add(b);
-      addObstacle(bx, bz, 0.55, { category: 'rigid', sourceId: 'barrel' }); // player não atravessa
       // ...e o CARRO também não: sem corpo CANNON o barril era decoração
       // atravessável (só o cacto é "vegetação macia" de propósito).
       const body = new CANNON.Body({ mass: 0,
@@ -1146,17 +1125,7 @@ const Scenery = createScenery();
       body.updateAABB(); // estático posicionado após o construtor: AABB ficaria na origem
       world.addBody(body);
     }
-    // tira árvores que nasceram dentro dos POIs novos e refaz o LOD
-    for (let i = treeSpots.length - 1; i >= 0; i--) {
-      const t = treeSpots[i];
-      for (const s of Structures.sites) {
-        if ((s.type === 'mercado' || s.type === 'refúgio') && Math.hypot(t.x - s.x, t.z - s.z) < s.r + 2) {
-          treeSpots.splice(i, 1);
-          break;
-        }
-      }
-    }
-    rebucketTrees(player.pos.x, player.pos.z);
+    registrarObstaculos('barrel'); // player e bala não atravessam
   } catch (err) { console.error('POIs GLB falharam — mundo segue como era:', err); }
 })();
 
@@ -1174,33 +1143,23 @@ const Scenery = createScenery();
   const rocks = new THREE.InstancedMesh(g, m, CFG.ROCK_COUNT);
   rocks.castShadow = rocks.receiveShadow = true;
   rocks.frustumCulled = false;
-  const lim = CFG.WORLD_SIZE * 0.47;
-  let placed = 0, tries = 0;
-  while (placed < CFG.ROCK_COUNT && tries++ < CFG.ROCK_COUNT * 20) {
-    const x = rand(-lim, lim), z = rand(-lim, lim);
-    if (Math.hypot(x, z) < 18) continue;
-    const sRand = Math.pow(Math.random(), 2.2) * 2.6 + 0.35;
-    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
-                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r) ||
-                       Structures.castle.excludesGuardRoute(x, z);
-    const s = isExcluded ? 0.0001 : sRand;
-    const y = heightAt(x, z) - s * 0.3;
-    const rX = rand(-0.3, 0.3), rY = rand(TAU), rZ = rand(-0.3, 0.3);
-    const scX = rand(0.8, 1.3), scZ = rand(0.8, 1.3);
-    _dummy.position.set(x, isExcluded ? -100 : y, z);
-    _dummy.rotation.set(rX, rY, rZ);
-    _dummy.scale.set(s * scX, s, s * scZ);
+  // onde, tamanho e giro: js/obstaculos.js; só a partir de s > 1,1 viram colisor
+  let placed = 0;
+  for (const r of Obstaculos.pedras) {
+    _dummy.position.set(r.x, r.y, r.z);
+    _dummy.rotation.set(r.rX, r.rY, r.rZ);
+    _dummy.scale.set(r.s * r.scX, r.s, r.s * r.scZ);
     _dummy.updateMatrix();
     rocks.setMatrixAt(placed++, _dummy.matrix);
-    if (!isExcluded && s > 1.1) {
-      addObstacle(x, z, s * 0.8, { category: 'rigid', sourceId: 'rock' });
-      const body = new CANNON.Body({ mass: 0, shape: new CANNON.Sphere(s * 0.75) });
-      body.position.set(x, y + s * 0.2, z);
+    if (r.solida) {
+      const body = new CANNON.Body({ mass: 0, shape: new CANNON.Sphere(r.s * 0.75) });
+      body.position.set(r.x, r.y + r.s * 0.2, r.z);
       body.userData = { category: 'rigid', sourceId: 'rock:' + placed, hardForVehicle: true };
       body.updateAABB(); // idem paredes: AABB ficava na origem
       world.addBody(body);
     }
   }
+  registrarObstaculos('rock');
   rocks.count = placed;
   scene.add(rocks);
 }
@@ -1261,33 +1220,21 @@ const Scenery = createScenery();
   parts.push(paintGeometry(a2v, _c.setHex(0x4a8c50)));
   const geo = BufferGeometryUtils.mergeGeometries(parts);
   const m = csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
-  const cacti = new THREE.InstancedMesh(geo, m, 160);
+  const cacti = new THREE.InstancedMesh(geo, m, VEGETACAO.CACTOS_MAX);
   cacti.castShadow = true;
   cacti.frustumCulled = false;
-  const limC = CFG.WORLD_SIZE * 0.47;
-  let nCac = 0, triesC = 0;
-  while (nCac < 160 && triesC++ < 4000) {
-    const x = rand(-limC, limC), z = rand(-limC, limC);
-    if (biomeAt(x, z) > -0.25 || slopeAt(x, z) > 0.4) continue;
-    if (heightAt(x, z) < WATER_LEVEL + 0.5) continue; // cacto não nasce no lago
-    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
-                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r) ||
-                       Structures.castle.excludesGuardRoute(x, z);
-    const rY = rand(TAU), rZ = rand(-0.06, 0.06);
-    const scaleRand = rand(0.7, 1.5);
-    const scale = isExcluded ? 0.0001 : scaleRand;
-    _dummy.position.set(x, isExcluded ? -100 : heightAt(x, z), z);
-    _dummy.rotation.set(0, rY, rZ);
-    _dummy.scale.setScalar(scale);
+  let nCac = 0;
+  for (const c of Obstaculos.cactos) {
+    _dummy.position.set(c.x, c.y, c.z);
+    _dummy.rotation.set(0, c.rY, c.rZ);
+    _dummy.scale.setScalar(c.s);
     _dummy.updateMatrix();
     cacti.setMatrixAt(nCac++, _dummy.matrix);
-    if (!isExcluded) {
-      // MATRIZ DE COLISÃO: cacto é "vegetação macia" — bloqueia o PLAYER
-      // (círculo), mas NÃO tem corpo Cannon: carro passa (comportamento
-      // intencional, documentado; grama/flor = decorativo puro, nada colide)
-      addObstacle(x, z, 0.35, { category: 'softVegetation', sourceId: 'cactus' });
-    }
   }
+  // MATRIZ DE COLISÃO: cacto é "vegetação macia" — bloqueia o PLAYER
+  // (círculo) e a bala, mas NÃO tem corpo Cannon: carro passa (comportamento
+  // intencional, documentado; grama/flor = decorativo puro, nada colide)
+  registrarObstaculos('cactus');
   cacti.count = nCac;
   scene.add(cacti);
 }

@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { noSeed, fuseBody } from './meshutils.js';
+import { TENDA } from './obstaculos.js';
 
 export function createAmb(deps) {
   const { rand, TAU, _v1, _v2, heightAt, biomeAt, addObstacle, SFX, FX, scene, csmMat, Structures, player } = deps;
@@ -185,11 +186,12 @@ export function createAmb(deps) {
     const s1 = new THREE.PlaneGeometry(1.5, 2.3); s1.rotateX(-Math.PI / 2); s1.rotateZ(0.96);  s1.translate(-0.44, 0.62, 0);
     const s2 = new THREE.PlaneGeometry(1.5, 2.3); s2.rotateX(-Math.PI / 2); s2.rotateZ(-0.96); s2.translate(0.44, 0.62, 0);
     const tent = new THREE.Mesh(BufferGeometryUtils.mergeGeometries([s1, s2]), canvasM);
-    tent.position.set(5.6, campY, -4.2);
+    tent.position.set(TENDA.x, campY, TENDA.z);
     tent.rotation.y = 0.5;
     tent.castShadow = true;
     pecas.push(tent);
-    addObstacle(5.6, -4.2, 1.3);
+    // barra jogador e bala; os bots conhecem pelo mesmo dado (js/obstaculos.js)
+    addObstacle(TENDA.x, TENDA.z, TENDA.r, { category: 'rigid', sourceId: 'tent' });
     /* A raiz é IDENTIDADE e some depois: `fuseBody` leva os vértices pro
        espaço dela, então cada malha fundida pode ir direto pra cena sem
        ganhar um Group de intermediário (e o `scene.add` já a desparenta). */

@@ -213,8 +213,12 @@ function erf(x) {
 
 /* ---------------- percepção ---------------- */
 
+/* Quem está no helicóptero NÃO é alvo (decisão do dono, 2026-09-28): o bot
+   não o percebe, não vira para ele e não atira — voando ou pousado. O
+   `playerUpdate` do servidor traz `heli` (observePlayerUpdate); ao descer ele
+   volta a ser candidato e o bot precisa notá-lo de novo. */
 function isTargetable(self, c) {
-  return !!c && c.id !== self.id && !!c.alive && !c.spectator && c.phase === 'PLAY'
+  return !!c && c.id !== self.id && !!c.alive && !c.spectator && c.phase === 'PLAY' && !c.heli
     && [self.x, self.z, c.x, c.z].every(Number.isFinite);
 }
 
@@ -294,11 +298,8 @@ function gridCrossingsClear(a0, a1, above) {
    resultado é o MESMO da consulta inteira — só mais barato (o teste compara
    os dois em 40 000 segmentos). A cidade sozinha tem 139 caixas.
 
-   FORA DO ALCANCE DO NODE: árvores e rochas. As duas são `obstacles` do
-   game.js, sorteadas no Math.random GLOBAL seedado depois de terreno e grama
-   (reconstruí-las exigiria reproduzir o boot inteiro — o motivo de
-   js/paredes.js existir). O bot continua vendo através delas; a VÍTIMA ainda
-   recusa o dano por cobertura (`youWereHit`, br-game.js), que conhece as duas.
+   Árvores, pedras, cactos, a tenda e os POIs entram pela consulta de
+   OBSTÁCULOS (abaixo, `createBotObstacles`): mesma ideia, outro módulo puro.
 
    O SOM atravessa parede, de propósito: `onPlayerFired` não consulta nada
    disto. O tiro revela a posição (Quake III, Halo — "Cause-Effect Stimuli —
@@ -371,6 +372,47 @@ async function createBotSolids(worldSeed, terrain) {
   };
 }
 
+/* ---------------- obstáculos (B7: pedra, árvore) ----------------
+   Árvores, pedras, cactos, a tenda do acampamento e os POIs (mercado,
+   refúgio, barris) barram a bala no `rayBlockedAt` do cliente — e a VÍTIMA
+   recusa o dano por eles (`youWereHit`, br-game.js). Antes o Node não os
+   conhecia (nasciam do Math.random global seedado, depois do terreno e da
+   grama) e o bot via, virava e metralhava a pedra na frente do jogador:
+   33 de 41 pares atrás de pedra no laudo 070502f.
+
+   js/obstaculos.js monta, só pela semente, o relevo e os sítios das
+   construções, a MESMA lista que o cliente registra no `obstaclesNear`
+   (paridade em test/obstaculos-paridade.test.js) e a consulta com a regra da
+   bala: círculo de raio r·√0,8, até 3,4 m acima do chão. A consulta é
+   contínua — o cliente amostra a cada 1,6 m, então tudo que a vítima diz
+   estar coberto o bot também diz (e um pouco mais: a reta que passa pela
+   borda entre duas amostras). Obstáculo não depende do estado da cidade: a
+   vegetação não nasce no distrito urbano. */
+async function createBotObstacles(worldSeed, terrain) {
+  const Par = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'paredes.js')).href);
+  const Ob = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'obstaculos.js')).href);
+  const { CFG } = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'config.js')).href);
+  const { plano } = Par.construirMundoSolido({
+    worldSeed, heightAt: terrain.heightAt, slopeAt: terrain.slopeAt,
+    WATER_LEVEL: terrain.WATER_LEVEL, CITY: terrain.CITY,
+  });
+  const { solidos } = Ob.construirObstaculos({
+    worldSeed, heightAt: terrain.heightAt, slopeAt: terrain.slopeAt, biomeAt: terrain.biomeAt,
+    noise: (x, z) => terrain.simplex.noise(x, z), WATER_LEVEL: terrain.WATER_LEVEL,
+    CITY: terrain.CITY, VOLCANO: terrain.VOLCANO, sitios: plano.sites,
+    WORLD_SIZE: CFG.WORLD_SIZE, TREE_COUNT: CFG.TREE_COUNT, ROCK_COUNT: CFG.ROCK_COUNT,
+  });
+  const q = Ob.criarConsultaObstaculos(solidos, { heightAt: terrain.heightAt, grade: terrain.losGrid || null });
+  return { ...q, solidos };
+}
+
+/* O olho do bot dentro do colisor de um obstáculo (o bot anda em linha reta
+   e atravessa pedra e árvore): de dentro ele não enxerga nem atira — o mesmo
+   contrato de `eyeInsideWall`. */
+function eyeInsideObstacle(obstacles, eye) {
+  return !!obstacles && obstacles.contem(eye);
+}
+
 /* O estado da cidade é do SERVIDOR (city-destruction-protocol.js, server.js):
    `cityDestruction` sai com state 'intact' → 'cinematic' → 'destroyed', no
    impacto. O cliente troca as paredes no MESMO instante (city.destroy() no
@@ -384,13 +426,14 @@ function activeWalls(world) {
   return world.cityDestroyed ? world.solids.destroyed : world.solids.intact;
 }
 
-/* Visada completa: relevo E paredes. `walls` nulo = mundo sem construção
-   (os dublês de teste). No processo real terreno e paredes chegam JUNTOS
-   (createBotWorldGeometry) — sem os dois, `terrain` fica nulo e o bot não vê
-   ninguém (B12c). */
-function clearSight(terrain, walls, from, to) {
+/* Visada completa: relevo, paredes E obstáculos. `walls`/`obstacles` nulos =
+   mundo sem construção/vegetação (os dublês de teste). No processo real os
+   três chegam JUNTOS (createBotWorldGeometry) — sem eles, `terrain` fica nulo
+   e o bot não vê ninguém (B12c). */
+function clearSight(terrain, walls, from, to, obstacles = null) {
   if (!lineOfSight(terrain, from, to)) return false;
-  return !walls || !walls.segmentBlocked(from, to);
+  if (walls && walls.segmentBlocked(from, to)) return false;
+  return !obstacles || !obstacles.segmentoBloqueado(from, to);
 }
 
 /* postura de um candidato: número em [0, 1]; qualquer outra coisa é em pé */
@@ -475,13 +518,14 @@ function eyeInsideWall(walls, eye) {
 
 /* Um passo de percepção de UM bot: atualiza o medidor, a memória e a fila de
    reação de cada candidato. Quem não está mais na lista (morreu, saiu, nave)
-   é esquecido. `walls`: a consulta de paredes do estado atual da cidade. */
-function perceive(bot, candidates, terrain, t, dt, walls = null) {
+   é esquecido. `walls`: a consulta de paredes do estado atual da cidade;
+   `obstacles`: a de pedras, árvores, cactos e POIs. */
+function perceive(bot, candidates, terrain, t, dt, walls = null, obstacles = null) {
   if (!bot.aware) bot.aware = new Map();
   const present = new Set();
   const inCombat = t - Math.max(bot.lastShotT ?? -Infinity, bot.hurtT ?? -Infinity) <= AI.COMBAT_WINDOW_S;
   const eye = { x: bot.x, y: (bot.y || 0) + AI.EYE_H, z: bot.z };
-  const walled = eyeInsideWall(walls, eye);
+  const walled = eyeInsideWall(walls, eye) || eyeInsideObstacle(obstacles, eye);
   for (const c of candidates) {
     if (!isTargetable(bot, c)) continue;
     present.add(c.id);
@@ -496,8 +540,8 @@ function perceive(bot, candidates, terrain, t, dt, walls = null) {
     const crouch = crouchOf(c);
     if (!walled && d <= AI.VIEW_RANGE && (alerted || inViewCone(bot.yaw, dx, dz, d))) {
       const cy = c.y || 0, h = bodyHeights(crouch);
-      visible = clearSight(terrain, walls, eye, { x: c.x, y: cy + h.head, z: c.z })
-        || clearSight(terrain, walls, eye, { x: c.x, y: cy + h.aim, z: c.z });
+      visible = clearSight(terrain, walls, eye, { x: c.x, y: cy + h.head, z: c.z }, obstacles)
+        || clearSight(terrain, walls, eye, { x: c.x, y: cy + h.aim, z: c.z }, obstacles);
     }
     if (visible) {
       const { speed } = targetMotion(a, c, t);
@@ -529,6 +573,7 @@ function knownTargets(bot, candidates, t) {
   const out = [];
   for (const [id, a] of bot.aware || []) {
     const c = byId.get(id);
+    if (c && c.heli) continue; // entrou no helicóptero: nem a fila de reação vale
     const view = c && sampleAt(a, t - AI.REACTION_S);
     if (!view || !view.known) continue;
     const seen = !!view.seen;
@@ -704,7 +749,7 @@ function botHitGap(target, bot, weapon) {
    não atravessa morro nem prédio); o cronômetro do token (humano só) antes da
    mira; e só o ACERTO consome o token. */
 function decideShot(bot, target, action, ctx) {
-  const { t, rng, terrain, walls = null, director, moved } = ctx;
+  const { t, rng, terrain, walls = null, obstacles = null, director, moved } = ctx;
   const weapon = action.weapon || bot.weapon;
   const profile = WEAPON_PROFILES[weapon] || WEAPON_PROFILES.FUZIL;
   const d = Math.hypot(target.x - bot.x, (target.y || 0) - (bot.y || 0), target.z - bot.z);
@@ -734,6 +779,8 @@ function decideShot(bot, target, action, ctx) {
   // o bot atira sobre o que via 0,6 s atrás (reação): quem entrou atrás do
   // prédio nesse meio-tempo leva a bala na parede, não no corpo
   if (walls && (eyeInsideWall(walls, eye) || walls.segmentBlocked(eye, aimPt))) return { hit: false, why: 'parede' };
+  // idem pedra, árvore, cacto e POI (a vítima recusaria o dano por eles)
+  if (obstacles && (eyeInsideObstacle(obstacles, eye) || obstacles.segmentoBloqueado(eye, aimPt))) return { hit: false, why: 'obstaculo' };
   const human = !target.isBot;
   if (human && director && !director.claim(target.id, bot.id, t, hitGap(target, bot), botHitGap(target, bot, weapon))) {
     return { hit: false, why: 'token' };
@@ -988,6 +1035,8 @@ function observePlayerUpdate(observed, update) {
     alive: previous ? previous.alive : true,
     spectator: previous ? previous.spectator : false,
     phase: update.ship ? 'SHIP' : (update.fall || update.chute) ? 'FALL' : 'PLAY',
+    // no helicóptero (voando ou pousado): não é alvo de bot (isTargetable)
+    heli: !!update.heli,
     isBot: !!update.bot,
   };
   observed.set(update.id, player);
@@ -1076,17 +1125,19 @@ function createBotWorld() {
   return {
     plan: null, t0: 0, bots: [],
     observedPlayers: new Map(), drops: new Map(), chests: new Map(),
-    terrain: null, solids: null, cityDestroyed: false, director: createHitDirector(), lastT: null,
+    terrain: null, solids: null, obstacles: null, cityDestroyed: false, director: createHitDirector(), lastT: null,
   };
 }
 
-/* Terreno e paredes da semente, JUNTOS. Se qualquer um falhar, nenhum vale:
-   terreno sem paredes daria bot que vê através da cidade em silêncio — o
-   defeito que B7 fecha. Sem os dois o bot fica cego (B12c) e a falha sobe. */
+/* Terreno, paredes e obstáculos da semente, JUNTOS. Se qualquer um falhar,
+   nenhum vale: terreno sem paredes (ou sem obstáculos) daria bot que vê
+   através da cidade (ou da pedra) em silêncio — o defeito que B7 fecha. Sem
+   os três o bot fica cego (B12c) e a falha sobe. */
 async function createBotWorldGeometry(worldSeed) {
   const terrain = await createBotTerrain(worldSeed);
   const solids = await createBotSolids(worldSeed, terrain);
-  return { terrain, solids };
+  const obstacles = await createBotObstacles(worldSeed, terrain);
+  return { terrain, solids, obstacles };
 }
 
 /* Candidatos a alvo neste tick: os bots do processo (posição de agora) e os
@@ -1103,8 +1154,9 @@ function buildCandidates(world) {
 function tickPlayingBot(world, b, zone, t, dt, rng) {
   const { drops, chests, terrain } = world;
   const walls = activeWalls(world);
+  const obstacles = world.obstacles || null;
   const candidates = buildCandidates(world);
-  perceive(b, candidates, terrain, t, dt, walls);
+  perceive(b, candidates, terrain, t, dt, walls, obstacles);
   const target = selectTarget(b, knownTargets(b, candidates, t), AI.VIEW_RANGE, {
     t, engaged: countAttackers(world.bots, b),
   });
@@ -1169,17 +1221,19 @@ function tickPlayingBot(world, b, zone, t, dt, rng) {
   });
   const profile = WEAPON_PROFILES[action.weapon] || WEAPON_PROFILES.FACA;
   const fromPos = [b.x, b.y + AI.EYE_H, b.z];
-  // de dentro da parede o bot segura o fogo: o cliente corta o traçante no
-  // primeiro obstáculo MENOS a caixa onde ele nasce — o tiro sairia do prédio
-  // (acontece na cauda da reação: ele via o alvo de fora e entrou andando)
+  // de dentro da parede (ou da pedra) o bot segura o fogo: o cliente corta o
+  // traçante no primeiro obstáculo MENOS a caixa onde ele nasce — o tiro
+  // sairia do prédio (acontece na cauda da reação: ele via o alvo de fora e
+  // entrou andando)
+  const boca = { x: fromPos[0], y: fromPos[1], z: fromPos[2] };
   if (canAttemptAttack(b, target, action, t, rng() * 0.45)
-    && !eyeInsideWall(walls, { x: fromPos[0], y: fromPos[1], z: fromPos[2] })) {
+    && !eyeInsideWall(walls, boca) && !eyeInsideObstacle(obstacles, boca)) {
     b.lastShot = t;
     const bursts = action.type === 'melee' ? 1 : Math.min(profile.bursts, b.ammo);
     // o bot decidiu sobre o que via 0,6 s atrás; a bala vai contra onde o
     // alvo ESTÁ agora (e contra o terreno de agora)
     const real = candidates.find(c => c.id === target.id) || target;
-    const verdict = decideShot(b, real, action, { t, rng, terrain, walls, director: world.director, moved });
+    const verdict = decideShot(b, real, action, { t, rng, terrain, walls, obstacles, director: world.director, moved });
     if (verdict.hit) for (let k = 0; k < bursts; k++) b.s.emit('shotHit', {
       targetId: real.id, dmg: profile.dmg,
       weapon: action.weapon,
@@ -1245,11 +1299,13 @@ function startBots(N, URL, { watchdog = true } = {}) {
     // erradas). Até o novo carregar, sem terreno = sem visada (B12c)
     world.terrain = null;
     world.solids = null;
+    world.obstacles = null;
     terrainPromise = createBotWorldGeometry(numericSeed)
-      .then(({ terrain: t, solids }) => {
+      .then(({ terrain: t, solids, obstacles }) => {
         if (loadedWorldSeed !== numericSeed) return null; // chegou o mapa seguinte no meio
         world.terrain = t;
         world.solids = solids;
+        world.obstacles = obstacles;
         const opened = new Set(openedChests);
         chests.clear();
         for (const chest of createBotChestSpots(numericSeed, t)) {
@@ -1259,7 +1315,7 @@ function startBots(N, URL, { watchdog = true } = {}) {
       })
       .catch(err => {
         // stderr herdado pelo server.js (B12a): a falha chega no log dele
-        console.error(`[bots] terreno/paredes indisponíveis: ${err.message} — sem eles os bots NÃO enxergam ninguém (sem linha de visada) e não atiram`);
+        console.error(`[bots] terreno/paredes/obstáculos indisponíveis: ${err.message} — sem eles os bots NÃO enxergam ninguém (sem linha de visada) e não atiram`);
         return null;
       });
     return terrainPromise;
@@ -1362,5 +1418,5 @@ module.exports = {
   createBotTerrain, createBotChestSpots, resetBotForMatch, canAttemptAttack, buildMissShot, dropLootOnce,
   perceive, knownTargets, lineOfSight, inViewCone, hitChance, createHitDirector, decideShot,
   onPlayerFired, onBotHit,
-  createBotSolids, createBotWorldGeometry, applyCityState, activeWalls, clearSight,
+  createBotSolids, createBotObstacles, createBotWorldGeometry, applyCityState, activeWalls, clearSight,
 };
