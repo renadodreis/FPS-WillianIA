@@ -46,7 +46,12 @@ function spawnServer(env = {}) {
         });
       }
     });
-    proc.on('exit', c => rej(new Error('servidor morreu cedo, código ' + c)));
+    /* o stderr do servidor é LIDO (pipe cheio trava o processo) e vai junto
+       na falha: "morreu cedo, código 1" sozinho não diz se foi porta ocupada
+       ou exceção no boot — já custou triagem às cegas */
+    let stderrFim = '';
+    proc.stderr.on('data', d => { stderrFim = (stderrFim + d).slice(-1500); });
+    proc.on('exit', c => rej(new Error('servidor morreu cedo, código ' + c + (stderrFim ? '\n' + stderrFim : ''))));
   });
 }
 
@@ -201,6 +206,23 @@ describe('Loot — só de participantes vivos da partida', () => {
     assert.ok(colete && colete.amount <= 50, `colete sem teto: ${JSON.stringify(colete)}`);
     assert.ok(mun && mun.amount <= 60, `munição solta sem teto: ${JSON.stringify(mun)}`);
     assert.ok(!d.items.some(i => i.type === 'desconhecido'), 'tipo desconhecido passou');
+  });
+
+  it('dado o loot de morte, então a munição de cada arma respeita o teto daquela arma', async t => {
+    // teto por arma: o que o jogo entrega para ela (baú, torre) com folga
+    const { clients } = await playing(t, 3); // 3: a morte não encerra a partida
+    const [a, b] = clients;
+    const drops = collect(b.s, 'dropSpawn');
+    a.s.emit('deathDrop', { pos: [0, 2, 0], items: [
+      { type: 'weapon', weapon: 3, ammo: 300 },
+      { type: 'weapon', weapon: 0, ammo: 300 },
+    ] });
+    a.s.emit('died', { cause: { type: 'environment' } });
+    await sleep(300);
+    assert.equal(drops.length, 1, 'o loot de morte não saiu');
+    const porArma = Object.fromEntries(drops[0].items.filter(i => i.type === 'weapon').map(i => [i.weapon, i.ammo]));
+    assert.ok(porArma[3] <= 12, `munição da arma 3 sem teto próprio: ${porArma[3]}`);
+    assert.equal(porArma[0], 300, 'o teto de uma arma não pode cortar a munição legítima de outra');
   });
 });
 

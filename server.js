@@ -443,6 +443,8 @@ function endMatch(winnerId) {
    (br-game.js e scripts/bots.js: munição 60, colete 50, armas com o pente) */
 const DROP_TYPES = new Set(['weapon', 'ammo', 'armor', 'med', 'nade']);
 const DROP_CAP = { weaponAmmo: 300, ammo: 60, armor: 50 };
+// teto de munição por arma (índice do arsenal): o que baú/torre entregam, com folga
+const DROP_WEAPON_AMMO = [300, 90, 96, 12, 300, 0];
 const DROP_PENDING_MS = 5000;
 function sanitizeDropItems(list) {
   let weapons = 0;
@@ -454,7 +456,7 @@ function sanitizeDropItems(list) {
     if (type === 'weapon') {
       if (!Number.isInteger(it.weapon) || it.weapon < 0 || it.weapon > 5 || ++weapons > 7) return null;
       o.weapon = it.weapon;
-      o.ammo = Math.max(0, Math.min(DROP_CAP.weaponAmmo, Math.round(+it.ammo) || 0));
+      o.ammo = Math.max(0, Math.min(DROP_WEAPON_AMMO[it.weapon] ?? DROP_CAP.weaponAmmo, Math.round(+it.ammo) || 0));
     } else if (type === 'ammo' || type === 'armor') {
       o.amount = Math.max(0, Math.min(DROP_CAP[type], Math.round(+it.amount) || 0));
       if (!o.amount) return null;
