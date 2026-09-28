@@ -12,6 +12,13 @@ Escreve o que reprova.
 > executado para escrever este documento (os construtores ocupavam as portas):
 > toda "linha de base" abaixo é LEITURA de código ou CONTA, e está marcada assim.
 
+> **Revisão 2026-09-28 — decisões do dono, escritas pelo validador (autor da
+> régua).** Duas mudanças, e só elas: (1) em **M1**, a grandeza da BAZUCA foi
+> trocada — o limiar antigo era inalcançável por construção no quadril e media o
+> asset, não defeito; (2) critério NOVO **B14** ("quem espia não é imune"), com o
+> escopo de **B1/B2** delimitado para não contradizê-lo. Nenhum outro limiar foi
+> tocado. O motivo está escrito em cada critério. Denominador: **54** (61 no total).
+
 ---
 
 ## 0. As regras que governam este documento
@@ -24,7 +31,7 @@ A queixa do dono, que é a razão de esta régua existir, jogando **no celular**
 Regras, herdadas da régua do VR (`docs/vr/criterio-aaa.md`) sem margem:
 
 1. **Um critério reprovado reprova a entrega inteira.** Não existe "passou em
-   52 de 53", não existe "esse é menor", não existe média.
+   53 de 54", não existe "esse é menor", não existe média.
 2. **Teste verde não prova tela certa.** Todo critério traz o campo **"por que a
    suíte atual não pega"**. Critério que não sabe responder isso não entra.
 3. **Todo critério traz o defeito a reinjetar.** Se a sonda ou o teste não fica
@@ -115,10 +122,31 @@ de servidor, não no processo real contra o `server.js` real. É o buraco de
 - **Mede:** distância (cm) e desvio (px de tela) entre o ponto por onde a bala
   passa e o centro da retícula, a 10, 25 e 50 m, congelados no instante do
   disparo.
-- **Limiar:** ≤ 1 cm e ≤ 1 px no hitscan (modo solo) e no projétil do BR. Na
-  bazuca — exceção medida do CLAUDE.md, o foguete nasce na BOCA e voa paralelo à
-  linha de mira — o afastamento é constante e ≤ altura de alça da mira ativa +
-  1 cm nas três distâncias. Reprova: qualquer arma, postura ou distância acima.
+- **Limiar:** ≤ 1 cm e ≤ 1 px no hitscan (modo solo) e no projétil do BR.
+  Reprova: qualquer arma, postura ou distância acima.
+- **Limiar da BAZUCA (reescrito em 2026-09-28, decisão do dono).** Contrato do
+  CLAUDE.md: projétil VISÍVEL nasce na BOCA e voa PARALELO à linha de mira;
+  zeragem pelo primeiro obstáculo é proibida. Então o foguete NÃO passa pelo
+  centro da retícula — passa a uma distância constante dele, igual ao
+  deslocamento da boca, e é isso que se cobra. Com a mesma âncora de M1 (câmera
+  do quadro do disparo) e a boca CONGELADA no instante do tiro
+  (`canoPosDoTiro()`), em quadril e em ADS, nas mesmas posturas e movimentos:
+  - **(a) origem na boca:** distância da origem do foguete à boca congelada
+    ≤ 1 cm;
+  - **(b) paralelo à linha de mira:** o afastamento entre a reta do foguete e o
+    eixo da mira (a câmera no quadril; a linha da mira ativa em ADS) varia
+    **≤ 1 cm entre 10, 25 e 50 m** (máx − mín) — equivale a ≤ 0,015° entre as
+    duas retas;
+  - **(c) o afastamento é o da própria boca:** esse afastamento difere
+    ≤ 1 cm da distância perpendicular da boca congelada ao eixo da mira NO MESMO
+    quadro (medido: ~26 cm no quadril, ~13 cm na mira — é geometria do modelo,
+    não entra como número fixo).
+  **Por que mudou:** o limiar antigo ("≤ altura de alça da mira ativa + 1 cm")
+  é inalcançável no quadril — lá não há alça, e o foguete paralelo passa a
+  ~26 cm do centro por construção. Media o ASSET (o deslocamento da arma) e
+  chamava de comportamento; nenhuma mudança em `fire()` o fechava (a mesma lição
+  do B7 do VR no CLAUDE.md). A grandeza nova descreve o defeito que existiu
+  (convergência e deriva) e não afrouxa nada do contrato.
 - **Fonte:** geometria (CLAUDE.md, "A mira é geometria, não gosto"); regressão
   do defeito de 29–31 cm no quadril corrigido em `2ed48e7`.
 - **Como:** V2 e V3 com `?mobile=1`; as 8 armas × {quadril, ADS pelo botão
@@ -139,7 +167,15 @@ de servidor, não no processo real contra o `server.js` real. É o buraco de
   `__BR_ballistics` → 29–31 cm no quadril (número de `2ed48e7`). (2) Aplicar o
   giro do toque DEPOIS de `fire()` no frame → erro proporcional ao arrasto
   daquele frame; o caso "dedo em movimento" tem de avermelhar e os casos parados
-  não.
+  não. **Bazuca:** (3) ZERAGEM de volta (direção = ponto de 120 m ou primeiro
+  obstáculo na linha de mira − boca) → o afastamento converge (medido em
+  `7515734`: 23,7 → 20,4 → 15,0 cm a 10/25/50 m no quadril) → vermelho em (b);
+  (4) foguete nascendo no OLHO (`_rayOrig`) → afastamento ~0 contra ~26 cm da
+  boca → vermelho em (a) e (c) — e é o caso que detonou a 0,39 m da cabeça
+  (42 de dano, CLAUDE.md); (5) direção pelo CANO em vez da linha de mira → deriva
+  com o recuo → vermelho em (b).
+- **Hoje (bazuca, medido em `6aeda6c`, laudo §2):** 25,85 cm no quadril e
+  13,09 cm em ADS, constantes nas três distâncias.
 
 ### M2 · Velocidade da bala medida no VOO, não na tabela *(REGRESSÃO)*
 - **Mede:** tempo (s) do projétil simulado até 100 m e queda (cm) a 100 m, lidos
@@ -604,6 +640,10 @@ N ≥ 30 engajamentos por caso (≥ 500 disparos nos casos de taxa), seeds decla
 - **Mede:** t(primeiro `playerFired` do bot contra o humano, recebido pelo humano)
   − t0, onde t0 = o humano sai de trás de uma cobertura para a frente do bot (≤ 10°
   do `rotY` que o bot difunde), com linha livre pelo `rayBlockedAt` do CLIENTE.
+- **Escopo (2026-09-28, decisão do dono — ver B14):** vale no engajamento NOVO e
+  na PRIMEIRA re-exposição (o humano volta depois de ≤ 3 s escondido). Da 2ª
+  re-exposição seguida em diante quem manda é B14 — a proteção se esgota ali por
+  decisão, e B1 não pode proibir isso. Nada muda no limiar.
 - **Limiar:** mínimo ≥ 1,3 s.
 - **Fonte:** CS2 Easy, `ReactionTime 0.60` + `AttackDelay .70` = 1,30 s — o mais
   brando dos perfis Easy publicados (CS 1.6 Easy: 2,0 s); Booth, *"Substantial
@@ -616,6 +656,8 @@ N ≥ 30 engajamentos por caso (≥ 500 disparos nos casos de taxa), seeds decla
 ### B2 · Os primeiros tiros erram: primeiro dano ≥ 1,3 s + missTime(d)
 - **Mede:** t(primeiro dano de bot APLICADO no humano, depois da checagem de
   cobertura do cliente) − t0.
+- **Escopo (2026-09-28, decisão do dono — ver B14):** o mesmo de B1 — engajamento
+  NOVO e PRIMEIRA re-exposição. Da 2ª re-exposição seguida em diante, B14.
 - **Limiar:** ≥ 1,3 + 1,0 + 0,0315·d s (d em m): **≥ 3,25 s a 30 m, ≥ 4,82 s a
   80 m**. DMR/sniper: os 2 primeiros disparos num alvo novo além de 12,7 m não
   acertam.
@@ -784,6 +826,55 @@ N ≥ 30 engajamentos por caso (≥ 500 disparos nos casos de taxa), seeds decla
 - **Aprova:** "não" nas três perguntas, nas três partidas.
 - **Fonte:** CLAUDE.md — "o critério é o dono"; o PUBG 12.1 só foi pego por
   jogador.
+
+### B14 · Quem espia não é imune — a proteção da re-exposição se esgota *(novo, 2026-09-28)*
+- **Decisão do dono (2026-09-28): "proteção que se esgota".** A PRIMEIRA volta de
+  trás da cobertura continua protegida exatamente como B1/B2 mandam; espiar de
+  novo em seguida vai perdendo a proteção. Motivo, medido em `6aeda6c` (laudo
+  `validacao-6aeda6c.md` §5): quem espia 3 s exposto / 2 s escondido ficou
+  imune — cada volta pagava de novo reação + reaquisição + janela de erro
+  (~3,1–3,4 s a 24 m, mais que os 3 s expostos).
+- **Definições.** *Exposição* = o humano à vista do bot (linha livre pelo
+  `rayBlockedAt` do cliente e dentro do cone); a 1ª é o engajamento novo, a 2ª é
+  a **1ª re-exposição**. *Seguida* = escondido ≤ 3 s entre uma exposição e a
+  próxima (acima disso é engajamento NOVO e paga tudo de novo — `REACQUIRE_S`,
+  CS `seenRecentTime`). *TTK do espiador* = tempo de RELÓGIO desde o começo da
+  1ª exposição até somar 100 de dano APLICADO (conta o tempo escondido).
+- **Mede:** por espiador, dano de bot em cada exposição e o TTK do espiador; e,
+  na mesma rodada, o TTK do mesmo perfil de bot/arma/distância com o humano
+  PARADO e exposto o tempo todo (B3).
+- **Cenário:** caminho real (`server.js` + `scripts/bots.js` pela flag do
+  anfitrião), humano parado em pé de frente para o bot, sem colete e sem revidar,
+  **3 s exposto / 2 s escondido**, até **12 ciclos** (60 s), **fuzil a ~24 m**;
+  N ≥ 30 espiadores. Cobertura que o bot também respeite (hoje só relevo — B7).
+  DMR a 24 m e escopeta a 15 m: medir e declarar, sem portão.
+- **Limiar:**
+  - **(a) a 1ª re-exposição continua protegida:** B1 e B2 medidos NELA
+    (1º disparo ≥ 1,3 s e 1º dano ≥ 1,3 + missTime(d), contados da volta) —
+    B14 não afrouxa a primeira volta;
+  - **(b) a proteção se esgota:** o TTK mediano do espiador (fuzil, 24 m) é
+    **finito dentro de 12 ciclos (60 s)** e **≤ 3 × o TTK mediano parado** da
+    mesma rodada;
+  - **(c) pelo menos UMA re-exposição é protegida, e não todas:** em ≥ 80 % dos
+    espiadores que chegam à 6ª exposição, há dano de bot em alguma exposição
+    entre a 3ª e a 6ª.
+- **Fonte:** decisão do dono (2026-09-28). Lastro do "se esgota": CoD4
+  `_gameskill.gsc` — a janela de erro só rearma depois de uns segundos sem
+  atirar, *"we can only start missing again if it's been a few seconds since
+  we last shot"*, `missTimeDebounce = gettime() + 3000` (referência de bots
+  §2.2). **[INFERÊNCIA]** no k = 3 e nos 12 ciclos, pela conta: exposto 60 % do
+  tempo e pagando só reação + reaquisição (~1,3–1,6 s) em cada volta sobra
+  ~47 % do tempo de fogo — TTK ≈ 2,1 × o parado; 3 × dá folga para a variância
+  da mira e ainda reprova a imunidade. O dono pode trocar k.
+- **Por que a suíte não pega:** o dublê de `test/bots-combate.test.js` não tem
+  ciclo de espiada; B1/B2 medem só a primeira volta.
+- **Reinjetar:** (1) rearmar janela de erro e atraso de reaquisição em TODA
+  volta, sem esgotar (o estado de `6aeda6c`) → 0 mortes → vermelho em (b) e (c);
+  (2) não rearmar nem na 1ª volta (o estado de `7515734`) → 1º dano a 0,41 s na
+  escopeta → vermelho em (a).
+- **Hoje (medido em `6aeda6c`):** 47 espiadores, 282 exposições, **0 mortes**;
+  fuzil a 24 m: 6 espiadores × 6 exposições, **0 de dano**; DMR a 24 m: 2 de 90
+  exposições com dano; escopeta a 15 m: 3 de 156. **Reprova (b) e (c).**
 
 ---
 
@@ -1016,14 +1107,14 @@ humano, a rodada não está validada.
 | M — Mira e tiro | M1–M6 | 6 | — |
 | A — Assistência | A1–A9 | 8 | A9 (humano) |
 | C — Controles e HUD | C1–C10 | 10 | — |
-| B — Bots | B1–B13 | 12 | B13 (humano) |
+| B — Bots | B1–B14 | 13 | B13 (humano) |
 | D — Desempenho | D1–D8 | 5 | D1, D7, D8 (aparelho) |
 | E — Estados | E1–E14 | 12 | E13 (aparelho), E14 (humano + aparelho) |
-| **Total** | **60** | **53** | **7** |
+| **Total** | **61** | **54** | **7** |
 
-**Denominador honesto: 53.** Os 7 da última coluna só fecham com o aparelho ligado
+**Denominador honesto: 54** (era 53 até a revisão de 2026-09-28, que acrescentou B14). Os 7 da última coluna só fecham com o aparelho ligado
 ou com um humano, e nenhum placar pode contá-los como verdes sem isso. **A entrega
-só está aprovada com 60 de 60** — os 53 automatizáveis verdes são condição
+só está aprovada com 61 de 61** — os 54 automatizáveis verdes são condição
 necessária, não suficiente.
 
 Sete critérios são **regressão** do que já foi corrigido e têm de continuar
@@ -1108,7 +1199,8 @@ aplicado e desfeito (restauração conferida por sha256), provando que ela averm
 - **D:** perfhud com idade declarada (D2); embrulho de construtores (D3); retrato
   do mundo desktop × celular (D4); boot com rede limitada (D6).
 - **B:** `node server.js` + bots pela flag do anfitrião + humano dublê por socket;
-  `Math.random` do processo dos bots semeado; dano contado no cliente da vítima.
+  `Math.random` do processo dos bots semeado; dano contado no cliente da vítima;
+  o ciclo de espiada de B14 (3 s exposto / 2 s escondido, até 12 ciclos).
 
 ### Passo 3 — a peneira do repo
 ```
@@ -1128,5 +1220,5 @@ arquivada no laudo da rodada.
 ### Passo 6 — veredito
 Uma linha por critério (M1…E14), verde/vermelho/não medido, com o número medido e a
 condição ao lado. Laudo em `docs/mobile/validacao-<commit>.md`, com o placar sobre
-**53**, os defeitos novos medidos e quantos deles nasceram de uma correção.
+**54**, os defeitos novos medidos e quantos deles nasceram de uma correção.
 Sem "quase", sem "só falta", sem média.
