@@ -98,6 +98,13 @@ export function createAlien(deps) {
      o soldado comum (100): 1200 = 12×, o topo da faixa, porque ele ainda é
      o chefe que dá o rifle de plasma. Fuzil a 80 %: 6,6 s, dois pentes.
      DECISÃO A CONFIRMAR COM O DONO: o dano dele (orbe) ficou igual. */
+  /* ORBE — rebalanceio pelo relato do dono ("o ET está muito forte pra matar
+     ele") e pelo P1 da régua (o fuzil a 80 % tem de derrubá-lo ANTES de ele
+     matar um jogador parado a 20 m). Antes: rajada tripla a cada 1,6 s, até
+     21 por orbe, laterais podendo convergir — no jogo o jogador morria em
+     5,4–7,3 s contra 7,8 s do fuzil. DECISÃO A CONFIRMAR COM O DONO. */
+  const ORBE = { dano: 12, base: 4, cadencia: 1.8, abertura: 1.6 };
+  const _peito = new THREE.Vector3(), _lado = new THREE.Vector3();
   const B = { alive: true, active: false, hp: 1200, hpMax: 1200, yaw: 0, phase: 0, nextShot: 0, blinkT: 6, deadT: -1, respawnT: 0 };
   // no helicóptero ele não persegue, não atira e o orbe não fere (js/aihelpers.js)
   const alcancavel = () => !player.dead && !noHelicoptero(state);
@@ -163,7 +170,10 @@ export function createAlien(deps) {
       }
       o.m.position.copy(_v2);
       o.m.scale.setScalar(1 + Math.sin(t * 26) * 0.15);
-      const d = o.m.position.distanceTo(player.pos);
+      /* distância até o PEITO (o orbe mira pos + 1,2 m): medida nos pés, o
+         orbe mirado no peito passava a ~1,2 m do "jogador" e não estourava —
+         o dano vinha dos laterais (laudo validacao-070502f.md, P1) */
+      const d = o.m.position.distanceTo(_peito.copy(player.pos).setY(player.pos.y + 1.1));
       if (o.life <= 0 || d < 1.2 || o.m.position.y < heightAt(o.m.position.x, o.m.position.z) + 0.2) {
         o.live = false; o.m.visible = false;
         FX.burst(o.m.position, _v1.set(0, 1, 0), 'spark');
@@ -172,7 +182,7 @@ export function createAlien(deps) {
            4 m valia através de tudo — 14 de dano dentro da cabana, medido. */
         if (o.life > 0 && d < 4 && alcancavel() &&
             !(Structures && Structures.segBlocked(o.m.position, _alvoCorpo.copy(player.pos).setY(player.pos.y + 1)))) {
-          playerDamage(Math.round(16 * (1 - d / 5)) + 5, o.m.position, { type: 'alien' });
+          playerDamage(Math.round(ORBE.dano * (1 - d / 5)) + ORBE.base, o.m.position, { type: 'alien' });
         }
       }
     }
@@ -227,14 +237,18 @@ export function createAlien(deps) {
     }
     // tiro triplo de plasma
     if (dP < 70 && state.gameTime >= B.nextShot && alcancavel()) {
-      B.nextShot = state.gameTime + 1.6;
+      B.nextShot = state.gameTime + ORBE.cadencia;
+      /* só o orbe central mira o jogador; os laterais abrem PARA OS LADOS com
+         afastamento garantido (antes `rand(-2,2)·i` podia dar 0 e os três
+         convergiam: 63 de dano numa rajada, medido) */
+      _lado.set(-(player.pos.z - group.position.z), 0, player.pos.x - group.position.x).normalize();
       for (let i = 0; i < 3; i++) {
         const o = orbs.find(o => !o.live);
         if (!o) break;
         o.live = true; o.m.visible = true; o.life = 4.5;
         o.m.position.set(group.position.x, group.position.y + 2.8, group.position.z);
         _v2.copy(player.pos); _v2.y += 1.2;
-        _v2.x += rand(-2, 2) * i; _v2.z += rand(-2, 2) * i;
+        if (i > 0) _v2.addScaledVector(_lado, (i === 1 ? -1 : 1) * (ORBE.abertura + rand(0, 1)));
         o.vel.copy(_v2).sub(o.m.position).normalize().multiplyScalar(22);
         SFX.bossShot(o.m.position);
       }
