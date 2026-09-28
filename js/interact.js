@@ -170,7 +170,28 @@ export function createInteract(deps) {
     const op = txt === null ? '0' : '1';
     if (op !== promptOpacity) { ui.prompt.style.opacity = op; promptOpacity = op; }
   }
+  /* O BAÚ DE GUARDAR É DO SOLO — E NO BR ELE SAI DA TELA, NÃO SÓ DO USAR.
+     `current()` já recusava o baú no BR ("loot vem dos baús BR"), mas o
+     MESH continuava desenhado, com o mesmo modelo do baú de saque do BR
+     (js/chestmodel.js). Eram 4 baús que não abrem, cada um a 6–11 m de um
+     veículo — a praça do spawn, a cidade e as duas bases militares, onde o
+     jogador pousa. Medido pelo caminho real do celular
+     (test/toque-bau-carro-real.test.js): ao lado do caminhão da base, o baú
+     desenhado mais perto era o falso (6,4 m, contra 9,2 m do de verdade);
+     a 1,21 m dele o USAR não aparecia e a tampa ficava em 0,00 rad. Foi o
+     "os baús não estavam abrindo". Tela que mostra o que não se usa é
+     promessa quebrada, a mesma família do HUD que citava tecla.
+     Escrito só na TROCA de modo (o BR pode ligar depois do boot), e antes do
+     `return` da nave: quem olha o mapa lá de cima também não vê o falso. */
+  let modoBR = null;
+  function sincronizarBausDoSolo() {
+    const br = !!window.__BR_active;
+    if (br === modoBR) return;
+    modoBR = br;
+    for (const s of Structures.chestSpots) if (s.mesh) s.mesh.visible = !br;
+  }
   function update(dt, t) {
+    sincronizarBausDoSolo();
     // BR: na nave/queda/espectador (freeze) não existe interação com o mundo
     if (window.__BR_freeze) { setPrompt(null); return; }
     const c = current();
