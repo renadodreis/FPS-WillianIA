@@ -1110,11 +1110,47 @@ export function createTouchControls(deps) {
     }
   }
 
+  /* ---- O AVISO É O BOTÃO ----
+     No celular a pessoa toca no que está ESCRITO no meio da tela ("USAR —
+     ENTRAR — BUGGY", "USAR — ABRIR BAÚ"), não no botão do canto — e o aviso
+     não respondia: #prompt mora em #hud (pointer-events: none, z 10, abaixo
+     do #touchUI) e a dica do baú do BR (#brHint, z 45) também. Relato do dono:
+     "os baús não estavam abrindo no celular e nem estavam conseguindo entrar e
+     sair do carro". O #prompt passa a morar no #touchUI (acima da área de
+     mira) e o #brHint sobe de camada SÓ quando é a dica do baú; os dois só
+     aceitam o dedo enquanto ACESOS (classe `tocavel`), senão comeriam o
+     arrasto de mira que começa em cima deles. O toque vira o MESMO `use` do
+     botão USAR (KeyE, com keyup casado no pointerup). */
+  let avisoPrompt = doc.getElementById('prompt'), avisoBR = null;
+  if (avisoPrompt && root && avisoPrompt.parentNode !== root) root.appendChild(avisoPrompt);
+  function avisoAceso(el) {
+    if (!el) return false;
+    if (el === avisoPrompt) return el.style.opacity === '1';
+    return !!win.__BR_bauPerto && el.style.display !== 'none';
+  }
+  function syncAvisos() {
+    if (!avisoBR) avisoBR = doc.getElementById('brHint');
+    for (const el of [avisoPrompt, avisoBR]) if (el) el.classList.toggle('tocavel', live() && avisoAceso(el));
+  }
+  function onAvisoDown(e) {
+    const el = e.currentTarget;
+    if (!el.classList.contains('tocavel') || !live()) return;
+    e.preventDefault();               // sem isto vem mousedown de compatibilidade
+    if (!core.press('use', e.pointerId, e.clientX, e.clientY)) return;
+    tipoDoPonteiro(e);
+    capture(el, e.pointerId);
+    pressAct('use');
+    paint('use');
+  }
+  let avisoBRLigado = false;
+
   function frame(inVehicle) {
     syncMouse();
     syncBR();
     syncContexto();
     syncArmas();
+    syncAvisos();
+    if (avisoBR && !avisoBRLigado) { avisoBR.addEventListener('pointerdown', onAvisoDown); avisoBRLigado = true; }
     /* dirigindo, a trava de corrida sai: o analógico vira volante binário */
     core.setSprintLock(!inVehicle);
     const m = core.getMove();
@@ -1183,6 +1219,7 @@ export function createTouchControls(deps) {
   win.addEventListener('mousedown', engolirCompat, true);
 
   if (btnsEl) btnsEl.addEventListener('pointerdown', onBtnDown);
+  if (avisoPrompt) avisoPrompt.addEventListener('pointerdown', onAvisoDown);
   if (btnsLEl) btnsLEl.addEventListener('pointerdown', onBtnDown);
   if (moveEl) moveEl.addEventListener('pointerdown', onMoveDown);
   if (lookEl) lookEl.addEventListener('pointerdown', onLookDown);

@@ -109,7 +109,16 @@ function instalarSonda() {
     const dx = x - P.x, dz = z - P.z, a = dx * rx + dz * rz, f = dx * fx + dz * fz, L = Math.hypot(a, f) || 1;
     return { a: a / L, f: f / L, d: Math.hypot(dx, dz) };
   }
-  window.__TR = { bausDesenhados, tampa, btn, centro, naTela, rumo, G, MP,
+  /* o AVISO de interação (#prompt, e no BR a dica do baú em #brHint) está
+     aceso e é ELE que recebe o dedo no centro dele */
+  function avisoTocavel(id) {
+    const el = document.getElementById(id); if (!el) return null;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility !== 'visible' || +cs.opacity < 0.5) return null;
+    const c = centro(el), hit = document.elementFromPoint(c.x, c.y);
+    return { ...c, meu: !!hit && (hit === el || el.contains(hit)), txt: el.textContent };
+  }
+  window.__TR = { bausDesenhados, tampa, btn, centro, naTela, rumo, avisoTocavel, G, MP,
     stick: () => centro(document.getElementById('tcMove')),
     fase: () => (window.__BR_debug ? window.__BR_debug.S.phase : null) };
 }
@@ -241,6 +250,60 @@ describe('BR no celular pelo caminho real — nave, pouso, analógico, USAR', { 
     assert.ok(depois.tampa < -0.5, `tocou o USAR ao lado do baú e a tampa ficou em ${depois.tampa.toFixed(2)} rad (não abriu)`);
   });
 
+  /* O AVISO É O BOTÃO. No celular a pessoa toca no que está escrito no meio
+     da tela ("USAR — ABRIR BAÚ"), não no botão do canto — e a dica não
+     respondia a toque (#hud é pointer-events: none). Relato do dono: "os baús
+     não estavam abrindo no celular". */
+  it('dado o próximo baú, então tocar a DICA "ABRIR BAÚ" (não o botão) abre a tampa', async () => {
+    const bau = await h.play(() => {
+      const T = window.__TR, P = window.__MP.player.pos;
+      let best = null, bd = Infinity;
+      const S = window.__game.Structures;
+      for (const b of T.bausDesenhados()) {
+        if (T.tampa(b) < -0.5) continue;               // já aberto
+        const d = Math.hypot(b.position.x - P.x, b.position.z - P.z);
+        // o analógico anda em linha reta: sem parede no caminho (o teste mede o toque, não a navegação)
+        const livre = !S.segBlocked({ x: P.x, y: P.y + 1, z: P.z }, { x: b.position.x, y: b.position.y + 1, z: b.position.z });
+        if (livre && d < bd) { bd = d; best = b; }
+      }
+      window.__trBau2 = best;
+      window.__trBausFechados = T.bausDesenhados().filter(b => T.tampa(b) > -0.5)
+        .map(b => ({ d: +Math.hypot(b.position.x - P.x, b.position.z - P.z).toFixed(1),
+          livre: !S.segBlocked({ x: P.x, y: P.y + 1, z: P.z }, { x: b.position.x, y: b.position.y + 1, z: b.position.z }) }))
+        .sort((a, b) => a.d - b.d).slice(0, 6);
+      return best ? { x: best.position.x, z: best.position.z, d: bd, lista: window.__trBausFechados } : null;
+    });
+    assert.ok(bau && bau.d < 60, `cenário inválido: nenhum baú fechado por perto (${bau && bau.d})`);
+    /* ESTE caso mede o TOQUE na dica, não a caminhada (o caso anterior já
+       leva o jogador ao baú pelo analógico). O próximo baú fechado fica a
+       ~45 m e um obstáculo baixo segura a reta aos 31 m — o jogador é posto
+       ao lado dele (a abertura é validada pelo servidor, sem distância) */
+    const volta = await h.play(() => { const P = window.__MP.player.pos; return [P.x, P.y, P.z]; });
+    await h.play(b => {
+      const P = window.__MP.player.pos;
+      P.set(b.x + 1, window.__MP.heightAt(b.x + 1, b.z) + 0.05, b.z);
+      window.__MP.player.vel.set(0, 0, 0);
+    }, bau);
+    const chegou = await andarAte(h, dedos, { x: bau.x, z: bau.z }, { perto: 1.3, ms: 5000, id: 12 });
+    await sleep(400);
+    const aviso = await h.play(() => window.__TR.avisoTocavel('brHint'));
+    assert.ok(aviso && /ABRIR BA/.test(aviso.txt), `a ${chegou.d.toFixed(2)} m do baú e a dica não está acesa: ${JSON.stringify(aviso)}`);
+    await dedos.tap(7, aviso.x, aviso.y);
+    let tampa = 0;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 2500) {
+      tampa = await h.play(() => window.__TR.tampa(window.__trBau2));
+      if (tampa < -0.5) break;
+      await sleep(100);
+    }
+    // devolve o jogador ao lado do caminhão: o caso seguinte parte de lá
+    await h.play(v => { window.__MP.player.pos.set(v[0], v[1], v[2]); window.__MP.player.vel.set(0, 0, 0); }, volta);
+    await sleep(300);
+    console.log(`  [dica do baú] chegou a ${chegou.d.toFixed(2)} m; dica recebe o dedo: ${aviso.meu}; tampa ${tampa.toFixed(2)} rad`);
+    assert.equal(aviso.meu, true, 'a dica do baú está acesa mas não recebe o dedo');
+    assert.ok(tampa < -0.5, `tocou a dica "ABRIR BAÚ" e a tampa ficou em ${tampa.toFixed(2)} rad`);
+  });
+
   it('dado o caminhão, então o USAR entra, um dedo novo no analógico dirige, e o USAR sai', async () => {
     const c = cena.carro;
     assert.ok(c, 'cenário inválido: sem caminhão');
@@ -348,6 +411,32 @@ describe('SOLO no celular pelo caminho real — menu por toque, analógico até 
     assert.equal(entrou, true, 'tocou o USAR com o polegar no analógico e não entrou');
     assert.equal(usarDentro, true, 'dirigindo, o USAR não está na tela');
     assert.equal(saiu, true, 'tocou o USAR dirigindo e não saiu');
+  });
+
+  it('dado o carro, então tocar o AVISO "ENTRAR" (não o botão) entra — e o aviso "SAIR" sai', async () => {
+    const c = await h.play(() => {
+      const G = window.__game, n = G.Car.nearest(window.__MP.player.pos);
+      const v = n.v.group.position, P = window.__MP.player.pos;
+      const dx = P.x - v.x, dz = P.z - v.z, L = Math.hypot(dx, dz) || 1;
+      return { x: v.x + dx / L * 3, z: v.z + dz / L * 3 };
+    });
+    const chegou = await andarAte(h, dedos, c, { perto: 0.9, id: 30 });
+    await sleep(300);
+    const a1 = await h.play(() => window.__TR.avisoTocavel('prompt'));
+    assert.ok(a1 && /ENTRAR/.test(a1.txt), `a ${chegou.d.toFixed(2)} m do carro e o aviso ENTRAR não está aceso: ${JSON.stringify(a1)}`);
+    await dedos.tap(31, a1.x, a1.y);
+    await sleep(400);
+    const entrou = await h.play(() => !!window.__game.state.driving);
+    await sleep(300);
+    const a2 = await h.play(() => window.__TR.avisoTocavel('prompt'));
+    if (a2) await dedos.tap(32, a2.x, a2.y);
+    await sleep(400);
+    const saiu = await h.play(() => !window.__game.state.driving);
+    console.log(`  [aviso] ENTRAR recebe o dedo: ${a1.meu}; entrou ${entrou}; aviso dirigindo: ${a2 && a2.txt}; saiu ${saiu}`);
+    assert.equal(a1.meu, true, 'o aviso ENTRAR está aceso mas não recebe o dedo');
+    assert.equal(entrou, true, 'tocou o aviso ENTRAR e não entrou no carro');
+    assert.ok(a2 && a2.meu, `dirigindo, o aviso SAIR não está aceso/tocável: ${JSON.stringify(a2)}`);
+    assert.equal(saiu, true, 'tocou o aviso SAIR e não saiu do carro');
   });
 
   /* o complementar do conserto: no SOLO o baú de guardar É o baú, e continua
