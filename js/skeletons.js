@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
-import { meleeBlocked } from './aihelpers.js';
+import { meleeBlocked, noHelicoptero } from './aihelpers.js';
 import { fundirPorAtlas, noSeed } from './meshutils.js';
 
 /* Mapa de eixos do rig (Sketchfab exporta em T-pose; tudo abaixo foi
@@ -222,7 +222,7 @@ function animateSkeleton(sk, dt, t, moving) {
 
 export function createSkeletons(deps) {
   const { rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed,
-    player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear } = deps;
+    player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear, state = null } = deps;
 
   const COUNT = 7, HP = 90, SPEED = 3.1, MELEE_DMG = 12, MELEE_RANGE = 1.8, MELEE_CD = 1.15;
   const ATTACK_DURATION = 0.9, HIT_AT = 0.48;
@@ -416,6 +416,8 @@ export function createSkeletons(deps) {
     if (!enabled) return;
     if (onboardingAtivo) onboardingT += dt;
     const emGraca = onboardingAtivo && onboardingT < ONBOARD_GRACE;
+    // no helicóptero ninguém caça nem acerta (js/aihelpers.js:noHelicoptero)
+    const alcancavel = !player.dead && !noHelicoptero(state);
     /* Só recalcula "quem tem vaga pra perseguir" enquanto a janela vale —
        fora do onboarding isto fica `null` e ninguém é passivo, que é o
        comportamento de sempre. */
@@ -454,7 +456,7 @@ export function createSkeletons(deps) {
       const dP = Math.hypot(dx, dz);
       sk.targetDistance = dP;
       const moveStartX = g.position.x, moveStartZ = g.position.z;
-      if (!passivo && dP > 1.5 && !player.dead && !sk.attacking) {
+      if (!passivo && dP > 1.5 && alcancavel && !sk.attacking) {
         g.position.x += dx / dP * SPEED * dt;
         g.position.z += dz / dP * SPEED * dt;
         sk.yaw = Math.atan2(dx, dz);
@@ -485,7 +487,7 @@ export function createSkeletons(deps) {
           sk.attackHit = true;
           const hitDx = player.pos.x - g.position.x, hitDz = player.pos.z - g.position.z;
           const hitDistance = Math.hypot(hitDx, hitDz);
-          if (!player.dead && hitDistance < MELEE_RANGE + 0.25 &&
+          if (alcancavel && hitDistance < MELEE_RANGE + 0.25 &&
               !meleeBlocked(sk.group, player.pos, Structures, obstaclesNear)) {
             playerDamage(MELEE_DMG, g.position, { type: 'skeleton' });
           }
@@ -495,7 +497,7 @@ export function createSkeletons(deps) {
           sk.attackT = 0;
           sk.attackHit = false;
         }
-      } else if (!passivo && !emGraca && dP < MELEE_RANGE && sk.hitT <= 0 && !player.dead &&
+      } else if (!passivo && !emGraca && dP < MELEE_RANGE && sk.hitT <= 0 && alcancavel &&
                  !meleeBlocked(sk.group, player.pos, Structures, obstaclesNear)) {
         sk.attacking = true;
         sk.attackT = 0;

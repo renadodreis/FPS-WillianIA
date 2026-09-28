@@ -1,10 +1,11 @@
 /* animais (veados, lobos) — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
 import { fuseBody } from './meshutils.js';
+import { noHelicoptero } from './aihelpers.js';
 
 export function createAnimals(deps) {
   const { clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups,
-    Structures = null, obstaclesNear = null, SFX = null } = deps;
+    Structures = null, obstaclesNear = null, SFX = null, state = null } = deps;
   const list = [];
   const _biteFrom = new THREE.Vector3(), _biteTo = new THREE.Vector3();
 
@@ -149,6 +150,8 @@ export function createAnimals(deps) {
   for (let i = 0; i < 5; i++) makeAnimal(true);
 
   function update(dt, t) {
+    // no helicóptero o bicho não alcança ninguém (js/aihelpers.js:noHelicoptero)
+    const alcancavel = !player.dead && !noHelicoptero(state);
     for (const a of list) {
       const g = a.group;
       if (!a.enabled) continue;
@@ -168,7 +171,7 @@ export function createAnimals(deps) {
       const dP = g.position.distanceTo(player.pos);
       const moveStartX = g.position.x, moveStartZ = g.position.z;
       let tx = null, tz = null, speed = 0;
-      if (a.predator && dP < 24 && !player.dead) { // lobo caça
+      if (a.predator && dP < 24 && alcancavel) { // lobo caça
         tx = player.pos.x; tz = player.pos.z; speed = 4.4;
         if (dP < 1.7 && a.biteT <= 0 && !biteBlocked(a)) {
           a.biteT = 1.2;
@@ -176,7 +179,7 @@ export function createAnimals(deps) {
           if (SFX && typeof SFX.groan === 'function') SFX.groan(g.position);
         }
       } else if (!a.predator && (dP < 12 || a.fleeing > 0)) { // cervo foge
-        if (dP < 1.6 && a.biteT <= 0 && !biteBlocked(a)) { // encurralado: cabeçada/chifrada defensiva
+        if (dP < 1.6 && a.biteT <= 0 && alcancavel && !biteBlocked(a)) { // encurralado: cabeçada/chifrada defensiva
           a.biteT = 1.5;
           playerDamage(6 + (Math.random() * 4 | 0), g.position, { type: 'animal' });
           if (SFX && typeof SFX.groan === 'function') SFX.groan(g.position);

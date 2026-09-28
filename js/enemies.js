@@ -2,10 +2,11 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { fuseBody } from './meshutils.js';
+import { meleeBlocked, noHelicoptero, primeiroObstaculo, linhaLivre } from './aihelpers.js';
 
 export function createEnemies(deps) {
-  const { Chars } = deps;
-  const { CFG, clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, heightAt, slopeAt, terrainNormal, WATER_LEVEL, obstaclesNear, SFX, FX, scene, csmMat, Structures, addScore, addKillFeed, player, playerDamage, addTrauma, Car, Pickups, knuckleMat, lastShotInfo } = deps;
+  const { Chars, state = null } = deps;
+  const { CFG, clamp, lerp, damp, rand, TAU, _v1, _v2, heightAt, slopeAt, terrainNormal, WATER_LEVEL, obstaclesNear, SFX, FX, scene, csmMat, Structures, addScore, addKillFeed, player, playerDamage, addTrauma, Car, Pickups, knuckleMat, lastShotInfo } = deps;
   // dois esquadrões: padrão (verde-oliva) e pesado (cinza-escuro com detalhe laranja)
   const clothG  = csmMat(new THREE.MeshStandardMaterial({ color: 0x4a5240, roughness: 0.75, metalness: 0.05 }));
   const clothH  = csmMat(new THREE.MeshStandardMaterial({ color: 0x363b46, roughness: 0.7, metalness: 0.1 }));
@@ -142,17 +143,26 @@ export function createEnemies(deps) {
     return { g, parts, flash, skeleton };
   }
 
-  // linha de visão barata: amostra a altura do terreno ao longo do raio
-  function hasLOS(from, to) {
-    if (Structures.segBlocked(from, to)) return false;
-    const steps = 11;
-    for (let i = 1; i < steps; i++) {
-      const k = i / steps;
-      const x = lerp(from.x, to.x, k), z = lerp(from.z, to.z, k);
-      if (lerp(from.y, to.y, k) < heightAt(x, z) + 0.25) return false;
-    }
-    return true;
-  }
+  /* LINHA DE VISÃO e LINHA DE TIRO são a mesma regra da bala do jogador:
+     parede, chão e tronco (js/aihelpers.js:primeiroObstaculo). Antes a visão
+     só olhava parede + 11 amostras de chão, e o TIRO não olhava nada: saía
+     sempre que o soldado "via" — e ele via o OLHO de quem estava em pé (1,5 m)
+     mesmo com o jogador agachado atrás de um caixote de 1,4 m, e mandava a
+     bala no PEITO agachado (0,95 m), através do caixote (80 de dano medido,
+     test/pve-parede.test.js). */
+  const mundo = { Structures, heightAt, obstaclesNear };
+  const hasLOS = (from, to) => linhaLivre(from, to, mundo);
+  // o jogador está ao alcance do PvE? (morto não; no helicóptero não — ver aihelpers)
+  const alcancavel = () => !player.dead && !noHelicoptero(state);
+  /* onde fica a CABEÇA e o PEITO de verdade: o olho segue a câmera de
+     game.js (lerp(1,62; 1,04; agachar)); o peito é o alvo de sempre do tiro */
+  const olhoDoJogador = out => { out.copy(player.pos); out.y += lerp(1.62, 1.04, player.crouchT || 0); return out; };
+  const peitoDoJogador = out => { out.copy(player.pos); out.y += lerp(1.5, 0.95, player.crouchT || 0); return out; };
+  // temporários PRÓPRIOS: o `_v3` de game.js era o olho do jogador E o fim do
+  // traçante de um tiro errado — o erro de um soldado virava a "visão" do
+  // próximo da lista (o de trás da parede passava a ver o jogador)
+  const _pOlho = new THREE.Vector3(), _eOlho = new THREE.Vector3(), _eFim = new THREE.Vector3(),
+    _eV = new THREE.Vector3(), _eN = new THREE.Vector3();
 
   const NAMES = ['Sentinela', 'Vigia', 'Caçador', 'Lâmina', 'Falcão', 'Brutamontes'];
   const list = [];
@@ -195,7 +205,8 @@ export function createEnemies(deps) {
       home: { x: 0, z: 0 }, waypoints: [], wpIdx: 0,
       yaw: rand(TAU), walkPhase: rand(TAU), speedF: 0,
       lastKnown: new THREE.Vector3(),
-      senseAcc: rand(0.15), losT: 0, alertT: 0,
+      // losT -99: com 0 o soldado "via" o jogador nos 0,25 s iniciais do relógio
+      senseAcc: rand(0.15), losT: -99, alertT: 0,
       burstLeft: 0, nextBurst: rand(1, 2), nextShot: 0, flashT: 0,
       ragVel: new THREE.Vector3(), ragSpin: 0, deadT: 0, respawnT: 0,
       sphCache: [{ c: new THREE.Vector3(), r: 0.3, part: 'head' },
@@ -295,31 +306,43 @@ export function createEnemies(deps) {
   function enemyFire(e) {
     e.flashT = 0.06;
     if (e.actions && e.actions.Shoot) e.actions.Shoot.reset().play();
-    _eFrom.copy(e.group.position); _eFrom.y += 1.45;
+    _eFrom.copy(e.group.position); _eFrom.y += 1.45 * e.group.scale.y;
     SFX.enemyShot(_eFrom); // som sai do cano: dá pra achar de onde levou tiro
-    _eTo.copy(player.pos); _eTo.y += lerp(1.5, 0.95, player.crouchT);
+    // mira no peito; se o peito está coberto e a cabeça não (quem espia por
+    // cima da cobertura), mira na cabeça
+    peitoDoJogador(_eTo);
+    if (!hasLOS(_eFrom, _eTo)) olhoDoJogador(_eTo);
     _eDir.copy(_eTo).sub(_eFrom).normalize();
     _eDir.x += rand(-0.045, 0.045); _eDir.y += rand(-0.03, 0.03); _eDir.z += rand(-0.045, 0.045);
     _eDir.normalize();
-    // aproximação mais próxima do raio ao peito do player
-    _v1.copy(_eTo).sub(_eFrom);
-    const proj = Math.max(0, _v1.dot(_eDir));
-    _v2.copy(_eFrom).addScaledVector(_eDir, proj);
-    const miss = _v2.distanceTo(_eTo);
+    // aproximação mais próxima do raio ao alvo
+    _eV.copy(_eTo).sub(_eFrom);
+    const proj = Math.max(0, _eV.dot(_eDir));
+    _eFim.copy(_eFrom).addScaledVector(_eDir, proj);
+    const miss = _eFim.distanceTo(_eTo);
     const range = _eFrom.distanceTo(_eTo);
-    if (miss < 0.5 && !player.dead) {
+    const acerta = miss < 0.5 && alcancavel();
+    const ate = acerta ? proj : range + rand(2, 8);
+    // a bala voa pela reta SORTEADA: parede, chão ou tronco no caminho param ela ali
+    const bate = primeiroObstaculo(_eFrom, _eDir, ate, mundo);
+    if (bate < ate) {
+      _eFim.copy(_eFrom).addScaledVector(_eDir, bate);
+      FX.spawnTracer(_eFrom, _eFim, 0xff8866);
+      FX.burst(_eFim, _eN.copy(_eDir).negate(), 'spark');
+      return;
+    }
+    if (acerta) {
       FX.spawnTracer(_eFrom, _eTo, 0xff8866);
       playerDamage((e.heavy ? rand(9, 14) : rand(6, 11)) | 0, _eFrom, { type: 'enemy' });
     } else {
-      _v3.copy(_eFrom).addScaledVector(_eDir, range + rand(2, 8));
-      _v3.y = Math.max(_v3.y, heightAt(_v3.x, _v3.z));
-      FX.spawnTracer(_eFrom, _v3, 0xff8866);
-      if (_v3.y <= heightAt(_v3.x, _v3.z) + 0.1) { terrainNormal(_v3.x, _v3.z, _v1); FX.burst(_v3, _v1, 'dirt'); }
+      _eFim.copy(_eFrom).addScaledVector(_eDir, ate);
+      _eFim.y = Math.max(_eFim.y, heightAt(_eFim.x, _eFim.z));
+      FX.spawnTracer(_eFrom, _eFim, 0xff8866);
+      if (_eFim.y <= heightAt(_eFim.x, _eFim.z) + 0.1) { terrainNormal(_eFim.x, _eFim.z, _eN); FX.burst(_eFim, _eN, 'dirt'); }
     }
   }
 
   function update(dt, t) {
-    const pEye = _v3.copy(player.pos); pEye.y += 1.5;
     for (const e of list) {
       const g = e.group;
 
@@ -360,13 +383,14 @@ export function createEnemies(deps) {
       let sees = false;
       if (e.senseAcc > 0.16) {
         e.senseAcc = 0;
-        if (dPlayer < 95 && !player.dead) {
-          _v1.copy(g.position); _v1.y += 1.7;
+        if (dPlayer < 95 && alcancavel()) {
+          _eOlho.copy(g.position); _eOlho.y += 1.7 * g.scale.y;
           const inFov = e.fsm !== 'PATRULHA' || (() => {
             _v2.copy(player.pos).sub(g.position); _v2.y = 0; _v2.normalize();
             return _v2.dot(_eDir.set(Math.sin(e.yaw), 0, Math.cos(e.yaw))) > 0.35;
           })();
-          sees = inFov && dPlayer < (e.fsm === 'PATRULHA' ? 55 : 85) && hasLOS(_v1, pEye);
+          // vê a CABEÇA (olho da câmera), não um olho fixo de quem está em pé
+          sees = inFov && dPlayer < (e.fsm === 'PATRULHA' ? 55 : 85) && hasLOS(_eOlho, olhoDoJogador(_pOlho));
           if (sees) { e.lastKnown.copy(player.pos); e.losT = t; }
         }
         // ouviu tiro do player por perto
@@ -379,10 +403,21 @@ export function createEnemies(deps) {
 
       /* ---------- FSM ---------- */
       let moveTarget = null, moveSpeed = 0, aiming = false;
+      if (e.fsm !== 'PATRULHA') e.wpMelhor = undefined; // volta à patrulha com o relógio zerado
       switch (e.fsm) {
         case 'PATRULHA': {
           const wp = e.waypoints[e.wpIdx];
-          if (Math.hypot(wp.x - g.position.x, wp.z - g.position.z) < 1.6) e.wpIdx = (e.wpIdx + 1) % e.waypoints.length;
+          const dWp = Math.hypot(wp.x - g.position.x, wp.z - g.position.z);
+          /* PRESO: o ponto sorteado pode ficar atrás de uma parede ou no bolso
+             entre dois caixotes, e o soldado anda em linha reta — o collide o
+             segura ali para sempre (semente 1: guarda da base 103 s parado em
+             120 s, no canto entre os dois caixotes — test/pve-predios.test.js).
+             Sem chegar 0,5 m mais perto em 4 s, desiste do ponto e vai ao próximo. */
+          if (e.wpMelhor === undefined || dWp < e.wpMelhor - 0.5) { e.wpMelhor = dWp; e.wpDesde = t; }
+          if (dWp < 1.6 || t - e.wpDesde > 4) {
+            e.wpIdx = (e.wpIdx + 1) % e.waypoints.length;
+            e.wpMelhor = undefined;
+          }
           moveTarget = wp; moveSpeed = 2.1;
           if (sees) { e.fsm = 'PERSEGUIR'; }
           break;
@@ -457,12 +492,17 @@ export function createEnemies(deps) {
            Punch quando o player cola (dano corpo-a-corpo novo, justo e telegrafado) */
         e.mixer.update(dt * (0.35 + e.speedF * 1.4));
         if (e.actions.Walk) e.actions.Walk.setEffectiveWeight(0.25 + e.speedF * 0.75);
-        if (aiming && dPlayer < 2.7 && t >= (e.nextMelee || 0) && e.actions.Punch) {
+        if (aiming && dPlayer < 2.7 && t >= (e.nextMelee || 0) && e.actions.Punch &&
+            alcancavel() && !meleeBlocked(g, player.pos, Structures, obstaclesNear)) {
           e.nextMelee = t + 2.4;
           e.actions.Punch.reset().play();
-          setTimeout(() => { // o soco conecta no meio da animação
-            if (e.alive && !player.dead && g.position.distanceTo(player.pos) < 3) {
-              playerDamage(9, g.position);
+          /* o soco conecta no meio da animação — e o mundo pode ter mudado em
+             380 ms: quem entrou atrás da parede ou no helicóptero não leva. Era
+             sem checagem nenhuma: 9 de dano através da parede da cabana. */
+          setTimeout(() => {
+            if (e.alive && alcancavel() && g.position.distanceTo(player.pos) < 3 &&
+                !meleeBlocked(g, player.pos, Structures, obstaclesNear)) {
+              playerDamage(9, g.position, { type: 'enemy' });
             }
           }, 380);
         }

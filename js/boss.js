@@ -1,9 +1,15 @@
 /* COLOSSO — guardião do forte — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { noHelicoptero } from './aihelpers.js';
 
 export function createBoss(deps) {
-  const { clamp, damp, rand, TAU, _v1, _v2, heightAt, groundAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale } = deps;
+  const { clamp, damp, rand, TAU, _v1, _v2, heightAt, groundAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale, state = null } = deps;
+  /* no helicóptero o Colosso não alcança: não acorda, não pisa, não atira, e
+     o orbe já no ar não fere. Quem está voando conta como alvo perdido — ele
+     volta para casa pelo portão e se regenera, como faz quando o jogador morre
+     ou sai da coleira (js/aihelpers.js:noHelicoptero) */
+  const alcancavel = () => !player.dead && !noHelicoptero(state);
   const HOME = Structures.FORT_POS;
   const RETURN_WAYPOINT_EPSILON = 0.2;
   const supportAt = (x, z, probeY = 999) =>
@@ -119,7 +125,7 @@ export function createBoss(deps) {
     FX.burst(o.mesh.position, _v1.set(0, 1, 0), 'spark');
     FX.burst(o.mesh.position, _v1.set(0, 1, 0), 'dirt');
     const d = o.mesh.position.distanceTo(player.pos);
-    if (damagePlayer && d < 4.5 && clearToPlayer(o.mesh.position, 0)) {
+    if (damagePlayer && d < 4.5 && alcancavel() && clearToPlayer(o.mesh.position, 0)) {
       playerDamage(Math.round(20 * (1 - d / 5)) + 6, o.mesh.position, { type: 'boss' });
     }
     addTrauma(clamp(0.55 - d * 0.025, 0, 0.55));
@@ -236,7 +242,7 @@ export function createBoss(deps) {
     const dPlayer = group.position.distanceTo(player.pos);
     ui.bossWrap.style.opacity = (B.active && dPlayer < 140) ? '1' : '0';
     if (!B.active) {
-      if (dPlayer < 60 && !player.dead) activate();
+      if (dPlayer < 60 && alcancavel()) activate();
       else {
         group.position.y = supportAt(group.position.x, group.position.z) + Math.sin(t * 0.9) * 0.04; // respira
         return;
@@ -245,7 +251,7 @@ export function createBoss(deps) {
 
     const dHome = Math.hypot(group.position.x - HOME.x, group.position.z - HOME.z);
     const castle = Structures.castle;
-    const leashing = dHome > 70 || player.dead || B.returnStage !== null;
+    const leashing = dHome > 70 || !alcancavel() || B.returnStage !== null;
     const speed = B.enraged ? 4.6 : 3.1;
     let tx = leashing ? HOME.x : player.pos.x;
     let tz = leashing ? HOME.z : player.pos.z;
@@ -329,7 +335,7 @@ export function createBoss(deps) {
           FX.spawnParticle(_v1, _v2, 0x9a8a6a, rand(0.3, 0.5), 0.7, 8);
         }
         const d = group.position.distanceTo(player.pos);
-        if (d < 11 && clearToPlayer(group.position, 1)) {
+        if (d < 11 && alcancavel() && clearToPlayer(group.position, 1)) {
           playerDamage(Math.round(32 * (1 - d / 13)), group.position, { type: 'boss' });
           _v2.copy(player.pos).sub(group.position).normalize();
           player.vel.x += _v2.x * 13; player.vel.z += _v2.z * 13; player.vel.y = 7;

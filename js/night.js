@@ -1,6 +1,6 @@
 /* criaturas da noite (zumbis/fantasmas) — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
-import { meleeBlocked } from './aihelpers.js';
+import { meleeBlocked, noHelicoptero, corpoEmSolido } from './aihelpers.js';
 import { fuseBody } from './meshutils.js';
 
 export function createNight(deps) {
@@ -83,13 +83,19 @@ export function createNight(deps) {
   for (let i = 0; i < 5; i++) makeCreature(true);
   let wasDeepNight = false;
 
-  /* mordida/toque não atravessa parede/árvore/pedra — fantasma flutua (design)
-     mas o golpe precisa de contato real; ver meleeBlocked() em aihelpers.js */
+  /* mordida/toque não atravessa parede/árvore/pedra — fantasma flutua e
+     ATRAVESSA parede (design: é fantasma), mas o golpe precisa de contato
+     real: com o centro dentro do sólido ele não toca ninguém do outro lado
+     (antes tocava — 7 de dano de dentro da casca da Torre Nexus, medido em
+     test/pve-parede.test.js). Ver meleeBlocked() em aihelpers.js. */
+  const _nasce = new THREE.Vector3();
 
   function update(dt, t) {
     const nk = Env.nightK;
     if (nk > 0.8) wasDeepNight = true;
     if (wasDeepNight && nk < 0.2 && state.started) { MFlags.night = true; }
+    // no helicóptero ninguém persegue nem toca (js/aihelpers.js:noHelicoptero)
+    const alcancavel = !player.dead && !noHelicoptero(state);
     for (const c of list) {
       const g = c.group;
       if (!c.alive) {
@@ -98,6 +104,11 @@ export function createNight(deps) {
           const a = rand(TAU), r = rand(26, 55);
           const x = player.pos.x + Math.cos(a) * r, z = player.pos.z + Math.sin(a) * r;
           if (heightAt(x, z) < WATER_LEVEL + 0.5) continue;
+          /* nem DENTRO de prédio: com o jogador na cidade, 14,3 % dos
+             nascimentos caíam dentro de um lote (semente 424242) e o zumbi era
+             cuspido pela parede no quadro seguinte. Tenta de novo no próximo
+             quadro — o mesmo consumo de sorteio por tentativa de antes. */
+          if (corpoEmSolido(_nasce.set(x, heightAt(x, z), z), 0.4, 1.8, Structures)) continue;
           c.alive = true;
           c.hp = c.ghost ? 50 : 70;
           g.position.set(x, heightAt(x, z), z);
@@ -114,7 +125,7 @@ export function createNight(deps) {
       }
       const dP = g.position.distanceTo(player.pos);
       const speed = c.ghost ? 3.6 : 2.3;
-      if (dP > 1.4 && !player.dead) {
+      if (dP > 1.4 && alcancavel) {
         const dx = player.pos.x - g.position.x, dz = player.pos.z - g.position.z;
         const d = Math.hypot(dx, dz);
         if (d > 1e-4) { // player exatamente acima/abaixo: d=0 viraria NaN
@@ -124,7 +135,7 @@ export function createNight(deps) {
         }
       }
       c.hitT = Math.max(0, c.hitT - dt);
-      if (dP < 1.6 && c.hitT <= 0 && !player.dead && !meleeBlocked(c.group, player.pos, Structures, obstaclesNear)) {
+      if (dP < 1.6 && c.hitT <= 0 && alcancavel && !meleeBlocked(c.group, player.pos, Structures, obstaclesNear)) {
         c.hitT = c.ghost ? 0.8 : 1.2;
         playerDamage(c.ghost ? 7 : 13, g.position, { type: c.ghost ? 'ghost' : 'zombie' });
         if (c.ghost) SFX.whisper(g.position);

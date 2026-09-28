@@ -1,5 +1,6 @@
 /* VISITANTE — boss alienígena — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
+import { noHelicoptero } from './aihelpers.js';
 
 export function createAlien(deps) {
   const { rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale, Structures = null, Chars = null } = deps;
@@ -88,6 +89,9 @@ export function createAlien(deps) {
     .catch(err => console.error('Alien GLB falhou — Visitante segue procedural:', err));
 
   const B = { alive: true, active: false, hp: 1900, hpMax: 1900, yaw: 0, phase: 0, nextShot: 0, blinkT: 6, deadT: -1, respawnT: 0 };
+  // no helicóptero ele não persegue, não atira e o orbe não fere (js/aihelpers.js)
+  const alcancavel = () => !player.dead && !noHelicoptero(state);
+  const _alvoCorpo = new THREE.Vector3();
   const _moveFrom = new THREE.Vector3(), _moveTo = new THREE.Vector3();
   function tryMoveTo(x, z) {
     if (Math.abs(x) > 520 || Math.abs(z) > 520 || heightAt(x, z) <= WATER_LEVEL + 0.5) return false;
@@ -153,7 +157,13 @@ export function createAlien(deps) {
       if (o.life <= 0 || d < 1.2 || o.m.position.y < heightAt(o.m.position.x, o.m.position.z) + 0.2) {
         o.live = false; o.m.visible = false;
         FX.burst(o.m.position, _v1.set(0, 1, 0), 'spark');
-        if (o.life > 0 && d < 4) playerDamage(Math.round(16 * (1 - d / 5)) + 5, o.m.position, { type: 'alien' });
+        /* a explosão precisa ALCANÇAR o corpo: parede entre o estouro e o
+           jogador segura (a mesma regra do orbe do Colosso). Antes o raio de
+           4 m valia através de tudo — 14 de dano dentro da cabana, medido. */
+        if (o.life > 0 && d < 4 && alcancavel() &&
+            !(Structures && Structures.segBlocked(o.m.position, _alvoCorpo.copy(player.pos).setY(player.pos.y + 1)))) {
+          playerDamage(Math.round(16 * (1 - d / 5)) + 5, o.m.position, { type: 'alien' });
+        }
       }
     }
     if (!B.alive) {
@@ -174,14 +184,14 @@ export function createAlien(deps) {
     }
     const dP = group.position.distanceTo(player.pos);
     if (!B.active) {
-      if (dP < 45 && !player.dead) { B.active = true; SFX.roar(group.position); showBanner('O VISITANTE<small>algo saiu dos destroços...</small>', 3000); }
+      if (dP < 45 && alcancavel()) { B.active = true; SFX.roar(group.position); showBanner('O VISITANTE<small>algo saiu dos destroços...</small>', 3000); }
       group.position.y = heightAt(group.position.x, group.position.z) + Math.sin(t * 1.2) * 0.1;
       return;
     }
     B.phase += dt;
     // teleporte lateral (blink)
     B.blinkT -= dt;
-    if (B.blinkT <= 0 && dP < 60) {
+    if (B.blinkT <= 0 && dP < 60 && alcancavel()) {
       B.blinkT = rand(4, 7);
       FX.burst(group.position, _v1.set(0, 1, 0), 'spark');
       const a = rand(TAU);
@@ -192,7 +202,7 @@ export function createAlien(deps) {
     // persegue flutuando
     const dx = player.pos.x - group.position.x, dz = player.pos.z - group.position.z;
     const d = Math.hypot(dx, dz);
-    if (d > 12) {
+    if (d > 12 && alcancavel()) {
       tryMoveTo(group.position.x + dx / d * 3.4 * dt,
         group.position.z + dz / d * 3.4 * dt);
     }
@@ -206,7 +216,7 @@ export function createAlien(deps) {
       parts.armL.rotation.x = Math.sin(B.phase * 1.5) * 0.3;
     }
     // tiro triplo de plasma
-    if (dP < 70 && state.gameTime >= B.nextShot && !player.dead) {
+    if (dP < 70 && state.gameTime >= B.nextShot && alcancavel()) {
       B.nextShot = state.gameTime + 1.6;
       for (let i = 0; i < 3; i++) {
         const o = orbs.find(o => !o.live);
@@ -220,7 +230,8 @@ export function createAlien(deps) {
       }
     }
   }
-  const api = { update, damage, hitSpheres, get alive() { return B.alive; }, pos: () => group.position, state: B, name: 'VISITANTE', SITE };
+  const api = { update, damage, hitSpheres, get alive() { return B.alive; }, pos: () => group.position, state: B, name: 'VISITANTE', SITE,
+    orbs }; // gancho de QA (test/pve-parede.test.js): o pool de orbes, só leitura
   Bosses.push(api);
   return api;
 }
