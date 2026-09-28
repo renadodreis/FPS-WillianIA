@@ -2104,7 +2104,7 @@ function placeRigXR() {
 }
 
 /* ================================================================
-   A VISTA DO QUADRO É RESOLVIDA ANTES DO TIRO (fora de XR, a pé).
+   A VISTA DO QUADRO É RESOLVIDA ANTES DO TIRO (fora de XR, fora do carro).
 
    O `tick()` rodava `shootUpdate` antes de `applyTouchLook` e de
    `applyFpsCamera`, e a posição da câmera só era escrita lá. O disparo lia a
@@ -2130,9 +2130,21 @@ function placeRigXR() {
 
    EM XR NADA MUDA DE ORDEM. O contrato de frame do XR (corpo depois da arma,
    `XRArma.aplicar` depois da câmera) mora mais abaixo, e o tiro em XR sai da
-   MÃO, não da câmera. Veículo, helicóptero, a mistura de câmera da saída do
-   carro (`driveBlend`) e a cinemática da cidade também ficam na ordem antiga:
-   lá a câmera é de outro dono. */
+   MÃO, não da câmera. A cinemática da cidade também fica na ordem antiga: lá a
+   câmera é dela, e nenhum tiro sai (`tiroBloqueado`).
+
+   VOANDO E NA VOLTA DO VEÍCULO, A MESMA REGRA (laudo `6aeda6c`, M6). A 1ª
+   versão deixou helicóptero e `driveBlend` na ordem antiga por "a câmera ser
+   de outro dono" — e a retícula continua na tela nos dois casos, porque o
+   tiro é possível (porta do helicóptero; a pé, com a câmera ainda voltando).
+   O disparo lia a câmera de perseguição do quadro anterior: o 1º tiro 0,5 s
+   depois de entrar no helicóptero passava a 72 cm da retícula a 10 m; em voo
+   para a frente fazendo curva, 2,3 m a 50 m; 82 cm a 50 m saindo do carro.
+   Agora, fora do carro, o quadro faz na ordem: `Heli.update` (voando — o
+   helicóptero anda antes, e a bala nasce onde ele é DESENHADO), o olhar, a
+   vista, o olho e a câmera de perseguição (`carCameraUpdate`); só então o
+   tiro. DIRIGINDO continua na ordem antiga, e de propósito: o carro é da
+   física (`stepPhysics` roda depois do tiro) e dirigindo não se atira. */
 let _shakeX = 0, _shakeY = 0;
 /* overlay de luneta: só miras tipo 'overlay' (DMR/snipers/luneta 2x), e só
    quando o ADS está quase completo — o jogador nunca fica sem referência */
@@ -2201,10 +2213,13 @@ function posicionarOlho() {
 }
 
 /* `vistaPronta`: o `tick()` já resolveu a orientação deste quadro ANTES do
-   tiro (ver `orientarVista`). Aqui só falta a metade da ARMA. */
-function applyFpsCamera(dt, t, vistaPronta = false) {
+   tiro (ver `orientarVista`). Aqui só falta a metade da ARMA.
+   `olhoPronto`: a POSIÇÃO também, e ela não pode ser reescrita — a câmera de
+   perseguição já misturou o olho com ela (voando, ou voltando do veículo), e
+   `posicionarOlho` aqui a arrancaria de volta para dentro da cabeça. */
+function applyFpsCamera(dt, t, vistaPronta = false, olhoPronto = false) {
   if (!vistaPronta) orientarVista(dt, t);
-  posicionarOlho();
+  if (!olhoPronto) posicionarOlho();
   recoil.kickZ = damp(recoil.kickZ, 0, 13, dt);
   recoil.kickRot = damp(recoil.kickRot, 0, 11, dt);
   const scopedK = escopoK();
@@ -2756,11 +2771,36 @@ function fire(t) {
       + (_v3.z - _rayOrig.z) * _rayDir.z;
     if (avanco > 0) _rayOrig.addScaledVector(_rayDir, avanco);
   }
-  // voando, origem do tiro é o HELICÓPTERO — a câmera de perseguição fica ~10m
-  // atrás e o servidor rejeitaria a origem longe da posição autoritativa
+  /* VOANDO, O TIRO SAI DO HELICÓPTERO — a câmera de perseguição fica ~10 m
+     atrás, e a origem que vai ao servidor (a replicação do erro, `shotFired`)
+     é recusada a mais de 5 m da posição autoritativa, que voando é o grupo do
+     heli. Mas copiar o ponto do heli para a origem com a direção da CÂMERA
+     fazia duas retas paralelas: a linha de mira passa pela câmera 10,5 m
+     atrás e 4,2 m acima, e o ponto do heli fica fora dela — 15–16 cm
+     pairando, 93 cm com a câmera ainda chegando e 1,5 m em voo fazendo curva,
+     quando a perseguição fica para trás (laudo `6aeda6c`, M6; medido em
+     test/veiculo-mira.test.js). Erro de ORIGEM não fecha em distância
+     nenhuma. A mesma regra do cano, acima: o que se VÊ (traçante, replicação
+     do erro) sai do helicóptero, `_v3`; o que ACERTA nasce SOBRE a linha de
+     mira, na ESTAÇÃO do helicóptero — a projeção do heli na reta, que fica a
+     essa mesma distância dele (a reta passa pelo ponto que a câmera olha,
+     2,6 m à frente do nariz). Em XR a mira é a MÃO, não a câmera de
+     perseguição: lá fica como estava. */
   if (state.flying) {
     _v3.copy(Heli.group.position); _v3.y += 1.6;
-    _rayOrig.copy(_v3);
+    if (XR.presenting) _rayOrig.copy(_v3);
+    else {
+      const avanco = (_v3.x - _rayOrig.x) * _miraDirDoTiro.x
+        + (_v3.y - _rayOrig.y) * _miraDirDoTiro.y
+        + (_v3.z - _rayOrig.z) * _miraDirDoTiro.z;
+      _rayOrig.addScaledVector(_miraDirDoTiro, avanco);
+      /* a boca congelada é de onde o BR DESENHA o traçante e replica o erro
+         (`__BR_ballistics`, br-game.js). Voando a arma está escondida e presa
+         à câmera de perseguição, ~10 m atrás: o traçante nascia atrás do
+         helicóptero e o `shotFired` saía com a origem longe da posição
+         autoritativa (o servidor recusa a mais de 5 m). */
+      _canoPosDoTiro.copy(_v3);
+    }
   }
 
   /* QA: a origem REAL do raio, já decidida (cano em VR, olho no desktop,
@@ -3031,12 +3071,44 @@ const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat });
 
 const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY, stampTrack: Grass.stampTrack });
 
-const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos, isMobile: __mobile });
+const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos, isMobile: __mobile,
+  aoTrocar: soltarToqueDaTroca });
 
 /* ================== entrar/sair + câmera de perseguição ================== */
 let driveBlend = 0;
 const _camQ = new THREE.Quaternion();
 const _lookM = new THREE.Matrix4();
+
+/* ENTRAR OU SAIR DE VEÍCULO SOLTA O TOQUE (laudo `6aeda6c`, C10).
+
+   No toque, o polegar e os botões MUDAM DE SENTIDO na troca. Dentro, o
+   analógico é volante binário (`KeyW/A/S/D` sintéticos com histerese, em
+   js/touchcontrols.js) e ⇧/⇩ sobem e descem o helicóptero; fora, o analógico
+   anda pelo canal analógico e ⇧/⇩ pulam e agacham. O que seguia valendo depois
+   da troca era o dedo comandando uma coisa que ele não apertou: medido pelo
+   validador, saindo do carro pelo USAR com o polegar no analógico o boneco
+   andava 3,66 m em 0,5 s; saindo do helicóptero com o ⇧ apertado, `Space`
+   seguia ligado. E entrando com o polegar no analógico o carro saía
+   acelerando, e com o dedo no ATIRAR o tiro voltava no quadro seguinte.
+
+   É a regra de ouro do módulo de toque ("todo keydown tem keyup casado") e o
+   mesmo contrato que o chat e a morte já seguem (`soltarEntrada`):
+   `Touch.releaseAll()` emite o keyup casado de cada botão e do volante,
+   desliga a MIRA alternada e ESQUECE os dedos — o que continua na tela não
+   controla nada até ser levantado e encostado de novo. A régua (C10) cobra
+   "entrar/sair do carro, entrar/sair do helicóptero" com o dedo pressionado
+   no instante da troca; não achei jogo de toque que documente outro contrato
+   (docs/mobile/referencia-mira-toque.md só cita o botão de entrar no veículo).
+
+   Só o TOQUE, e não o `soltarEntrada()` inteiro, de propósito: ele zera
+   `keys`, e no teclado a tecla é verdade física com o MESMO sentido dentro e
+   fora (W é frente nos dois); e em XR os botões do headset só voltam a emitir
+   na próxima borda (`teclaXR`). Desktop e XR ficam como estavam — lá `Touch`
+   é o objeto inerte. Chamado só onde o estado MUDA ("veículo ocupado" não é
+   troca e não solta nada): aqui para o carro, e dentro de js/heli.js para o
+   helicóptero — a saída dele pelo USAR vem de js/interact.js direto em
+   `Heli.exit()`, sem passar por `tryToggleCar`. */
+function soltarToqueDaTroca() { Touch.releaseAll(); }
 
 function tryToggleCar() {
   if (state.flying) { Heli.exit(); return; }
@@ -3050,6 +3122,7 @@ function tryToggleCar() {
     ui.speedo.style.display = 'none';
     ui.ammoWrap.style.display = '';
     SFX.carDoor();
+    soltarToqueDaTroca();
   } else {
     if (Heli.tryEnter()) return;
     const { v, d } = Car.nearest(player.pos);
@@ -3077,25 +3150,37 @@ function tryToggleCar() {
       SFX.carDoor();
       SFX.engineStart();
       chaseCamPos.copy(camera.position); // a câmera parte de onde está (lerp suave)
+      soltarToqueDaTroca();
     }
   }
 }
 
+/* O VEÍCULO QUE A PERSEGUIÇÃO SEGUE — inclusive na VOLTA, depois de sair.
+   O alvo era escolhido por `state.flying ? Heli : Car` a cada quadro, e na
+   volta `state.flying` já é falso: saindo do helicóptero a câmera ia buscar o
+   CARRO, onde quer que ele estivesse. Medido: com o carro a 378 m, a câmera
+   saltou 31,75 m no 1º quadro e chegou a 102 m do jogador antes de voltar
+   (test/veiculo-mira.test.js). Guardar o GRUPO (e não o `Car.group`, que é
+   getter do carro atual) mantém a volta presa ao veículo que foi deixado. */
+let _perseguido = null;
+/* Devolve true quando escreveu a câmera (a mistura com a perseguição está
+   valendo neste quadro): quem chamou não pode reposicionar o olho depois. */
 function carCameraUpdate(dt) {
+  if (state.flying) _perseguido = Heli.group;
+  else if (state.driving) _perseguido = Car.group;
   driveBlend = damp(driveBlend, (state.driving || state.flying) ? 1 : 0, 4.5, dt);
-  if (driveBlend < 0.002) return;
-  const vg = state.flying ? Heli.group : Car.group;
+  if (driveBlend < 0.002 || !_perseguido) return false;
+  const vg = _perseguido, noHeli = vg === Heli.group;
 
   // alvo atrás do veículo, sempre acima do terreno
-  _v1.set(state.flying ? -10.5 : -7.4, state.flying ? 4.2 : 3.1, 0).applyQuaternion(vg.quaternion).add(vg.position);
+  _v1.set(noHeli ? -10.5 : -7.4, noHeli ? 4.2 : 3.1, 0).applyQuaternion(vg.quaternion).add(vg.position);
   const minY = Math.max(heightAt(_v1.x, _v1.z) + 0.7, vg.position.y + 1.6);
   if (_v1.y < minY) _v1.y = minY;
   chaseCamPos.x = damp(chaseCamPos.x, _v1.x, 5.5, dt);
   chaseCamPos.y = damp(chaseCamPos.y, _v1.y, 5.5, dt);
   chaseCamPos.z = damp(chaseCamPos.z, _v1.z, 5.5, dt);
 
-  const vg2 = state.flying ? Heli.group : Car.group;
-  _v2.set(2.6, 1.15, 0).applyQuaternion(vg2.quaternion).add(vg2.position);
+  _v2.set(2.6, 1.15, 0).applyQuaternion(vg.quaternion).add(vg.position);
   chaseLook.x = damp(chaseLook.x, _v2.x, 9, dt);
   chaseLook.y = damp(chaseLook.y, _v2.y, 9, dt);
   chaseLook.z = damp(chaseLook.z, _v2.z, 9, dt);
@@ -3112,6 +3197,7 @@ function carCameraUpdate(dt) {
     player.pos.y = heightAt(player.pos.x, player.pos.z);
     player.vel.set(0, 0, 0);
   }
+  return true;
 }
 
 /* ================================================================
@@ -4197,19 +4283,26 @@ function tick(forceDt) {
   if (!player.dead && !state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
   devolverRejeicaoXR();
   /* A CÂMERA DESTE QUADRO ANTES DO TIRO: o disparo sai pela mesma câmera que
-     este quadro desenha (ver `orientarVista`). Fora de XR, a pé, sem a câmera
-     de perseguição no meio. Decidido UMA vez: se o quadro entrar no carro
-     depois do tiro, a metade da arma não reorienta a vista de novo. */
-  const vistaAntesDoTiro = !xrOn && !state.cinematic && !state.driving && !state.flying && driveBlend < 0.002;
+     este quadro desenha (ver `orientarVista`). Fora de XR e fora do carro — a
+     pé, voando e na volta da câmera de perseguição (M6). Decidido UMA vez: se
+     o quadro entrar ou sair de veículo depois do tiro, a metade da arma não
+     reorienta a vista de novo nem roda a perseguição outra vez. */
+  const vistaAntesDoTiro = !xrOn && !state.cinematic && !state.driving;
+  /* voando, o helicóptero anda ANTES: a câmera de perseguição e a origem do
+     tiro partem da pose que este quadro desenha, não da anterior */
+  const heliAntesDoTiro = vistaAntesDoTiro && state.flying;
+  let olhoDaPerseguicao = false;
+  if (heliAntesDoTiro) Heli.update(dt, t);
   if (vistaAntesDoTiro) {
     applyTouchLook(dt);
     orientarVista(dt, t);
     posicionarOlho();
+    olhoDaPerseguicao = carCameraUpdate(dt);
   }
   shootUpdate(dt, t);
   stepPhysics(dt, intendedDt);
   Car.update(dt, t);
-  Heli.update(dt, t);
+  if (!heliAntesDoTiro) Heli.update(dt, t);
   if (!window.__BR_active) Enemies.update(dt, t); // BR: sem inimigos comuns
   if (!window.__BR_active || (window.__BR_debug && window.__BR_debug.S.phase === 'PLAY')) Skeletons.update(dt, t);
   Animals.update(dt, t);
@@ -4281,11 +4374,13 @@ function tick(forceDt) {
        escreve a câmera, que é filha dele. */
     if (xrOn) placeRigXR();
   } else {
-    /* ANTES do applyFpsCamera: ele só soma delta de recuo. A pé, fora de XR,
-       os dois já rodaram antes do tiro (`vistaAntesDoTiro`). */
+    /* ANTES do applyFpsCamera: ele só soma delta de recuo. Fora de XR e do
+       carro, os três já rodaram antes do tiro (`vistaAntesDoTiro`) — e a
+       perseguição não pode rodar de novo: ela amortece estado (`driveBlend`,
+       `chaseCamPos`) e andaria dois passos num quadro só. */
     if (!vistaAntesDoTiro) applyTouchLook(dt);
-    applyFpsCamera(dt, t, vistaAntesDoTiro);
-    carCameraUpdate(dt);
+    applyFpsCamera(dt, t, vistaAntesDoTiro, olhoDaPerseguicao);
+    if (!vistaAntesDoTiro) carCameraUpdate(dt);
   }
   /* DEPOIS do applyFpsCamera, e isso é contrato: a pose de desktop (hipV, bob,
      sway do mouse) é escrita lá, e aplicar a mão antes faria o desktop

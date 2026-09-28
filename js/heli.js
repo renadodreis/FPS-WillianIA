@@ -6,7 +6,11 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 
 export function createHeli(deps) {
   const { CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos,
-    isMobile = false } = deps;
+    isMobile = false,
+    /* chamado a cada ENTRADA e SAÍDA (game.js: solta o toque — C10). Aqui e
+       não em quem chama: a saída pelo USAR vem de js/interact.js direto em
+       `exit()`, sem passar pelo `tryToggleCar` do game.js. */
+    aoTrocar = () => {} } = deps;
   const group = new THREE.Group();
   const body = csmMat(new THREE.MeshStandardMaterial({ color: 0x2b5e8c, metalness: 0.5, roughness: 0.3 }));
   const dark = csmMat(new THREE.MeshStandardMaterial({ color: 0x1a1d22, roughness: 0.6 }));
@@ -96,6 +100,7 @@ export function createHeli(deps) {
     chaseCamPos.copy(camera.position);
     // celular: ⇧/⇩ são os botões de pular/agachar, que emitem o mesmo Space/Ctrl
     centerMsg(isMobile ? '⇧ sobe · ⇩ desce · analógico voa' : 'ESPAÇO sobe · CTRL desce · WASD voa', 2600);
+    aoTrocar();
     return true;
   }
   function exit() {
@@ -106,6 +111,7 @@ export function createHeli(deps) {
     ui.speedo.style.display = 'none';
     ui.ammoWrap.style.display = '';
     SFX.carDoor();
+    aoTrocar();
   }
   function update(dt, t) {
     const on = state.flying && !state.paused;
