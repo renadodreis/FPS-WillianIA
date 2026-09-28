@@ -88,7 +88,17 @@ export function createAlien(deps) {
     })
     .catch(err => console.error('Alien GLB falhou — Visitante segue procedural:', err));
 
-  const B = { alive: true, active: false, hp: 1900, hpMax: 1900, yaw: 0, phase: 0, nextShot: 0, blinkT: 6, deadT: -1, respawnT: 0 };
+  /* VIDA 1200 (era 1900) — "o ET está muito forte pra matar ele" (dono).
+     Medido em test/pve-visitante-ttk.test.js, fuzil a 80 % no corpo com
+     recargas: 12,65 s e 93 disparos com 1900 — mais que os ~6–8 s em que ele
+     mata um jogador parado (13–16 de dano/s medidos com o orbe de sempre).
+     Referência de gênero: chefe de BR vale 2,5× a ~12× a vida efetiva de um
+     jogador (Fortnite: Brutus 400 de escudo + 100 de vida contra 200 do
+     jogador; os mais duros chegam a ~2 500). Aqui o "jogador" de referência é
+     o soldado comum (100): 1200 = 12×, o topo da faixa, porque ele ainda é
+     o chefe que dá o rifle de plasma. Fuzil a 80 %: 6,6 s, dois pentes.
+     DECISÃO A CONFIRMAR COM O DONO: o dano dele (orbe) ficou igual. */
+  const B = { alive: true, active: false, hp: 1200, hpMax: 1200, yaw: 0, phase: 0, nextShot: 0, blinkT: 6, deadT: -1, respawnT: 0 };
   // no helicóptero ele não persegue, não atira e o orbe não fere (js/aihelpers.js)
   const alcancavel = () => !player.dead && !noHelicoptero(state);
   const _alvoCorpo = new THREE.Vector3();
