@@ -63,7 +63,12 @@ function spawnServer(env = {}) {
         });
       }
     });
-    proc.on('exit', c => rej(new Error('servidor morreu cedo, código ' + c)));
+    /* o stderr do servidor é LIDO (pipe cheio trava o processo) e vai junto
+       na falha: "morreu cedo, código 1" sozinho não diz se foi porta ocupada
+       ou exceção no boot — já custou triagem às cegas */
+    let stderrFim = '';
+    proc.stderr.on('data', d => { stderrFim = (stderrFim + d).slice(-1500); });
+    proc.on('exit', c => rej(new Error('servidor morreu cedo, código ' + c + (stderrFim ? '\n' + stderrFim : ''))));
   });
 }
 
