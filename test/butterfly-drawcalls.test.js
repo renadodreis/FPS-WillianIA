@@ -62,11 +62,16 @@ const FLAP_AMPLITUDE = 1.0;
    Os dois canários são imutáveis depois do worldgen: `size` é sorteado dentro
    do laço de criação (js/animals.js) e `idlePhase` (js/skeletons.js:268) só é
    LIDO pela animação, nunca reescrito. Posição não serve: bicho e esqueleto
-   renascem, e aí o valor vira função do relógio, não da semente. */
+   renascem, e aí o valor vira função do relógio, não da semente.
+   RECAPTURADO em 2026-09-28: as construções passaram a sortear num PRNG
+   próprio (js/paredes.js) e o stream seedado depois delas encurtou 5.923
+   sorteios na seed 424242 (borboletas, animais e esqueletos são a jusante).
+   `animais` bate com o que test/animal-drawcalls.test.js colheu por conta
+   própria; os anteriores estão no histórico deste arquivo. */
 const OURO_SEED = {
-  animais: [0.9401, 0.9968, 0.9483, 1.0707, 1.11, 1.1065, 1.1023, 1.0081,
+  animais: [0.9287, 0.9671, 0.9958, 1.1298, 1.1333, 1.0754, 1.0907, 1.142,
     0.85, 0.85, 0.85, 0.85, 0.85],
-  esqueletos: [5.056, 3.439, 3.2986, 2.3055, 3.0275, 1.7277, 1.9306],
+  esqueletos: [2.3006, 3.1617, 5.6136, 2.3402, 2.9624, 5.0139, 1.7401],
 };
 
 /* CSM. O número absoluto de csmMaterials NÃO é asserção aqui de propósito: ele

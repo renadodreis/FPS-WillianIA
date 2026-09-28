@@ -60,7 +60,14 @@ const OURO = {
   mercado: [[-241.843, 6.922, 105.150], [-230.693, 13.922, 118.103]],
   // acampamento do spawn: união das 3 lenhas + banco (madeira) e das 7 pedras
   campoMadeira: [[1.350, 2.329, -2.414], [3.050, 3.283, -0.040]],
-  campoPedra: [[1.196, 2.455, -2.877], [2.888, 2.720, -1.153]],
+  /* RECAPTURADA em 2026-09-28. O raio de cada pedra é `rand(0.09, 0.15)` do
+     stream seedado (js/amb.js), e o stream depois das construções encurtou
+     quando elas passaram a sortear num PRNG próprio (js/paredes.js): as 7
+     pedras nasceram com outros raios. A madeira, sem sorteio, não mexeu — é
+     o controle. A igualdade com as 7 pedras SOLTAS (pré-fusão) foi provada em
+     bbe6b48 com os raios antigos; daqui pra frente este número trava
+     regressão. O antigo está no histórico deste arquivo. */
+  campoPedra: [[1.163, 2.444, -2.855], [2.873, 2.731, -1.108]],
   /* Drop de munição, em coordenadas LOCAIS do modelo. Estes dois não vêm de
      captura: saem da geometria escrita em js/pickups.js, e é justamente por
      isso que provam a fusão. A caixa é `RoundedBoxGeometry(0.5, 0.3, 0.34)`
@@ -408,14 +415,21 @@ describe('draw calls do mundo — props de GLB, acampamento e pássaros', { skip
 
   /* Caixa que os vértices de cada feixe ocupam NO MUNDO, colhida em HEAD
      3cc8eea (6 malhas soltas, seed 424242). Fundir só muda como se
-     desenha: se um número aqui se mexer, mexeu no que se vê. */
+     desenha: se um número aqui se mexer, mexeu no que se vê.
+
+     RECAPTURADA em 2026-09-28: as construções passaram a sortear num PRNG
+     próprio (js/paredes.js), e as atrações e o ninho do segredo procuram o
+     ponto mais longe delas — os 6 feixes mudaram de LUGAR. Só de lugar: a
+     extensão de cada caixa (1,9 × 46 × 1,9 m nas atrações, 1,6 × 32 × 1,6 m
+     no segredo) saiu idêntica à das 6 malhas soltas de 3cc8eea, casa por
+     casa. Os números antigos estão no histórico deste arquivo. */
   const OURO_FEIXES = {
-    '8a3ffb': [[-337.550, 1.060, -224.950], [-335.650, 47.060, -223.050]],
-    'ffe14a': [[-226.415, 6.800, 286.134], [-224.515, 52.800, 288.034]],
-    '53c7ff': [[-183.866, 4.773, 5.515], [-181.966, 50.773, 7.415]],
-    'd7343a': [[-122.248, 11.309, 409.897], [-120.348, 57.309, 411.797]],
-    'ff8ad4': [[-11.697, 1.751, -4.220], [-9.797, 47.751, -2.320]],
-    'ff3b30': [[224.690, 22.606, -360.198], [226.290, 54.606, -358.598]],
+    '8a3ffb': [[-10.373, -4.153, 172.124], [-8.473, 41.847, 174.024]],
+    'ffe14a': [[-66.103, 10.840, -86.452], [-64.203, 56.840, -84.552]],
+    '53c7ff': [[-158.022, 5.380, 201.821], [-156.122, 51.380, 203.721]],
+    'd7343a': [[-248.202, 2.409, 345.238], [-246.302, 48.409, 347.138]],
+    'ff8ad4': [[-338.750, 3.258, -198.750], [-336.850, 49.258, -196.850]],
+    'ff3b30': [[-454.063, 13.948, -4.743], [-452.463, 45.948, -3.143]],
   };
 
   /* Roda na página: acha as malhas de farol pelo carimbo do módulo e
@@ -504,7 +518,8 @@ describe('draw calls do mundo — props de GLB, acampamento e pássaros', { skip
   it('feixes: com far = VIEW_DIST o feixe a 600 m ainda pinta pixels', async () => {
     const medido = await h.play(() => {
       const MP = window.__MP, THREE = MP.THREE, R = MP.renderer;
-      const alvo = new THREE.Vector3(-121.298, 34.309, 410.847); // feixe d7343a
+      // feixe d7343a (centro da caixa de OURO_FEIXES; layout de 2026-09-28)
+      const alvo = new THREE.Vector3(-247.252, 25.409, 346.188);
       const cam = new THREE.PerspectiveCamera(75,
         R.domElement.width / R.domElement.height, 0.08, MP.CFG.VIEW_DIST);
       // 600 m na horizontal e bem acima do relevo: linha de visada limpa

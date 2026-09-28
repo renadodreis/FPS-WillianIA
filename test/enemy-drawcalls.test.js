@@ -119,13 +119,20 @@ const OURO_SEM_CSM = {
    boot: o harness mata todos e eles renascem em spawnPos() a cada 5 s, ou
    seja, é função do RELÓGIO. Passava por sorte e ia piscar sozinho num boot
    lento. O `size` é sorteado DENTRO do laço de criação (js/animals.js:109) e
-   nunca mais muda: é o canário certo pro mesmo trecho de stream. */
+   nunca mais muda: é o canário certo pro mesmo trecho de stream.
+
+   RECAPTURADO em 2026-09-28: as construções passaram a sortear num PRNG
+   próprio (js/paredes.js) e o stream seedado depois delas encurtou 5.923
+   sorteios na seed 424242 — tudo aqui é a jusante. Os valores novos batem,
+   campo a campo, com os que test/animal-drawcalls.test.js e
+   test/carregamento-determinismo.test.js colheram por conta própria. Os
+   anteriores estão no histórico deste arquivo. */
 const OURO_SEED = {
-  casas: [[79.8919, 118.9435], [-345.0308, -214.8442], [-19.1836, -72.3092]],
-  waypoints: [[93.2651, 124.1702], [-336.2117, -206.5287], [-5.6515, -66.9843]],
-  yaws: [5.3518, 5.0665, 0.573],
+  casas: [[-166.0315, 8.9694], [247.7313, 358.1112], [296.002, 172.695]],
+  waypoints: [[-151.6932, 14.5094], [260.2361, 363.3933], [304.803, 177.7033]],
+  yaws: [2.4657, 1.8672, 2.7347],
   // 8 herbívoros com tamanho sorteado + 5 predadores de tamanho fixo (0,85)
-  animais: [0.9401, 0.9968, 0.9483, 1.0707, 1.11, 1.1065, 1.1023, 1.0081,
+  animais: [0.9287, 0.9671, 0.9958, 1.1298, 1.1333, 1.0754, 1.0907, 1.142,
     0.85, 0.85, 0.85, 0.85, 0.85],
 };
 

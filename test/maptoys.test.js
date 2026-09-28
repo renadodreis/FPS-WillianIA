@@ -26,15 +26,37 @@ describe('Atrações do mapa 🎪', () => {
       const cannon = G.Cannon.spot;
       let minCannon = Infinity;
       for (const p of list) minCannon = Math.min(minCannon, Math.hypot(p.x - cannon.x, p.z - cannon.z));
-      const allDry = list.every(p => G.heightAt(p.x, p.z) > -3);
+      /* "nasceu na água" medido NA PEGADA, não num ponto. Antes era
+         `heightAt(centro) > -3` — um proxy 2 m acima do nível da água (-5)
+         que o próprio pickSpot não usa (ele aceita centro 1,2 m acima, a
+         mesma regra de "seco" dos baús). Com o layout de 2026-09-28 (as
+         construções sortearam num PRNG próprio, js/paredes.js) a cama
+         elástica da seed 424242 foi parar numa margem: centro a 1,52 m da
+         água e a pegada inteira (raio 3,5 m, onde ficam as quinas das
+         almofadas a ±2,4 m) SECA — menor altura -4,29 contra água em -5; a
+         água só começa a ~8 m. O que o caso quer saber é se alguma parte da
+         atração está dentro do lago: pegada toda acima da água, com folga de
+         0,3 m, e centro na regra de "seco" do pickSpot. */
+      const WL = window.__MP.WATER_LEVEL;
+      const menorNaPegada = p => {
+        let mn = G.heightAt(p.x, p.z);
+        for (let k = 0; k < 32; k++) {
+          const a = k / 32 * Math.PI * 2;
+          mn = Math.min(mn, G.heightAt(p.x + Math.cos(a) * 3.5, p.z + Math.sin(a) * 3.5));
+        }
+        return mn;
+      };
+      const molhadas = list.map((p, i) => ({ i, centro: G.heightAt(p.x, p.z), pegada: menorNaPegada(p) }))
+        .filter(m => m.centro <= WL + 1.2 || m.pegada <= WL + 0.3)
+        .map(m => `#${m.i} centro ${m.centro.toFixed(2)} pegada ${m.pegada.toFixed(2)} (água ${WL})`);
       const ringsAtCannon = Math.hypot(s.rings.x - cannon.x, s.rings.z - cannon.z);
-      return { ok: true, minPair, minCannon, allDry, count: list.length, ringsAtCannon };
+      return { ok: true, minPair, minCannon, molhadas, count: list.length, ringsAtCannon };
     });
     assert.ok(r.ok, r.why);
     assert.equal(r.count, 4);
     assert.ok(r.minPair > 30, `atrações empilhadas (${r.minPair.toFixed(1)} m)`);
     assert.ok(r.minCannon > 20, `atração colada no canhão (${r.minCannon.toFixed(1)} m)`);
-    assert.ok(r.allDry, 'alguma nasceu na água');
+    assert.deepEqual(r.molhadas, [], `alguma nasceu na água: ${r.molhadas.join('; ')}`);
     assert.ok(r.ringsAtCannon < 2, `curso de argolas longe do canhão (${r.ringsAtCannon.toFixed(1)} m)`);
   });
 
