@@ -229,8 +229,9 @@ describe('Pureza do contrato', () => {
     for (const i of CI.HOLLOW_LOTS) assert.deepEqual(planOf(i), planOf(i));
   });
 
-  it('a contagem de geometria pulada do caminho maciço é declarada (compensação de RNG)', () => {
-    assert.equal(typeof CI.SKIPPED_TRIMS, 'number');
-    assert.ok(CI.SKIPPED_TRIMS > 0, 'sem compensação declarada o stream seedado anda');
-  });
+  /* (2026-09-28) O caso "a contagem de geometria pulada é declarada
+     (compensação de RNG)" saiu junto com SKIPPED_TRIMS: js/structures.js
+     roda inteiro em noSeed e não consome mais o stream seedado, então não
+     há consumo a repor. Quem garante isso agora é a armadilha de
+     test/paredes-paridade.test.js ("consome ZERO do Math.random seedado"). */
 });

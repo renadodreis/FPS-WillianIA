@@ -17,11 +17,9 @@
      • cobertura interna que quebra a linha reta porta→porta, sem
        entupir a passagem (o teste faz BFS com o raio do jogador).
 
-   PURO E SEM RNG: o térreo é construído na fase SEEDADA do worldgen,
-   onde cada Math.random extra desloca o mapa inteiro (CLAUDE.md). Este
-   módulo só faz contas; quem materializa cria a geometria em noSeed e
-   REPÕE o consumo das peças do caminho maciço que deixou de criar
-   (ver SKIPPED_TRIMS).
+   PURO E SEM RNG: só faz contas. É lido por js/paredes.js (as caixas
+   sólidas do térreo, que o servidor e os bots também montam em Node) e
+   materializado por js/structures.js.
    ================================================================ */
 
 /* Um por quadrante da cidade (índices em CityLayout.LOTS):
@@ -41,13 +39,6 @@ export const INT = Object.freeze({
   WIN_Y1: 2.3,
   COVER_H: 1.1,   // caixotes/balcão: cobertura de pé, sem tapar a mira
 });
-
-/* Peças do caminho MACIÇO que o térreo oco deixa de criar: o pódium
-   (trimBox do térreo cheio), a moldura da porta falsa e o vão recuado.
-   Cada BoxGeometry custa 4 Math.random (UUID do THREE), e a fase é
-   seedada — quem materializa REPÕE 4×SKIPPED_TRIMS chamadas, igualzinho
-   às 168 de js/structures.js. Sem isso, bases/baús/grama saem do lugar. */
-export const SKIPPED_TRIMS = 3;
 
 export function isHollowLot(index) { return HOLLOW_LOTS.includes(index); }
 

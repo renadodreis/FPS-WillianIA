@@ -19,9 +19,12 @@
    Por que estes campos e não a grama: o conteúdo de cada chunk de grama
    vem de um RNG LOCAL por (worldSeed,cx,cz) — não do stream global — e
    por isso NÃO denuncia um deslocamento do stream (ver js/grass.js,
-   comentário de `legacyConsume`). Sítios/inimigos/boss/alien continuam
-   lendo `rand()` direto do stream global: se qualquer coisa ANTES deles
-   ganhar ou perder uma chamada, a posição de pelo menos um destes muda.
+   comentário de `legacyConsume`). Os 12 inimigos de patrulha e o alien
+   continuam lendo `rand()` direto do stream global: se qualquer coisa
+   ANTES deles ganhar ou perder uma chamada, a posição de pelo menos um
+   destes muda. Castelo, sítios, clareiras, vagas, guardas das bases/Torre
+   e o boss vêm do sorteio PRÓPRIO das construções (js/paredes.js, desde
+   2026-09-28): denunciam mudança no planejador ou no relevo, não no stream.
    ================================================================ */
 'use strict';
 const { describe, it, before, after } = require('node:test');
@@ -30,84 +33,96 @@ const { CHROME, bootGame } = require('./helpers/harness.js');
 
 const SEED = '424242';
 
-/* capturado de window.__game ANTES de qualquer mudança neste PR — ver o
-   cabeçalho acima. Reproduzir: node scripts/vr-baseline.js já usa esta
-   seed; o retrato abaixo saiu de um bootGame({ port, worldSeed: '424242',
-   autoStart: false }) e da função `retrato()` logo adiante. */
+/* Retrato de REFERÊNCIA da seed 424242. Reproduzir: bootGame({ port,
+   worldSeed: '424242', autoStart: false }) e a função `retrato()` logo
+   adiante.
+
+   RECAPTURADO em 2026-09-28, na mudança aprovada pelo dono em que as
+   construções passaram a sortear num PRNG próprio (js/paredes.js) e a não
+   consumir mais NADA do stream seedado. Por isso mudaram, UMA vez:
+   castelo/boss, os 20 sítios rurais, clareiras das torres, os 2 caminhões,
+   os 16 guardas (Torre + bases) — sorteio novo — e os 12 inimigos de
+   patrulha + o alien — o stream global depois das construções encurtou
+   5.923 sorteios. `heightSamples` e a cidade NÃO mudaram (o relevo e a
+   grama nascem antes; prova medida no relatório da entrega e em
+   test/paredes-paridade.test.js). O retrato anterior (fingerprint do HEAD
+   36022f1) está no histórico do git deste arquivo. Três capturas
+   seguidas deram o mesmo retrato byte a byte. */
 const ANTES = {
-  castle: { x: 250.03, z: 299.42 },
+  castle: { x: 279.78, z: -248.04 },
   sitesCount: 21,
   sites: [
-    { type: 'forte', x: 250.03, z: 299.42, r: 28 },
-    { type: 'torre', x: -214.8, z: -185.67, r: 5 },
-    { type: 'torre', x: -181.76, z: -334.35, r: 5 },
-    { type: 'torre', x: 359.84, z: 102.38, r: 5 },
-    { type: 'torre', x: 344.11, z: -154.02, r: 5 },
-    { type: 'torre', x: 225.49, z: -359.4, r: 5 },
-    { type: 'torre', x: 27.37, z: -189.64, r: 5 },
-    { type: 'cabana', x: 170.72, z: 326.56, r: 6.5 },
-    { type: 'cabana', x: -337.93, z: 272.29, r: 6.5 },
-    { type: 'cabana', x: -110.8, z: -66.46, r: 6.5 },
-    { type: 'cabana', x: 270.51, z: -29.08, r: 6.5 },
-    { type: 'cabana', x: -336.07, z: -90.67, r: 6.5 },
-    { type: 'cabana', x: 162.94, z: -390.61, r: 6.5 },
-    { type: 'ruína', x: -114.34, z: 172.76, r: 5.5 },
-    { type: 'ruína', x: 115.44, z: -381.39, r: 5.5 },
-    { type: 'ruína', x: -92.06, z: -191.01, r: 5.5 },
-    { type: 'ruína', x: -178.19, z: 114.81, r: 5.5 },
-    { type: 'ruína', x: -68.14, z: 88.83, r: 5.5 },
+    { type: 'forte', x: 279.78, z: -248.04, r: 28 },
+    { type: 'torre', x: -453.26, z: -3.94, r: 5 },
+    { type: 'torre', x: 335.91, z: 181.43, r: 5 },
+    { type: 'torre', x: -10.98, z: 430.47, r: 5 },
+    { type: 'torre', x: -253.9, z: -269.21, r: 5 },
+    { type: 'torre', x: -87.33, z: 319.02, r: 5 },
+    { type: 'torre', x: 235.84, z: -91.04, r: 5 },
+    { type: 'cabana', x: 166.19, z: 330.73, r: 6.5 },
+    { type: 'cabana', x: -182.52, z: -334.06, r: 6.5 },
+    { type: 'cabana', x: -184.87, z: -57.75, r: 6.5 },
+    { type: 'cabana', x: -92.51, z: 61.42, r: 6.5 },
+    { type: 'cabana', x: 21.67, z: -181.53, r: 6.5 },
+    { type: 'cabana', x: 259.73, z: 301.78, r: 6.5 },
+    { type: 'ruína', x: -339.07, z: -91.39, r: 5.5 },
+    { type: 'ruína', x: 266.21, z: -20.37, r: 5.5 },
+    { type: 'ruína', x: -166.87, z: -7.76, r: 5.5 },
+    { type: 'ruína', x: -226.95, z: -107.38, r: 5.5 },
+    { type: 'ruína', x: 175.05, z: 387.77, r: 5.5 },
     { type: 'cidade', x: -340, z: 130, r: 88 },
-    { type: 'base', x: -247.69, z: -101.44, r: 22 },
-    { type: 'base', x: 172.74, z: -285.99, r: 22 },
+    { type: 'base', x: -102.17, z: -284.21, r: 22 },
+    { type: 'base', x: 278.08, z: -71.61, r: 22 },
   ],
   towerClearings: [
-    { x: -212.2, z: -186.27 },
-    { x: -179.16, z: -334.95 },
-    { x: 362.44, z: 101.78 },
-    { x: 346.71, z: -154.62 },
-    { x: 228.09, z: -360 },
-    { x: 29.97, z: -190.24 },
+    { x: -450.66, z: -4.54 },
+    { x: 338.51, z: 180.83 },
+    { x: -8.38, z: 429.87 },
+    { x: -251.3, z: -269.81 },
+    { x: -84.73, z: 318.42 },
+    { x: 238.44, z: -91.64 },
   ],
   carSpots: [
     { type: 'sport', x: -326, z: 156 },
     { type: 'sport2', x: -348, z: 156 },
     { type: 'sport', x: -314, z: 114 },
-    { type: 'truck', x: -247.69, z: -105.44 },
-    { type: 'truck', x: 172.74, z: -289.99 },
+    { type: 'truck', x: -102.17, z: -288.21 },
+    { type: 'truck', x: 278.08, z: -75.61 },
   ],
   enemiesCount: 28,
   enemies: [
-    { x: 79.89, z: 118.94, fsm: 'PATRULHA', alive: true },
-    { x: -345.03, z: -214.84, fsm: 'PATRULHA', alive: true },
-    { x: -19.18, z: -72.31, fsm: 'PATRULHA', alive: true },
-    { x: 323.21, z: -81.92, fsm: 'PATRULHA', alive: true },
-    { x: -103.62, z: -202.54, fsm: 'PATRULHA', alive: true },
-    { x: 7.81, z: 363.91, fsm: 'PATRULHA', alive: true },
-    { x: 102.21, z: -96.7, fsm: 'PATRULHA', alive: true },
-    { x: -290.3, z: 200.62, fsm: 'PATRULHA', alive: true },
-    { x: -201.11, z: -132.25, fsm: 'PATRULHA', alive: true },
-    { x: -382.63, z: -5.5, fsm: 'PATRULHA', alive: true },
-    { x: -182.99, z: 363.05, fsm: 'PATRULHA', alive: true },
-    { x: 354.26, z: 39.48, fsm: 'PATRULHA', alive: true },
-    { x: -337, z: 130.37, fsm: 'PATRULHA', alive: true },
-    { x: -336.83, z: 133.45, fsm: 'PATRULHA', alive: true },
-    { x: -337, z: 129.39, fsm: 'PATRULHA', alive: true },
-    { x: -336.29, z: 131.62, fsm: 'PATRULHA', alive: true },
-    { x: -337, z: 133.76, fsm: 'PATRULHA', alive: true },
-    { x: -336.09, z: 126.88, fsm: 'PATRULHA', alive: true },
-    { x: -337, z: 126.65, fsm: 'PATRULHA', alive: true },
-    { x: -337.84, z: 134.23, fsm: 'PATRULHA', alive: true },
-    { x: -250.4, z: -97.8, fsm: 'PATRULHA', alive: true },
-    { x: -249.19, z: -108.11, fsm: 'PATRULHA', alive: true },
-    { x: -243.45, z: -95.32, fsm: 'PATRULHA', alive: true },
-    { x: -259.01, z: -105.53, fsm: 'PATRULHA', alive: true },
-    { x: 167.53, z: -289.39, fsm: 'PATRULHA', alive: true },
-    { x: 177.86, z: -279.05, fsm: 'PATRULHA', alive: true },
-    { x: 168.73, z: -284.84, fsm: 'PATRULHA', alive: true },
-    { x: 182.65, z: -287.39, fsm: 'PATRULHA', alive: true },
+    { x: -166.03, z: 8.97, fsm: 'PATRULHA', alive: true },
+    { x: 247.73, z: 358.11, fsm: 'PATRULHA', alive: true },
+    { x: 296, z: 172.7, fsm: 'PATRULHA', alive: true },
+    { x: 147.84, z: 250.22, fsm: 'PATRULHA', alive: true },
+    { x: -28.54, z: -118.79, fsm: 'PATRULHA', alive: true },
+    { x: 212.41, z: -219.84, fsm: 'PATRULHA', alive: true },
+    { x: -128.7, z: 19.7, fsm: 'PATRULHA', alive: true },
+    { x: 38.45, z: 117.76, fsm: 'PATRULHA', alive: true },
+    { x: 244.32, z: -197.31, fsm: 'PATRULHA', alive: true },
+    { x: 256.13, z: -381.29, fsm: 'PATRULHA', alive: true },
+    { x: 111.07, z: 63.13, fsm: 'PATRULHA', alive: true },
+    { x: -214.45, z: -266.55, fsm: 'PATRULHA', alive: true },
+    { x: -337, z: 126.31, fsm: 'PATRULHA', alive: true },
+    { x: -335.37, z: 131.44, fsm: 'PATRULHA', alive: true },
+    { x: -337, z: 128.28, fsm: 'PATRULHA', alive: true },
+    { x: -336.36, z: 125.82, fsm: 'PATRULHA', alive: true },
+    { x: -337, z: 133.54, fsm: 'PATRULHA', alive: true },
+    { x: -336.41, z: 127.54, fsm: 'PATRULHA', alive: true },
+    { x: -337, z: 130.9, fsm: 'PATRULHA', alive: true },
+    { x: -337.03, z: 128.03, fsm: 'PATRULHA', alive: true },
+    { x: -102.62, z: -281.35, fsm: 'PATRULHA', alive: true },
+    { x: -107.48, z: -286.14, fsm: 'PATRULHA', alive: true },
+    { x: -100, z: -283.35, fsm: 'PATRULHA', alive: true },
+    { x: -101.16, z: -290.11, fsm: 'PATRULHA', alive: true },
+    { x: 286.37, z: -67.37, fsm: 'PATRULHA', alive: true },
+    { x: 272.18, z: -73.02, fsm: 'PATRULHA', alive: true },
+    { x: 268.11, z: -73.98, fsm: 'PATRULHA', alive: true },
+    { x: 274.46, z: -70.37, fsm: 'PATRULHA', alive: true },
   ],
-  boss: { x: 250.03, z: 299.42 },
-  alien: { x: 202.67, z: 130.48 },
+  boss: { x: 279.78, z: -248.04 },
+  alien: { x: -117.15, z: 143.29 },
+  // idênticas às do retrato de 36022f1: o relevo nasce antes e não mudou
   heightSamples: [2.53, 4.4, 0.74, -1.1, 40.49],
 };
 
@@ -138,10 +153,11 @@ describe('mundo determinístico pela mesma seed (Chrome headless)', { skip: !CHR
   before(async () => { h = await bootGame({ port: 3425, worldSeed: SEED, autoStart: false }); });
   after(async () => { if (h) await h.close(); });
 
-  it('dada a seed 424242, então castelo/sítios/clareiras/vagas/inimigos/boss/alien/altura saem BYTE A BYTE iguais ao retrato pré-fatiamento', async () => {
+  it('dada a seed 424242, então castelo/sítios/clareiras/vagas/inimigos/boss/alien/altura saem BYTE A BYTE iguais ao retrato de referência', async () => {
     const depois = await h.play(retrato);
     assert.deepEqual(depois, ANTES,
       'o mundo mudou pra mesma seed — algum fatiamento/adiamento do boot ' +
-      'inseriu, removeu ou reordenou consumo do rand seedado');
+      'inseriu, removeu ou reordenou consumo do rand seedado (inimigos/alien), ' +
+      'ou o planejador das construções mudou (js/paredes.js: castelo/sítios/vagas)');
   });
 });

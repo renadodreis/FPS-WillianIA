@@ -1,18 +1,22 @@
 /* ================================================================
-   CONSTRUÇÕES — torres de vigia, cabanas, ruínas e o forte do boss
+   CONSTRUÇÕES — torres de vigia, cabanas, ruínas, cidade e o forte
    Tudo mesclado em UMA malha com vertex colors (1 draw call) +
    AABBs para bala/visão/colisão e corpos estáticos no cannon.
+
+   O MUNDO SÓLIDO É DADO, E NÃO MORA AQUI. js/paredes.js decide onde fica
+   cada construção (sorteio PRÓPRIO, derivado só da semente) e quais caixas
+   são parede — é o mesmo código que o servidor e os bots rodam em Node.
+   Este módulo DESENHA o que aquele descreve e publica `walls` exatamente
+   como ele monta (test/paredes-paridade.test.js compara caixa a caixa com o
+   Node). Parede nova se declara lá; aqui só entra o visual.
    ================================================================ */
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import * as CityLayout from './citylayout.js';
-import {
-  createCastle,
-  MAX_CASTLE_RAMP_SLOPE_DEGREES,
-  measureCastleSite,
-} from './castle.js';
+import { createCastle } from './castle.js';
 import { towerPlatforms, towerSurfaces, towerSteps } from './watchtower.js';
 import * as CityInterior from './cityinterior.js';
+import * as Paredes from './paredes.js';
 
 // Altura da porta de FACHADA (moldura/vão recuado/marquise, prédio maciço
 // sem interior) — decoração, sem relação com CityInterior.INT.DOOR_H (porta
@@ -20,49 +24,63 @@ import * as CityInterior from './cityinterior.js';
 // exige 2,0-2,1 m; ver test/city-facade-door.test.js.
 export const FACADE_DOOR_H = 2.05;
 
+/* NEUTRALIZAÇÃO DO RNG: THREE.generateUUID() consome Math.random 4× por
+   objeto, e Math.random É o PRNG SEEDADO do worldgen (contrato do
+   CLAUDE.md). noSeed() troca Math.random por um PRNG privado enquanto `fn`
+   roda. createStructures roda INTEIRO dentro de um — as construções não
+   consomem NADA do stream seedado, então criar/mudar construção não desloca
+   mais árvores, bichos e inimigos gerados depois (a armadilha de
+   test/paredes-paridade.test.js mede isso). */
+function criarNoSeed() {
+  let _us = 0x9E3779B9 >>> 0;
+  return (fn) => {
+    const _R = Math.random;
+    Math.random = () => (_us = (_us * 1664525 + 1013904223) >>> 0) / 4294967296;
+    try { return fn(); } finally { Math.random = _R; }
+  };
+}
+
 export function createStructures(deps) {
-  const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
-  const sites = [];      // {x, z, r, type}
+  const noSeed = criarNoSeed();
+  return noSeed(() => criarEstruturas(deps, noSeed));
+}
+
+function criarEstruturas(deps, noSeed) {
+  const { clamp, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
+  /* A semente que MONTOU este mundo: a mesma leitura que o game.js faz para a
+     grama e os POIs (`init` do servidor; solo sem servidor cai em 424242). */
+  const worldSeed = deps.worldSeed !== undefined ? deps.worldSeed
+    : (globalThis.__MP_init && globalThis.__MP_init.worldSeed);
+  const mundo = Paredes.construirMundoSolido({ worldSeed, heightAt, slopeAt, WATER_LEVEL, CITY });
+  const plano = mundo.plano;
+  const sites = plano.sites; // {x, z, r, type} — o game.js acrescenta mercado/refúgio depois
   const fieldRoofs = []; // telhados do CAMPO p/ o clima (js/cover.js) — metadado puro
-  const walls = [];      // AABBs sólidas {x0,x1,y0,y1,z0,z1}
+  /* AABBs sólidas {x0,x1,y0,y1,z0,z1}, na ordem de js/paredes.js. O castelo
+     (último da lista) é empurrado pelo próprio createCastle, mais abaixo. */
+  const walls = mundo.paredes.filter(w => !w.castle);
   const geos = [];
   const fortGeos = [];   // fallback legado isolado: não entra na malha mundial
   let buildingFort = false;
   const smokeSpots = []; // topos de chaminé (fumaça ambiente)
   const towerClearings = []; // clareiras de grama sob a escada das torres (game.js)
-  const cityInteriors = []; // térreos ocos materializados {lot,bx,bz,gy,d,gfH,plan}
+  const cityInteriors = mundo.cidade.interiores; // térreos ocos {lot,bx,bz,gy,d,gfH,plan}
   const poiMarks = [];      // pontos pro radar do minimapa (game.js: ToysRadar)
   const flags = [];      // bandeiras que tremulam
   const flagGeo = new THREE.PlaneGeometry(1.15, 0.55);
   flagGeo.translate(0.6, 0, 0); // articulada no mastro
   const flagMat = new THREE.MeshStandardMaterial({ color: 0xe8562a, side: THREE.DoubleSide, roughness: 0.7 });
   const _sc = new THREE.Color();
-  // NEUTRALIZAÇÃO DO RNG: THREE.generateUUID() consome Math.random 4× por
-  // objeto, e Math.random É o PRNG SEEDADO do worldgen (contrato do
-  // CLAUDE.md). Qualquer geometria/material criado durante a geração
-  // deslocaria tudo gerado depois (bases, baús, grama). noSeed() troca
-  // Math.random por um PRNG privado enquanto a geometria é criada — os
-  // UUIDs saem daqui e o stream seedado fica intacto.
-  // Declarado NO TOPO porque a escada das torres de vigia (a primeira
-  // coisa construída) já precisa dele; antes vivia junto da Torre Nexus.
-  let _us = 0x9E3779B9 >>> 0;
-  const noSeed = (fn) => {
-    const _R = Math.random;
-    Math.random = () => (_us = (_us * 1664525 + 1013904223) >>> 0) / 4294967296;
-    try { return fn(); } finally { Math.random = _R; }
-  };
 
-  function sbox(w, h, d, x, y, z, color, solid = true) {
+  /* caixa vertex-color da malha mundial. SÓ desenho: a parede correspondente
+     (quando a peça é sólida) já está em `walls`, vinda de js/paredes.js —
+     e o corpo físico o game.js cria a partir dela. */
+  function sbox(w, h, d, x, y, z, color) {
     const g = new THREE.BoxGeometry(w, h, d);
     g.translate(x, y, z);
     paintGeometry(g, _sc.setHex(color));
     (buildingFort ? fortGeos : geos).push(g);
-    if (solid && !buildingFort) {
-      // corpo físico NÃO é criado aqui: o game.js cria um por parede a partir
-      // de walls[] (com updateAABB) — criar aqui duplicava ~400 corpos mortos
-      walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2 });
-    }
   }
+  const desenhar = pecas => { for (const p of pecas) sbox(p.w, p.h, p.d, p.x, p.y, p.z, p.cor); };
   function scone(r, h, x, y, z, color) {
     const g = new THREE.ConeGeometry(r, h, 4);
     g.rotateY(Math.PI / 4);
@@ -73,87 +91,62 @@ export function createStructures(deps) {
 
   /* escada dog-leg externa + tampo pisável.
      O contrato geométrico mora em js/watchtower.js (puro, testável em
-     node). Aqui só se materializa: `platforms` são objetos puros (não
-     tocam o RNG) e a geometria vai TODA dentro de noSeed, porque a torre
-     nasce na fase SEEDADA e cada BoxGeometry custa 4 Math.random. */
+     node). Aqui só se materializa: `platforms` são objetos puros e a
+     escada é só desenho (nenhuma peça dela é parede). */
   function towerAccess(cx, cz, y) {
     for (const p of towerPlatforms(cx, cz, y)) platforms.push(p);
     const s = towerSurfaces(cx, cz, y);
     towerClearings.push({ x: cx + 2.6, z: cz - 0.6, r: 5.2 }); // grama não brota na escada
-    noSeed(() => {
-      const wood = 0x8a6238, dark = 0x6b4a2e;
-      // degraus visuais por cima da rampa lógica (padrão flight() da Nexus)
-      for (const st of towerSteps(cx, cz, y))
-        sbox(st.w, st.h, st.d, st.x, st.y, st.z, wood, false);
-      // patamares: laje visual com a espessura do degrau
-      for (const L of [s.landingN, s.landingT])
-        sbox(L.x1 - L.x0, 0.22, L.z1 - L.z0, (L.x0 + L.x1) / 2, L.y - 0.11, (L.z0 + L.z1) / 2, wood, false);
-      // longarinas inclinadas (fecham o vão embaixo dos degraus)
-      for (const f of [s.flightA, s.flightB]) {
-        const dz = f.z1 - f.z0, dy = f.y1 - f.y0, len = Math.hypot(dz, dy);
-        for (const sx of [f.x0 + 0.08, f.x1 - 0.08]) {
-          const g = new THREE.BoxGeometry(0.16, 0.42, len);
-          g.rotateX(-Math.atan2(dy, dz));
-          g.translate(sx, (f.y0 + f.y1) / 2 - 0.34, (f.z0 + f.z1) / 2);
-          paintGeometry(g, _sc.setHex(dark)); geos.push(g);
-        }
-        // corrimão externo acompanhando o lance
-        const gh = new THREE.BoxGeometry(0.08, 0.08, len);
-        gh.rotateX(-Math.atan2(dy, dz));
-        gh.translate(f.x1 - 0.08, (f.y0 + f.y1) / 2 + 0.95, (f.z0 + f.z1) / 2);
-        paintGeometry(gh, _sc.setHex(dark)); geos.push(gh);
-        for (let i = 0; i <= 3; i++) {
-          const t = i / 3, pz = f.z0 + dz * t;
-          sbox(0.08, 0.95, 0.08, f.x1 - 0.08, f.y0 + dy * t + 0.48, pz, dark, false);
-        }
+    const wood = 0x8a6238, dark = 0x6b4a2e;
+    // degraus visuais por cima da rampa lógica (padrão flight() da Nexus)
+    for (const st of towerSteps(cx, cz, y))
+      sbox(st.w, st.h, st.d, st.x, st.y, st.z, wood);
+    // patamares: laje visual com a espessura do degrau
+    for (const L of [s.landingN, s.landingT])
+      sbox(L.x1 - L.x0, 0.22, L.z1 - L.z0, (L.x0 + L.x1) / 2, L.y - 0.11, (L.z0 + L.z1) / 2, wood);
+    // longarinas inclinadas (fecham o vão embaixo dos degraus)
+    for (const f of [s.flightA, s.flightB]) {
+      const dz = f.z1 - f.z0, dy = f.y1 - f.y0, len = Math.hypot(dz, dy);
+      for (const sx of [f.x0 + 0.08, f.x1 - 0.08]) {
+        const g = new THREE.BoxGeometry(0.16, 0.42, len);
+        g.rotateX(-Math.atan2(dy, dz));
+        g.translate(sx, (f.y0 + f.y1) / 2 - 0.34, (f.z0 + f.z1) / 2);
+        paintGeometry(g, _sc.setHex(dark)); geos.push(g);
       }
-      // pés dos patamares apoiados no terreno (nada flutuando)
-      for (const [px, pz] of [[s.landingN.x0 + 0.2, s.landingN.z0 + 0.2], [s.landingN.x1 - 0.2, s.landingN.z0 + 0.2]]) {
-        const gy2 = heightAt(px, pz);
-        const hh = Math.max(0.2, s.midY - gy2); // terreno acidentado não inverte a estaca
-        sbox(0.2, hh, 0.2, px, s.midY - hh / 2, pz, dark, false);
+      // corrimão externo acompanhando o lance
+      const gh = new THREE.BoxGeometry(0.08, 0.08, len);
+      gh.rotateX(-Math.atan2(dy, dz));
+      gh.translate(f.x1 - 0.08, (f.y0 + f.y1) / 2 + 0.95, (f.z0 + f.z1) / 2);
+      paintGeometry(gh, _sc.setHex(dark)); geos.push(gh);
+      for (let i = 0; i <= 3; i++) {
+        const t = i / 3, pz = f.z0 + dz * t;
+        sbox(0.08, 0.95, 0.08, f.x1 - 0.08, f.y0 + dy * t + 0.48, pz, dark);
       }
-    });
+    }
+    // pés dos patamares apoiados no terreno (nada flutuando)
+    for (const [px, pz] of [[s.landingN.x0 + 0.2, s.landingN.z0 + 0.2], [s.landingN.x1 - 0.2, s.landingN.z0 + 0.2]]) {
+      const gy2 = heightAt(px, pz);
+      const hh = Math.max(0.2, s.midY - gy2); // terreno acidentado não inverte a estaca
+      sbox(0.2, hh, 0.2, px, s.midY - hh / 2, pz, dark);
+    }
   }
 
-  function tower(cx, cz) {
-    const y = heightAt(cx, cz);
-    sites.push({ x: cx, z: cz, r: 5, type: 'torre' });
-    const H = 6.2;
-    for (const [ox, oz] of [[-1.4, -1.4], [1.4, -1.4], [-1.4, 1.4], [1.4, 1.4]])
-      sbox(0.34, H + 2, 0.34, cx + ox, y + H / 2 - 1, cz + oz, 0x6b4a2e);
-    sbox(3.4, 0.2, 0.2, cx, y + 2.3, cz - 1.4, 0x8a6238, false);
-    sbox(3.4, 0.2, 0.2, cx, y + 2.3, cz + 1.4, 0x8a6238, false);
-    sbox(0.2, 0.2, 3.4, cx - 1.4, y + 3.6, cz, 0x8a6238, false);
-    sbox(0.2, 0.2, 3.4, cx + 1.4, y + 3.6, cz, 0x8a6238, false);
-    sbox(3.7, 0.28, 3.7, cx, y + H, cz, 0x8a6238);
+  /* torre de vigia: montantes, tampo e guarda-corpos (js/paredes.js:
+     pecasTorre) + telhado cônico, telhado climático e a escada */
+  function tower(t, pecas) {
+    const cx = t.x, cz = t.z, y = t.y, H = Paredes.TORRE_H;
+    desenhar(pecas);
     fieldRoofs.push({ x0: cx - 1.85, x1: cx + 1.85, z0: cz - 1.85, z1: cz + 1.85, roofY: y + H + 0.14 });
-    // Guarda-corpos agora SÓLIDOS: 6,3 m de queda sem parapeito é armadilha,
-    // e o murinho de 0,5 m também para bala (rayHit) — vira a cobertura que
-    // faz do tampo um ninho de sniper de verdade, não um pedestal exposto.
-    // A face LESTE é a boca da escada: o trecho vira 2,7 m (mesma contagem
-    // de geometria = mesmo consumo de RNG) e deixa o vão de entrada ao sul.
-    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz - 1.78, 0x6b4a2e);
-    sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz + 1.78, 0x6b4a2e);
-    sbox(0.14, 0.5, 3.7, cx - 1.78, y + H + 0.5, cz, 0x6b4a2e);
-    sbox(0.14, 0.5, 2.7, cx + 1.78, y + H + 0.5, cz - 0.5, 0x6b4a2e);
     scone(3, 1.7, cx, y + H + 1.8, cz, 0xa84f35);
     towerAccess(cx, cz, y);
   }
 
-  function cabin(cx, cz, flip) {
-    const y = heightAt(cx, cz);
-    sites.push({ x: cx, z: cz, r: 6.5, type: 'cabana' });
-    const W = flip ? 4.4 : 5.4, D = flip ? 5.4 : 4.4, H = 2.7;
-    sbox(W + 0.7, 0.34, D + 0.7, cx, y + 0.05, cz, 0x6e6a63, false);          // base (decorativa)
-    sbox(W, H, 0.26, cx, y + H / 2 + 0.15, cz - D / 2, 0x8a6238);             // fundo
-    sbox(0.26, H, D, cx - W / 2, y + H / 2 + 0.15, cz, 0x8a6238);             // lateral esq
-    sbox(0.26, H, D, cx + W / 2, y + H / 2 + 0.15, cz, 0x8a6238);             // lateral dir
-    const doorW = 1.2, segW = (W - doorW) / 2;                                 // frente com porta
-    sbox(segW, H, 0.26, cx - (doorW + segW) / 2, y + H / 2 + 0.15, cz + D / 2, 0x8a6238);
-    sbox(segW, H, 0.26, cx + (doorW + segW) / 2, y + H / 2 + 0.15, cz + D / 2, 0x8a6238);
-    sbox(doorW + 0.3, 0.45, 0.3, cx, y + H + 0.05, cz + D / 2, 0x6b4a2e, false);
-    sbox(W + 0.8, 0.18, D + 0.8, cx, y + H + 0.35, cz, 0x6b4a2e);             // forro
+  /* cabana: paredes, forro e chaminé (js/paredes.js: pecasCabana) + as duas
+     águas do telhado, telhado climático e a fumaça */
+  function cabin(c, pecas) {
+    const cx = c.x, cz = c.z, y = c.y;
+    const { W, D, H } = Paredes.dimensoesCabana(c.flip);
+    desenhar(pecas);
     fieldRoofs.push({ x0: cx - (W + 0.8) / 2, x1: cx + (W + 0.8) / 2,
       z0: cz - (D + 0.8) / 2, z1: cz + (D + 0.8) / 2, roofY: y + H + 0.44 });
     const r1 = new THREE.BoxGeometry(W + 1.1, 0.15, D * 0.64);
@@ -162,23 +155,13 @@ export function createStructures(deps) {
     const r2 = new THREE.BoxGeometry(W + 1.1, 0.15, D * 0.64);
     r2.rotateX(-0.48); r2.translate(cx, y + H + 0.92, cz + D * 0.26);
     paintGeometry(r2, _sc.setHex(0xa84f35)); geos.push(r2);
-    sbox(0.5, 1.5, 0.5, cx + W * 0.28, y + H + 1.1, cz - D * 0.18, 0x6e6a63, false); // chaminé
     smokeSpots.push({ x: cx + W * 0.28, y: y + H + 1.95, z: cz - D * 0.18 });
   }
 
-  function ruin(cx, cz) {
-    const y = heightAt(cx, cz);
-    sites.push({ x: cx, z: cz, r: 5.5, type: 'ruína' });
-    sbox(4.6, rand(1.1, 2.4), 0.42, cx, y + 0.7, cz - 2, 0x9a958c);
-    sbox(0.42, rand(0.9, 2.6), 4.2, cx - 2.2, y + 0.7, cz, 0x9a958c);
-    sbox(2, rand(0.6, 1.1), 0.42, cx + 1, y + 0.4, cz + 1.8, 0x6e6a63);
-    sbox(0.7, 3, 0.7, cx + 2.1, y + 1.5, cz + 1.9, 0x9a958c);
-    sbox(0.7, rand(0.8, 1.6), 0.7, cx - 2.1, y + 0.6, cz + 1.9, 0x6e6a63);
-  }
-
   const flames = [];
+  /* forte LEGADO: fonte visual oculta (o fallback ativo sai dos colisores do
+     castelo). Nenhuma peça dele é parede. */
   function fort(cx, cz) {
-    sites.push({ x: cx, z: cz, r: 28, type: 'forte' });
     const y = heightAt(cx, cz);
     const S = 17, H = 4.6, T = 0.9;
     sbox(S * 2 + T, H + 2.5, T, cx, y + H / 2 - 0.6, cz - S, 0x9a958c);
@@ -187,26 +170,26 @@ export function createStructures(deps) {
     const gate = 4.6, seg = (S * 2 - gate) / 2;
     sbox(seg, H + 2.5, T, cx - (gate + seg) / 2, y + H / 2 - 0.6, cz + S, 0x9a958c);
     sbox(seg, H + 2.5, T, cx + (gate + seg) / 2, y + H / 2 - 0.6, cz + S, 0x9a958c);
-    sbox(gate + 1.4, 1.1, T + 0.5, cx, y + H + 0.4, cz + S, 0x6e6a63, false);  // arco do portão
+    sbox(gate + 1.4, 1.1, T + 0.5, cx, y + H + 0.4, cz + S, 0x6e6a63);  // arco do portão
     for (const [ox, oz] of [[-S, -S], [S, -S], [-S, S], [S, S]]) {
       sbox(2.8, H + 4, 2.8, cx + ox, y + (H + 4) / 2 - 0.6, cz + oz, 0x6e6a63);
       // telhado pagode em 2 camadas (estilo oriental)
       scone(2.6, 1.3, cx + ox, y + H + 4.1, cz + oz, 0xb8342a);
-      sbox(1.5, 0.5, 1.5, cx + ox, y + H + 4.9, cz + oz, 0x6e2620, false);
+      sbox(1.5, 0.5, 1.5, cx + ox, y + H + 4.9, cz + oz, 0x6e2620);
       scone(1.6, 1.1, cx + ox, y + H + 5.6, cz + oz, 0xb8342a);
       // mastro + bandeira tremulante
-      sbox(0.09, 1.7, 0.09, cx + ox, y + H + 7.0, cz + oz, 0x6b4a2e, false);
+      sbox(0.09, 1.7, 0.09, cx + ox, y + H + 7.0, cz + oz, 0x6b4a2e);
       const fl = new THREE.Mesh(flagGeo, flagMat);
       fl.position.set(cx + ox, y + H + 7.4, cz + oz);
-      fl.userData.ry = rand(TAU);
+      fl.userData.ry = Math.random() * TAU; // fase do tremular: RNG privado (noSeed)
       scene.add(fl);
       flags.push(fl);
     }
     // portão torii vermelho + lanternas
     sbox(0.7, 7, 0.7, cx - 3.4, y + 3.2, cz + S + 1.6, 0xb8342a);
     sbox(0.7, 7, 0.7, cx + 3.4, y + 3.2, cz + S + 1.6, 0xb8342a);
-    sbox(9.5, 0.55, 1.1, cx, y + 6.6, cz + S + 1.6, 0xb8342a, false);
-    sbox(8, 0.45, 0.9, cx, y + 5.7, cz + S + 1.6, 0x6e2620, false);
+    sbox(9.5, 0.55, 1.1, cx, y + 6.6, cz + S + 1.6, 0xb8342a);
+    sbox(8, 0.45, 0.9, cx, y + 5.7, cz + S + 1.6, 0x6e2620);
     const lanternMat = new THREE.MeshStandardMaterial({ color: 0x401505, emissive: 0xff9a40, emissiveIntensity: 2.4, roughness: 0.5 });
     for (const lx of [-3.4, 3.4]) {
       const lt = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), lanternMat);
@@ -221,10 +204,10 @@ export function createStructures(deps) {
     sbox(0.45, 3.2, 0.45, cx - 2.4, y + 1.7, cz + 2.4, 0xb8342a);
     sbox(0.45, 3.2, 0.45, cx + 2.4, y + 1.7, cz + 2.4, 0xb8342a);
     scone(4.6, 1.6, cx, y + 3.9, cz, 0xb8342a);
-    sbox(2.6, 0.5, 2.6, cx, y + 4.8, cz, 0x6e2620, false);
+    sbox(2.6, 0.5, 2.6, cx, y + 4.8, cz, 0x6e2620);
     scone(2.6, 1.3, cx, y + 5.7, cz, 0xb8342a);
-    for (let i = -3; i <= 3; i++) sbox(1, 0.7, 0.5, cx + i * 4.2, y + H + 0.55, cz - S, 0x9a958c, false);
-    sbox(7, 0.34, 7, cx, y + 0.05, cz, 0x6e6a63, false);                       // estrado central
+    for (let i = -3; i <= 3; i++) sbox(1, 0.7, 0.5, cx + i * 4.2, y + H + 0.55, cz - S, 0x9a958c);
+    sbox(7, 0.34, 7, cx, y + 0.05, cz, 0x6e6a63);                       // estrado central
     // braseiros com chama emissiva (brilham no bloom)
     const flameMat = new THREE.MeshStandardMaterial({ color: 0x331303, emissive: 0xff8a2e, emissiveIntensity: 3.2, roughness: 0.4 });
     for (const [ox, oz] of [[-4, 4], [4, 4], [-4, -4], [4, -4]]) {
@@ -236,45 +219,14 @@ export function createStructures(deps) {
     }
   }
 
-  /* ---- posicionamento: acha pontos planos e sem sobreposição ---- */
-  function flatSpot(rMin, rMax, tries = 70, options = {}) {
-    const { need = 16, cityNeed = 100, accept = null } = options;
-    let best = null, bestS = 1e9;
-    for (let i = 0; i < tries; i++) {
-      const a = rand(TAU), r = rand(rMin, rMax);
-      const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      if (!clearOf(x, z, need, cityNeed)) continue;
-      const s = slopeAt(x, z) + slopeAt(x + 6, z) + slopeAt(x, z + 6) + slopeAt(x - 6, z) + slopeAt(x, z - 6);
-      if (s >= bestS) continue;
-      const candidate = { x, z };
-      if (accept && !accept(candidate)) continue;
-      bestS = s;
-      best = candidate;
-    }
-    return best;
-  }
-  function clearOf(x, z, need = 16, cityNeed = 100) {
-    if (Math.hypot(x, z) < 42) return false;
-    if (Math.hypot(x - CITY.x, z - CITY.z) < cityNeed) return false;
-    if (heightAt(x, z) < WATER_LEVEL + 1.5) return false; // nada construído dentro de lago
-    for (const s of sites) if (Math.hypot(x - s.x, z - s.z) < s.r + need) return false;
-    return true;
-  }
-
-  // O disco de ruínas urbanas (88 m), a órbita (30 m) e o corpo do Golem
-  // (1,5 m) exigem 119,5 m. Também rejeitamos rampas acima de 30° usando
-  // exatamente a mesma medição pura que createCastle — sem consumir RNG.
-  const FORT_POS = flatSpot(290, 410, 70, {
-    cityNeed: 120,
-    accept: candidate =>
-      measureCastleSite({ center: candidate, heightAt }).rampMaxSlopeDegrees <=
-        MAX_CASTLE_RAMP_SLOPE_DEGREES,
-  }) || { x: 330, z: -280 };
+  /* ---- posicionamento: js/paredes.js (planejarEstruturas) já decidiu
+     onde fica cada construção; aqui cada uma é desenhada no lugar dela ---- */
+  const FORT_POS = plano.forte;
   buildingFort = true;
   try { fort(FORT_POS.x, FORT_POS.z); } finally { buildingFort = false; }
-  for (let i = 0; i < 6; i++) { const p = flatSpot(90, 470); if (p) tower(p.x, p.z); }
-  for (let i = 0; i < 6; i++) { const p = flatSpot(70, 440); if (p) cabin(p.x, p.z, i % 2 === 0); }
-  for (let i = 0; i < 5; i++) { const p = flatSpot(80, 460); if (p) ruin(p.x, p.z); }
+  plano.torres.forEach((t, i) => tower(t, mundo.pecas.torres[i]));
+  plano.cabanas.forEach((c, i) => cabin(c, mundo.pecas.cabanas[i]));
+  for (const pecas of mundo.pecas.ruinas) desenhar(pecas);
 
   /* ================= CIDADE + TORRE NEXUS ================= */
   const carSpots = [];      // vagas de veículos {x,z,ry,type}
@@ -284,8 +236,9 @@ export function createStructures(deps) {
 
   // fachada: parede + janelas com moldura/peitoril geradas por canvas. Só o VIDRO
   // vai pro emissiveMap (janelas acendem à noite; a parede fica apagada).
-  // A grade e o consumo de Math.random (janela acesa/cor) são os MESMOS de antes
-  // — preserva a ordem do rand seedado (invariante do worldgen).
+  // Janela acesa/cor saem do Math.random PRIVADO (noSeed): mesma fachada em
+  // todos os clientes, sem encostar no stream seedado. Só o lado visual tem
+  // canvas — js/paredes.js não sabe o que é fachada.
   function facadeTex() {
     const c1 = document.createElement('canvas'); c1.width = 64; c1.height = 128;
     const c2 = document.createElement('canvas'); c2.width = 64; c2.height = 128;
@@ -320,41 +273,39 @@ export function createStructures(deps) {
   const cityInteriorLampGeos = []; // luminárias emissivas do interior (mesh própria)
   const cityInteriorSignGeos = []; // numeração dos andares (atlas em CanvasTexture)
   let cityInteriorSignTex;         // textura-atlas dos números (setada na geração da torre)
-  // (noSeed vive no TOPO de createStructures: as torres de vigia já o usam)
   const cityProps = new THREE.Group(); cityProps.name = 'cityProps';
   // PRNG independente pro detalhe arquitetônico: determinístico em todos os
-  // clientes (seed constante) e NÃO consome o rand seedado do worldgen.
+  // clientes (seed constante). Só desenho — nada daqui vira parede.
   let _bs = 0xB111D5;
   const bp = () => (_bs = (_bs * 1664525 + 1013904223) >>> 0) / 4294967296;
   const brand = (a = 1, b) => (b === undefined ? bp() * a : a + bp() * (b - a));
   const _white = new THREE.Color(1, 1, 1);
-  /* `roof=false`: parede do TÉRREO OCO. `groundAt` varre `platforms`
+  /* caixa texturizada (UV ~ por andar). A parede urbana já está em `walls`
+     (js/paredes.js); aqui fica o desenho e o telhado pisável.
+     `roof=false`: parede do TÉRREO OCO. `groundAt` varre `platforms`
      inteiro a cada consulta (jogador + todo bicho, por frame), então as
      ~44 paredes internas não podem virar 44 lajes pisáveis — ainda mais
      porque o topo delas fica DENTRO do bloco maciço de cima. */
-  function cityBox(w, h, d, x, y, z, tint, solid = true, roof = true) { // caixa texturizada (UV ~ por andar)
+  function cityBox(b, tint, roof = true) {
+    const { w, h, d, x, y, z } = b;
     const g = new THREE.BoxGeometry(w, h, d);
     const uv = g.attributes.uv;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * Math.max(w, d) / 9, uv.getY(i) * h / 7);
     g.translate(x, y, z);
     paintGeometry(g, tint || _white); // tint por prédio (vertexColors * map)
     cityGeos.push(g);
-    if (solid) {
-      walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2, city: true });
-      // telhado pisável: pousar de paraquedas/pular em prédio da cidade funciona
-      if (roof) platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });
-    }
+    // telhado pisável: pousar de paraquedas/pular em prédio da cidade funciona
+    if (roof) platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });
   }
   /* miolo dos térreos ocos: vai pro cityInteriorMesh (que some junto no
      evento de destruição). Já houve o bug de o visual da laje vazar pro
      mesh GLOBAL e ficar flutuando depois do destroy() — não repetir. */
   const _icc = new THREE.Color();
-  function interiorBox(w, h, d, x, y, z, hex, solid = false, floor = false) {
+  function interiorBox(w, h, d, x, y, z, hex, floor = false) {
     const g = new THREE.BoxGeometry(w, h, d);
     g.translate(x, y, z);
     paintGeometry(g, _icc.setHex(hex));
     cityInteriorGeos.push(g);
-    if (solid) walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2, city: true });
     if (floor) platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });
   }
   function interiorLamp(w, d, x, y, z) { // mesh emissiva própria (luz de teto/placa)
@@ -362,14 +313,13 @@ export function createStructures(deps) {
     g.translate(x, y, z);
     cityInteriorLampGeos.push(g);
   }
-  // trim urbano vertex-color: some no evento (vai pro cityTrimMesh). Decorativo
-  // por padrão (sem colisão) — não cria parede invisível.
-  function trimBox(w, h, d, x, y, z, hex, solid = false) {
+  // trim urbano vertex-color: some no evento (vai pro cityTrimMesh). Só
+  // decorativo — parede urbana nova se declara em js/paredes.js.
+  function trimBox(w, h, d, x, y, z, hex) {
     const g = new THREE.BoxGeometry(w, h, d);
     g.translate(x, y, z);
     paintGeometry(g, _sc.setHex(hex));
     cityTrimGeos.push(g);
-    if (solid) walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2, city: true });
   }
   function trimCyl(r, h, x, y, z, hex, seg = 10) {
     const g = new THREE.CylinderGeometry(r, r, h, seg);
@@ -378,8 +328,7 @@ export function createStructures(deps) {
     cityTrimGeos.push(g);
   }
   {
-    const cx = CITY.x, cz = CITY.z, gy = heightAt(cx, cz);
-    sites.push({ x: cx, z: cz, r: 88, type: 'cidade' });
+    const { cx, cz, gy } = mundo.cidade; // o sítio 'cidade' já está em `sites` (plano)
     /* ---------- PAVIMENTO: praça, ruas, calçadas, meio-fio, faixas ----------
        Geometria plana vertex-color no cityTrimMesh (some no evento de destruição,
        revelando o solo escurecido das ruínas). Camadas em alturas ligeiramente
@@ -430,73 +379,54 @@ export function createStructures(deps) {
       if (arch === 'office' || arch === 'corner') { const ah = brand(2.6, 4.2); // antena
         trimBox(0.13, ah, 0.13, bx + brand(-w * 0.2, w * 0.2), py + ah / 2, bz + brand(-d * 0.2, d * 0.2), 0x20242a); }
     }
-    /* TÉRREO OCO: 4 lotes viram sala de verdade (js/cityinterior.js).
-       Tudo aqui nasce em noSeed — a fase é SEEDADA e cada BoxGeometry
-       custa 4 Math.random. Paredes vão pro cityGeos (fachada texturizada,
-       vista de fora continua prédio); miolo e luzes vão pro
-       cityInteriorMesh, que some junto no evento de destruição. */
-    function hollowGroundFloor(lot, bx, bz, d, gfH, tint) {
-      const plan = CityInterior.interiorPlan(lot, d, gfH);
-      noSeed(() => {
-        for (const s of plan.walls)
-          cityBox(s.w, s.h, s.d, bx + s.x, gy + s.y, bz + s.z, tint, true, false);
-        // SEM laje de piso: o cityInteriorMesh tem auto-iluminação forte
-        // (emissive 0x3b4552 @1.5 — é o que impede a Torre Nexus de ficar
-        // preta à noite), e uma laje grande dentro dele virava um espelho
-        // azul-claro que engolia os caixotes (visto na captura). O chão do
-        // footprint urbano já vem pintado e sem grama por CityLayout.
-        plan.cover.forEach((c, i) => {
-          // só o balcão central ganha laje pisável (pular nele pra atirar por
-          // cima do peitoril); os caixotes ficam só como cobertura, pra não
-          // engordar o `platforms` que groundAt varre por frame
-          interiorBox(c.w, c.h, c.d, bx + c.x, gy + c.h / 2, bz + c.z,
-            i === 0 ? 0x4a5561 : 0x7a5c30, true, i === 0);
-        });
-        for (const lp of plan.lamps)
-          interiorLamp(lp.w, lp.d, bx + lp.x, gy + lp.y, bz + lp.z);
-        // FINDABILITY: placa acesa por cima da porta + jambas de neon. Da rua
-        // a entrada tem que gritar "dá pra entrar aqui" — porta escura no meio
-        // de fachada texturizada some.
-        const sg = plan.sign, horiz = sg.face === 'N' || sg.face === 'S';
-        const nz = sg.face === 'S' ? 1 : sg.face === 'N' ? -1 : 0;
-        const nx = sg.face === 'E' ? 1 : sg.face === 'O' ? -1 : 0;
-        const sx = bx + sg.x + nx * 0.35, sz = bz + sg.z + nz * 0.35;
-        interiorLamp(horiz ? 3.2 : 0.12, horiz ? 0.12 : 3.2, sx, gy + sg.y, sz);
-        for (const k of [-1, 1]) {
-          const jx = sx + (horiz ? k * (CityInterior.INT.DOOR_W / 2 + 0.2) : 0);
-          const jz = sz + (horiz ? 0 : k * (CityInterior.INT.DOOR_W / 2 + 0.2));
-          interiorBox(0.16, CityInterior.INT.DOOR_H, 0.16, jx, gy + CityInterior.INT.DOOR_H / 2, jz, 0x9fe6ff);
-        }
-        poiMarks.push({ x: bx + sg.x + nx * 1.2, z: bz + sg.z + nz * 1.2, color: 0x9fe6ff, kind: 'interior' });
+    /* TÉRREO OCO: 4 lotes viram sala de verdade (js/cityinterior.js; as
+       caixas sólidas vêm de js/paredes.js: lote().interior). Paredes vão pro
+       cityGeos (fachada texturizada, vista de fora continua prédio); miolo e
+       luzes vão pro cityInteriorMesh, que some junto no evento de destruição. */
+    function hollowGroundFloor(L, tint) {
+      const { bx, bz } = L, { plan, paredes, cobertura } = L.interior;
+      for (const s of paredes) cityBox(s, tint, false);
+      // SEM laje de piso: o cityInteriorMesh tem auto-iluminação forte
+      // (emissive 0x3b4552 @1.5 — é o que impede a Torre Nexus de ficar
+      // preta à noite), e uma laje grande dentro dele virava um espelho
+      // azul-claro que engolia os caixotes (visto na captura). O chão do
+      // footprint urbano já vem pintado e sem grama por CityLayout.
+      cobertura.forEach((c, i) => {
+        // só o balcão central ganha laje pisável (pular nele pra atirar por
+        // cima do peitoril); os caixotes ficam só como cobertura, pra não
+        // engordar o `platforms` que groundAt varre por frame
+        interiorBox(c.w, c.h, c.d, c.x, c.y, c.z, i === 0 ? 0x4a5561 : 0x7a5c30, i === 0);
       });
-      cityInteriors.push({ lot, bx, bz, gy, d, gfH, plan });
+      for (const lp of plan.lamps)
+        interiorLamp(lp.w, lp.d, bx + lp.x, gy + lp.y, bz + lp.z);
+      // FINDABILITY: placa acesa por cima da porta + jambas de neon. Da rua
+      // a entrada tem que gritar "dá pra entrar aqui" — porta escura no meio
+      // de fachada texturizada some.
+      const sg = plan.sign, horiz = sg.face === 'N' || sg.face === 'S';
+      const nz = sg.face === 'S' ? 1 : sg.face === 'N' ? -1 : 0;
+      const nx = sg.face === 'E' ? 1 : sg.face === 'O' ? -1 : 0;
+      const sx = bx + sg.x + nx * 0.35, sz = bz + sg.z + nz * 0.35;
+      interiorLamp(horiz ? 3.2 : 0.12, horiz ? 0.12 : 3.2, sx, gy + sg.y, sz);
+      for (const k of [-1, 1]) {
+        const jx = sx + (horiz ? k * (CityInterior.INT.DOOR_W / 2 + 0.2) : 0);
+        const jz = sz + (horiz ? 0 : k * (CityInterior.INT.DOOR_W / 2 + 0.2));
+        interiorBox(0.16, CityInterior.INT.DOOR_H, 0.16, jx, gy + CityInterior.INT.DOOR_H / 2, jz, 0x9fe6ff);
+      }
+      poiMarks.push({ x: bx + sg.x + nx * 1.2, z: bz + sg.z + nz * 1.2, color: 0x9fe6ff, kind: 'interior' });
     }
 
-    function building(lot, idx) {
+    function building(L) {
+      const { lot, bx, bz, d, oco, gfH } = L;
       const { w, h, arch, face } = lot;
-      const bx = cx + lot.ox, bz = cz + lot.oz, d = CityLayout.lotDepth(lot);
-      const _s = rand(0.8, 1.1); void _s;              // PRESERVA o rand seedado (1 call/lote)
       const hue = arch === 'resid' ? 0.07 : arch === 'commerc' ? 0.55 : 0.6;
       const tint = new THREE.Color().setHSL(hue + brand(-0.02, 0.02), 0.06 + brand(0, 0.05), 0.6 + brand(-0.05, 0.12));
-      const oco = CityInterior.isHollowLot(idx);
       // o térreo OCO é sala e precisa de pé-direito de sala (ver cityinterior.js):
       // sem isso a cabeça de quem pula entra no bloco maciço e collide() cospe
       // o jogador pela fachada. O telhado NÃO se move (segue em gy + h).
-      const gfH = CityInterior.groundFloorHeight(lot, oco);
-      if (oco) {
-        // volume maciço começa ACIMA do térreo; o térreo vira sala
-        cityBox(w, h - gfH, d, bx, gy + gfH + (h - gfH) / 2, bz, tint);
-        // CONTRATO DO WORLDGEN: as 3 peças do caminho maciço que deixamos de
-        // criar (pódium, moldura e vão recuado da porta falsa) consumiam
-        // 4 Math.random cada via UUID do THREE. Repor o consumo mantém
-        // bases/baús/grama IDÊNTICOS ao layout do seed — mesma técnica das
-        // 168 chamadas lá embaixo. NÃO é código morto.
-        for (let i = 0; i < CityInterior.SKIPPED_TRIMS * 4; i++) Math.random();
-        hollowGroundFloor(lot, bx, bz, d, gfH, tint);
-      } else {
-        cityBox(w, h, d, bx, gy + h / 2, bz, tint);     // volume principal (fachada + colisor + telhado)
-        trimBox(w + 0.5, gfH, d + 0.5, bx, gy + gfH / 2, bz, arch === 'commerc' ? 0x2b2f36 : 0x4a4f58); // térreo/podium
-      }
+      // `L.volume` já é o bloco maciço certo: no oco começa ACIMA do térreo.
+      cityBox(L.volume, tint);                          // volume principal (fachada + telhado)
+      if (oco) hollowGroundFloor(L, tint);
+      else trimBox(w + 0.5, gfH, d + 0.5, bx, gy + gfH / 2, bz, arch === 'commerc' ? 0x2b2f36 : 0x4a4f58); // térreo/podium
       trimBox(w + 0.7, 0.28, d + 0.7, bx, gy + gfH, bz, 0x6c727b);                                    // cornija do térreo
       const fo = faceOffset(face, w, d);
       const doorW = Math.min(2.8, w * 0.42), doorH = FACADE_DOOR_H;
@@ -527,7 +457,7 @@ export function createStructures(deps) {
       trimBox(0.3, 0.7, d + 0.4, bx + w / 2, py + 0.35, bz, 0x3a3f48);
       roofUnits(bx, bz, w, d, py, arch);
     }
-    CityLayout.LOTS.forEach((lot, i) => building(lot, i));
+    for (const L of mundo.cidade.lotes) building(L);
 
     // vagas de carros esportivos na rua
     carSpots.push({ x: cx + 14, z: cz + 26, ry: 0, type: 'sport' });          // de frente pra avenida
@@ -573,16 +503,15 @@ export function createStructures(deps) {
     trimCyl(0.26, 1.0, cx + 10, gy + 0.5, cz - 8, 0xb23a2a);          // hidrante
     trimBox(0.6, 0.9, 0.6, cx + 14, gy + 0.45, cz + 6, 0x33383f);    // lixeira
 
-    /* ---- TORRE NEXUS: 10 andares + escadaria + heliponto ---- */
-    const W = 18, fh = 3.4, NF = 10;
-    towerTopY = gy + NF * fh + 0.25;
-    // casca externa texturizada (porta ao sul)
-    cityBox(W, NF * fh + 1, 0.5, cx, gy + (NF * fh + 1) / 2, cz - W / 2);              // norte
-    cityBox(0.5, NF * fh + 1, W, cx - W / 2, gy + (NF * fh + 1) / 2, cz);              // oeste
-    cityBox(0.5, NF * fh + 1, W, cx + W / 2, gy + (NF * fh + 1) / 2, cz);              // leste
-    cityBox(W / 2 - 2, NF * fh + 1, 0.5, cx - W / 4 - 1, gy + (NF * fh + 1) / 2, cz + W / 2); // sul-esq
-    cityBox(W / 2 - 2, NF * fh + 1, 0.5, cx + W / 4 + 1, gy + (NF * fh + 1) / 2, cz + W / 2); // sul-dir
-    cityBox(4.2, NF * fh + 1 - 3, 0.5, cx, gy + 3 + (NF * fh - 2) / 2, cz + W / 2);    // acima da porta
+    /* ---- TORRE NEXUS: 10 andares + escadaria + heliponto ----
+       Casca, pilares, lajes, lances e corrimãos são DADO (js/paredes.js:
+       cascaNexus / interiorNexus) — as caixas sólidas já estão em `walls`.
+       Aqui: fachada, trim, o desenho do interior, placas e o telhado. */
+    const { W, FH: fh, NF } = Paredes.NEXUS;
+    const nexus = mundo.cidade.nexus;
+    NEXUS_INTERIOR = nexus.info;
+    towerTopY = nexus.info.towerTopY;
+    for (const b of mundo.cidade.casca) cityBox(b); // casca externa texturizada (porta ao sul)
     // ---- trim externo da torre (decorativo, sem colisão): pilares de canto,
     //      moldura de entrada e marquise. Não bloqueia porta nem navegação. ----
     for (const sx of [-1, 1]) for (const sz of [-1, 1])
@@ -596,20 +525,11 @@ export function createStructures(deps) {
     trimBox(0.4, 0.5, W + 0.6, cx - W / 2, gy + 3.0, cz, 0x5a616b);
     trimBox(0.4, 0.5, W + 0.6, cx + W / 2, gy + 3.0, cz, 0x5a616b);
     /* ---------- INTERIOR: escada dog-leg (dois lances em U) + poço + lobby ----------
-       Contrato geométrico (relativo ao centro cx,cz; y absoluto). Reusado pela
-       geometria E pelos testes (test/tower-interior.test.js). Todo o VISUAL vai
-       pro cityInteriorMesh (some no evento de destruição, ver cityVisual). */
-    const HALF = W / 2 - 0.25;               // 8.75: meia-largura interna (casca 0.5)
-    const WELL = { x0: -HALF, x1: -4.9, z0: -HALF, z1: -4.1 }; // poço fixo (NO): a escada mora inteira aqui
-    const GAP = 0.2, SLABT = 0.24, RAILH = 0.98, STEPS = 10;
-    const FLW = (WELL.x1 - WELL.x0 - GAP) / 2; // largura de cada lance (~1.825)
-    const xA0 = WELL.x0, xA1 = WELL.x0 + FLW;  // lance A (oeste)
-    const xB0 = WELL.x1 - FLW, xB1 = WELL.x1;  // lance B (leste)
-    const zMid = WELL.z0 + 1.75;               // topo dos lances / borda sul do patamar
-    const zBot = WELL.z1;                       // base dos lances (borda norte do apron)
-    NEXUS_INTERIOR = { W, fh: fh, floors: NF, well: WELL, flightWidth: FLW, flightRun: zBot - zMid,
-      gap: GAP, midDepth: 1.75, riserCount: STEPS, railHeight: RAILH, slabT: SLABT,
-      xA0, xA1, xB0, xB1, zMid, zBot, half: HALF, gy, towerTopY };
+       O contrato geométrico é `nexus.info` (NEXUS_INTERIOR: test/tower-interior.
+       test.js) e `nexus.ops`, a lista ordenada do que existe lá dentro — cada
+       op traz a parede/plataforma que gera. Aqui só se DESENHA, e todo o VISUAL
+       vai pro cityInteriorMesh (some no evento de destruição, ver cityVisual). */
+    const { half: HALF, zMid, zBot, railHeight: RAILH, slabT: SLABT, riserCount: STEPS } = nexus.info;
     const _ic = new THREE.Color();
     const iBox = (w, h, d, x, y, z, hex) => { // caixa vertex-color no mesh interior
       const g = new THREE.BoxGeometry(w, h, d); g.translate(cx + x, y, cz + z);
@@ -619,14 +539,13 @@ export function createStructures(deps) {
       const g = new THREE.BoxGeometry(w, 0.1, d); g.translate(cx + x, y, cz + z);
       cityInteriorLampGeos.push(g);
     };
-    // laje/patamar: visual + plataforma pisável + parede noCollide (barra bala, não empurra)
-    const iSlab = (x0, x1, z0, z1, y, hex = 0x9297a0) => {
+    // laje/patamar: desenho + plataforma pisável (a parede noCollide já está em walls)
+    const iSlab = ({ x0, x1, z0, z1, y, plataforma }, hex = 0x9297a0) => {
       iBox(x1 - x0, SLABT, z1 - z0, (x0 + x1) / 2, y - SLABT / 2, (z0 + z1) / 2, hex);
-      walls.push({ x0: cx + x0, x1: cx + x1, y0: y - SLABT, y1: y, z0: cz + z0, z1: cz + z1, noCollide: true, city: true });
-      platforms.push({ x0: cx + x0, x1: cx + x1, z0: cz + z0, z1: cz + z1, y, city: true });
+      platforms.push(plataforma);
     };
-    // corrimão horizontal (barra sup+méd + prumos); colisor fino contínuo opcional
-    const railRun = (x0, x1, z0, z1, yb, collide) => {
+    // corrimão horizontal (barra sup+méd + prumos); o colisor fino já está em walls
+    const railRun = ({ x0, x1, z0, z1, yb }) => {
       const horiz = Math.abs(x1 - x0) >= Math.abs(z1 - z0);
       const len = horiz ? (x1 - x0) : (z1 - z0), mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, hex = 0x9aa1ab;
       if (horiz) { iBox(len, 0.06, 0.06, mx, yb + RAILH, mz, hex); iBox(len, 0.05, 0.05, mx, yb + RAILH * 0.5, mz, hex); }
@@ -634,12 +553,9 @@ export function createStructures(deps) {
       const n = Math.max(2, Math.round(Math.abs(len) / 1.1));
       for (let i = 0; i <= n; i++) { const f = i / n;
         iBox(0.06, RAILH, 0.06, horiz ? x0 + (x1 - x0) * f : mx, yb + RAILH / 2, horiz ? mz : z0 + (z1 - z0) * f, hex); }
-      if (collide) { const t = 0.12;
-        walls.push({ x0: cx + (horiz ? x0 : mx - t / 2), x1: cx + (horiz ? x1 : mx + t / 2),
-          y0: yb, y1: yb + RAILH, z0: cz + (horiz ? mz - t / 2 : z0), z1: cz + (horiz ? mz + t / 2 : z1), city: true }); }
     };
     // corrimão inclinado acompanhando um lance (x fixo; norte->sul: yN->yS)
-    const railSlope = (x, yN, yS) => {
+    const railSlope = ({ x, yN, yS }) => {
       const dz = zBot - zMid, dy = yS - yN, len = Math.hypot(dz, dy), hex = 0x9aa1ab;
       const g = new THREE.BoxGeometry(0.06, 0.06, len);
       g.rotateX(-Math.atan2(dy, dz)); g.translate(cx + x, (yN + yS) / 2 + RAILH, cz + (zMid + zBot) / 2);
@@ -647,112 +563,74 @@ export function createStructures(deps) {
       for (let i = 0; i <= 5; i++) { const t = i / 5; iBox(0.06, RAILH, 0.06, x, yN + dy * t + RAILH / 2, zMid + dz * t, hex); }
     };
     // um lance: rampa lógica contínua (colisão SUAVE) + degraus SÓ visuais por cima
-    const flight = (xL, xR, yN, yS) => {
-      platforms.push({ ramp: true, axis: 'z', x0: cx + xL, x1: cx + xR, z0: cz + zMid, z1: cz + zBot, y0: yN, y1: yS, city: true });
+    const flight = ({ xL, xR, yN, yS, plataforma }) => {
+      platforms.push(plataforma);
       const dz = (zBot - zMid) / STEPS;
       for (let i = 0; i < STEPS; i++) { const t = (i + 0.5) / STEPS;
         iBox(xR - xL, 0.34, dz + 0.02, (xL + xR) / 2, (yN + (yS - yN) * t) - 0.17, zMid + t * (zBot - zMid), 0x83888f); }
     };
-    // guarda-corpo do poço por pavimento: borda leste + vão central do apron
-    const stairGuards = (y) => {
-      railRun(WELL.x1, WELL.x1, WELL.z0, zBot, y, true);   // borda leste do poço (protege o piso)
-      railRun(xA1, xB0, zBot, zBot, y, true);              // vão central (0.2) na borda do apron
-    };
-    // escada k: sobe de yBottom (piso de baixo) a yTop (piso de cima ou telhado)
-    const buildStaircase = (yBottom, yTop) => {
-      const ym = (yBottom + yTop) / 2;
-      iSlab(xA0, xB1, WELL.z0, zMid, ym);                  // patamar intermediário (norte), plano em ym
-      flight(xA0, xA1, ym, yBottom);                       // lance A: patamar(N) -> piso baixo(S)
-      flight(xB0, xB1, ym, yTop);                          // lance B: patamar(N) -> piso alto(S)
-      railSlope(xA1, ym, yBottom); railSlope(xB0, ym, yTop); // corrimãos internos (no vão central)
-      railRun(WELL.x1, WELL.x1, WELL.z0, zMid, ym, true);  // borda leste do patamar
-    };
-    // pavimento 1..NF-1: laje = bloco leste + apron SO (tudo menos o poço)
-    const buildFloor = (y) => { iSlab(WELL.x1, HALF, -HALF, HALF, y); iSlab(-HALF, WELL.x1, zBot, HALF, y); };
 
     heliSpot = { x: cx, y: towerTopY, z: cz };
     bazookaSpot = { x: cx + 6.5, y: towerTopY, z: cz + 6.5 };
-    // === GEOMETRIA DO INTERIOR: criada com Math.random NEUTRALIZADO (noSeed) ===
-    // Nada aqui pode consumir o RNG seedado; walls/platforms são objetos puros.
-    noSeed(() => {
-      // painéis internos (escondem a fachada externa vista por dentro) — sem colisão
-      const panelH = NF * fh, panelY = gy + panelH / 2, panelC = 0x565b64;
-      iBox(2 * HALF, panelH, 0.08, 0, panelY, -HALF + 0.08, panelC);   // norte
-      iBox(0.08, panelH, 2 * HALF, -HALF + 0.08, panelY, 0, panelC);   // oeste
-      iBox(0.08, panelH, 2 * HALF, HALF - 0.08, panelY, 0, panelC);    // leste
-      iBox(HALF - 2.4, panelH, 0.08, -(HALF + 2.4) / 2, panelY, HALF - 0.08, panelC); // sul-esq (evita porta)
-      iBox(HALF - 2.4, panelH, 0.08, (HALF + 2.4) / 2, panelY, HALF - 0.08, panelC);  // sul-dir
-      // lobby: piso interno diferenciado (decorativo) + 4 pilares estruturais (colisor)
-      iBox(2 * HALF, 0.06, 2 * HALF, 0, gy + 0.05, 0, 0x3d434c);       // placa do lobby (leitura visual)
-      for (const [px, pz] of [[-2.5, -5.5], [-2.5, 5.5], [6, -5.5], [6, 5.5]]) {
-        iBox(0.5, panelH, 0.5, px, panelY, pz, 0x6b7079);              // pilar visual (full-height)
-        walls.push({ x0: cx + px - 0.25, x1: cx + px + 0.25, y0: gy, y1: gy + panelH, z0: cz + pz - 0.25, z1: cz + pz + 0.25, city: true });
-      }
-      // numeração dos andares: 1 atlas em CanvasTexture (planos mesclados = 1 draw call)
-      const signCv = document.createElement('canvas'); signCv.width = 64 * NF; signCv.height = 64;
-      const sctx = signCv.getContext('2d');
-      sctx.fillStyle = '#0b0e13'; sctx.fillRect(0, 0, signCv.width, signCv.height);
-      sctx.fillStyle = '#8fd8ff'; sctx.font = 'bold 40px sans-serif'; sctx.textAlign = 'center'; sctx.textBaseline = 'middle';
-      for (let f = 1; f <= NF; f++) sctx.fillText(String(f), (f - 0.5) * 64, 36);
-      cityInteriorSignTex = new THREE.CanvasTexture(signCv); cityInteriorSignTex.colorSpace = THREE.SRGBColorSpace;
-      const floorSign = (f, x, y, z) => {                              // placa do andar f, olhando pro leste (+x)
-        const g = new THREE.PlaneGeometry(0.9, 0.9);
-        const u = g.attributes.uv, c0 = (f - 1) / NF, c1 = f / NF;
-        for (let i = 0; i < u.count; i++) u.setX(i, c0 + u.getX(i) * (c1 - c0));
-        g.rotateY(Math.PI / 2); g.translate(cx + x, y, cz + z);
-        cityInteriorSignGeos.push(g);
-      };
-      // andares e escada + numeração
-      for (let k = 1; k <= NF; k++) {
-        const yTop = k === NF ? towerTopY : gy + k * fh;
-        if (k < NF) { buildFloor(gy + k * fh); stairGuards(gy + k * fh); }
-        buildStaircase(gy + (k - 1) * fh, yTop);
-        iLamp(1.4, 0.4, 3.5, gy + k * fh - 0.35, 0);                   // luminária central do teto
-        iLamp(0.5, 1.2, -6.5, gy + k * fh - 0.35, -5.5);               // luminária sobre a escada
-        floorSign(k, -4.7, gy + (k - 1) * fh + 2.3, -4.0);            // número do andar junto à saída
-      }
-      // ---- TELHADO: deck (footprint menos o poço) + heliponto + parapeitos ----
-      buildFloor(towerTopY);                                          // deck com saída da escada (poço aberto)
-      stairGuards(towerTopY);                                         // guarda-corpo do poço no telhado
-      iBox(W, 0.6, 0.4, 0, towerTopY + 0.3, -W / 2 + 0.2, 0x3a3f48);  // parapeitos
-      iBox(W, 0.6, 0.4, 0, towerTopY + 0.3, W / 2 - 0.2, 0x3a3f48);
-      iBox(0.4, 0.6, W, -W / 2 + 0.2, towerTopY + 0.3, 0, 0x3a3f48);
-      iBox(0.4, 0.6, W, W / 2 - 0.2, towerTopY + 0.3, 0, 0x3a3f48);
-      const padGeo = new THREE.CylinderGeometry(5.2, 5.2, 0.1, 24); padGeo.translate(cx, towerTopY + 0.06, cz);
-      paintGeometry(padGeo, _ic.setHex(0x32363d)); cityInteriorGeos.push(padGeo);
-      iBox(3.4, 0.06, 0.7, 0, towerTopY + 0.12, 0, 0xe8eef4);         // "H"
-      iBox(0.7, 0.06, 2.6, -1.35, towerTopY + 0.12, 0, 0xe8eef4);
-      iBox(0.7, 0.06, 2.6, 1.35, towerTopY + 0.12, 0, 0xe8eef4);
-      trimBox(0.16, 5.5, 0.16, cx - W / 2 + 1.6, towerTopY + 2.75, cz - W / 2 + 1.6, 0x20242a); // antena
-      trimBox(1.6, 0.5, 1.6, cx - W / 2 + 1.6, towerTopY + 0.25, cz - W / 2 + 1.6, 0x2e323a);   // casa de máquinas
-      iBox(1.2, 0.7, 0.7, 6.5, towerTopY + 0.35, 6.5, 0x4a5240);      // caixa da bazuca
-    });
-    // === CONSUMO SEEDADO DO WORLDGEN (fora do noSeed) — contrato do Math.random ===
-    // inimigos de terno em andares alternados (rand seedado: variedade por seed)
-    for (let k = 1; k <= NF; k++) if (k % 2 === 0 && k < NF) {
-      enemyCamps.push({ x: cx + 3, z: cz + rand(-4, 4), suit: true, floorY: gy + k * fh });
-      enemyCamps.push({ x: cx + rand(0, 5), z: cz + rand(-5, 5), suit: true, floorY: gy + k * fh });
-    }
-    // a escadaria/telhado ANTIGOS (42 geometrias) consumiam 168 chamadas de Math.random
-    // via UUIDs do THREE; reproduz esse consumo p/ manter bases/baús/grama a jusante
-    // IDÊNTICOS ao layout do seed (preserva o contrato do worldgen sem prender a
-    // riqueza da geometria nova ao stream). 42×4 = 168.
-    for (let i = 0; i < 168; i++) Math.random();
+    // painéis internos (escondem a fachada externa vista por dentro) — sem colisão
+    const panelH = NF * fh, panelY = gy + panelH / 2, panelC = 0x565b64;
+    iBox(2 * HALF, panelH, 0.08, 0, panelY, -HALF + 0.08, panelC);   // norte
+    iBox(0.08, panelH, 2 * HALF, -HALF + 0.08, panelY, 0, panelC);   // oeste
+    iBox(0.08, panelH, 2 * HALF, HALF - 0.08, panelY, 0, panelC);    // leste
+    iBox(HALF - 2.4, panelH, 0.08, -(HALF + 2.4) / 2, panelY, HALF - 0.08, panelC); // sul-esq (evita porta)
+    iBox(HALF - 2.4, panelH, 0.08, (HALF + 2.4) / 2, panelY, HALF - 0.08, panelC);  // sul-dir
+    // lobby: piso interno diferenciado (decorativo); os 4 pilares vêm das ops
+    iBox(2 * HALF, 0.06, 2 * HALF, 0, gy + 0.05, 0, 0x3d434c);       // placa do lobby (leitura visual)
+    // numeração dos andares: 1 atlas em CanvasTexture (planos mesclados = 1 draw call)
+    const signCv = document.createElement('canvas'); signCv.width = 64 * NF; signCv.height = 64;
+    const sctx = signCv.getContext('2d');
+    sctx.fillStyle = '#0b0e13'; sctx.fillRect(0, 0, signCv.width, signCv.height);
+    sctx.fillStyle = '#8fd8ff'; sctx.font = 'bold 40px sans-serif'; sctx.textAlign = 'center'; sctx.textBaseline = 'middle';
+    for (let f = 1; f <= NF; f++) sctx.fillText(String(f), (f - 0.5) * 64, 36);
+    cityInteriorSignTex = new THREE.CanvasTexture(signCv); cityInteriorSignTex.colorSpace = THREE.SRGBColorSpace;
+    const floorSign = ({ andar: f, x, y, z }) => {                  // placa do andar f, olhando pro leste (+x)
+      const g = new THREE.PlaneGeometry(0.9, 0.9);
+      const u = g.attributes.uv, c0 = (f - 1) / NF, c1 = f / NF;
+      for (let i = 0; i < u.count; i++) u.setX(i, c0 + u.getX(i) * (c1 - c0));
+      g.rotateY(Math.PI / 2); g.translate(cx + x, y, cz + z);
+      cityInteriorSignGeos.push(g);
+    };
+    // pilares, andares, escada, luzes e numeração — na ordem de js/paredes.js
+    const desenhaOp = {
+      pilar: op => iBox(0.5, panelH, 0.5, op.px, panelY, op.pz, 0x6b7079), // pilar visual (full-height)
+      laje: op => iSlab(op),
+      corrimao: op => railRun(op),
+      lance: op => flight(op),
+      corrimaoInclinado: op => railSlope(op),
+      luminaria: op => iLamp(op.w, op.d, op.x, op.y, op.z),
+      placa: op => floorSign(op),
+    };
+    for (const op of nexus.ops) desenhaOp[op.tipo](op);
+    // ---- TELHADO: heliponto + parapeitos (o deck e o guarda-corpo do poço são ops) ----
+    iBox(W, 0.6, 0.4, 0, towerTopY + 0.3, -W / 2 + 0.2, 0x3a3f48);  // parapeitos
+    iBox(W, 0.6, 0.4, 0, towerTopY + 0.3, W / 2 - 0.2, 0x3a3f48);
+    iBox(0.4, 0.6, W, -W / 2 + 0.2, towerTopY + 0.3, 0, 0x3a3f48);
+    iBox(0.4, 0.6, W, W / 2 - 0.2, towerTopY + 0.3, 0, 0x3a3f48);
+    const padGeo = new THREE.CylinderGeometry(5.2, 5.2, 0.1, 24); padGeo.translate(cx, towerTopY + 0.06, cz);
+    paintGeometry(padGeo, _ic.setHex(0x32363d)); cityInteriorGeos.push(padGeo);
+    iBox(3.4, 0.06, 0.7, 0, towerTopY + 0.12, 0, 0xe8eef4);         // "H"
+    iBox(0.7, 0.06, 2.6, -1.35, towerTopY + 0.12, 0, 0xe8eef4);
+    iBox(0.7, 0.06, 2.6, 1.35, towerTopY + 0.12, 0, 0xe8eef4);
+    trimBox(0.16, 5.5, 0.16, cx - W / 2 + 1.6, towerTopY + 2.75, cz - W / 2 + 1.6, 0x20242a); // antena
+    trimBox(1.6, 0.5, 1.6, cx - W / 2 + 1.6, towerTopY + 0.25, cz - W / 2 + 1.6, 0x2e323a);   // casa de máquinas
+    iBox(1.2, 0.7, 0.7, 6.5, towerTopY + 0.35, 6.5, 0x4a5240);      // caixa da bazuca
+    // inimigos de terno em andares alternados (sorteio das construções: variedade por seed)
+    for (const c of plano.campsNexus) enemyCamps.push({ ...c });
   }
 
   /* ================= BASES MILITARES ================= */
+  /* muro, sacos de areia e caixotes vêm de js/paredes.js (pecasBase); guardas
+     e o giro do caminhão, do mesmo sorteio (plano). Aqui: tendas e vagas. */
   const baseSites = [];
-  function mbase(cx, cz) {
-    const y = heightAt(cx, cz);
-    sites.push({ x: cx, z: cz, r: 22, type: 'base' });
+  function mbase(b, pecas) {
+    const cx = b.x, cz = b.z, y = b.y;
     baseSites.push({ x: cx, z: cz, cleared: false });
-    const W2 = 21, D2 = 15, H2 = 2.4;
-    sbox(W2 * 2, H2, 0.7, cx, y + H2 / 2 - 0.3, cz - D2, 0x4a5240);
-    sbox(0.7, H2, D2 * 2, cx - W2, y + H2 / 2 - 0.3, cz, 0x4a5240);
-    sbox(0.7, H2, D2 * 2, cx + W2, y + H2 / 2 - 0.3, cz, 0x4a5240);
-    const g2 = 6;
-    sbox(W2 - g2 / 2, H2, 0.7, cx - (g2 / 2 + (W2 - g2 / 2) / 2), y + H2 / 2 - 0.3, cz + D2, 0x4a5240);
-    sbox(W2 - g2 / 2, H2, 0.7, cx + (g2 / 2 + (W2 - g2 / 2) / 2), y + H2 / 2 - 0.3, cz + D2, 0x4a5240);
+    desenhar(pecas);
     // tendas militares (prismas)
     for (const [ox, oz] of [[-12, -6], [-12, 4], [12, -5]]) {
       const t1 = new THREE.BoxGeometry(5.5, 0.16, 4.4); t1.rotateZ(0.7); t1.translate(cx + ox - 1.25, y + 1.25, cz + oz);
@@ -760,42 +638,29 @@ export function createStructures(deps) {
       const t2 = new THREE.BoxGeometry(5.5, 0.16, 4.4); t2.rotateZ(-0.7); t2.translate(cx + ox + 1.25, y + 1.25, cz + oz);
       paintGeometry(t2, _sc.setHex(0x55603f)); geos.push(t2);
     }
-    // sacos de areia + caixotes
-    for (let i = 0; i < 5; i++) sbox(2.2, 0.8, 0.6, cx - 4 + i * 2.4, y + 0.4, cz + D2 - 3, 0x8a7a58);
-    sbox(1.4, 1.4, 1.4, cx + 6, y + 0.7, cz - 8, 0x6b5a38);
-    sbox(1.2, 1.2, 1.2, cx + 7.6, y + 0.6, cz - 7.2, 0x6b5a38);
     // guardas + caminhão
-    for (let i = 0; i < 4; i++) enemyCamps.push({ x: cx + rand(-12, 12), z: cz + rand(-8, 8), army: true });
-    carSpots.push({ x: cx, z: cz - 4, ry: rand(TAU), type: 'truck' });
+    for (const g of b.guardas) enemyCamps.push({ x: g.x, z: g.z, army: true });
+    carSpots.push({ x: cx, z: cz - 4, ry: b.caminhaoRy, type: 'truck' });
     chestSpots.push({ x: cx - 5, z: cz - 8 });
   }
-  // fort.r (28) + need (30) = 58 m: cobre a órbita e o envelope máximo
-  // ±21 × ±15 m das paredes da base sem mudar as chamadas do RNG.
-  for (let i = 0; i < 2; i++) {
-    const p = flatSpot(130, 380, 70, { need: 30 });
-    if (p) mbase(p.x, p.z);
-  }
+  plano.bases.forEach((b, i) => mbase(b, mundo.pecas.bases[i]));
   chestSpots.push({ x: 5, z: 0.5 });
 
   const merged = BufferGeometryUtils.mergeGeometries(geos);
   const mesh = new THREE.Mesh(merged, csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.02 })));
   mesh.castShadow = mesh.receiveShadow = true;
   scene.add(mesh);
-  // O forte antigo continua sendo construído acima (mesmas geometrias, UUIDs
-  // e rand(TAU)), porém numa fonte separada e sempre oculta. O fallback ativo
-  // é gerado dos colliders novos em castle.js; esta fonte existe apenas para
-  // preservar o contrato histórico do worldgen.
-  const fortFallbackMesh = noSeed(() => {
-    const fallback = new THREE.Mesh(
-      BufferGeometryUtils.mergeGeometries(fortGeos),
-      csmMat(new THREE.MeshStandardMaterial({
-        vertexColors: true, roughness: 0.85, metalness: 0.02,
-      })),
-    );
-    fallback.name = 'bossCastleLegacySource';
-    fallback.castShadow = fallback.receiveShadow = true;
-    return fallback;
-  });
+  // O forte antigo continua sendo construído acima, numa fonte separada e
+  // sempre oculta (castle.js a recebe como `legacyRoot`). O fallback ativo é
+  // gerado dos colliders novos em castle.js.
+  const fortFallbackMesh = new THREE.Mesh(
+    BufferGeometryUtils.mergeGeometries(fortGeos),
+    csmMat(new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.85, metalness: 0.02,
+    })),
+  );
+  fortFallbackMesh.name = 'bossCastleLegacySource';
+  fortFallbackMesh.castShadow = fortFallbackMesh.receiveShadow = true;
   scene.add(fortFallbackMesh);
   const legacyFortY = heightAt(FORT_POS.x, FORT_POS.z);
   const castle = createCastle({
@@ -828,23 +693,19 @@ export function createStructures(deps) {
   // INTERIOR intacto da Torre Nexus (lajes, degraus, patamares, corrimãos, pilares,
   // painéis, heliponto): meshes próprias pra sumir junto no evento de destruição
   // (antes o visual ia pro `mesh` global e ficava FLUTUANDO após city.destroy()).
-  // noSeed: mesclagem/mesh/material geram UUIDs — não podem consumir o RNG do worldgen
-  // (a grama roda depois). São ADITIVOS (o antigo não os tinha) → sem compensação.
   // emissive baixo de auto-iluminação: o interior fechado quase não recebe luz à
   // noite; sem isto ficava preto. Sutil de dia, legível à noite.
-  const [cityInteriorMesh, cityInteriorLampMesh, cityInteriorSignMesh] = noSeed(() => {
-    const im = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityInteriorGeos),
-      csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04,
-        emissive: 0x3b4552, emissiveIntensity: 1.5 })));
-    im.name = 'cityInteriorMesh'; im.castShadow = im.receiveShadow = true;
-    const lm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityInteriorLampGeos),
-      new THREE.MeshStandardMaterial({ color: 0x0e1218, emissive: 0xcfe9ff, emissiveIntensity: 2.4, roughness: 0.5 }));
-    lm.name = 'cityInteriorLampMesh';
-    const sm = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityInteriorSignGeos),
-      new THREE.MeshBasicMaterial({ map: cityInteriorSignTex, transparent: false }));
-    sm.name = 'cityInteriorSignMesh';
-    return [im, lm, sm];
-  });
+  const cityInteriorMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityInteriorGeos),
+    csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04,
+      emissive: 0x3b4552, emissiveIntensity: 1.5 })));
+  cityInteriorMesh.name = 'cityInteriorMesh';
+  cityInteriorMesh.castShadow = cityInteriorMesh.receiveShadow = true;
+  const cityInteriorLampMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityInteriorLampGeos),
+    new THREE.MeshStandardMaterial({ color: 0x0e1218, emissive: 0xcfe9ff, emissiveIntensity: 2.4, roughness: 0.5 }));
+  cityInteriorLampMesh.name = 'cityInteriorLampMesh';
+  const cityInteriorSignMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityInteriorSignGeos),
+    new THREE.MeshBasicMaterial({ map: cityInteriorSignTex, transparent: false }));
+  cityInteriorSignMesh.name = 'cityInteriorSignMesh';
   scene.add(cityInteriorMesh, cityInteriorLampMesh, cityInteriorSignMesh);
   // visuais urbanos escondidos/mostrados atomicamente no evento
   const cityVisual = [cityMesh, cityTrimMesh, cityProps,
@@ -953,11 +814,12 @@ export function createStructures(deps) {
   const cityRuins = new THREE.Group();
   cityRuins.name = 'cidadeDestruida';
   cityRuins.visible = false;
-  const ruinWalls = [];   // colisores simplificados dos escombros (poucos)
+  // colisores simplificados dos escombros (poucos): js/paredes.js, porque o
+  // servidor/bots precisam deles quando a cidade cai
+  const ruinWalls = mundo.escombros;
   {
-    // PRNG PRÓPRIO: as ruínas nascem no boot e NÃO podem consumir o RNG
-    // seedado do mundo — senão tudo gerado depois delas muda de lugar
-    // (mundos de versões antigas/novas divergiriam e o QA quebra)
+    // PRNG PRÓPRIO do DESENHO das ruínas (inclinação, vigas, entulho): nada
+    // daqui vira parede, e o stream seedado nem está instalado (noSeed)
     let _rs = 0xC1DADE;
     const _rr = () => (_rs = (_rs * 1664525 + 1013904223) >>> 0) / 4294967296;
     const rand = (a = 1, b) => (b === undefined ? _rr() * a : a + _rr() * (b - a));
@@ -971,8 +833,7 @@ export function createStructures(deps) {
        tem 88 m de raio e só os ~62 m centrais são o platô urbano — do 62 pro 88
        o terreno volta ao natural e uma laje plana em gy chegava a FLUTUAR ~5 m
        (medido em 10 seeds). RingGeometry no lugar de CircleGeometry dá os anéis
-       intermediários pra malha seguir o relevo; é UM objeto, igual ao anterior,
-       então o consumo de UUID (4 Math.random) do stream seedado não muda. */
+       intermediários pra malha seguir o relevo. */
     // 160×26: passo radial ~3,4 m e arco ~3,5 m na borda, ambos MENORES que a
     // célula de 5 m do terreno — sem isso a corda entre dois anéis mergulhava
     // abaixo do relevo e o terreno furava o decalque.
@@ -1001,11 +862,10 @@ export function createStructures(deps) {
       cityRuins.add(r);
     }
     // stubs dos prédios: metade inferior, inclinados e chamuscados + vigas
-    const lots = [[-34, -28, 11, 22], [-16, -34, 12, 16], [4, -30, 10, 26], [38, -26, 13, 18],
-      [-40, -2, 10, 14], [-38, 44, 12, 20], [-14, 42, 11, 24], [8, 44, 12, 15],
-      [40, 8, 11, 19], [42, 42, 13, 28], [-44, 18, 9, 12], [16, -8, 9, 13]];
+    // (os 6 primeiros têm colisor BAIXO, 1,6 m, em js/paredes.js: dá pra pular
+    // por cima e bala passa por cima — mesmo `sy` do desenho abaixo)
     let li = 0;
-    for (const [ox, oz, w, hOrig] of lots) {
+    for (const [ox, oz, w, hOrig] of Paredes.LOTES_ESCOMBROS) {
       const h = hOrig * rand(0.28, 0.45);
       const sy = heightAt(cx + ox, cz + oz); // pé do escombro no terreno do lote
       const stub = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.95), li % 2 ? mRuina : mQueim);
@@ -1021,19 +881,13 @@ export function createStructures(deps) {
         viga.rotation.z = rand(-0.35, 0.35);
         cityRuins.add(viga);
       }
-      // colisor simplificado só nos 6 primeiros stubs: BAIXO (1,6m) — dá pra
-      // pular por cima; balas passam por cima; só barra quem anda reto nele
-      // (segue o MESMO sy do visual: colisor e escombro não podem descolar)
-      if (li < 6) ruinWalls.push({ x0: cx + ox - w / 2, x1: cx + ox + w / 2,
-        y0: sy - 0.4, y1: sy + 1.6, z0: cz + oz - w / 2, z1: cz + oz + w / 2, cityRuin: true });
       li++;
     }
     // Torre Nexus severamente danificada: toco alto e torto
     const toco = new THREE.Mesh(new THREE.BoxGeometry(13, 14, 13), mQueim);
     toco.position.set(cx, gy + 6.6, cz);
     toco.rotation.z = 0.12;
-    cityRuins.add(toco);
-    ruinWalls.push({ x0: cx - 6.5, x1: cx + 6.5, y0: gy - 0.4, y1: gy + 13, z0: cz - 6.5, z1: cz + 6.5, cityRuin: true });
+    cityRuins.add(toco); // o colisor do toco (13 m) também vem de js/paredes.js
     // entulho instanciado (decorativo, sem física — barato)
     const debGeo = new THREE.BoxGeometry(1, 0.7, 1);
     const deb = new THREE.InstancedMesh(debGeo, mRuina, 120);

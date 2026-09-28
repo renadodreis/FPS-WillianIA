@@ -6,9 +6,20 @@ const { CHROME, bootGame } = require('./helpers/harness');
 describe('Castelo — Colosso solo', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   let h;
   const PORT = 3226;
+  /* SEMENTE COM RAMPA ÍNGREME, de propósito. Estes casos existem para a
+     rampa do portão: o Golem sai e volta por ela, e o orbe tem de seguir o
+     apoio dela e só tocar o terreno DEPOIS do fim. Com a seed padrão
+     (424242) o castelo ficava num sítio cuja aproximação caía 2,97 m (22,3°)
+     — o cenário que exercita isso. Desde 2026-09-28 as construções sorteiam
+     num PRNG próprio (js/paredes.js) e o castelo da 424242 foi para um sítio
+     PLANO (queda de 0,02 m, 0,2°): o orbe tocava a rampa aos 26,07 m de 26,5
+     e, pior, rampa e terreno ficam na mesma altura — o caso deixava de
+     separar "respeita a rampa" de "usa o terreno". A 1234 reproduz o perfil
+     antigo (queda de 3,02 m, 22,6°, trecho mais íngreme 29,0° ≤ 30°). */
+  const SEMENTE = '1234';
 
   before(async () => {
-    h = await bootGame({ port: PORT });
+    h = await bootGame({ port: PORT, worldSeed: SEMENTE });
   });
   after(async () => {
     if (!h) return;
