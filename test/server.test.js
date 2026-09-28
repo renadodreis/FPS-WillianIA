@@ -204,6 +204,27 @@ describe('Estado e movimento', () => {
     assert.equal(mine.heldWeapon, 'FUZIL');
   });
 
+  it('dado um jogador agachado e parado, então os outros recebem a postura no playerUpdate', async t => {
+    // postura replicada: o boneco remoto agacha, as esferas de acerto descem
+    // e os bots leem o mesmo campo (test/postura-*.test.js)
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    const upds = collect(b.s, 'playerUpdate');
+    let crouch = 1;
+    const iv = setInterval(() => a.s.emit('state', { pos: [4, 2, 4], rotY: 0, crouch }), 60);
+    t.after(() => clearInterval(iv));
+    await sleep(500);
+    const agachado = upds.filter(u => u.id === a.init.id).at(-1);
+    assert.ok(agachado, 'nenhum playerUpdate chegou');
+    assert.equal(agachado.crouch, 1, `postura agachada não chegou: ${JSON.stringify(agachado.crouch)}`);
+    crouch = 0.5;
+    await sleep(400);
+    assert.equal(upds.filter(u => u.id === a.init.id).at(-1).crouch, 0.5, 'postura intermediária não passou como veio');
+    crouch = undefined; // cliente antigo, sem o campo
+    await sleep(400);
+    assert.equal(upds.filter(u => u.id === a.init.id).at(-1).crouch, 0, 'state sem postura tem de chegar EM PÉ (0)');
+  });
+
   it('dado um state com posição inválida (não numérica), então ele é descartado', async t => {
     const { clients } = await playing(t, 2);
     const [a, b] = clients;

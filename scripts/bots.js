@@ -144,6 +144,34 @@ const AI = {
   // Erro VISÍVEL: traçante rente ao rosto (cap. 33 "at eye level"; Lidén)
   // [LASTRO]; 0,5–1,5 m de lado [INFERÊNCIA]; segue 12 m além do alvo.
   NEAR_MISS_MIN_M: 0.5, NEAR_MISS_MAX_M: 1.5, NEAR_MISS_LIFT_M: 0.2, NEAR_MISS_OVERSHOOT_M: 12,
+
+  // POSTURA do humano: `crouch` do playerUpdate (0 = em pé, 1 = agachado; o
+  // servidor já sanitizou e derruba para 0 quem se move rápido demais para
+  // estar agachado — server.js crouchFromState).
+  // O corpo agachado do boneco remoto (br-game.js, AGACHA): a cabeça desce os
+  // mesmos 0,58 m do olho (game.js: 1,62 → 1,04) e o centro do tronco fica a
+  // ~0,55 m. É ONDE o bot procura o alvo: atrás de uma crista baixa o agachado
+  // some como some da tela de um humano [coerência com o desenho].
+  CROUCH_DROP_M: 0.58, CROUCH_AIM_H: 0.55,
+  // Intervalo entre acertos: "keep the base delay if the player is standing
+  // [...] but double it if they are crouching" (Game AI Pro 3, cap. 33)
+  // [LASTRO]. O atraso-base de UM bot é a cadência da arma dele quando ela
+  // passa do intervalo global (fuzil 1,1 s > 1,0 s): dobrar só o global não
+  // dobraria nada para um bot sozinho [INFERÊNCIA no atraso-base].
+  HIT_GAP_CROUCH_MULT: 2,
+  // Notar (CS, cs_bot_vision.cpp — chance por 0,25 s, perto → longe, com
+  // interpolação linear entre 300 e 1000 unidades): parado em pé 100 → 10,
+  // parado agachado 80 → 5 ("crouching and motionless - very tough to
+  // notice"); andando em pé 100 → 75, andando agachado 90 → 60 [LASTRO]. Aqui
+  // entra só a RAZÃO agachado ÷ em pé na taxa do medidor (chance por quantum
+  // → taxa: [INFERÊNCIA]); 1 un. = 2,54 cm [INFERÊNCIA na conversão].
+  // Passos: o CS não manda passo de quem anda agachado aos bots (player.cpp:
+  // EVENT_PLAYER_FOOTSTEP só com `velocity.Length2D() > 150`, e agachado anda
+  // a 0,333 × a velocidade — pm_shared.h PLAYER_DUCKING_MULTIPLIER). Estes
+  // bots não ouvem passo nenhum, só tiro: não há o que aplicar.
+  NOTICE_CS_NEAR_M: 300 * 0.0254, NOTICE_CS_FAR_M: 1000 * 0.0254,
+  NOTICE_CS_STILL_STAND: [100, 10], NOTICE_CS_STILL_CROUCH: [80, 5],
+  NOTICE_CS_MOVING_STAND: [100, 75], NOTICE_CS_MOVING_CROUCH: [90, 60],
 };
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -223,12 +251,37 @@ function gridCrossingsClear(a0, a1, above) {
   return true;
 }
 
-function noticeRate(d, speed, inCombat) {
+/* postura de um candidato: número em [0, 1]; qualquer outra coisa é em pé */
+function crouchOf(c) {
+  const v = c ? c.crouch : 0;
+  return typeof v === 'number' && Number.isFinite(v) ? clamp(v, 0, 1) : 0;
+}
+
+/* alturas (acima do pé) onde o bot procura o corpo: cabeça e tronco */
+function bodyHeights(crouch) {
+  return {
+    head: AI.HEAD_H - AI.CROUCH_DROP_M * crouch,
+    aim: AI.AIM_H + (AI.CROUCH_AIM_H - AI.AIM_H) * crouch,
+  };
+}
+
+/* razão agachado ÷ em pé da chance de notar do CS na distância `d` */
+function crouchNoticeMult(d, moving, crouch) {
+  if (!(crouch > 0)) return 1;
+  const k = clamp((d - AI.NOTICE_CS_NEAR_M) / (AI.NOTICE_CS_FAR_M - AI.NOTICE_CS_NEAR_M), 0, 1);
+  const [sN, sF] = moving ? AI.NOTICE_CS_MOVING_STAND : AI.NOTICE_CS_STILL_STAND;
+  const [cN, cF] = moving ? AI.NOTICE_CS_MOVING_CROUCH : AI.NOTICE_CS_STILL_CROUCH;
+  const ratio = (cN + (cF - cN) * k) / (sN + (sF - sN) * k);
+  return 1 + (ratio - 1) * crouch;
+}
+
+function noticeRate(d, speed, inCombat, crouch = 0) {
   const k = clamp((d - AI.NOTICE_NEAR_M) / (AI.NOTICE_FAR_M - AI.NOTICE_NEAR_M), 0, 1);
   let r = AI.NOTICE_NEAR_PER_S + (AI.NOTICE_FAR_PER_S - AI.NOTICE_NEAR_PER_S) * k;
-  if (speed > AI.NOTICE_MOVING_SPEED) r *= AI.NOTICE_MOVING_MULT;
+  const moving = speed > AI.NOTICE_MOVING_SPEED;
+  if (moving) r *= AI.NOTICE_MOVING_MULT;
   if (inCombat) r *= AI.NOTICE_COMBAT_MULT;
-  return r;
+  return r * crouchNoticeMult(d, moving, crouch);
 }
 
 function awarenessOf(bot, id) {
@@ -287,14 +340,15 @@ function perceive(bot, candidates, terrain, t, dt) {
     }
     const alerted = t - a.alertT <= AI.ALERT_S;
     let visible = false;
+    const crouch = crouchOf(c);
     if (d <= AI.VIEW_RANGE && (alerted || inViewCone(bot.yaw, dx, dz, d))) {
-      const cy = c.y || 0;
-      visible = lineOfSight(terrain, eye, { x: c.x, y: cy + AI.HEAD_H, z: c.z })
-        || lineOfSight(terrain, eye, { x: c.x, y: cy + AI.AIM_H, z: c.z });
+      const cy = c.y || 0, h = bodyHeights(crouch);
+      visible = lineOfSight(terrain, eye, { x: c.x, y: cy + h.head, z: c.z })
+        || lineOfSight(terrain, eye, { x: c.x, y: cy + h.aim, z: c.z });
     }
     if (visible) {
       const { speed } = targetMotion(a, c, t);
-      a.meter = Math.min(1, a.meter + dt * noticeRate(d, speed, inCombat));
+      a.meter = Math.min(1, a.meter + dt * noticeRate(d, speed, inCombat, crouch));
     } else if (!a.perceived) {
       a.meter = Math.max(0, a.meter - dt * AI.NOTICE_DECAY_PER_S);
     }
@@ -328,7 +382,7 @@ function knownTargets(bot, candidates, t) {
     const p = seen ? view : view.known;
     out.push({
       id, x: p.x, y: p.y, z: p.z, isBot: !!c.isBot, alive: true, spectator: false, phase: 'PLAY',
-      seen, hurtT: a.hurtT, heardT: a.heardT, rotY: c.rotY,
+      seen, hurtT: a.hurtT, heardT: a.heardT, rotY: c.rotY, crouch: crouchOf(c),
     });
   }
   return out;
@@ -447,16 +501,23 @@ function hitChance({ distance, sigmaDeg, aimScale = 1, exposureS = 0, botMoving 
    errando deixava 4 bots tão letais quanto 1 (medido: TTK 10,85 s × 10,65 s).
    Bot-contra-bot não usa token. */
 function createHitDirector() {
-  const lastHit = new Map();
+  const lastHit = new Map();     // humano → último acerto de QUALQUER bot
+  const lastByBot = new Map();   // humano|bot → último acerto DESTE bot (agachado)
+  const since = (m, k, t) => t - (m.has(k) ? m.get(k) : -Infinity);
   return {
-    claim(humanId, botId, t, gap) {
-      return t - (lastHit.has(humanId) ? lastHit.get(humanId) : -Infinity) >= gap;
+    /* `gap`: intervalo global do humano; `botGap` (> 0 só com o humano
+       agachado): intervalo entre acertos do MESMO bot */
+    claim(humanId, botId, t, gap, botGap = 0) {
+      if (since(lastHit, humanId, t) < gap) return false;
+      return !(botGap > 0) || since(lastByBot, humanId + '|' + botId, t) >= botGap;
     },
-    hit(humanId, botId, t) { lastHit.set(humanId, t); },
+    hit(humanId, botId, t) { lastHit.set(humanId, t); lastByBot.set(humanId + '|' + botId, t); },
   };
 }
 
-/* o humano está de costas para o bot? (rotY do humano, frente = -Z girado) */
+/* Intervalo mínimo entre acertos de bot neste humano (global, qualquer bot):
+   dobra se ele está de costas para o bot (rotY do humano, frente = -Z girado)
+   e dobra se está agachado — as regras do cap. 33 se MULTIPLICAM. */
 function hitGap(target, bot) {
   let gap = AI.HIT_GAP_S;
   if (Number.isFinite(target.rotY)) {
@@ -466,7 +527,16 @@ function hitGap(target, bot) {
       if (cos < Math.cos(AI.BEHIND_DEG * DEG)) gap *= AI.HIT_GAP_BEHIND_MULT;
     }
   }
-  return gap;
+  return gap * crouchDelayMult(target);
+}
+function crouchDelayMult(target) { return 1 + (AI.HIT_GAP_CROUCH_MULT - 1) * crouchOf(target); }
+/* Agachado, o MESMO bot também espera o dobro da cadência dele entre dois
+   acertos: com um bot só, quem limita os acertos é a cadência (fuzil 1,1 s),
+   não o intervalo global (1,0 s) — dobrar só o global não dobraria nada.
+   Em pé não há trava por bot (0): o comportamento de antes, byte por byte. */
+function botHitGap(target, bot, weapon) {
+  if (!(crouchOf(target) > 0)) return 0;
+  return (WEAPON_PROFILES[weapon || bot.weapon] || WEAPON_PROFILES.FUZIL).cooldown * crouchDelayMult(target);
 }
 
 /* Veredito de UM disparo contra a posição REAL do alvo agora. A ordem importa:
@@ -492,11 +562,14 @@ function decideShot(bot, target, action, ctx) {
   if (ranged && bot.scopedMisses > 0) { bot.scopedMisses--; return { hit: false, why: 'luneta' }; }
   if (ranged && t < bot.missUntil) return { hit: false, why: 'janela' };
   const eye = { x: bot.x, y: (bot.y || 0) + AI.EYE_H, z: bot.z };
-  if (!lineOfSight(terrain, eye, { x: target.x, y: (target.y || 0) + AI.AIM_H, z: target.z })) {
+  // o tronco de quem está agachado fica mais baixo: a bala mira ali (e a
+  // vítima, que testa cobertura a pé + 1 m, nunca recusa um tiro que passou
+  // aqui — a reta até um ponto mais alto do mesmo lugar só sobe)
+  if (!lineOfSight(terrain, eye, { x: target.x, y: (target.y || 0) + bodyHeights(crouchOf(target)).aim, z: target.z })) {
     return { hit: false, why: 'terreno' };
   }
   const human = !target.isBot;
-  if (human && director && !director.claim(target.id, bot.id, t, hitGap(target, bot))) {
+  if (human && director && !director.claim(target.id, bot.id, t, hitGap(target, bot), botHitGap(target, bot, weapon))) {
     return { hit: false, why: 'token' };
   }
   const motion = targetMotion(bot.aware && bot.aware.get(target.id), target, t);
@@ -742,6 +815,8 @@ function observePlayerUpdate(observed, update) {
     // para onde ele olha: decide "atrás de quem atirou" (audição pela metade)
     // e "bot nas costas dele" (intervalo de acerto dobrado)
     rotY: Number.isFinite(rotY) ? rotY : (previous ? previous.rotY : undefined),
+    // agachado (0..1): percepção, onde procurar o corpo e intervalo de acerto
+    crouch: crouchOf(update),
     alive: previous ? previous.alive : true,
     spectator: previous ? previous.spectator : false,
     phase: update.ship ? 'SHIP' : (update.fall || update.chute) ? 'FALL' : 'PLAY',

@@ -80,6 +80,49 @@ function weaponCode(value) {
   const raw = cleanSoft(value).toUpperCase().slice(0, 48);
   return WEAPON_CODES.find(code => raw === code || raw.startsWith(code + ' ')) || null;
 }
+/* ---------------- postura (agachar) ----------------
+   O `state` leva `crouch`: o `crouchT` do cliente (0 = em pé, 1 = agachado,
+   olho 1,62 → 1,04 m no game.js). O servidor repassa no `playerUpdate` e é
+   isso que abaixa o boneco remoto, as esferas de acerto dele e o que os bots
+   enxergam (scripts/bots.js). Modelo client-authoritative: não há como provar
+   que alguém está agachado, então o campo é LIMITADO para que mentir custe o
+   mesmo que agachar de verdade:
+   - número finito em [0, 1]; qualquer outra coisa vale 0 — em pé é a postura
+     MAIS visível, então lixo no campo nunca esconde ninguém;
+   - só a pé (nave, queda, paraquedas, carro e helicóptero valem 0);
+   - agachado anda a 2,6 m/s (game.js CROUCH_SPEED). Acima de SPEED_MAX o
+     jogador é repassado EM PÉ. A velocidade é o CAMINHO na janela (soma dos
+     trechos entre pacotes aceitos), não o deslocamento: zigue-zague no lugar
+     não a disfarça. A folga de 30 % cobre o tremor de chegada dos pacotes
+     (medido em test/postura-servidor.test.js: ±40 ms não derruba ninguém).
+   Custo para quem é honesto: quem agacha ANDANDO aparece agachado ~0,4 s
+   depois (a janela ainda contém a caminhada); deslizando, aparece em pé. */
+const CROUCH = Object.freeze({
+  SPEED_MAX: 2.6 * 1.3,   // m/s
+  WINDOW_S: 0.5,          // janela do caminho percorrido
+  MIN_SPAN_S: 0.2,        // piso do denominador: rajada de pacotes não divide por ~0
+  HIST_MAX: 64,           // teto do histórico sob flood de `state`
+});
+function crouchFromState(p, d, nowMs) {
+  const car = Number.isInteger(d.car) ? d.car : -1;
+  if (p.ship || p.fall || d.ship || d.fall || d.chute || car >= 0 || d.heli) {
+    p.crouchHist = null;
+    return 0;
+  }
+  const t = nowMs / 1000;
+  const h = p.crouchHist || (p.crouchHist = []);
+  const prev = h[h.length - 1];
+  // `s` = caminho acumulado: tirar amostra do MEIO (teto) não apaga caminho
+  const s = prev ? prev.s + Math.hypot(p.pos[0] - prev.x, p.pos[2] - prev.z) : 0;
+  h.push({ t, x: p.pos[0], z: p.pos[2], s });
+  while (h.length > 2 && t - h[1].t >= CROUCH.WINDOW_S) h.shift();
+  if (h.length > CROUCH.HIST_MAX) h.splice(1, h.length - CROUCH.HIST_MAX);
+  const raw = d.crouch;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return 0;
+  const span = Math.max(t - h[0].t, CROUCH.MIN_SPAN_S);
+  return (h[h.length - 1].s - h[0].s) / span > CROUCH.SPEED_MAX ? 0 : Math.min(1, raw);
+}
+
 function mulberry32(seed) {
   let s = seed >>> 0;
   return () => {
@@ -838,6 +881,8 @@ io.on('connection', socket => {
     // pousado, não "desapousa" na partida.
     if (match.phase === 'PLAYING' && p.alive && !p.ship && !p.fall) p.landed = true;
     p.heldWeapon = weaponCode(d.heldWeapon) || p.heldWeapon;
+    // agachar: sanitizado e limitado pela velocidade (crouchFromState)
+    p.crouch = crouchFromState(p, d, now);
     p.lastState = now;
     socket.volatile.broadcast.emit('playerUpdate', {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
@@ -847,6 +892,7 @@ io.on('connection', socket => {
       // referencial da nave (sem atraso quando ela se desloca)
       shipLocal: p.ship && p.shipLocal ? p.shipLocal : undefined,
       nick: p.nick, colors: p.colors, bot: !!p.bot, heldWeapon: p.heldWeapon,
+      crouch: p.crouch,
     });
   });
 
@@ -1141,7 +1187,8 @@ process.on('exit', () => { if (botsProc) try { botsProc.kill(); } catch (e) { /*
 
 /* internos expostos pra suite de QA; o listen só roda quando executado
    direto (node server.js) — require() nos testes não abre porta */
-module.exports = { saveRankNow, buildPlan, zoneAt, shipPosAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank };
+module.exports = { saveRankNow, buildPlan, zoneAt, shipPosAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank,
+  crouchFromState, CROUCH };
 
 if (require.main === module) {
   server.listen(PORT, () => {

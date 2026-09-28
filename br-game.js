@@ -65,6 +65,58 @@
       return spr;
     }
 
+    /* ================================================================
+       POSTURA DO BONECO REMOTO — agachar de verdade.
+       O `crouch` do playerUpdate (0 = em pé, 1 = agachado) já vem limitado
+       pelo servidor (server.js crouchFromState: número em [0, 1], só a pé, e
+       quem anda rápido demais para estar agachado chega EM PÉ).
+
+       O olho de quem agacha desce 0,58 m (game.js: 1,62 → 1,04). A cabeça do
+       boneco desce os MESMOS 0,58 m — o que o outro vê de mim fica onde está
+       o meu olho —, o tronco inclina 20° à frente pivotando no quadril, a
+       cabeça fica de pé (pivô no pescoço) e as pernas dobram: uma à frente,
+       a outra ajoelhada atrás. Topo do capacete: 1,91 → 1,33 m, o topo da
+       lâmina mais alta da grama (js/grass.js: 1,4 × 0,95).
+
+       As esferas de acerto saem da MESMA conta (`esferasDoCorpo`), não de
+       números soltos: quem agacha fica menor para quem atira, e a esfera não
+       sai de dentro da peça desenhada. */
+    const AGACHA = (() => {
+      const QUADRIL = 0.78, PESCOCO = 1.41;         // em pé: topo da perna, topo do tronco
+      const CABECA = 1.66 - PESCOCO;                 // centro da cabeça acima do pescoço
+      const TRONCO = 1.1 - QUADRIL;                  // centro do tronco acima do quadril
+      const QUEDA = 1.62 - 1.04;                     // quanto o olho desce (game.js eyeH)
+      const INCLINA = 20 * Math.PI / 180;
+      const PERNA = 0.79;                            // quadril → sola da bota
+      const quadril = c => 1.66 - QUEDA * c - CABECA - (PESCOCO - QUADRIL) * Math.cos(INCLINA * c);
+      // ângulo da perna agachada: a bota chega ao chão com o quadril baixo
+      const PERNA_ANG = Math.acos(Math.min(1, quadril(1) / PERNA));
+      return { QUADRIL, PESCOCO, CABECA, TRONCO, QUEDA, INCLINA, PERNA_ANG, quadril };
+    })();
+    /* aplica a postura `c` (e a passada `sw` da caminhada) no boneco */
+    function poseAgachado(body, c, sw) {
+      const q = AGACHA.quadril(c), inc = AGACHA.INCLINA * c;
+      body.upper.position.y = q;
+      body.upper.rotation.x = -inc;                 // tronco à frente (frente = -Z)
+      body.head.rotation.x = inc;                   // cabeça de pé
+      body.legL.position.y = q; body.legR.position.y = q;
+      const passo = 1 - 0.6 * c;                    // agachado anda de passo curto
+      body.legL.rotation.x = sw * passo + AGACHA.PERNA_ANG * c;    // à frente
+      body.legR.rotation.x = -sw * passo - AGACHA.PERNA_ANG * c;   // ajoelhada atrás
+    }
+    /* centros das esferas de acerto no referencial do boneco (pé = 0):
+       cabeça, tronco e pernas, com o avanço `f` (m à frente) da inclinação */
+    function esferasDoCorpo(c) {
+      const q = AGACHA.quadril(c), inc = AGACHA.INCLINA * c;
+      const s = Math.sin(inc), co = Math.cos(inc), nq = AGACHA.PESCOCO - AGACHA.QUADRIL;
+      return {
+        cabeca: { y: q + nq * co + AGACHA.CABECA, f: nq * s },
+        tronco: { y: q + AGACHA.TRONCO * co, f: AGACHA.TRONCO * s },
+        pernas: { y: 0.42 - 0.17 * c, f: 0 },
+        quadril: q,
+      };
+    }
+
     /* boneco voxel low-poly: cabeça, tronco, braços, pernas + visor */
     /* silhuetas LEVES por classe de arma remota: geometrias e materiais criados
        UMA vez; cada jogador recebe um clone (clone compartilha geometria).
@@ -150,22 +202,32 @@
         b.position.set(x, y, z); (parent || g).add(b); return b;
       };
       const legL = new THREE.Group(), legR = new THREE.Group();
-      legL.position.set(-0.15, 0.78, 0); legR.position.set(0.15, 0.78, 0);
+      legL.position.set(-0.15, AGACHA.QUADRIL, 0); legR.position.set(0.15, AGACHA.QUADRIL, 0);
       box(mCloth, 0.22, 0.78, 0.26, 0, -0.39, 0, legL);
       box(mCloth, 0.22, 0.78, 0.26, 0, -0.39, 0, legR);
       box(mDetail, 0.24, 0.14, 0.3, 0, -0.72, 0.02, legL); // bota
       box(mDetail, 0.24, 0.14, 0.3, 0, -0.72, 0.02, legR);
       g.add(legL, legR);
-      box(mBody, 0.56, 0.62, 0.32, 0, 1.1, 0);            // tronco
-      box(mCloth, 0.58, 0.24, 0.34, 0, 0.92, 0);          // cinto/roupa
+      /* tronco para cima pivotando no QUADRIL, cabeça pivotando no PESCOÇO:
+         é o que deixa o boneco agachar (poseAgachado). Em pé, as peças caem
+         exatamente onde sempre estiveram (alturas no comentário). */
+      const upper = new THREE.Group();
+      upper.position.y = AGACHA.QUADRIL;
+      g.add(upper);
+      const Q = AGACHA.QUADRIL, N = AGACHA.PESCOCO;
+      box(mBody, 0.56, 0.62, 0.32, 0, 1.1 - Q, 0, upper);            // tronco (1,10)
+      box(mCloth, 0.58, 0.24, 0.34, 0, 0.92 - Q, 0, upper);          // cinto/roupa (0,92)
       const armL = new THREE.Group(), armR = new THREE.Group();
-      armL.position.set(-0.38, 1.36, 0); armR.position.set(0.38, 1.36, 0);
+      armL.position.set(-0.38, 1.36 - Q, 0); armR.position.set(0.38, 1.36 - Q, 0);
       box(mBody, 0.16, 0.6, 0.2, 0, -0.26, 0, armL);
       box(mBody, 0.16, 0.6, 0.2, 0, -0.26, 0, armR);
-      g.add(armL, armR);
-      box(mBody, 0.4, 0.38, 0.38, 0, 1.66, 0);            // cabeça
-      box(mVisor, 0.3, 0.09, 0.06, 0, 1.7, -0.21);        // visor
-      box(mDetail, 0.44, 0.08, 0.42, 0, 1.87, 0);         // "capacete"
+      upper.add(armL, armR);
+      const head = new THREE.Group();
+      head.position.y = N - Q;
+      upper.add(head);
+      box(mBody, 0.4, 0.38, 0.38, 0, 1.66 - N, 0, head);            // cabeça (1,66)
+      box(mVisor, 0.3, 0.09, 0.06, 0, 1.7 - N, -0.21, head);        // visor (1,70)
+      box(mDetail, 0.44, 0.08, 0.42, 0, 1.87 - N, 0, head);         // "capacete" (1,87)
       // arma remota por CLASSE (silhueta SIL aplicada por applyRemoteWeapon);
       // o estado de rede escolhe quando ela aparece.
       const weapon = new THREE.Group();
@@ -200,14 +262,15 @@
         mVisor.color.copy(d); mVisor.emissive.copy(d); cVisor.copy(d);
         canopy.material.color.copy(a);
       }
-      return { g, legL, legR, armL, armR, chute, weapon, muzzle,
+      return { g, legL, legR, armL, armR, upper, head, chute, weapon, muzzle,
         mats: [mBody, mCloth, mDetail], mVisor, cVisor, canopy, retint };
     }
 
     function makeRemote(id, nk, colors, pos) {
       const body = buildVoxelBody(colors);
       const group = body.g;
-      group.add(nickSprite(nk || '???', '#ffffff'));
+      const nome = nickSprite(nk || '???', '#ffffff');
+      group.add(nome);
       if (Array.isArray(pos)) group.position.set(pos[0], pos[1], pos[2]);
       MP.scene.add(group);
       const rp = {
@@ -218,6 +281,9 @@
         shipLocalTgt: null, shipLocalCur: null,
         heldWeapon: 'FACA', wpnScale: 0, fireT: 0, hitT: 0, deadT: 0,
         lastPos: group.position.clone(), speed: 0, walkPh: 0,
+        // postura: `crouchTgt` é a do servidor; `crouch` é a DESENHADA (anda
+        // suave até a outra no brTick) — esferas e perna seguem a desenhada
+        crouch: 0, crouchTgt: 0, nome,
         sphCache: [
           { c: new THREE.Vector3(), r: 0.28, part: 'head' },
           { c: new THREE.Vector3(), r: 0.42, part: 'body' },
@@ -225,9 +291,12 @@
         ],
         hitSpheres() {
           const p = this.group.position;
-          this.sphCache[0].c.set(p.x, p.y + 1.66, p.z);
-          this.sphCache[1].c.set(p.x, p.y + 1.1, p.z);
-          this.sphCache[2].c.set(p.x, p.y + 0.42, p.z);
+          const e = esferasDoCorpo(this.crouch);
+          // frente do boneco = -Z girado por yaw (o mesmo yaw do desenho)
+          const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
+          this.sphCache[0].c.set(p.x + fx * e.cabeca.f, p.y + e.cabeca.y, p.z + fz * e.cabeca.f);
+          this.sphCache[1].c.set(p.x + fx * e.tronco.f, p.y + e.tronco.y, p.z + fz * e.tronco.f);
+          this.sphCache[2].c.set(p.x, p.y + e.pernas.y, p.z);
           return this.sphCache;
         },
         /* `opt`: { head } no tiro/faca, { kind, impact, at } no explosivo.
@@ -235,7 +304,8 @@
            predição (queueHit/queueBlast), depois de confirmar que o
            servidor aceitaria este acerto. */
         damage(dmg, hitPos, opt) {
-          if (hitPos && hitPos.y < this.group.position.y + 0.78) dmg *= 0.8; // perna dói menos
+          // perna dói menos: abaixo do quadril DESENHADO (agachado ele desce)
+          if (hitPos && hitPos.y < this.group.position.y + AGACHA.quadril(this.crouch)) dmg *= 0.8;
           // explosivo NÃO viaja pelo shotHit: lá a arma equipada e a posição
           // do atirador seriam validadas (granada com FACA = rejeitada a 4 m)
           if (opt && opt.impact) queueBlast(this.id, dmg, opt.kind, opt.impact, opt.at);
@@ -1664,6 +1734,8 @@
       rp.car = Number.isInteger(d.car) && d.car >= 0 && d.car < G.Car.vehicles.length ? d.car : -1;
       rp.heli = !!d.heli;
       rp.bot = !!d.bot;
+      // agachado (0..1), já limitado pelo servidor; lixo ou ausência = em pé
+      rp.crouchTgt = typeof d.crouch === 'number' && Number.isFinite(d.crouch) ? Math.min(1, Math.max(0, d.crouch)) : 0;
       rp.heldWeapon = d.heldWeapon ? weaponCode(d.heldWeapon) : rp.heldWeapon;
       applyRemoteWeapon(rp);
       // saque aparece já neste frame (escala pequena crescendo no brTick);
@@ -1967,6 +2039,9 @@
         pos: [p.x, p.y, p.z], rotY, car, heli,
         ship: S.phase === 'SHIP', fall: S.phase === 'FALL', chute: S.phase === 'FALL' && S.chuteOpen,
         heldWeapon: localWeaponCode(),
+        /* agachado: o `crouchT` do game.js (0..1), só a pé no chão. O servidor
+           confere de novo (e derruba para em pé quem anda rápido demais) */
+        crouch: S.phase === 'PLAY' && car < 0 && !heli ? Math.round(MP.player.crouchT * 100) / 100 : 0,
       };
       // na nave o servidor valida e reconstrói TUDO pela posição local
       if (S.phase === 'SHIP' && shipLocalPos)
@@ -2126,8 +2201,16 @@
         rp.lastPos.copy(rp.group.position);
         rp.walkPh += dt * Math.min(rp.speed, 9) * 1.6;
         const sw = Math.sin(rp.walkPh) * Math.min(rp.speed / 5, 1) * 0.7;
-        rp.body.legL.rotation.x = sw;
-        rp.body.legR.rotation.x = -sw;
+        // postura: anda suave até a do servidor (o mesmo `k` da posição)
+        rp.crouch += (rp.crouchTgt - rp.crouch) * k;
+        if (Math.abs(rp.crouchTgt - rp.crouch) < 1e-3) rp.crouch = rp.crouchTgt;
+        poseAgachado(rp.body, rp.crouch, sw);
+        /* o nome flutuante desce com a cabeça e APAGA com o agachar: a 1,77 m
+           ele ficaria acima da grama e entregaria quem se escondeu nela (os BRs
+           de referência nem mostram nome de inimigo) */
+        rp.nome.position.y = 2.35 - AGACHA.QUEDA * rp.crouch;
+        rp.nome.material.opacity = 1 - rp.crouch;
+        rp.nome.visible = rp.crouch < 0.98;
         rp.body.armL.rotation.x = -sw * 0.8;
         rp.body.armR.rotation.x = sw * 0.8;
         rp.body.chute.visible = rp.chute;

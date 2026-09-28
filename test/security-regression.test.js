@@ -270,6 +270,67 @@ describe('Anfitrião — cooldown de tentativas por IP', () => {
   });
 });
 
+/* =============== postura declarada pelo cliente é limitada =============== */
+describe('Postura — o campo de agachar é limitado pelo servidor', () => {
+  /* manda `state` a 10 Hz andando em linha reta a `v` m/s dizendo `crouch`;
+     devolve a última postura que o OUTRO jogador recebeu */
+  async function posturaVista(t, { v, crouch, extra = {}, ms = 1200 }) {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    const upds = collect(b.s, 'playerUpdate');
+    let z = 10;
+    const iv = setInterval(() => {
+      a.s.emit('state', { pos: [10, 2, z], rotY: 0, crouch, ...extra });
+      z += v * 0.1;
+    }, 100);
+    t.after(() => clearInterval(iv));
+    await sleep(ms);
+    const mine = upds.filter(u => u.id === a.init.id);
+    return { ultimo: mine.at(-1), todos: mine };
+  }
+
+  it('dado um tipo que não é número, então a postura repassada é 0', async t => {
+    for (const crouch of ['1', true, { v: 1 }, [1]]) {
+      const { ultimo } = await posturaVista(t, { v: 0, crouch, ms: 500 });
+      assert.ok(ultimo, 'nenhum playerUpdate chegou');
+      assert.equal(ultimo.crouch, 0, `postura ${JSON.stringify(crouch)} repassada como ${JSON.stringify(ultimo.crouch)}`);
+    }
+  });
+
+  it('dado um número fora da faixa, então a postura repassada fica em [0, 1]', async t => {
+    const alto = await posturaVista(t, { v: 0, crouch: 50, ms: 500 });
+    const baixo = await posturaVista(t, { v: 0, crouch: -3, ms: 500 });
+    assert.equal(alto.ultimo.crouch, 1);
+    assert.equal(baixo.ultimo.crouch, 0);
+  });
+
+  it('dado deslocamento acima da velocidade de quem está agachado, então a postura repassada é 0', async t => {
+    const andando = await posturaVista(t, { v: 5.2, crouch: 1 });
+    const correndo = await posturaVista(t, { v: 8.6, crouch: 1 });
+    // a primeira meia janela ainda não tem caminho medido; depois dela, nada passa
+    const tardeA = andando.todos.slice(-5), tardeC = correndo.todos.slice(-5);
+    assert.ok(tardeA.length >= 3 && tardeC.length >= 3, 'poucos playerUpdate para medir');
+    assert.ok(tardeA.every(u => u.crouch === 0), `andando: ${JSON.stringify(tardeA.map(u => u.crouch))}`);
+    assert.ok(tardeC.every(u => u.crouch === 0), `correndo: ${JSON.stringify(tardeC.map(u => u.crouch))}`);
+  });
+
+  it('dado deslocamento na velocidade de quem está agachado, então a postura é repassada', async t => {
+    // controle do caso anterior: o portão não pode derrubar quem agacha de verdade
+    const { todos } = await posturaVista(t, { v: 2.6, crouch: 1 });
+    const tarde = todos.slice(-5);
+    assert.ok(tarde.length >= 3 && tarde.every(u => u.crouch === 1),
+      `agachado a 2,6 m/s repassado como ${JSON.stringify(tarde.map(u => u.crouch))}`);
+  });
+
+  it('dado paraquedas, queda, veículo ou helicóptero, então a postura repassada é 0', async t => {
+    for (const extra of [{ chute: true }, { fall: true }, { car: 1 }, { heli: true }]) {
+      const { ultimo } = await posturaVista(t, { v: 0, crouch: 1, extra, ms: 500 });
+      assert.ok(ultimo, `nenhum playerUpdate com ${JSON.stringify(extra)}`);
+      assert.equal(ultimo.crouch, 0, `postura aceita com ${JSON.stringify(extra)}`);
+    }
+  });
+});
+
 /* =============== invulnerabilidade de queda é temporal =============== */
 describe('Queda — invulnerabilidade só na janela inicial', () => {
   it('dado o flag de queda fora da janela inicial, então o jogador ainda leva dano', async t => {
