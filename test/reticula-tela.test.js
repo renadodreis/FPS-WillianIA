@@ -542,6 +542,64 @@ describe('retícula vermelha na tela (desktop) — acende no inimigo que a tela 
     assert.deepEqual(verm, [], `a retícula avermelhou no que não é inimigo:\n${resumo(verm)}`);
   });
 
+  /* C12 (laudo validacao-070502f.md): sobre o VISITANTE (e o Colosso) a cruz
+     nunca avermelhava — o motivo registrado era `oculto`, com o alvo ocupando
+     os 25 px sob a cruz. Os objetos dos dois chefes não expunham `group`, e
+     `isRendered(undefined)` é falso: a MESMA causa tirava a assistência deles.
+     O objeto desenhado é achado pela CENA (a raiz cuja posição É a de
+     `pos()`), não pelo `group` do produto — a âncora não usa o conserto. */
+  it('dados o VISITANTE e o COLOSSO visíveis sob a cruz, então vermelha', async () => {
+    const r = await h.play(() => {
+      const V = window.RET, G = window.QA.G, MP = window.QA.MP;
+      const out = [];
+      for (const [nome, B] of [['VISITANTE', G.Alien], ['COLOSSO', G.Boss]]) {
+        // o Colosso do mundo de teste pode ainda não ter despertado: o caso mede a retícula, não o spawn
+        if (B && !B.alive && B.state) { B.state.alive = true; if (B.state.hp !== undefined && B.state.hp <= 0) B.state.hp = 1; }
+        if (!B || !B.alive) { out.push({ nome, erro: 'chefe morto/ausente' }); continue; }
+        const raiz = MP.scene.children.find(o => o.position === B.pos());
+        if (!raiz) { out.push({ nome, erro: 'objeto desenhado não achado na cena' }); continue; }
+        raiz.visible = true;   // reanimado (Colosso): o corpo volta a ser desenhado
+        /* o chefe fica onde mora (o Colosso no pátio do castelo): IA parada
+           durante a medida (restaurada abaixo) e o atirador procura um rumo e
+           uma distância de onde o vê sob a cruz */
+        const upd = B.update;
+        B.update = () => {};
+        let achado = null;
+        try {
+        const proxy = { group: raiz, hitSpheres: () => B.hitSpheres() };
+        for (let n = 0; n < 40 && !achado; n++) {
+          const k = n % 8, d0 = [6, 10, 15, 22, 30][Math.floor(n / 8)];
+          const sph = B.hitSpheres().reduce((a, b) => (b.r > a.r ? b : a));
+          const a = k * Math.PI / 4, d = d0 + sph.r;
+          window.QA.reset(sph.c.x + Math.sin(a) * d, sph.c.z + Math.cos(a) * d);
+          V.arma('fuzil');
+          window.QA.tick(12);
+          for (let q = 0; q < 8; q++) { V.mirar(B.hitSpheres().reduce((x, y) => (y.r > x.r ? y : x)).c); window.QA.tick(1); }
+          const c = { nome, vermelha: V.vermelha(), motivo: G.Reticula ? G.Reticula.last.motivo : 'sem-reticula' };
+          Object.assign(c, V.px(proxy));
+          if (c.nucleo === 4) achado = c;
+        }
+        } finally { B.update = upd; }
+        /* a causa, direto: o objeto do chefe aponta o MESMO corpo que a cena
+           desenha (é por `group`/`mesh` que assistência e retícula perguntam
+           "está desenhado?") — vale mesmo sem rumo livre até o Colosso no pátio */
+        const expoe = (B.group || B.mesh) === raiz;
+        out.push(achado ? { ...achado, expoe } : { nome, expoe, semRumo: true });
+      }
+      MP.player.invulnUntil = 1e12;
+      return out;
+    });
+    console.log(`  [chefes] ${r.map(c => c.erro ? `${c.nome}: ${c.erro}` : c.semRumo ? `${c.nome}: sem rumo livre; expõe o corpo: ${c.expoe}`
+      : `${c.nome} px=${c.px} ${c.vermelha ? 'VERMELHA' : 'branca'} (${c.motivo}); expõe o corpo: ${c.expoe}`).join(' · ')}`);
+    for (const c of r) {
+      assert.ok(!c.erro, `cenário inválido: ${c.nome}: ${c.erro}`);
+      assert.equal(c.expoe, true, `${c.nome} não expõe o corpo desenhado (group/mesh) — assistência e retícula o tratam como oculto`);
+    }
+    const vis = r.find(c => c.nome === 'VISITANTE');
+    assert.ok(vis && !vis.semRumo, 'cenário inválido: nenhum rumo com o VISITANTE sob a cruz');
+    assert.equal(vis.vermelha, true, `VISITANTE visível sob a cruz (${vis.px} px) e a retícula ficou branca (${vis.motivo})`);
+  });
+
   it('dada a cruz saindo do inimigo ou tremendo na borda, então apaga em ~0,1 s e não pisca', async () => {
     const r = await h.play(() => {
       const V = window.RET, MP = window.QA.MP, THREE = MP.THREE;

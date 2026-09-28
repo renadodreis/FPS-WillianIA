@@ -392,7 +392,11 @@ export function createBoss(deps) {
     }
   }
   updateBar();
-  const api = { update, damage, hitSpheres, get alive() { return B.alive; }, pos: () => group.position, state: B, name: 'COLOSSO' };
+  /* `group`: o corpo DESENHADO. Assistência e retícula perguntam "está
+     desenhado?" por `group`/`mesh` (js/aimassist.js isRendered) — sem ele o chefe
+     era sempre `oculto`: a cruz nunca avermelhava e a assistência nunca agia
+     nele (laudo validacao-070502f.md, C12). */
+  const api = { update, damage, hitSpheres, group, get alive() { return B.alive; }, pos: () => group.position, state: B, name: 'COLOSSO' };
   Bosses.push(api);
   return api;
 }
