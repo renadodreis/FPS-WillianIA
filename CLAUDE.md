@@ -260,9 +260,15 @@ escrita pelo validador — quem constrói não edita).
   (física, e não se atira dirigindo).
 - **Bot sem terreno é CEGO** (ouve e investiga, não atira) e grita no stderr.
   Antes, `lineOfSight(null)` via através de tudo.
-- **Postura não é replicada** (o `state` não leva agachado/deitado): o avatar
-  remoto aparece sempre em pé. Quem replicar postura tem de revisitar a
-  assistência, a grama e a percepção dos bots juntos.
+- **Agachar é replicado** (`state.crouch` 0..1 → `playerUpdate.crouch`) e o
+  servidor LIMITA: fora do chão vale 0, e quem percorre > 3,38 m/s em 0,5 s é
+  repassado em pé (caminho somado, não deslocamento). O boneco remoto agacha e
+  as esferas de acerto descem junto. **A grama cobre parte do agachado, não o
+  esconde** (32,7 % visível contra 56,2 % em pé a 30 m — lâmina de 0,62 a
+  1,33 m). Não existe postura deitada.
+- **Teste que teleporta o jogador acumula punição do anti-teleporte e é
+  EXPULSO ao passar de 120** — a partir daí o quadro desenha outra coisa e o
+  teste mede lixo. Devolva o jogador à posição que o servidor aceitou.
 - **Bots (`scripts/bots.js`) pensam em funções puras (`tickBots`) que o laço
   real chama** — o teste mede o código que roda. As constantes ficam no objeto
   `AI`, cada uma com a fonte. A queixa "apelão" era onisciência + prioridade ao
