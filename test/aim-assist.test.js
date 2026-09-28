@@ -717,7 +717,9 @@ describe('Assistência de mira no toque — celular', { skip: !CHROME && 'Chrome
         linhas: bloco ? bloco.querySelectorAll('.srow').length : 0 };
     });
     assert.equal(r.display, 'block');
-    assert.equal(r.linhas, 7);
+    /* 7 da rodada da assistência + "curso do analógico" e "aceleração do
+       olhar" (8506731, frente de toque) */
+    assert.equal(r.linhas, 9);
   });
 
   // ÚLTIMO desta página: recarrega (o window.QA morre com o reload)

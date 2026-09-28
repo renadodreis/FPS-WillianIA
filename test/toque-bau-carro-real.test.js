@@ -262,9 +262,8 @@ describe('BR no celular pelo caminho real — nave, pouso, analógico, USAR', { 
       for (const b of T.bausDesenhados()) {
         if (T.tampa(b) < -0.5) continue;               // já aberto
         const d = Math.hypot(b.position.x - P.x, b.position.z - P.z);
-        // o analógico anda em linha reta: sem parede no caminho (o teste mede o toque, não a navegação)
-        const livre = !S.segBlocked({ x: P.x, y: P.y + 1, z: P.z }, { x: b.position.x, y: b.position.y + 1, z: b.position.z });
-        if (livre && d < bd) { bd = d; best = b; }
+        // o jogador é POSTO ao lado (abaixo): não precisa de caminho livre nem de estar perto
+        if (d < bd) { bd = d; best = b; }
       }
       window.__trBau2 = best;
       window.__trBausFechados = T.bausDesenhados().filter(b => T.tampa(b) > -0.5)
@@ -273,7 +272,7 @@ describe('BR no celular pelo caminho real — nave, pouso, analógico, USAR', { 
         .sort((a, b) => a.d - b.d).slice(0, 6);
       return best ? { x: best.position.x, z: best.position.z, d: bd, lista: window.__trBausFechados } : null;
     });
-    assert.ok(bau && bau.d < 60, `cenário inválido: nenhum baú fechado por perto (${bau && bau.d})`);
+    assert.ok(bau, 'cenário inválido: nenhum baú fechado desenhado');
     /* ESTE caso mede o TOQUE na dica, não a caminhada (o caso anterior já
        leva o jogador ao baú pelo analógico). O próximo baú fechado fica a
        ~45 m e um obstáculo baixo segura a reta aos 31 m — o jogador é posto
