@@ -28,9 +28,10 @@ export const FACADE_DOOR_H = 2.05;
    objeto, e Math.random É o PRNG SEEDADO do worldgen (contrato do
    CLAUDE.md). noSeed() troca Math.random por um PRNG privado enquanto `fn`
    roda. createStructures roda INTEIRO dentro de um — as construções não
-   consomem NADA do stream seedado, então criar/mudar construção não desloca
-   mais árvores, bichos e inimigos gerados depois (a armadilha de
-   test/paredes-paridade.test.js mede isso). */
+   consomem NADA do stream seedado, então o que é gerado depois delas não
+   anda por causa do CONSUMO delas (a armadilha de
+   test/paredes-paridade.test.js mede isso). Por DADO ainda anda: árvores e
+   atrações evitam `sites`. */
 function criarNoSeed() {
   let _us = 0x9E3779B9 >>> 0;
   return (fn) => {

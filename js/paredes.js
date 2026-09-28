@@ -14,15 +14,20 @@
    Reconstruir isso fora do navegador exigia reproduzir o boot inteiro
    — e nem o boot inteiro bastava: medido na seed 987654, duas cargas
    do MESMO código puseram os prédios em lugares diferentes, porque um
-   consumidor assíncrono (evento durante o `await` do boot) comeu dois
-   números a mais do stream antes das construções.
+   consumidor assíncrono comeu números do stream antes das construções.
+   Reproduzido: uma queda do socket durante o `await bootFase(...)` que
+   separa grama e construções faz o socket.io agendar a reconexão com
+   jitter (`Backoff.duration` → Math.random seedado).
 
    Agora as construções sorteiam num PRNG PRÓPRIO, derivado só da
    semente (`rngEstruturas`), e não consomem NADA do stream global
    (js/structures.js roda inteiro em noSeed). Consequências:
-     • paredes = f(semente, relevo) — reproduzível no Node;
-     • mudar/acrescentar construção NÃO desloca mais árvores, bichos,
-       inimigos e o resto do mundo gerado depois;
+     • paredes = f(semente, relevo) — reproduzível no Node, e imunes a
+       quem comer o stream global antes delas;
+     • mudar/acrescentar construção não desloca mais o mundo por CONSUMO
+       de sorteio. Ainda desloca por DADO: as árvores (game.js) e as
+       atrações evitam `sites`, e o laço das árvores sorteia menos quando
+       recusa um ponto — mover sítio mexe nelas e em tudo depois delas;
      • o layout mudou UMA vez para cada semente (decisão do dono,
        2026-09-28).
 
