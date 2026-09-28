@@ -1330,7 +1330,7 @@
         }
         orb.mesh.position.addScaledVector(orb.velocity, dt);
         _bv.copy(MP.player.pos); _bv.y += 1;
-        if (S.phase === 'PLAY' && !MP.player.dead && orb.mesh.position.distanceToSquared(_bv) < 1.25 * 1.25) {
+        if (S.phase === 'PLAY' && !MP.player.dead && !MP.state.flying && orb.mesh.position.distanceToSquared(_bv) < 1.25 * 1.25) {
           MP.playerDamage(18, orb.mesh.position, { type: 'golem' });
           removeGolemOrb(i, orb.mesh.position);
           continue;
@@ -1460,13 +1460,13 @@
       const slamVertical = Math.abs(P.y - by);
       const slamClear = slamLineLen < 0.01 ||
         MP.rayBlockedAt(_bv, _bp.multiplyScalar(1 / slamLineLen), slamLineLen) >= slamLineLen - 0.15;
-      if (S.phase === 'PLAY' && !MP.player.dead && d < 8 && slamVertical < 3 && slamClear && t - lastAoE > 2.2) {
+      if (S.phase === 'PLAY' && !MP.player.dead && !MP.state.flying && d < 8 && slamVertical < 3 && slamClear && t - lastAoE > 2.2) {
         lastAoE = t;
         boss.slamT = 0.5;
         aimBossAt(P.x, P.z, 0.5);
         MP.playerDamage(16, boss.group.position, { type: 'golem' });
       }
-      if (S.phase === 'PLAY' && !MP.player.dead && d >= 8 && d < 68 && t - lastRanged > 1.8) {
+      if (S.phase === 'PLAY' && !MP.player.dead && !MP.state.flying && d >= 8 && d < 68 && t - lastRanged > 1.8) {
         lastRanged = t;
         aimBossAt(P.x, P.z, 0.55);
         fireGolemOrb();

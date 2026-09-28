@@ -3236,7 +3236,7 @@ const lastShotInfo = { pos: new THREE.Vector3(), t: -99 };
 function setTimeScale(v) { timeScale = v; }
 const Pickups = createPickups({ heightAt, SFX, scene, Structures, showBanner, centerMsg, getGun: () => gun, updateAmmoHUD, updateInvHUD, updateArmorHUD, player, inventory }); // criado antes: Enemies dropa loot
 const Chars = createCharModels();
-const Enemies = createEnemies({ CFG, clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, heightAt, slopeAt, terrainNormal, WATER_LEVEL, obstaclesNear, SFX, FX, scene, csmMat, Structures, addScore, addKillFeed, player, playerDamage, addTrauma, Car, Pickups, knuckleMat, lastShotInfo, Chars });
+const Enemies = createEnemies({ CFG, clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, heightAt, slopeAt, terrainNormal, WATER_LEVEL, obstaclesNear, SFX, FX, scene, csmMat, Structures, addScore, addKillFeed, player, playerDamage, addTrauma, Car, Pickups, knuckleMat, lastShotInfo, Chars, state });
 
 /* registro do último tiro do player (os inimigos "ouvem") */
 /* alvos extras (animais, zumbis, fantasmas) e lista de bosses */
@@ -3252,7 +3252,7 @@ const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainN
    BOSS — COLOSSO, guardião do forte (o núcleo brilhante é o ponto fraco)
    ================================================================ */
 let timeScale = 1; // câmera lenta cinematográfica na morte do boss
-const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, groundAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale });
+const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, groundAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale, state });
 /* Rockets criado APOS o Boss (dependencia declarada) — só é usado em runtime */
 const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss, Bosses, extraTargets });
 
@@ -3315,14 +3315,14 @@ const Amb = createAmb({ rand, TAU, _v1, _v2, heightAt, biomeAt, addObstacle, SFX
 /* ================================================================
    ANIMAIS — cervos (carne) e lobos (selvagens, mordem)
    ================================================================ */
-const Animals = createAnimals({ clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear, SFX });
+const Animals = createAnimals({ clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear, SFX, state });
 
 /* ================================================================
    CRIATURAS DA NOITE — zumbis e fantasmas (somem ao amanhecer)
    ================================================================ */
 const Night = createNight({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, obstaclesNear, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags });
 
-const Skeletons = createSkeletons({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear });
+const Skeletons = createSkeletons({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear, state });
 
 /* ================================================================
    BOSS 2 — O VISITANTE (alien na cratera do deserto) -> arma PLASMA
