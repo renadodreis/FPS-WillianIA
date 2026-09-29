@@ -87,6 +87,13 @@ async function playing(t, n, env = {}) {
   return { srv, clients, plan: ms[0].plan };
 }
 
+/* assumir um veículo exige estar ao lado dele na pose que o servidor conhece */
+async function aoLado(c, plan, id) {
+  const v = plan.veiculos.find(x => String(x.v) === String(id));
+  c.s.emit('state', { pos: [v.pos[0] + 2, v.pos[1], v.pos[2]], rotY: 0 });
+  await sleep(120);
+}
+
 /* =============== LOBBY E ANFITRIÃO =============== */
 describe('Lobby e anfitrião', () => {
   it('dado um jogador novo, quando conecta, então recebe init do lobby sem host', async t => {
@@ -175,15 +182,19 @@ describe('Lobby e anfitrião', () => {
 /* =============== ESTADO E MOVIMENTO =============== */
 describe('Estado e movimento', () => {
   it('dado um state válido, então os outros recebem playerUpdate com o carro', async t => {
-    const { clients } = await playing(t, 2);
+    const { clients, plan } = await playing(t, 2);
     const [a, b] = clients;
+    const carro = plan.veiculos.find(v => String(v.v) === '2');
+    const pos = [carro.pos[0] + 1, carro.pos[1], carro.pos[2]];
+    await aoLado(a, plan, 2);
+    assert.equal((await ack(a.s, 'enterCar', { idx: 2 })).ok, true);
     const upds = collect(b.s, 'playerUpdate');
-    const iv = setInterval(() => a.s.emit('state', { pos: [1, 2, 3], rotY: 0.5, car: 2 }), 60);
+    const iv = setInterval(() => a.s.emit('state', { pos, rotY: 0.5, car: 2 }), 60);
     t.after(() => clearInterval(iv));
     await sleep(500);
     const mine = upds.filter(u => u.id === a.init.id);
     assert.ok(mine.length > 0, 'nenhum playerUpdate chegou');
-    assert.deepEqual(mine[mine.length - 1].pos, [1, 2, 3]);
+    assert.deepEqual(mine[mine.length - 1].pos, pos);
     assert.equal(mine[mine.length - 1].car, 2);
   });
 
@@ -898,8 +909,10 @@ describe('Regras da sala (flags do anfitrião)', () => {
 /* =============== POSSE DE VEÍCULO =============== */
 describe('Posse de veículo (arbitrada no servidor)', () => {
   it('dado dois pedidos pelo mesmo carro, então só o primeiro leva — e sair devolve', async t => {
-    const { clients } = await playing(t, 3);
+    const { clients, plan } = await playing(t, 3);
     const [a, b] = clients;
+    await aoLado(a, plan, 0);
+    await aoLado(b, plan, 0);
     const r1 = await ack(a.s, 'enterCar', { idx: 0 });
     assert.equal(r1.ok, true);
     const r2 = await ack(b.s, 'enterCar', { idx: 0 });
@@ -911,9 +924,11 @@ describe('Posse de veículo (arbitrada no servidor)', () => {
   });
 
   it('dada a morte do motorista, então o carro é liberado pros outros', async t => {
-    const { clients } = await playing(t, 3);
+    const { clients, plan } = await playing(t, 3);
     const [a, b] = clients;
-    await ack(a.s, 'enterCar', { idx: 2 });
+    await aoLado(a, plan, 2);
+    await aoLado(b, plan, 2);
+    assert.equal((await ack(a.s, 'enterCar', { idx: 2 })).ok, true);
     await ack(a.s, 'died', {});
     const r = await ack(b.s, 'enterCar', { idx: 2 });
     assert.equal(r.ok, true, 'carro ficou preso com o morto');

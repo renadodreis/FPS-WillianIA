@@ -843,7 +843,17 @@ setInterval(() => {
   }
 }, 100).unref();
 /* a pose do veículo vem do seu ocupante — o `pos` dele já passou pelo
-   anti-teleporte. Carro: só o motorista ARBITRADO (`enterCar`). */
+   anti-teleporte. Carro: só o motorista ARBITRADO (`enterCar`). Assumir um
+   veículo exige estar perto da pose que o servidor conhece dele: o cliente
+   entra a 4,5 m (carro) / 5 m (heli); a folga cobre o carro parado que a
+   física local de cada cliente deixou rolar um pouco. */
+const POSSE_VEICULO_M = 12;
+// sem frota montada (terreno indisponível) não há pose para comparar
+const posseArbitrada = () => !!(match.veiculos && match.veiculos.size);
+function pertoDoVeiculo(p, veh) {
+  return !!veh && Array.isArray(p.pos) && veh.estado !== 'destruido'
+    && Math.hypot(p.pos[0] - veh.x, p.pos[1] - veh.y, p.pos[2] - veh.z) <= POSSE_VEICULO_M;
+}
 function poseDoOcupante(socketId, p, d) {
   if (!match.veiculos) return;
   const car = Number.isInteger(d.car) ? d.car : -1;
@@ -855,7 +865,8 @@ function poseDoOcupante(socketId, p, d) {
   if (!heli) return;
   if (d.heli && !p.ship && !p.fall && heli.estado !== 'destruido') {
     const dono = match.heliOwner && players.get(match.heliOwner);
-    if (!dono || !dono.alive) match.heliOwner = socketId;   // o primeiro a pilotar leva
+    // o primeiro a pilotar leva — estando ao lado dele
+    if ((!dono || !dono.alive) && pertoDoVeiculo(p, heli)) match.heliOwner = socketId;
     if (match.heliOwner === socketId) { heli.x = p.pos[0]; heli.y = p.pos[1]; heli.z = p.pos[2]; heli.yaw = +d.rotY || 0; }
   } else if (match.heliOwner === socketId) match.heliOwner = null;
 }
@@ -985,6 +996,7 @@ io.on('connection', socket => {
     if (!p || !p.alive || match.phase !== 'PLAYING' || idx < 0 || idx > 31) return cb({ ok: false });
     const owner = match.carOwners[idx];
     if (owner && owner !== socket.id && players.has(owner)) return cb({ ok: false });
+    if (posseArbitrada() && owner !== socket.id && !pertoDoVeiculo(p, veiculoPorId(idx))) return cb({ ok: false });
     match.carOwners[idx] = socket.id;
     socket.broadcast.emit('carTaken', { idx, id: socket.id });
     cb({ ok: true });
@@ -1082,10 +1094,14 @@ io.on('connection', socket => {
     p.lastState = now;
     // veículo ocupado anda com quem está dentro (pose já validada acima)
     if (match.phase === 'PLAYING' && p.alive && !p.spectator) poseDoOcupante(socket.id, p, d);
+    // ocupante repassado é o ARBITRADO pelo servidor, não o declarado
+    const carDecl = Number.isInteger(d.car) ? d.car : -1;
+    const noCarro = carDecl >= 0 && (!posseArbitrada() || match.carOwners[carDecl] === socket.id) ? carDecl : -1;
+    const noHeli = !!d.heli && (!posseArbitrada() || match.heliOwner === socket.id);
     socket.volatile.broadcast.emit('playerUpdate', {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
-      ship: !!d.ship, chute: !!d.chute, car: Number.isInteger(d.car) ? d.car : -1,
-      heli: !!d.heli, fall: p.fall,
+      ship: !!d.ship, chute: !!d.chute, car: noCarro,
+      heli: noHeli, fall: p.fall,
       // posição local VALIDADA na cabine: os outros clientes interpolam no
       // referencial da nave (sem atraso quando ela se desloca)
       shipLocal: p.ship && p.shipLocal ? p.shipLocal : undefined,

@@ -42,12 +42,33 @@ describe('BR — acerto dado do helicóptero chega ao servidor', { skip: !CHROME
       G.arsenal[0].locked = false;
       G.switchWeapon(0);                        // FUZIL: 320 m no servidor
       window.QA.tick(20);
-      // o helicóptero vem até o jogador (a posição DELE é a que o servidor
-      // aceitou; levar o jogador até o heli seria teleporte recusado)
-      const P = window.QA.MP.player.pos;
-      G.Heli.group.position.set(P.x + 1, window.QA.MP.groundAt(P.x + 1, P.z, P.y + 5) + 0.55, P.z);
-      if (!G.Heli.tryEnter()) throw new Error('não entrou no helicóptero');
+      // o jogador vai até o helicóptero: o servidor só entrega o heli a quem
+      // está ao lado da pose que ELE conhece (a do heliponto). O salto é
+      // recusado pelo anti-teleporte e re-ancorado após recusas seguidas.
+      const H = G.Heli.group.position, P = window.QA.MP.player.pos;
+      P.set(H.x + 2, window.QA.MP.groundAt(H.x + 2, H.z, H.y + 1), H.z);
     });
+    await new Promise((resolve, reject) => {
+      const to = setTimeout(() => { host.off('playerUpdate', on); reject(new Error('o servidor não aceitou o jogador no heliponto')); }, 15000);
+      let alvo = null;
+      h.play(() => { const g = window.QA.G.Heli.group.position; return [g.x, g.y, g.z]; }).then(a => { alvo = a; });
+      const on = d => {
+        if (!alvo || !d || d.id !== pageId || Math.hypot(d.pos[0] - alvo[0], d.pos[2] - alvo[2]) > 4) return;
+        clearTimeout(to); host.off('playerUpdate', on); resolve();
+      };
+      host.on('playerUpdate', on);
+    });
+    // o outro jogador vai junto, a 40 m do heliponto (dentro do alcance do fuzil)
+    const posHost = await h.play(() => {
+      const g = window.QA.G.Heli.group.position;
+      return [g.x + 40, window.QA.MP.groundAt(g.x + 40, g.z, g.y + 1), g.z];
+    });
+    for (let i = 0; i < 14; i++) { host.emit('state', { pos: posHost, rotY: 0 }); await sleep(100); }
+    await h.page.waitForFunction(alvo => {
+      const rp = (window.__MP_remotePlayers || []).find(x => x.nick === 'BotHost');
+      return !!rp && Math.hypot(rp.group.position.x - alvo[0], rp.group.position.z - alvo[2]) < 2;
+    }, { timeout: 10000 }, posHost);
+    await h.play(() => { if (!window.QA.G.Heli.tryEnter()) throw new Error('não entrou no helicóptero'); });
     // sobe no motor dele (8 m/s — o anti-teleporte vertical é 120 m/s)
     await h.play(() => { window.QA.G.keys.Space = true; });
     await h.page.waitForFunction(alt => {

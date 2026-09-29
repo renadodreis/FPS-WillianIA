@@ -85,6 +85,8 @@ async function playing(t, n, env = {}) {
 }
 const veic = (plan, id) => plan.veiculos.find(v => String(v.v) === String(id));
 const perto = (v, dx = 6, dz = 0) => [v.pos[0] + dx, v.pos[1], v.pos[2] + dz];
+/* assumir um veículo exige estar ao lado dele na pose que o servidor conhece */
+async function aoLado(c, v) { c.s.emit('state', { pos: perto(v, 2), rotY: 0 }); await sleep(120); }
 /* N acertos espaçados (cabem na cadência e no orçamento de 1 s) */
 async function rajada(sock, n, payload, gapMs = 110) {
   for (let i = 0; i < n; i++) { sock.emit('vehicleHit', payload); await sleep(gapMs); }
@@ -161,6 +163,7 @@ describe('vida, queima e explosão (autoritativas)', () => {
     const { clients, plan } = await playing(t, 4);
     const [a, b, c, d] = clients;
     const buggy = veic(plan, 0);
+    await aoLado(b, buggy);
     assert.equal((await ack(b.s, 'enterCar', { idx: 0 })).ok, true);
     b.s.emit('state', { pos: buggy.pos, rotY: 0, car: 0 });
     c.s.emit('state', { pos: perto(buggy, 3), rotY: 0 });
@@ -180,8 +183,8 @@ describe('vida, queima e explosão (autoritativas)', () => {
     assert.ok(hitC[0].dmg >= 60 && hitC[0].dmg <= 120, `dano a ~3 m: ${hitC[0].dmg}`);
     assert.equal(hitC[0].shooterId, a.init.id);
     assert.equal(hitD.length, 0, 'a explosão feriu quem estava a 40 m');
-    // o carro saiu da posse: outro jogador pode "entrar" (não há o que entrar, mas a vaga não fica presa)
-    assert.equal((await ack(c.s, 'enterCar', { idx: 0 })).ok, true);
+    // destruído, não há o que assumir — nem para quem está ao lado
+    assert.equal((await ack(c.s, 'enterCar', { idx: 0 })).ok, false, 'assumiu um carro destruído');
   });
 
   it('o veículo anda com quem o dirige: a pose é a do motorista arbitrado, e a de mais ninguém', async t => {
@@ -190,6 +193,7 @@ describe('vida, queima e explosão (autoritativas)', () => {
     const cam = veic(plan, 4); // caminhão da 1ª base
     assert.ok(cam && cam.tipo === 'caminhao', 'semente sem caminhão');
     const destino = [cam.pos[0] + 60, cam.pos[1], cam.pos[2]];
+    await aoLado(b, cam);
     assert.equal((await ack(b.s, 'enterCar', { idx: 4 })).ok, true);
     // B leva o caminhão 60 m (a 20 m/s, dentro do anti-teleporte)
     for (let k = 0; k <= 30; k++) {

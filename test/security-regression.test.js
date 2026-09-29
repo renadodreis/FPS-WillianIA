@@ -226,6 +226,62 @@ describe('Loot — só de participantes vivos da partida', () => {
   });
 });
 
+/* =============== posse de veículo é do servidor =============== */
+describe('Veículo — posse arbitrada pela posição que o servidor conhece', () => {
+  const veic = (plan, id) => (plan.veiculos || []).find(v => String(v.v) === String(id));
+
+  it('dado um jogador longe do carro, então ele não assume o carro', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a] = clients;
+    const carro = (plan.veiculos || []).find(v => v.v !== 'heli');
+    assert.ok(carro, 'cenário inválido: a partida não tem carro');
+    a.s.emit('state', { pos: [carro.pos[0] + 200, 5, carro.pos[2] + 200], rotY: 0 });
+    await sleep(150);
+    const r = await ack(a.s, 'enterCar', { idx: +carro.v });
+    assert.equal(r.ok, false, 'assumiu um carro a 280 m');
+  });
+
+  it('dado um jogador ao lado do carro, então ele assume o carro', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a] = clients;
+    const carro = (plan.veiculos || []).find(v => v.v !== 'heli');
+    a.s.emit('state', { pos: [carro.pos[0] + 2, carro.pos[1], carro.pos[2]], rotY: 0 });
+    await sleep(150);
+    const r = await ack(a.s, 'enterCar', { idx: +carro.v });
+    assert.equal(r.ok, true, 'não assumiu o carro estando ao lado dele');
+  });
+
+  it('dado um jogador longe do helicóptero, então ele não é tratado como piloto pelos outros', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a, b] = clients;
+    const heli = veic(plan, 'heli');
+    assert.ok(heli, 'cenário inválido: a partida não tem helicóptero');
+    const ups = collect(b.s, 'playerUpdate');
+    for (let i = 0; i < 5; i++) {
+      a.s.emit('state', { pos: [heli.pos[0] + 150, 5, heli.pos[2] + 150], rotY: 0, heli: true });
+      await sleep(60);
+    }
+    await sleep(150);
+    const deA = ups.filter(u => u.id === a.init.id);
+    assert.ok(deA.length > 0, 'cenário inválido: nenhum playerUpdate do jogador');
+    assert.ok(deA.every(u => !u.heli), 'jogador longe do helicóptero repassado como piloto');
+  });
+
+  it('dado o piloto de verdade (ao lado do helicóptero), então ele é repassado como piloto', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a, b] = clients;
+    const heli = veic(plan, 'heli');
+    const ups = collect(b.s, 'playerUpdate');
+    for (let i = 0; i < 5; i++) {
+      a.s.emit('state', { pos: [heli.pos[0], heli.pos[1] + 0.5, heli.pos[2]], rotY: 0, heli: true });
+      await sleep(60);
+    }
+    await sleep(150);
+    const deA = ups.filter(u => u.id === a.init.id);
+    assert.ok(deA.some(u => u.heli), 'o piloto de verdade não foi repassado como piloto');
+  });
+});
+
 /* =============== crédito de kill exige acerto validado =============== */
 describe('Kill — crédito só com acerto validado', () => {
   it('dado um killer que nunca acertou a vítima, então a kill não é creditada', async t => {
