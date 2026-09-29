@@ -320,6 +320,25 @@ escrita pelo validador — quem constrói não edita).
   de vida no segurança visto entre as barras. E o contrário também existia:
   degrau desenhado maciço sem colisão de bala (16/16 tiros atravessavam).
   **Desenho sólido tem de barrar bala; desenho vazado não.**
+- **Acabamento da cidade é DADO em `js/paredes.js` (`acabamentoDaCidade`), e o
+  `structures.js` desenha a partir dele.** Parapeito de todo telhado, pódio,
+  cornija, porta, pilastras, casa de máquinas, caixa d'água, ar-condicionado,
+  antena, bancos, floreira, hidrante, lixeira, postes e o acabamento de fora e
+  do topo da Torre eram só desenho: a bala atravessava 318 de 329 retas que
+  batiam neles (`test/acabamento-bala.test.js`, âncora na malha). Viraram
+  lajes `city` `noCollide` (barram bala e visada, não mudam o andar). O
+  sorteio do detalhe (LCG de semente constante 0xB111D5) mora lá, na mesma
+  ordem: o desenho saiu IDÊNTICO (soma de vértices e cores das 4 malhas).
+  **Peça nova que parece sólida entra no dado, não num `trimBox` solto.** O
+  piso do pátio do castelo também (`foundation-slab`): 715 de 3 957 retas
+  que furavam o piso passavam. **Caixa de bala MAIOR que o desenho é bala
+  parando no ar:** o quadrado de lado 1,8·r no poste sobrava 2–4 cm na
+  diagonal e a retícula ficou branca com o inimigo à vista; cilindro vira 5
+  caixas DENTRO do círculo (`caixasDeBala`), e o teste mede a sobra com reta
+  RENTE (2 cm fora da superfície), não só a 0,3 m. **A lista de paredes
+  dobrou (586 → 1 133)** e `rayHit` varre linear: blocos de 16 paredes
+  consecutivas com caixa-união podam a varredura (3,45 µs por reta contra
+  5,25 com a metade das paredes) — no cliente e na consulta dos bots.
 - **Inimigo de POSTO (Executivos da torre, guardas) não renasce à vista:** só
   com o jogador a > 75 m e sem ver o posto nem o corpo (Left 4 Dead, Valve
   2009). O corpo cai no piso do andar em que morreu, não no terreno.

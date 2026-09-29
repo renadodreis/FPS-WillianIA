@@ -86,9 +86,10 @@ export function rngEstruturas(worldSeed) {
    servidor; até ele passar a importar daqui, os DOIS têm de concordar —
    test/paredes-puro.test.js compara a medida com a de castle.js e
    test/paredes-paridade.test.js compara os colisores com os do jogo. */
-const CASTELO = Object.freeze({
+export const CASTELO = Object.freeze({
   FOOTPRINT_HALF: 19.18,
   FLOOR_LOCAL_Y: 0.16,
+  SLAB_PATIO: 0.4,
   BASE_CLEARANCE: 0.05,
   FOUNDATION_BURY: 0.25,
   GATE_HALF: 2.3,
@@ -305,6 +306,13 @@ export function paredesDoCastelo(medida) {
   wall('foundation-back', -FH, FH, bottomLocal, C.FLOOR_LOCAL_Y, -FH, -edge0);
   wall('foundation-front-left', -FH, -C.GATE_HALF, bottomLocal, C.FLOOR_LOCAL_Y, edge0, FH);
   wall('foundation-front-right', C.GATE_HALF, FH, bottomLocal, C.FLOOR_LOCAL_Y, edge0, FH);
+  /* O PISO DO PÁTIO barra bala. A fundação é só uma faixa de 0,46 m na
+     borda e a muralha começa em y local 0 (embutida 16 cm no piso): a reta
+     rasante que entrava pelo piso passava por baixo do muro e por cima da
+     fundação — o piso desenhado (RB_CourtyardFloor) não tinha colisor (laudo
+     de 2224bf5: 6 de 85 pares no castelo). Laje `noCollide`: barra bala e
+     visada, não empurra corpo; `foundation-` fica fora do desenho de reserva. */
+  wall('foundation-slab', -FH, FH, C.FLOOR_LOCAL_Y - C.SLAB_PATIO, C.FLOOR_LOCAL_Y, -FH, FH, { noCollide: true });
   for (const f of fundacaoDoPortaoEAterro(medida))
     wall(f.part, f.x0, f.x1, f.y0, f.y1, f.z0, f.z1, f.noCollide ? { noCollide: true } : {});
   wall('wall-left', -17.45, -16.55, 0, 7.1, -17.45, 17.45);
@@ -621,6 +629,187 @@ export function lote(lot, idx, cx, cz, gy) {
 export const NEXUS = Object.freeze({ W: 18, FH: 3.4, NF: 10 });
 
 /* ================================================================
+   ACABAMENTO DA CIDADE — o desenho que segura bala.
+   Parapeito de telhado, pódio e cornija do térreo, batente/porta/marquise,
+   pilastras, casa de máquinas, caixa d'água, ar-condicionado e antena no
+   telhado, bancos, floreira, hidrante e lixeira da praça, postes, e
+   pilares/batentes/verga/marquise/faixas da Torre Nexus eram SÓ desenho
+   (cityTrimMesh e cityProps em js/structures.js): a bala e a visada do bot
+   atravessavam — o parapeito de todo telhado pisável não protegia ninguém,
+   e o validador mediu bot vendo o jogador atrás de floreira e lixeira
+   (laudo de 2224bf5, §2c). "Desenho sólido barra bala."
+
+   Agora é DADO aqui, e js/structures.js desenha A PARTIR dele (uma fonte:
+   o que se vê é o que segura). As caixas de bala são lajes `city`
+   `noCollide`: barram bala e visada, não empurram corpo nem carro — andar
+   pela cidade não muda — e somem com a cidade no evento. Cilindro vira
+   5 caixas dentro do círculo (caixasDeBala).
+
+   O sorteio do detalhe é o de sempre: LCG de semente CONSTANTE 0xB111D5,
+   na mesma ordem (tinta do prédio, depois o telhado, lote a lote) — o
+   desenho sai idêntico, e o Node reproduz sem navegador.
+   ================================================================ */
+export const ACABAMENTO = Object.freeze({ SEMENTE: 0xB111D5, PORTA_H: 2.05 });
+function sorteioDoDetalhe() {
+  let s = ACABAMENTO.SEMENTE;
+  const bp = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+  return (a = 1, b) => (b === undefined ? bp() * a : a + bp() * (b - a));
+}
+export function faceDaFachada(face, w, d) {
+  if (face === 'S') return { ox: 0, oz: d / 2, nx: 0, nz: 1, axis: 'x' };
+  if (face === 'N') return { ox: 0, oz: -d / 2, nx: 0, nz: -1, axis: 'x' };
+  if (face === 'E') return { ox: w / 2, oz: 0, nx: 1, nz: 0, axis: 'z' };
+  return { ox: -w / 2, oz: 0, nx: -1, nz: 0, axis: 'z' };
+}
+const acab = (w, h, d, x, y, z, cor) => ({ forma: 'caixa', w, h, d, x, y, z, cor });
+const tambor = (r, h, x, y, z, cor, seg = 10) => ({ forma: 'cilindro', r, h, x, y, z, cor, seg });
+
+/* as caixas de bala de uma peça de acabamento. Cilindro vira a união de 5
+   caixas DENTRO do círculo (canto ≤ 1,003·r; falta no máximo 7 % do raio,
+   a 20° do eixo): cruz (0,97·r × 0,25·r), dois retângulos (0,87·r × 0,5·r) e
+   o quadrado inscrito. Caixa maior que o desenho é bala parando no ar — o
+   quadrado de lado 1,8·r no poste barrava, na diagonal, a reta que passava
+   2 cm FORA da haste desenhada (a retícula ficava branca com o inimigo à
+   vista, test/reticula-tela.test.js). */
+const CILINDRO = [[0.97, 0.25], [0.25, 0.97], [0.87, 0.5], [0.5, 0.87], [Math.SQRT1_2, Math.SQRT1_2]];
+export function caixasDeBala(p) {
+  if (p.forma === 'caixa') return [caixaDaPeca(p)];
+  const y0 = p.y - p.h / 2, y1 = p.y + p.h / 2;
+  return CILINDRO.map(([fx, fz]) => ({ x0: p.x - p.r * fx, x1: p.x + p.r * fx, y0, y1, z0: p.z - p.r * fz, z1: p.z + p.r * fz }));
+}
+
+export function acabamentoDaCidade({ lotes, cx, cz, gy, towerTopY }) {
+  const brand = sorteioDoDetalhe();
+  const predios = lotes.map(L => {
+    const { lot, bx, bz, d, oco, gfH } = L;
+    const { w, h, arch, face } = lot;
+    // a tinta sorteia ANTES do telhado (a ordem de sempre do structures.js)
+    const tinta = [brand(-0.02, 0.02), brand(0, 0.05), brand(-0.05, 0.12)];
+    const pecas = [];
+    if (!oco) pecas.push(acab(w + 0.5, gfH, d + 0.5, bx, gy + gfH / 2, bz, arch === 'commerc' ? 0x2b2f36 : 0x4a4f58)); // térreo/pódio
+    pecas.push(acab(w + 0.7, 0.28, d + 0.7, bx, gy + gfH, bz, 0x6c727b));                                        // cornija do térreo
+    const fo = faceDaFachada(face, w, d);
+    const doorW = Math.min(2.8, w * 0.42), doorH = ACABAMENTO.PORTA_H;
+    const fx = bx + fo.ox, fz = bz + fo.oz;
+    if (fo.axis === 'x') {
+      if (!oco) {
+        pecas.push(acab(doorW + 0.7, doorH + 0.4, 0.22, fx, gy + (doorH + 0.4) / 2, fz + fo.nz * 0.02, 0x8a909a)); // moldura
+        pecas.push(acab(doorW, doorH, 0.16, fx, gy + doorH / 2, fz + fo.nz * 0.1, 0x14161a));                     // vão recuado
+      }
+      if (arch === 'commerc' || arch === 'corner')
+        pecas.push(acab(doorW + 1.6, 0.16, 1.2, fx, gy + doorH + 0.35, fz + fo.nz * 0.55, 0x2c3038));            // marquise
+    } else {
+      if (!oco) {
+        pecas.push(acab(0.22, doorH + 0.4, doorW + 0.7, fx + fo.nx * 0.02, gy + (doorH + 0.4) / 2, fz, 0x8a909a));
+        pecas.push(acab(0.16, doorH, doorW, fx + fo.nx * 0.1, gy + doorH / 2, fz, 0x14161a));
+      }
+      if (arch === 'commerc' || arch === 'corner')
+        pecas.push(acab(1.2, 0.16, doorW + 1.6, fx + fo.nx * 0.55, gy + doorH + 0.35, fz, 0x2c3038));
+    }
+    // pilastras de canto
+    for (const sx of [-1, 1]) for (const sz of [-1, 1])
+      pecas.push(acab(0.5, h - gfH, 0.5, bx + sx * (w / 2 - 0.05), gy + gfH + (h - gfH) / 2, bz + sz * (d / 2 - 0.05), 0x565c66));
+    // parapeito: 4 murinhos na borda do telhado (o telhado segue pisável)
+    const py = gy + h;
+    pecas.push(acab(w + 0.4, 0.7, 0.3, bx, py + 0.35, bz - d / 2, 0x3a3f48));
+    pecas.push(acab(w + 0.4, 0.7, 0.3, bx, py + 0.35, bz + d / 2, 0x3a3f48));
+    pecas.push(acab(0.3, 0.7, d + 0.4, bx - w / 2, py + 0.35, bz, 0x3a3f48));
+    pecas.push(acab(0.3, 0.7, d + 0.4, bx + w / 2, py + 0.35, bz, 0x3a3f48));
+    // telhado: casa de máquinas, caixa d'água, ar-condicionado, antena
+    // (argumentos na ordem de avaliação do structures.js: o sorteio é posicional)
+    {
+      const mh = brand(1.5, 2.4), mw = w * brand(0.32, 0.44), md = d * brand(0.32, 0.44);
+      const mx = bx + brand(-w * 0.12, w * 0.12), mz = bz + brand(-d * 0.12, d * 0.12);
+      pecas.push(acab(mw, mh, md, mx, py + mh / 2, mz, 0x2e323a));
+      if (brand() < 0.65) {
+        const tr = brand(0.7, 1.05), th = brand(1.4, 2.1);
+        const tx = bx + brand(-w * 0.22, w * 0.22), tz = bz + brand(-d * 0.22, d * 0.22);
+        pecas.push(tambor(tr, th, tx, py + th / 2, tz, 0x8f9aa2, 12));
+      }
+      for (let i = 0; i < 2; i++) {
+        const aw = brand(0.6, 1.1), ah = brand(0.4, 0.8), ad = brand(0.6, 1.1);
+        const ax = bx + brand(-w * 0.3, w * 0.3), az = bz + brand(-d * 0.3, d * 0.3);
+        pecas.push(acab(aw, ah, ad, ax, py + 0.4, az, 0x474c55));
+      }
+      if (arch === 'office' || arch === 'corner') {
+        const ah = brand(2.6, 4.2), ax = bx + brand(-w * 0.2, w * 0.2), az = bz + brand(-d * 0.2, d * 0.2);
+        pecas.push(acab(0.13, ah, 0.13, ax, py + ah / 2, az, 0x20242a));
+      }
+    }
+    return { tinta, pecas };
+  });
+
+  // postes nas calçadas da avenida e da transversal (coordenadas locais da cidade)
+  const eo = CityLayout.CITY_CONST.SIDEWALK_W + 0.5, postes = [];
+  const nasCalcadas = r => {
+    if (r.x1 - r.x0 > r.z1 - r.z0) {
+      for (let x = r.x0 + 4; x < r.x1 - 2; x += 13) {
+        postes.push({ x, z: r.z0 - eo, hz: 0.7, hx: 0 });
+        postes.push({ x, z: r.z1 + eo, hz: -0.7, hx: 0 });
+      }
+    } else {
+      for (let z = r.z0 + 4; z < r.z1 - 2; z += 13) {
+        postes.push({ x: r.x0 - eo, z, hx: 0.7, hz: 0 });
+        postes.push({ x: r.x1 + eo, z, hx: -0.7, hz: 0 });
+      }
+    }
+  };
+  nasCalcadas(CityLayout.ROADS[0]); nasCalcadas(CityLayout.ROADS[1]);
+  const pecasDosPostes = [];
+  for (const L of postes) {
+    const wx = cx + L.x, wz = cz + L.z;
+    /* haste: cilindro de 6 lados que afina de 0,13 (pé) a 0,10 (topo). Duas
+       metades, cada uma no raio efetivo do hexágono dela (média entre a face,
+       0,87·r, e o vértice) — só a bala usa isto; o desenho é o do structures.js */
+    pecasDosPostes.push(tambor(0.114, 2.1, wx, gy + 1.05, wz, 0x3a3e44, 6));
+    pecasDosPostes.push(tambor(0.100, 2.1, wx, gy + 3.15, wz, 0x3a3e44, 6));
+    pecasDosPostes.push(acab(0.5, 0.22, 0.9, wx + L.hx, gy + 4.15, wz + L.hz, 0x2a2d33)); // luminária
+  }
+
+  // mobiliário da praça
+  const praca = [
+    acab(2.4, 0.45, 0.6, cx - 6, gy + 0.32, cz + 12, 0x6b5a3a),   // banco
+    acab(2.4, 0.45, 0.6, cx + 6, gy + 0.32, cz + 12, 0x6b5a3a),   // banco
+    acab(1.0, 0.5, 1.0, cx - 11, gy + 0.3, cz + 7, 0x2f6b3a),     // floreira
+    tambor(0.26, 1.0, cx + 10, gy + 0.5, cz - 8, 0xb23a2a),       // hidrante
+    acab(0.6, 0.9, 0.6, cx + 14, gy + 0.45, cz + 6, 0x33383f),    // lixeira
+  ];
+
+  // Torre Nexus: o acabamento de fora (a casca e o interior já são paredes)
+  const { W, FH: fh, NF } = NEXUS, torre = [];
+  for (const sx of [-1, 1]) for (const sz of [-1, 1])
+    torre.push(acab(0.8, NF * fh + 1, 0.8, cx + sx * W / 2, gy + (NF * fh + 1) / 2, cz + sz * W / 2, 0x474d57)); // pilar de canto
+  torre.push(acab(0.4, 3.4, 0.4, cx - 2, gy + 1.7, cz + W / 2 + 0.05, 0x8a909a));  // jamba esq da porta
+  torre.push(acab(0.4, 3.4, 0.4, cx + 2, gy + 1.7, cz + W / 2 + 0.05, 0x8a909a));  // jamba dir
+  torre.push(acab(5, 0.4, 0.5, cx, gy + 3.3, cz + W / 2 + 0.05, 0x8a909a));        // verga
+  torre.push(acab(6.4, 0.2, 1.8, cx, gy + 3.7, cz + W / 2 + 0.85, 0x2c3038));      // marquise de entrada
+  torre.push(acab(W + 0.6, 0.5, 0.4, cx, gy + 3.0, cz - W / 2, 0x5a616b));         // faixa do térreo (perímetro)
+  torre.push(acab(0.4, 0.5, W + 0.6, cx - W / 2, gy + 3.0, cz, 0x5a616b));
+  torre.push(acab(0.4, 0.5, W + 0.6, cx + W / 2, gy + 3.0, cz, 0x5a616b));
+  // o TOPO da torre: parapeitos do heliponto e o caixote da bazuca (desenhados
+  // na malha do interior) e a antena + casa de máquinas (no acabamento)
+  const topo = [
+    acab(W, 0.6, 0.4, cx, towerTopY + 0.3, cz - W / 2 + 0.2, 0x3a3f48),
+    acab(W, 0.6, 0.4, cx, towerTopY + 0.3, cz + W / 2 - 0.2, 0x3a3f48),
+    acab(0.4, 0.6, W, cx - W / 2 + 0.2, towerTopY + 0.3, cz, 0x3a3f48),
+    acab(0.4, 0.6, W, cx + W / 2 - 0.2, towerTopY + 0.3, cz, 0x3a3f48),
+    acab(1.2, 0.7, 0.7, cx + 6.5, towerTopY + 0.35, cz + 6.5, 0x4a5240),   // caixa da bazuca
+  ].map(p => ({ ...p, malha: 'interior' })).concat([
+    acab(0.16, 5.5, 0.16, cx - W / 2 + 1.6, towerTopY + 2.75, cz - W / 2 + 1.6, 0x20242a), // antena
+    acab(1.6, 0.5, 1.6, cx - W / 2 + 1.6, towerTopY + 0.25, cz - W / 2 + 1.6, 0x2e323a),   // casa de máquinas
+  ]);
+
+  const solidos = [];
+  const bala = (p, nome) => { for (const b of caixasDeBala(p)) solidos.push(Object.assign(b, { city: true, noCollide: true, acabamento: nome })); };
+  predios.forEach((pr, i) => pr.pecas.forEach(p => bala(p, `lote#${lotes[i].idx}`)));
+  pecasDosPostes.forEach(p => bala(p, 'poste'));
+  praca.forEach(p => bala(p, 'praça'));
+  torre.forEach(p => bala(p, 'torre'));
+  topo.forEach(p => bala(p, 'torre/topo'));
+  return { predios, postes, praca, torre, topo, solidos };
+}
+
+/* ================================================================
    PISO DO SAGUÃO DA TORRE — um chão só, e o pé nele.
    O saguão não tinha piso: o jogador andava no TERRENO e a tela mostrava
    uma placa plana em gy+0,08 — no MESMO plano do disco da praça que passa
@@ -849,6 +1038,8 @@ export function construirMundoSolido({ worldSeed, heightAt, slopeAt, WATER_LEVEL
   for (const b of casca) add(caixaDaPeca(b, { city: true }), 'nexus/casca');
   const nexus = interiorNexus(cx, cz, gy, pisoDoSaguao(heightAt, cx, cz, gy));
   for (const op of nexus.ops) if (op.parede) add(op.parede, `nexus/${op.tipo}`);
+  const acabamento = acabamentoDaCidade({ lotes, cx, cz, gy, towerTopY: nexus.info.towerTopY });
+  for (const b of acabamento.solidos) add(b, `acabamento/${b.acabamento}`);
 
   pecas.bases.forEach((p, i) => solidas(p, `base#${i}`));
 
@@ -857,7 +1048,7 @@ export function construirMundoSolido({ worldSeed, heightAt, slopeAt, WATER_LEVEL
 
   return {
     semente, plano, paredes, origens, pecas,
-    cidade: { cx, cz, gy, lotes, casca, nexus, interiores },
+    cidade: { cx, cz, gy, lotes, casca, nexus, interiores, acabamento },
     castelo,
     escombros: escombrosDaCidade(cx, cz, gy, heightAt),
     cofre: paredeDoCofre(interiores, { x: cx, z: cz }),
@@ -888,9 +1079,29 @@ export function criarConsultaParedes(paredes) {
     const b = solidas[i];
     w[o] = b.x0; w[o + 1] = b.x1; w[o + 2] = b.y0; w[o + 3] = b.y1; w[o + 4] = b.z0; w[o + 5] = b.z1;
   }
+  /* blocos de BLOCO paredes consecutivas com a caixa-união (a mesma poda do
+     Structures.rayHit): a reta que não cruza a caixa do bloco pula o bloco */
+  const BLOCO = 16, nb = Math.ceil(n / BLOCO), cx = new Float64Array(nb * 6);
+  for (let k = 0; k < nb; k++) {
+    const q = k * 6;
+    cx[q] = cx[q + 2] = cx[q + 4] = Infinity; cx[q + 1] = cx[q + 3] = cx[q + 5] = -Infinity;
+    for (let i = k * BLOCO, o = i * 6; i < Math.min(n, (k + 1) * BLOCO); i++, o += 6)
+      for (let e = 0; e < 6; e += 2) { cx[q + e] = Math.min(cx[q + e], w[o + e]); cx[q + e + 1] = Math.max(cx[q + e + 1], w[o + e + 1]); }
+  }
+  function cruza(o, d, best, c, q) {
+    let t0 = 0, t1 = best, ta, tb;
+    if (Math.abs(d.x) < 1e-8) { if (o.x < c[q] || o.x > c[q + 1]) return false; }
+    else { ta = (c[q] - o.x) / d.x; tb = (c[q + 1] - o.x) / d.x; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) return false; }
+    if (Math.abs(d.y) < 1e-8) { if (o.y < c[q + 2] || o.y > c[q + 3]) return false; }
+    else { ta = (c[q + 2] - o.y) / d.y; tb = (c[q + 3] - o.y) / d.y; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) return false; }
+    if (Math.abs(d.z) < 1e-8) { if (o.z < c[q + 4] || o.z > c[q + 5]) return false; }
+    else { ta = (c[q + 4] - o.z) / d.z; tb = (c[q + 5] - o.z) / d.z; if (ta > tb) { const m = ta; ta = tb; tb = m; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) return false; }
+    return true;
+  }
   function raio(o, d, maxDist) {
     let best = maxDist;
     for (let i = 0, p = 0; i < n; i++, p += 6) {
+      if (i % BLOCO === 0 && !cruza(o, d, best, cx, (i / BLOCO) * 6)) { i += BLOCO - 1; p += (BLOCO - 1) * 6; continue; }
       let t0 = 0, t1 = best, ta, tb;
       const bx0 = w[p], bx1 = w[p + 1], by0 = w[p + 2], by1 = w[p + 3], bz0 = w[p + 4], bz1 = w[p + 5];
       if (Math.abs(d.x) < 1e-8) { if (o.x < bx0 || o.x > bx1) continue; }

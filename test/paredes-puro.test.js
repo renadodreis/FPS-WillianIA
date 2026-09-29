@@ -195,7 +195,11 @@ describe('planta nova mantém os invariantes (varredura em Node)', () => {
     // 581 → 585: o saguão da torre ganhou piso (laje) e soleira na porta sul,
     // e a rampa da porta, duas muretas (test/torre-tela) — o jogador andava no
     // terreno, abaixo do chão desenhado.
-    assert.equal(contagem, 585, 'a semente 424242 devia ter 585 paredes (sem o cofre)');
+    // 585 → 1133: o acabamento da cidade virou laje de bala (acabamentoDaCidade:
+    // 212 dos prédios, 308 dos 28 postes — haste em 2 metades de 5 caixas +
+    // luminária —, 9 da praça, 18 da Torre) e o castelo ganhou a laje do piso
+    // do pátio (test/acabamento-bala, test/castelo-piso-bala).
+    assert.equal(contagem, 1133, 'a semente 424242 devia ter 1133 paredes (sem o cofre)');
   });
 });
 

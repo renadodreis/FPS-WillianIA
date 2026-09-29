@@ -11,6 +11,7 @@ const MODEL_URL = '/assets/models/boss-castle.v2.optimized.glb';
 const FOOTPRINT_HALF = 19.18;
 const COURTYARD_HALF = 18.3;
 const FLOOR_LOCAL_Y = 0.16;
+const SLAB_PATIO = 0.4; // espessura da laje de bala sob o piso do pátio (js/paredes.js, CASTELO)
 const BASE_CLEARANCE = 0.05;
 const FOUNDATION_BURY = 0.25;
 const GATE_HALF = 2.3;
@@ -649,6 +650,9 @@ export function createCastle({
     edge0, FOOTPRINT_HALF);
   wall('foundation-front-right', GATE_HALF, FOOTPRINT_HALF, bottomLocal, FLOOR_LOCAL_Y,
     edge0, FOOTPRINT_HALF);
+  // O PISO do pátio barra bala (laje: não empurra corpo). Ver js/paredes.js.
+  wall('foundation-slab', -FOOTPRINT_HALF, FOOTPRINT_HALF, FLOOR_LOCAL_Y - SLAB_PATIO, FLOOR_LOCAL_Y,
+    -FOOTPRINT_HALF, FOOTPRINT_HALF, { noCollide: true });
   // Por baixo do portão e sob a rampa: fundação e aterro (js/paredes.js).
   // O vão de passagem do portão continua sem AABB na altura de quem passa.
   const extraFoundation = fundacaoDoPortaoEAterro(placement);
