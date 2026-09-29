@@ -620,6 +620,43 @@ export function lote(lot, idx, cx, cz, gy) {
 
 export const NEXUS = Object.freeze({ W: 18, FH: 3.4, NF: 10 });
 
+/* ================================================================
+   PISO DO SAGUÃO DA TORRE — um chão só, e o pé nele.
+   O saguão não tinha piso: o jogador andava no TERRENO e a tela mostrava
+   uma placa plana em gy+0,08 — no MESMO plano do disco da praça que passa
+   por baixo da torre (2 536 pontos de z-fighting medidos na tela,
+   test/torre-tela.test.js). E o platô da cidade não é plano: guarda 5 % do
+   relevo natural, e na pegada da torre o terreno sobe até +0,13 m na
+   mediana das sementes (+0,42 no pior de 60) — furando a placa — e desce
+   até −0,33 m, com o pé enterrado no chão desenhado.
+   Agora o saguão é LAJE pisável (como todo andar de cima), 3 cm acima do
+   ponto mais alto do terreno na pegada e nunca abaixo de gy+0,16 (2 cm
+   acima do asfalto da rua de acesso, gy+0,14: a soleira fica rente). Uma
+   rampa de 1:10 na porta leva do piso ao terreno de fora — sem degrau — e
+   duas muretas a ladeiam: rampa pisável é reta (groundAt interpola num eixo
+   só), e quem entrava DE LADO, colado na fachada, subia 13 cm num quadro
+   pela borda dela. Como em toda rampa de entrada, se entra pela frente.
+   ================================================================ */
+export const PISO_TERREO_MIN = 0.16;
+export const RAMPA_PORTA_DECLIVE = 0.1;
+export function pisoDoSaguao(heightAt, cx, cz, gy) {
+  const R = NEXUS.W / 2 + 0.25;
+  let alto = -Infinity;
+  for (let x = -R; x <= R + 1e-9; x += 0.25) for (let z = -R; z <= R + 1e-9; z += 0.25)
+    alto = Math.max(alto, heightAt(cx + x, cz + z));
+  const piso = Math.max(gy + PISO_TERREO_MIN, alto + 0.03);
+  /* rampa da porta (sul), 1:10: a menor que termina ABAIXO do terreno de fora
+     em toda a largura do vão (x ±2) — a ponta enterrada some no chão e o
+     groundAt passa do terreno para a rampa sem degrau (ele pega o mais alto).
+     O terreno varia até 5 cm ao longo desses 4 m. */
+  const z0 = NEXUS.W / 2 + 0.25;
+  const chaoFora = z => { let h = Infinity; for (let x = -2; x <= 2 + 1e-9; x += 0.25) h = Math.min(h, heightAt(cx + x, cz + z)); return h; };
+  let L = 0.6;
+  while (L < 5 && piso - RAMPA_PORTA_DECLIVE * L > chaoFora(z0 + L) - 0.01) L = Math.min(5, L + 0.05);
+  const yFora = Math.min(piso - RAMPA_PORTA_DECLIVE * L, chaoFora(z0 + L) - 0.01);
+  return { y: piso, rampa: { z0, z1: z0 + L, yFora } };
+}
+
 /* casca externa texturizada (porta ao sul) — telhado pisável em todas */
 export function cascaNexus(cx, cz, gy) {
   const { W, FH: fh, NF } = NEXUS;
@@ -639,8 +676,9 @@ export function cascaNexus(cx, cz, gy) {
    centro; y absoluto). Cada op carrega a `parede` e/ou a `plataforma` que
    gera — calculadas AQUI, com a aritmética de sempre — e os números que o
    desenho precisa. */
-export function interiorNexus(cx, cz, gy) {
+export function interiorNexus(cx, cz, gy, saguao = null) {
   const { W, FH: fh, NF } = NEXUS;
+  const piso = saguao || { y: gy + PISO_TERREO_MIN, rampa: { z0: W / 2 + 0.25, z1: W / 2 + 0.25 + 1.6, yFora: gy } };
   const towerTopY = gy + NF * fh + 0.25;
   const HALF = W / 2 - 0.25;               // 8.75: meia-largura interna (casca 0.5)
   const WELL = { x0: -HALF, x1: -4.9, z0: -HALF, z1: -4.1 }; // poço fixo (NO)
@@ -652,7 +690,7 @@ export function interiorNexus(cx, cz, gy) {
   const zBot = WELL.z1;                       // base dos lances (borda norte do apron)
   const info = { W, fh, floors: NF, well: WELL, flightWidth: FLW, flightRun: zBot - zMid,
     gap: GAP, midDepth: 1.75, riserCount: STEPS, railHeight: RAILH, slabT: SLABT, stepThick: DEGRAU_H,
-    xA0, xA1, xB0, xB1, zMid, zBot, half: HALF, gy, towerTopY };
+    xA0, xA1, xB0, xB1, zMid, zBot, half: HALF, gy, towerTopY, lobbyY: piso.y, rampaPorta: { ...piso.rampa } };
   const ops = [];
   const panelH = NF * fh;
   // 4 pilares estruturais do lobby (colisor)
@@ -660,9 +698,19 @@ export function interiorNexus(cx, cz, gy) {
     ops.push({ tipo: 'pilar', px, pz, parede: { x0: cx + px - 0.25, x1: cx + px + 0.25, y0: gy, y1: gy + panelH,
       z0: cz + pz - 0.25, z1: cz + pz + 0.25, city: true } });
   // laje/patamar: pisável + parede noCollide (barra bala, não empurra)
-  const laje = (x0, x1, z0, z1, y) => ops.push({ tipo: 'laje', x0, x1, z0, z1, y,
+  const laje = (x0, x1, z0, z1, y, cor) => ops.push({ tipo: 'laje', x0, x1, z0, z1, y, cor,
     parede: { x0: cx + x0, x1: cx + x1, y0: y - SLABT, y1: y, z0: cz + z0, z1: cz + z1, noCollide: true, city: true },
     plataforma: { x0: cx + x0, x1: cx + x1, z0: cz + z0, z1: cz + z1, y, city: true } });
+  // saguão: piso inteiro (os lances de baixo nascem dele) + soleira no vão da porta sul (x ±2) + rampa
+  laje(-HALF, HALF, -HALF, HALF, piso.y, 0x3d434c);
+  laje(-2, 2, HALF, W / 2 + 0.25, piso.y, 0x3d434c);
+  { const R = piso.rampa;
+    ops.push({ tipo: 'rampaPorta', x0: -2, x1: 2, z0: R.z0, z1: R.z1, y0: piso.y, y1: R.yFora,
+      plataforma: { ramp: true, axis: 'z', x0: cx - 2, x1: cx + 2, z0: cz + R.z0, z1: cz + R.z1, y0: piso.y, y1: R.yFora, city: true } });
+    // muretas dos dois lados da rampa (0,3 m de largura, 0,45 m acima do piso do saguão)
+    for (const [x0, x1] of [[-2.3, -2], [2, 2.3]])
+      ops.push({ tipo: 'mureta', x0, x1, z0: R.z0, z1: R.z1, y0: R.yFora - 0.3, y1: piso.y + 0.45,
+        parede: { x0: cx + x0, x1: cx + x1, y0: R.yFora - 0.3, y1: piso.y + 0.45, z0: cz + R.z0, z1: cz + R.z1, city: true } }); }
   /* corrimão horizontal; colisor fino contínuo opcional.
      O colisor é GUARDA-CORPO, não parede: segura quem anda (ninguém cai no
      poço) e deixa a bala passar, porque o desenho é grade — barra a 0,98 m,
@@ -715,7 +763,14 @@ export function interiorNexus(cx, cz, gy) {
     if (k < NF) { buildFloor(gy + k * fh); stairGuards(gy + k * fh); }
     buildStaircase(gy + (k - 1) * fh, yTop);
     ops.push({ tipo: 'luminaria', w: 1.4, d: 0.4, x: 3.5, y: gy + k * fh - 0.35, z: 0 });
-    ops.push({ tipo: 'luminaria', w: 0.5, d: 1.2, x: -6.5, y: gy + k * fh - 0.35, z: -5.5 });
+    /* luz do poço: pendurada SOB o patamar de cima, sobre o patamar deste
+       lance (3,05 m acima dele). Ficava na altura do teto do ANDAR, em
+       (−6,5; −5,5) — mas ali, dentro do poço, é por onde o lance B sobe: a
+       placa acesa ficava deitada nos degraus, 4 cm acima deles, e quem
+       subia atravessava a luz (relato do dono: "tem luz na escada").
+       O último lance não tem patamar em cima: o poço abre para o céu. */
+    if (k < NF) ops.push({ tipo: 'luminaria', w: 1.2, d: 0.4, x: (WELL.x0 + WELL.x1) / 2,
+      y: gy + k * fh + fh / 2 - SLABT - 0.06, z: (WELL.z0 + zMid) / 2 });
     ops.push({ tipo: 'placa', andar: k, x: -4.7, y: gy + (k - 1) * fh + 2.3, z: -4.0 });
   }
   // telhado: deck com a saída da escada (poço aberto) + guarda-corpo
@@ -792,7 +847,7 @@ export function construirMundoSolido({ worldSeed, heightAt, slopeAt, WATER_LEVEL
   }
   const casca = cascaNexus(cx, cz, gy);
   for (const b of casca) add(caixaDaPeca(b, { city: true }), 'nexus/casca');
-  const nexus = interiorNexus(cx, cz, gy);
+  const nexus = interiorNexus(cx, cz, gy, pisoDoSaguao(heightAt, cx, cz, gy));
   for (const op of nexus.ops) if (op.parede) add(op.parede, `nexus/${op.tipo}`);
 
   pecas.bases.forEach((p, i) => solidas(p, `base#${i}`));

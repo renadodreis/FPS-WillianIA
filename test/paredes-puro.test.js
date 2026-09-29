@@ -74,12 +74,28 @@ describe('paredes.js é dado puro', () => {
     const dif = ra.filter((p, i) => Math.hypot(p[0] - rc[i][0], p[1] - rc[i][1]) > 1).length;
     assert.ok(dif > 100, `sementes 424242 e 7 deram só ${dif} caixas rurais em lugar diferente`);
     // a cidade não sorteia nada: mesmo desenho em planta, e a altura acompanha
-    // só o chão do centro (gy), que o platô NÃO fixa por completo (5% do relevo)
+    // só o chão do centro (gy), que o platô NÃO fixa por completo (5% do relevo).
+    // EXCEÇÃO de propósito: o piso do saguão da Torre Nexus (laje + soleira) e
+    // as muretas da rampa da porta acompanham o RELEVO da pegada — o piso fica
+    // 3 cm acima do ponto mais alto do terreno ali, e a rampa desce até o
+    // terreno de fora (js/paredes.js: pisoDoSaguao; test/torre-tela). Em planta
+    // só o comprimento da rampa (z1 das muretas) muda; em altura, essas peças.
+    const doSaguao = m => {
+      const y = m.cidade.nexus.info.lobbyY;
+      return m.paredes.map((w, i) => w.city && (m.origens[i] === 'nexus/mureta' ||
+        (m.origens[i] === 'nexus/laje' && Math.abs(w.y1 - y) < 1e-9)));
+    };
+    const sa = doSaguao(a).filter((_, i) => a.paredes[i].city), sc = doSaguao(c).filter((_, i) => c.paredes[i].city);
+    const mur = a.origens.filter((_, i) => a.paredes[i].city).map(o => o === 'nexus/mureta');
     const ca = a.paredes.filter(w => w.city), cc = c.paredes.filter(w => w.city);
     assert.equal(ca.length, cc.length);
+    assert.equal(sa.filter(Boolean).length, 4, 'pré-condição: saguão = laje + soleira + 2 muretas');
     assert.notEqual(a.cidade.gy, c.cidade.gy, 'pré-condição: as duas sementes têm o mesmo gy');
     ca.forEach((w, i) => {
-      for (const k of ['x0', 'x1', 'z0', 'z1']) assert.equal(w[k], cc[i][k], `cidade #${i}.${k}`);
+      assert.equal(sa[i], sc[i], `cidade #${i}: peça do saguão numa semente e não na outra`);
+      const planta = mur[i] ? ['x0', 'x1', 'z0'] : ['x0', 'x1', 'z0', 'z1'];
+      for (const k of planta) assert.equal(w[k], cc[i][k], `cidade #${i}.${k}`);
+      if (sa[i]) return;
       for (const k of ['y0', 'y1'])
         assert.ok(Math.abs((w[k] - a.cidade.gy) - (cc[i][k] - c.cidade.gy)) < 1e-9, `cidade #${i}.${k} fora do gy`);
     });
@@ -176,7 +192,10 @@ describe('planta nova mantém os invariantes (varredura em Node)', () => {
     // 381 → 581: os 10 degraus de cada um dos 20 lances da Torre Nexus
     // viraram caixas `noCollide` (barram bala, não empurram quem anda) —
     // antes a bala passava pelos degraus desenhados (test/torre-bala-escada).
-    assert.equal(contagem, 581, 'a semente 424242 devia ter 581 paredes (sem o cofre)');
+    // 581 → 585: o saguão da torre ganhou piso (laje) e soleira na porta sul,
+    // e a rampa da porta, duas muretas (test/torre-tela) — o jogador andava no
+    // terreno, abaixo do chão desenhado.
+    assert.equal(contagem, 585, 'a semente 424242 devia ter 585 paredes (sem o cofre)');
   });
 });
 

@@ -58,7 +58,12 @@ describe('Torre Nexus — interior', { skip: !CHROME && 'Chrome não encontrado'
     const r = await play(() => {
       const S = window.QA.G.Structures, NI = S.NEXUS_INTERIOR, plats = window.__game.platforms;
       const half = NI.half, cx = S.city.center.x, cz = S.city.center.z;
-      const cityRamps = plats.filter(p => p.ramp && p.city);
+      // a rampa da PORTA (sul, do piso do saguão ao terreno de fora) é a única
+      // rampa urbana fora da pegada, de propósito: não é lance de escada
+      const R = NI.rampaPorta;
+      const daPorta = p => p.ramp && p.city && Math.abs(p.z0 - (cz + R.z0)) < 1e-6 && Math.abs(p.z1 - (cz + R.z1)) < 1e-6;
+      const portas = plats.filter(daPorta);
+      const cityRamps = plats.filter(p => p.ramp && p.city && !daPorta(p));
       // toda plataforma/rampa city sem NaN e com limites coerentes
       let bad = 0, outFoot = 0;
       for (const p of plats.filter(p => p.city)) {
@@ -69,14 +74,15 @@ describe('Torre Nexus — interior', { skip: !CHROME && 'Chrome não encontrado'
         if (p.x0 < cx - half - 0.3 || p.x1 > cx + half + 0.3 ||
             p.z0 < cz - half - 0.3 || p.z1 > cz + half + 0.3) {
           // só as rampas/escada precisam estar no footprint; o resto pode ser laje inteira
-          if (p.ramp) outFoot++;
+          if (p.ramp && !daPorta(p)) outFoot++;
         }
       }
-      return { floors: NI.floors, ramps: cityRamps.length, bad, outFoot,
+      return { floors: NI.floors, ramps: cityRamps.length, portas: portas.length, bad, outFoot,
         towerTopY: S.towerTopY, riser: NI.riserCount, flightW: NI.flightWidth };
     });
     assert.equal(r.floors, 10, 'torre não tem 10 andares');
     assert.equal(r.ramps, 20, `esperado 20 lances (2/andar × 10), veio ${r.ramps}`);
+    assert.equal(r.portas, 1, `esperada 1 rampa na porta do saguão, veio ${r.portas}`);
     assert.equal(r.bad, 0, 'plataforma city com NaN ou limites invertidos');
     assert.equal(r.outFoot, 0, 'lance de escada fora do footprint da torre');
     assert.ok(r.towerTopY > 30, 'towerTopY perdido');

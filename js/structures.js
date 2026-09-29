@@ -335,9 +335,32 @@ function criarEstruturas(deps, noSeed) {
        revelando o solo escurecido das ruínas). Camadas em alturas ligeiramente
        diferentes (0.03→0.10) evitam z-fighting. */
     const SW = CityLayout.CITY_CONST.SIDEWALK_W;
-    const paveRect = (lx0, lx1, lz0, lz1, dy, hex) =>
-      trimBox(lx1 - lx0, 0.12, lz1 - lz0, cx + (lx0 + lx1) / 2, gy + dy, cz + (lz0 + lz1) / 2, hex);
+    /* PAVIMENTO NÃO ENTRA EM SALA. A rua de acesso da torre começa na
+       fachada sul: a calçada dela invadia 2,15 m do saguão (3 cm acima do
+       piso) e o meio-fio de 18 cm cruzava o vão da porta. A calçada da
+       transversal entrava 1,9 m na sala do térreo oco do lote (38, −26).
+       Cada retângulo de pavimento sai recortado pela pegada da torre e das
+       salas ocas (test/torre-tela.test.js mede o que sobra na tela). */
+    const TORRE_R = Paredes.NEXUS.W / 2 + 0.25;
+    const buracos = [{ x0: -TORRE_R, x1: TORRE_R, z0: -TORRE_R, z1: TORRE_R }];
+    CityInterior.HOLLOW_LOTS.forEach(i => buracos.push(CityLayout.footprintRect(CityLayout.LOTS[i])));
+    const menos = (r, b) => {
+      if (b.x1 <= r.x0 || b.x0 >= r.x1 || b.z1 <= r.z0 || b.z0 >= r.z1) return [r];
+      const out = [], z0 = Math.max(r.z0, b.z0), z1 = Math.min(r.z1, b.z1);
+      if (b.z0 > r.z0) out.push({ x0: r.x0, x1: r.x1, z0: r.z0, z1: b.z0 });
+      if (b.z1 < r.z1) out.push({ x0: r.x0, x1: r.x1, z0: b.z1, z1: r.z1 });
+      if (b.x0 > r.x0) out.push({ x0: r.x0, x1: b.x0, z0, z1 });
+      if (b.x1 < r.x1) out.push({ x0: b.x1, x1: r.x1, z0, z1 });
+      return out;
+    };
+    const foraDasSalas = r => buracos.reduce((pedacos, b) => pedacos.flatMap(p => menos(p, b)), [r])
+      .filter(p => p.x1 - p.x0 > 1e-3 && p.z1 - p.z0 > 1e-3);
+    const paveRect = (lx0, lx1, lz0, lz1, dy, hex, h = 0.12) => {
+      for (const p of foraDasSalas({ x0: lx0, x1: lx1, z0: lz0, z1: lz1 }))
+        trimBox(p.x1 - p.x0, h, p.z1 - p.z0, cx + (p.x0 + p.x1) / 2, gy + dy, cz + (p.z0 + p.z1) / 2, hex);
+    };
     { // praça pavimentada (disco) ao redor da torre — acesso desobstruído
+      // (dentro da torre fica por baixo do piso do saguão, js/paredes.js)
       const pg = new THREE.CylinderGeometry(CityLayout.PLAZA.r, CityLayout.PLAZA.r, 0.1, 40);
       pg.translate(cx, gy + 0.03, cz);
       paintGeometry(pg, _sc.setHex(0x565b63));
@@ -348,11 +371,11 @@ function criarEstruturas(deps, noSeed) {
       paveRect(r.x0, r.x1, r.z0, r.z1, 0.08, 0x23252a);                     // asfalto
       // meio-fio (lip decorativo baixo nas bordas longas; sem física)
       if (r.x1 - r.x0 > r.z1 - r.z0) {
-        trimBox(r.x1 - r.x0 + SW * 2, 0.18, 0.22, cx + (r.x0 + r.x1) / 2, gy + 0.15, cz + r.z0 - 0.11, 0x585d65);
-        trimBox(r.x1 - r.x0 + SW * 2, 0.18, 0.22, cx + (r.x0 + r.x1) / 2, gy + 0.15, cz + r.z1 + 0.11, 0x585d65);
+        paveRect(r.x0 - SW, r.x1 + SW, r.z0 - 0.22, r.z0, 0.15, 0x585d65, 0.18);
+        paveRect(r.x0 - SW, r.x1 + SW, r.z1, r.z1 + 0.22, 0.15, 0x585d65, 0.18);
       } else {
-        trimBox(0.22, 0.18, r.z1 - r.z0 + SW * 2, cx + r.x0 - 0.11, gy + 0.15, cz + (r.z0 + r.z1) / 2, 0x585d65);
-        trimBox(0.22, 0.18, r.z1 - r.z0 + SW * 2, cx + r.x1 + 0.11, gy + 0.15, cz + (r.z0 + r.z1) / 2, 0x585d65);
+        paveRect(r.x0 - 0.22, r.x0, r.z0 - SW, r.z1 + SW, 0.15, 0x585d65, 0.18);
+        paveRect(r.x1, r.x1 + 0.22, r.z0 - SW, r.z1 + SW, 0.15, 0x585d65, 0.18);
       }
     }
     const av = CityLayout.ROADS[0], cr = CityLayout.ROADS[1];
@@ -541,7 +564,7 @@ function criarEstruturas(deps, noSeed) {
       cityInteriorLampGeos.push(g);
     };
     // laje/patamar: desenho + plataforma pisável (a parede noCollide já está em walls)
-    const iSlab = ({ x0, x1, z0, z1, y, plataforma }, hex = 0x9297a0) => {
+    const iSlab = ({ x0, x1, z0, z1, y, plataforma, cor }, hex = cor || 0x9297a0) => {
       iBox(x1 - x0, SLABT, z1 - z0, (x0 + x1) / 2, y - SLABT / 2, (z0 + z1) / 2, hex);
       platforms.push(plataforma);
     };
@@ -577,8 +600,7 @@ function criarEstruturas(deps, noSeed) {
     iBox(0.08, panelH, 2 * HALF, HALF - 0.08, panelY, 0, panelC);    // leste
     iBox(HALF - 2.4, panelH, 0.08, -(HALF + 2.4) / 2, panelY, HALF - 0.08, panelC); // sul-esq (evita porta)
     iBox(HALF - 2.4, panelH, 0.08, (HALF + 2.4) / 2, panelY, HALF - 0.08, panelC);  // sul-dir
-    // lobby: piso interno diferenciado (decorativo); os 4 pilares vêm das ops
-    iBox(2 * HALF, 0.06, 2 * HALF, 0, gy + 0.05, 0, 0x3d434c);       // placa do lobby (leitura visual)
+    // o piso do saguão e a soleira são lajes das ops (js/paredes.js); os 4 pilares também
     // numeração dos andares: 1 atlas em CanvasTexture (planos mesclados = 1 draw call)
     const signCv = document.createElement('canvas'); signCv.width = 64 * NF; signCv.height = 64;
     const sctx = signCv.getContext('2d');
@@ -597,6 +619,16 @@ function criarEstruturas(deps, noSeed) {
     const desenhaOp = {
       pilar: op => iBox(0.5, panelH, 0.5, op.px, panelY, op.pz, 0x6b7079), // pilar visual (full-height)
       laje: op => iSlab(op),
+      // rampa da porta: pisável (a lerp do groundAt) + a laje inclinada que se vê
+      rampaPorta: op => {
+        platforms.push(op.plataforma);
+        const dz = op.z1 - op.z0, dy = op.y1 - op.y0, len = Math.hypot(dz, dy);
+        const g = new THREE.BoxGeometry(op.x1 - op.x0, 0.1, len);
+        g.rotateX(-Math.atan2(dy, dz));
+        g.translate(cx + (op.x0 + op.x1) / 2, (op.y0 + op.y1) / 2 - 0.05, cz + (op.z0 + op.z1) / 2);
+        paintGeometry(g, _ic.setHex(0x3d434c)); cityInteriorGeos.push(g);
+      },
+      mureta: op => iBox(op.x1 - op.x0, op.y1 - op.y0, op.z1 - op.z0, (op.x0 + op.x1) / 2, (op.y0 + op.y1) / 2, (op.z0 + op.z1) / 2, 0x5a616b),
       corrimao: op => railRun(op),
       lance: op => flight(op),
       degrau: op => degrau(op),
@@ -684,12 +716,14 @@ function criarEstruturas(deps, noSeed) {
   for (const obj of flags) obj.position.y += fortLift;
   for (const obj of flames) obj.position.y += fortLift;
   const cityMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityGeos), cityMat);
+  cityMesh.name = 'cityMesh'; // QA: fachadas texturizadas
   cityMesh.castShadow = cityMesh.receiveShadow = true;
   scene.add(cityMesh);
   // trim urbano (térreos, entradas, parapeitos, coberturas, mobiliário): mesh
   // vertex-color própria pra sumir junto no evento de destruição.
   const cityTrimMat = csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.05 }));
   const cityTrimMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityTrimGeos), cityTrimMat);
+  cityTrimMesh.name = 'cityTrimMesh'; // QA: pavimento e detalhe urbano
   cityTrimMesh.castShadow = cityTrimMesh.receiveShadow = true;
   scene.add(cityTrimMesh);
   scene.add(cityProps);
