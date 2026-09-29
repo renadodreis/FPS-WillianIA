@@ -214,7 +214,12 @@ describe('A2/A8 na tela — assistência e automático só em quem a tela mostra
        pixels conta diferença de cor, e à noite ou na chuva (névoa mais perto)
        o mesmo alvo visível dá menos pixels — o arquivo inteiro leva ~10 min,
        mais que um dia do jogo (480 s), e a varredura caía na noite */
-    host = await startBRMatch(h, { serverPort: PORT, flags: { golem: false, ciclo: 'dia' } });
+    /* SEM a destruição da cidade: é mecânica do servidor cronometrada por
+       relógio de PAREDE (90 s após o início) e a cinemática dela toma a
+       câmera. Caía no meio da varredura conforme o setup demorasse mais ou
+       menos — 61 de 130 casos medidos com a câmera da cinemática, a 200 m de
+       altura, e o controle ia de 24 para 0 alvos visíveis. */
+    host = await startBRMatch(h, { serverPort: PORT, flags: { golem: false, ciclo: 'dia', cidade: false } });
     await h.play(async () => {
       const G = window.QA.G;
       await G.WeaponModels.ready;

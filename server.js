@@ -1421,6 +1421,10 @@ io.on('connection', socket => {
    sobe/derruba um processo filho rodando scripts/bots.js apontando pra
    este servidor — os bots entram na sala como jogadores de verdade */
 const PORT = process.env.PORT || 3000;
+/* a porta de VERDADE, depois do listen: com PORT=0 o sistema escolhe uma
+   livre (os testes usam isso — porta fixa na faixa efêmera do Linux,
+   32768–60999, colidia com conexões de saída e derrubava o boot) */
+let portaReal = PORT;
 let botsProc = null;
 function syncBots() {
   if (botsProc) { try { botsProc.kill(); } catch (e) { /* já morto */ } botsProc = null; }
@@ -1433,7 +1437,7 @@ function syncBots() {
        BOTS_SCRIPT só existe para o teste trocar o processo por um dublê. */
     const script = process.env.BOTS_SCRIPT || path.join(__dirname, 'scripts', 'bots.js');
     const proc = require('child_process').spawn(process.execPath,
-      [script, String(n), `http://localhost:${PORT}`],
+      [script, String(n), `http://localhost:${portaReal}`],
       { stdio: ['ignore', 'ignore', 'inherit'] });
     proc.on('exit', (code, signal) => {
       // morte pedida por nós (syncBots/exit) chega com sinal e não é falha
@@ -1461,7 +1465,8 @@ if (require.main === module) {
       console.error(`[VEICULOS] frota da semente ${match.seed} falhou: ${err && err.message}`);
     }
   }).finally(() => server.listen(PORT, () => {
-    console.log(`Servidor BR no ar em http://localhost:${PORT} · seed inicial ${match.seed}`);
+    portaReal = server.address().port;
+    console.log(`Servidor BR no ar em http://localhost:${portaReal} · seed inicial ${match.seed}`);
     console.log('====================================================');
     console.log(`  CÓDIGO DO ANFITRIÃO: ${HOST_CODE}`);
     console.log('  cole no lobby (campo "código do anfitrião") ou');

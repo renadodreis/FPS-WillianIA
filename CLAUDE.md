@@ -347,7 +347,16 @@ mexer no repositório de outra pessoa — só com pedido explícito.
 - **Um arquivo:** `node --test test/<arquivo>.test.js`.
 - **Vários arquivos à mão:** SEMPRE `--test-concurrency=1` — testes de browser usam
   portas fixas por arquivo que colidem em paralelo. (Testes de socket usam portas
-  dinâmicas altas 21000+/26000+/31000+, sem colisão.)
+  altas 21000+/23000+/26000+ — ou `PORT=0`, com a porta lida do log "Servidor BR
+  no ar em http://localhost:N".) **Porta fixa ≥ 32768 é bomba:** é a faixa
+  efêmera do Linux (32768–60999), e qualquer conexão de saída da máquina pode
+  estar nela — `security-regression` (33000+) virou "regressão real" com
+  `EADDRINUSE`. Servidor de teste novo: `PORT=0`.
+- **Teste longo com partida BR tem a destruição da cidade aos 90 s de relógio
+  de PAREDE** (flag `cidade`, ligada por padrão), e a cinemática toma a câmera.
+  Onde ela cai depende de quanto o setup demorou: `aim-visibilidade` passava ou
+  não conforme a cinemática pegasse a varredura (61 de 130 casos com a câmera
+  a 200 m de altura). Se o teste não é sobre o evento, `flags: { cidade: false }`.
 - **Flake ≠ bug.** Testes de browser (puppeteer-core + Chrome/swiftshader) têm
   portas fixas e o boot da página pode passar de 60 s sob carga. Antes de chamar
   uma falha de regressão: re-rode SÓ aquele arquivo isolado 2–3×. O runner exige

@@ -33,15 +33,17 @@ const { io } = require('socket.io-client');
 const { CHROME, bootGame } = require('./helpers/harness');
 
 const SERVER = path.join(__dirname, '..', 'server.js');
-let nextPort = 37000 + (process.pid % 400) * 10;
+/* PORT=0: o sistema escolhe uma porta livre e o servidor a anuncia no log
+   (a faixa fixa antiga caía na faixa efêmera do Linux, 32768–60999, e uma
+   conexão de saída qualquer derrubava o boot com EADDRINUSE) */
+let nServidor = 0;
 
 function spawnServer(env = {}) {
-  const port = nextPort++;
   const rankFile = path.join(os.tmpdir(),
-    `fps-solo-rank-${process.pid}-${port}-${Date.now()}.json`);
+    `fps-solo-rank-${process.pid}-${nServidor++}-${Date.now()}.json`);
   const proc = spawn(process.execPath, [SERVER], {
     env: {
-      ...process.env, PORT: String(port), HOST_CODE: 'QA123',
+      ...process.env, PORT: '0', HOST_CODE: 'QA123',
       COUNTDOWN_S: '1', NEXT_IN_S: '60', GAS_DEFAULT: 'classica',
       RANK_FILE: rankFile, ...env,
     },
@@ -49,11 +51,16 @@ function spawnServer(env = {}) {
   });
   return new Promise((res, rej) => {
     const to = setTimeout(() => rej(new Error('servidor não subiu')), 8000);
+    let saida = '', subiu = false;
     proc.stdout.on('data', d => {
-      if (String(d).includes('Servidor BR no ar')) {
+      if (subiu) return;                       // o resto do log não interessa (o pipe segue lido)
+      saida += d;
+      const m = /Servidor BR no ar em http:\/\/localhost:(\d+)/.exec(saida);
+      if (m) {
+        subiu = true;
         clearTimeout(to);
         res({
-          port, proc,
+          port: Number(m[1]), proc,
           stop: () => new Promise(resolve => {
             const done = () => { fs.rmSync(rankFile, { force: true }); resolve(); };
             if (proc.exitCode !== null) return done();
