@@ -315,6 +315,10 @@ escrita pelo validador — quem constrói não edita).
   124 de 197 silhuetas). **Fatia em altura não serve para domo** (perto do
   topo o contorno encolhe e a fatia sai minúscula) e **casco convexo tapa a
   reentrância** (bala parando no ar até 25 cm fora) — só a malha deu 0 e 0.
+  **Cacto idem** (os mesmos cilindros e esfera do `game.js`, gerados no
+  layout de vértices do three em `formaDoCacto`), e **barril e tenda param
+  no topo desenhado** — todo cilindro de obstáculo subia até 3,4 m e parava
+  bala no ar por cima de coisa baixa (`test/cacto-colisor.test.js`).
 - **Veículo segura bala, mas não para sempre** (decisão do dono, 2026-09-28):
   vida AUTORITATIVA no servidor (`vehicleHit`/`vehicleBlast`, mesmas travas e
   orçamento do tiro em jogador), regra única em `js/veiculo-vida.js`. Inteiro,

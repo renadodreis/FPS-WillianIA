@@ -1078,6 +1078,7 @@ const Scenery = createScenery();
   } catch (err) { console.error('Árvores GLB falharam — mantendo procedurais:', err); }
 })();
 
+const barrisQA = [];    // QA: os barris desenhados (test/cacto-colisor.test.js)
 /* pontos de interesse novos: MERCADO na beira da cidade, REFÚGIO NA ÁRVORE na
    floresta e barris espalhados — com colisão (player + veículos) e, por serem
    sites, os baús do Battle Royale nascem neles automaticamente.
@@ -1127,6 +1128,7 @@ const Scenery = createScenery();
       b.position.set(bx, by, bz);
       b.rotation.y = ry;
       scene.add(b);
+      barrisQA.push(b);
       // ...e o CARRO também não: sem corpo CANNON o barril era decoração
       // atravessável (só o cacto é "vegetação macia" de propósito).
       const body = new CANNON.Body({ mass: 0,
@@ -1213,6 +1215,7 @@ const Scenery = createScenery();
 }
 
 /* cactos saguaro no deserto */
+let cactiMesh = null;   // QA: a malha que se VÊ (test/cacto-colisor.test.js)
 {
   const parts = [];
   const trunk = new THREE.CylinderGeometry(0.18, 0.23, 2.4, 9);
@@ -1247,6 +1250,7 @@ const Scenery = createScenery();
   // intencional, documentado; grama/flor = decorativo puro, nada colide)
   registrarObstaculos('cactus');
   cacti.count = nCac;
+  cactiMesh = cacti;
   scene.add(cacti);
 }
 
@@ -5350,6 +5354,7 @@ window.__game = {
   /* QA: as árvores (posição, giro, escala, modelo) e as malhas que as desenham
      de perto — a âncora de test/arvores-colisor.test.js é o que se VÊ */
   treeSpots, get treeVariantMeshes() { return treeVariantMeshes; },
+  get cactiMesh() { return cactiMesh; }, barrisQA,
   XRArma, XRInterage, XRUI, XRHud, XRTato, XRTaxa, XRAndar,
   /* QA + menu de VR: a preferência de empunhadura (`apertar`/`manter`) e os
      getters `mirando()`/`apoiando()`. Sem isto não há como um teste — nem o

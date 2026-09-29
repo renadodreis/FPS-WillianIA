@@ -99,7 +99,15 @@ export function trechoNaFaixa(y, dy, y0, y1) {
 }
 
 /* tenda em A do acampamento inicial (js/amb.js) */
-export const TENDA = Object.freeze({ x: 5.6, z: -4.2, r: 1.3 });
+export const TENDA = Object.freeze({ x: 5.6, z: -4.2, r: 1.3,
+  // o acampamento se assenta no chão de (2, −2) (js/amb.js, campY); a cumeeira
+  // da tenda em A fica 1,234 m acima (plano 1,5 × 2,3 girado 0,96 rad, +0,62)
+  CAMPO: Object.freeze({ x: 2, z: -2 }), CUMEEIRA: 1.234 });
+/* a faixa de altura da tenda: do chão do acampamento até a cumeeira */
+export function faixaDaTenda(heightAt) {
+  const campY = heightAt(TENDA.CAMPO.x, TENDA.CAMPO.z);
+  return { y0: campY - 50, y1: campY + TENDA.CUMEEIRA };
+}
 
 /* Medidas dos GLBs dos POIs na escala do jogo — ESPELHO do que
    Scenery.prop mede (`meia` = max(size.x, size.z) / 2 com a altura pedida).
@@ -108,7 +116,12 @@ export const TENDA = Object.freeze({ x: 5.6, z: -4.2, r: 1.3 });
 export const PROPS = Object.freeze({
   mercado: Object.freeze({ altura: 7, meia: 6.37004667679303 }),
   refugio: Object.freeze({ altura: 13, meia: 5.695140938972557 }),
-  barril: Object.freeze({ r: 0.55 }),
+  /* barril: a altura é a do GLB (Scenery.prop, game.js); o raio DESENHADO,
+     medido por raios na malha a 20/50/80 % da altura, é 0,34–0,41 (média
+     0,37) — 0,42 põe a bala a 0,376 e o corpo onde o CANNON já estava
+     (BARRIL_R). Era 0,55: a caixa do modelo girado, 12 cm mais larga que o
+     barril (test/cacto-colisor.test.js). */
+  barril: Object.freeze({ r: 0.42, altura: 1.05 }),
 });
 /* colisor-círculo de um prop: a caixa física vale 72 % da pegada e o círculo
    90 % da maior meia-largura dela (placeProp, game.js) */
@@ -245,8 +258,12 @@ export function formaDaPedra(noise) {
 /* a pedra no MUNDO: a matriz do three (escala, Euler XYZ, posição) →
    Float64Array [ax, ay, az, bx, by, bz, cx, cy, cz, ...] */
 export function malhaDaPedra(tris, p) {
-  const [sx, sy, sz] = [p.s * p.scX, p.s, p.s * p.scZ];
-  const a = Math.cos(p.rX), b = Math.sin(p.rX), c = Math.cos(p.rY), d = Math.sin(p.rY), e = Math.cos(p.rZ), f = Math.sin(p.rZ);
+  return malhaNoMundo(tris, { x: p.x, y: p.y, z: p.z, sx: p.s * p.scX, sy: p.s, sz: p.s * p.scZ, rX: p.rX, rY: p.rY, rZ: p.rZ });
+}
+/* malha do modelo → mundo, pela matriz do three: escala, Euler XYZ, posição */
+export function malhaNoMundo(tris, { x: px, y: py, z: pz, sx, sy, sz, rX = 0, rY = 0, rZ = 0 }) {
+  const p = { x: px, y: py, z: pz };
+  const a = Math.cos(rX), b = Math.sin(rX), c = Math.cos(rY), d = Math.sin(rY), e = Math.cos(rZ), f = Math.sin(rZ);
   const ae = a * e, af = a * f, be = b * e, bf = b * f;
   const m = [c * e, af + be * d, bf - ae * d, -c * f, ae - bf * d, be + af * d, d, -b * c, a * c];
   const out = new Float64Array(tris.length * 9);
@@ -284,12 +301,84 @@ export function retaNaMalha(tris, ox, oy, oz, dx, dy, dz) {
   }
   return best === Infinity ? null : { t: best, entra };
 }
-/* o ponto está DENTRO da malha fechada? (a reta para cima sai por uma face) */
-export function dentroDaMalha(tris, x, y, z) {
-  const h = retaNaMalha(tris, x, y, z, 0, 1, 0);
-  return !!h && !h.entra;
+/* o ponto está DENTRO da malha fechada? (a reta para cima sai por uma face).
+   Com `pecas` (quantos triângulos cada peça convexa tem): dentro de ALGUMA. */
+export function dentroDaMalha(tris, x, y, z, pecas = null) {
+  if (!pecas) { const h = retaNaMalha(tris, x, y, z, 0, 1, 0); return !!h && !h.entra; }
+  for (let i = 0, o = 0; i < pecas.length; o += pecas[i++] * 9) {
+    const h = retaNaMalha(tris.subarray(o, o + pecas[i] * 9), x, y, z, 0, 1, 0);
+    if (h && !h.entra) return true;
+  }
+  return false;
 }
 export const RAIO_CACTO = 0.35;
+
+/* ---------------- cacto: a FORMA desenhada ----------------
+   O saguaro do game.js é tronco (cilindro 0,18→0,23 × 2,4, 9 lados), capa
+   (esfera 0,18) e dois braços (cotovelo deitado + ponta em pé, 7 lados),
+   escalado por s (0,7–1,5) e girado (0, rY, rZ). O colisor era um cilindro
+   de 0,35 (bala a 0,31) até 3,4 m: largo demais para o tronco fino, sem os
+   braços (a 0,34–0,56·s do eixo) e parando bala no ar acima do topo. Agora
+   a bala usa os MESMOS cilindros e a mesma esfera, gerados aqui no layout
+   de vértices do three (CylinderGeometry / SphereGeometry), como a pedra. */
+function cilindroDoThree(rTopo, rBase, h, lados) {
+  const aro = (y, r) => Array.from({ length: lados + 1 }, (_, i) => { const t = i / lados * TAU; return [r * Math.sin(t), y, r * Math.cos(t)]; });
+  const cima = aro(h / 2, rTopo), baixo = aro(-h / 2, rBase), tris = [];
+  for (let i = 0; i < lados; i++) {
+    tris.push([cima[i], baixo[i], cima[i + 1]], [baixo[i], baixo[i + 1], cima[i + 1]]);
+    tris.push([[0, h / 2, 0], cima[i], cima[i + 1]], [[0, -h / 2, 0], baixo[i + 1], baixo[i]]);
+  }
+  return tris;
+}
+function esferaDoThree(r, larg, alt) {
+  const g = [];
+  for (let iy = 0; iy <= alt; iy++) {
+    const v = iy / alt, linha = [];
+    for (let ix = 0; ix <= larg; ix++) {
+      const u = ix / larg;
+      linha.push([-r * Math.cos(u * TAU) * Math.sin(v * Math.PI), r * Math.cos(v * Math.PI), r * Math.sin(u * TAU) * Math.sin(v * Math.PI)]);
+    }
+    g.push(linha);
+  }
+  const tris = [];
+  for (let iy = 0; iy < alt; iy++) for (let ix = 0; ix < larg; ix++) {
+    const a = g[iy][ix + 1], b = g[iy][ix], c = g[iy + 1][ix], d = g[iy + 1][ix + 1];
+    if (iy !== 0) tris.push([a, b, d]);
+    if (iy !== alt - 1) tris.push([b, c, d]);
+  }
+  return tris;
+}
+/* peça convexa: move (deita se preciso) e vira as faces para FORA do centro dela */
+function pecaFora(tris, { deita = false, dx = 0, dy = 0, dz = 0 }) {
+  const mv = v => (deita ? [-v[1] + dx, v[0] + dy, v[2] + dz] : [v[0] + dx, v[1] + dy, v[2] + dz]);   // rotateZ(π/2)
+  const m = tris.map(t => t.map(mv));
+  let cx = 0, cy = 0, cz = 0, n = 0;
+  for (const t of m) for (const v of t) { cx += v[0]; cy += v[1]; cz += v[2]; n++; }
+  cx /= n; cy /= n; cz /= n;
+  return m.map(([p, q, r]) => {
+    const u = [q[0] - p[0], q[1] - p[1], q[2] - p[2]], w = [r[0] - p[0], r[1] - p[1], r[2] - p[2]];
+    const nn = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+    const fora = nn[0] * ((p[0] + q[0] + r[0]) / 3 - cx) + nn[1] * ((p[1] + q[1] + r[1]) / 3 - cy) + nn[2] * ((p[2] + q[2] + r[2]) / 3 - cz) >= 0;
+    return fora ? [p, q, r] : [p, r, q];
+  });
+}
+/* os triângulos do cacto-base (escala 1), peça a peça como no game.js.
+   `pecas` = quantos triângulos cada peça tem: as peças se SOBREPÕEM (a capa
+   entra no tronco, o cotovelo entra no tronco), então "dentro" é dentro de
+   alguma peça, não a paridade da união (dentroDaMalha) */
+export function formaDoCacto() {
+  const pecas = [
+    pecaFora(cilindroDoThree(0.18, 0.23, 2.4, 9), { dy: 1.2 }),
+    pecaFora(esferaDoThree(0.18, 9, 6), { dy: 2.4 }),
+    pecaFora(cilindroDoThree(0.1, 0.1, 0.5, 7), { deita: true, dx: 0.34, dy: 1.15 }),
+    pecaFora(cilindroDoThree(0.1, 0.1, 0.85, 7), { dx: 0.56, dy: 1.6 }),
+    pecaFora(cilindroDoThree(0.09, 0.09, 0.4, 7), { deita: true, dx: -0.3, dy: 1.55 }),
+    pecaFora(cilindroDoThree(0.09, 0.09, 0.6, 7), { dx: -0.47, dy: 1.88 }),
+  ];
+  const tris = pecas.flat();
+  tris.pecas = pecas.map(p => p.length);
+  return tris;
+}
 export function sitioDoProp(x, z, meia, type) { return { x, z, r: meia + 3, type }; }
 
 /* ---------------- POIs ----------------
@@ -450,11 +539,22 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
     const m = malhaDaPedra(formaPedra, p);
     solidos.push({ x: p.x, z: p.z, r: m.raio, category: 'rigid', sourceId: 'rock', corpo: false, malha: m.tris, y0: m.ymin, y1: m.ymax });
   }
-  for (const c of cactos) add(c.x, c.z, RAIO_CACTO, 'softVegetation', 'cactus');
-  add(TENDA.x, TENDA.z, TENDA.r, 'rigid', 'tent');
+  const formaCacto = formaDoCacto();
+  for (const c of cactos) {
+    // corpo: o círculo de sempre; bala: a malha do cacto desenhado
+    solidos.push({ x: c.x, z: c.z, r: RAIO_CACTO, category: 'softVegetation', sourceId: 'cactus', bala: false });
+    const m = malhaNoMundo(formaCacto, { x: c.x, y: c.y, z: c.z, sx: c.s, sy: c.s, sz: c.s, rY: c.rY, rZ: c.rZ });
+    solidos.push({ x: c.x, z: c.z, r: m.raio, category: 'softVegetation', sourceId: 'cactus', corpo: false, malha: m.tris, pecas: formaCacto.pecas, y0: m.ymin, y1: m.ymax });
+  }
+  // tenda e barril: o cilindro para no TOPO desenhado (antes subia até 3,4 m e
+  // a bala que passava por cima deles parava no ar)
+  solidos.push({ x: TENDA.x, z: TENDA.z, r: TENDA.r, category: 'rigid', sourceId: 'tent', ...faixaDaTenda(heightAt) });
   add(pois.mercado.x, pois.mercado.z, raioDoProp(pois.mercado.meia), 'rigid', 'mercado');
   if (pois.refugio) add(pois.refugio.x, pois.refugio.z, raioDoProp(pois.refugio.meia), 'rigid', 'refúgio');
-  for (const b of pois.barris) add(b.x, b.z, PROPS.barril.r, 'rigid', 'barrel');
+  for (const b of pois.barris) {
+    const chao = heightAt(b.x, b.z);
+    solidos.push({ x: b.x, z: b.z, r: PROPS.barril.r, category: 'rigid', sourceId: 'barrel', y0: chao - 50, y1: chao + PROPS.barril.altura });
+  }
   return { semente, pois, arvores, pedras, cactos, solidos };
 }
 
@@ -593,7 +693,7 @@ export function criarConsultaObstaculos(todos, { heightAt, grade = null, celula 
     for (const k of l) {
       const cx = p.x - ox[k], cz = p.z - oz[k];
       if (cx * cx + cz * cz >= oR2[k]) continue;
-      if (solidos[k].malha) { if (dentroDaMalha(solidos[k].malha, p.x, p.y, p.z)) return true; continue; }
+      if (solidos[k].malha) { if (dentroDaMalha(solidos[k].malha, p.x, p.y, p.z, solidos[k].pecas)) return true; continue; }
       if (Number.isNaN(oY1[k]) ? p.y - heightAt(p.x, p.z) < BALA.TETO_M : p.y >= oY0[k] && p.y < oY1[k]) return true;
     }
     return false;

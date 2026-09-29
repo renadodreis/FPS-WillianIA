@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { noSeed, fuseBody } from './meshutils.js';
-import { TENDA } from './obstaculos.js';
+import { TENDA, faixaDaTenda } from './obstaculos.js';
 
 export function createAmb(deps) {
   const { rand, TAU, _v1, _v2, heightAt, biomeAt, addObstacle, SFX, FX, scene, csmMat, Structures, player } = deps;
@@ -158,7 +158,7 @@ export function createAmb(deps) {
      `rand`/UUID (contrato do worldgen); o que mudou é que elas entram numa
      raiz temporária em vez da cena, e quem vai pra cena é o resultado da
      fusão. Mesmo padrão das asas de borboleta, logo acima. */
-  const campY = heightAt(2, -2);
+  const campY = heightAt(TENDA.CAMPO.x, TENDA.CAMPO.z);   // o chão do acampamento (js/obstaculos.js)
   {
     const pecas = [];
     const wood = csmMat(new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 0.8 }));
@@ -191,7 +191,8 @@ export function createAmb(deps) {
     tent.castShadow = true;
     pecas.push(tent);
     // barra jogador e bala; os bots conhecem pelo mesmo dado (js/obstaculos.js)
-    addObstacle(TENDA.x, TENDA.z, TENDA.r, { category: 'rigid', sourceId: 'tent' });
+    // até a cumeeira: acima dela a bala passa (antes subia a 3,4 m e parava no ar)
+    addObstacle(TENDA.x, TENDA.z, TENDA.r, { category: 'rigid', sourceId: 'tent', ...faixaDaTenda(heightAt) });
     /* A raiz é IDENTIDADE e some depois: `fuseBody` leva os vértices pro
        espaço dela, então cada malha fundida pode ir direto pra cena sem
        ganhar um Group de intermediário (e o `scene.add` já a desparenta). */

@@ -90,11 +90,13 @@ describe('obstaculos.js é dado puro', () => {
       { sourceId: 'mercado', x: -236, z: 112, r: 4.127790246561884 },
       { sourceId: 'refúgio', x: 312.37904870065694, z: -161.3925724075108, r: 3.6904513284542166 },
       { sourceId: 'tent', x: 5.6, z: -4.2, r: 1.3 },
-      { sourceId: 'barrel', x: -231, z: 116, r: 0.55 }, { sourceId: 'barrel', x: -242, z: 114, r: 0.55 },
-      { sourceId: 'barrel', x: -233, z: 106, r: 0.55 },
-      { sourceId: 'barrel', x: 316.37904870065694, z: -159.3925724075108, r: 0.55 },
-      { sourceId: 'barrel', x: 309.37904870065694, z: -165.3925724075108, r: 0.55 },
-      { sourceId: 'barrel', x: 314.37904870065694, z: -166.3925724075108, r: 0.55 },
+      // barril: a posição é a de sempre; o RAIO passou a ser o do barril desenhado
+      // (0,55 era a caixa do modelo girado — js/obstaculos.js, PROPS.barril)
+      { sourceId: 'barrel', x: -231, z: 116, r: 0.42 }, { sourceId: 'barrel', x: -242, z: 114, r: 0.42 },
+      { sourceId: 'barrel', x: -233, z: 106, r: 0.42 },
+      { sourceId: 'barrel', x: 316.37904870065694, z: -159.3925724075108, r: 0.42 },
+      { sourceId: 'barrel', x: 309.37904870065694, z: -165.3925724075108, r: 0.42 },
+      { sourceId: 'barrel', x: 314.37904870065694, z: -166.3925724075108, r: 0.42 },
     ];
     const { ob } = await obstaculosDe(424242);
     for (const o of ANTES) {
