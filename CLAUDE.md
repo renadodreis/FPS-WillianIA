@@ -300,6 +300,15 @@ escrita pelo validador — quem constrói não edita).
   composição de `Structures.rayHit/segBlocked` no game.js). Vida zero: para de
   proteger na hora, queima 5 s, explode e some; quem está dentro morre.
   O servidor passou a carregar `three` + terreno no boot (dependencies).
+- **Marca `noBullet` em parede** (js/paredes.js): segura o CORPO mas deixa a
+  bala passar — guarda-corpo vazado da escada da Torre Nexus (como o
+  `playerclip` do Source). Antes barrava bala: 90 quadros de fuzil, 120 → 120
+  de vida no segurança visto entre as barras. E o contrário também existia:
+  degrau desenhado maciço sem colisão de bala (16/16 tiros atravessavam).
+  **Desenho sólido tem de barrar bala; desenho vazado não.**
+- **Inimigo de POSTO (Executivos da torre, guardas) não renasce à vista:** só
+  com o jogador a > 75 m e sem ver o posto nem o corpo (Left 4 Dead, Valve
+  2009). O corpo cai no piso do andar em que morreu, não no terreno.
 - **Construção se ASSENTA no terreno** (`js/paredes.js`): fundação até o ponto
   mais baixo da pegada, muro de base em trechos que descem a encosta, caixote
   no chão debaixo dele, portão e rampa do castelo com aterro. Antes, peça
