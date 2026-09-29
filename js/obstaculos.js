@@ -46,9 +46,11 @@
    ── A regra da bala ──────────────────────────────────────────────
    `rayBlockedAt` (game.js) barra o raio num círculo de raio r·√0,8 em torno
    do obstáculo, só até 3,4 m acima do chão do ponto (BALA). A consulta dos
-   bots (`criarConsultaObstaculos`) usa a MESMA regra, contínua: o cliente
-   amostra a cada 1,6 m, então tudo que ele barra a consulta também barra
-   (a paridade mede isso contra o `rayBlockedAt` de verdade).
+   bots (`criarConsultaObstaculos`) usa a MESMA regra; as duas são contínuas
+   (o cliente amostrava a cada 1,6 m e a bala passava por metade dos cactos
+   e árvores). Única diferença: no cliente o cilindro que CONTÉM a origem não
+   barra a reta (granada no pé do tronco). A paridade mede isso contra o
+   `rayBlockedAt` de verdade.
    ================================================================ */
 import { mulberry32, sementeNormalizada } from './paredes.js';
 
@@ -85,6 +87,16 @@ export const CASTELO_ROTA_LIVRE_M = 49;
 
 /* a regra do `rayBlockedAt` (game.js): círculo r·√0,8, até 3,4 m do chão */
 export const BALA = Object.freeze({ FATOR_R2: 0.8, TETO_M: 3.4 });
+/* FAIXA ABSOLUTA: o obstáculo com `y1` (fatia de tronco) barra só com a
+   altura da bala em [y0, y1), no MUNDO — não "até 3,4 m acima do chão do
+   ponto". Exata e sem relevo: o tronco deslocado do pivô não depende do
+   chão debaixo dele. Devolve o trecho do parâmetro u da reta y + dy·u que
+   fica na faixa. */
+export function trechoNaFaixa(y, dy, y0, y1) {
+  if (Math.abs(dy) < 1e-12) return y >= y0 && y < y1 ? [-Infinity, Infinity] : [Infinity, -Infinity];
+  const u0 = (y0 - y) / dy, u1 = (y1 - y) / dy;
+  return u0 < u1 ? [u0, u1] : [u1, u0];
+}
 
 /* tenda em A do acampamento inicial (js/amb.js) */
 export const TENDA = Object.freeze({ x: 5.6, z: -4.2, r: 1.3 });
@@ -103,6 +115,87 @@ export const PROPS = Object.freeze({
 export function raioDoProp(meia) { return meia * 0.72 * 0.9; }
 /* colisor-círculo de cada família (o cliente registra com estas contas) */
 export const raioDaArvore = s => 0.45 * s;
+
+/* ---------------- árvore: o MODELO e os TRONCOS ----------------
+   De perto (< 70 m) cada árvore é um de quatro GLBs (game.js,
+   `treeVariantMeshes`, na ordem de ARVORE.MODELOS), e o tronco deles NÃO
+   fica no pivô: na retorcida está a ~1 m do centro, o bosquete tem três em
+   fila, e o quarto modelo são duas MUDAS a ±2,2 m (caule de ~10 cm até
+   0,8 m e folhas até 1,25 m) com o meio vazio. O colisor era um círculo de
+   0,45·s no pivô para todas: o jogador atravessava o tronco desenhado e
+   batia num pilar invisível, a bala idem, e o bot (mesma lista) via e
+   atirava através do tronco.
+
+   TRONCOS[v]: os troncos do modelo v, cada um em FATIAS de altura
+   [dx, dz, r, até] em coordenadas do modelo (escala 1, pivô no chão, antes
+   do giro): centro, raio da MADEIRA e topo da fatia (null = até o teto da
+   bala). O tronco afina (a retorcida vai de r 0,44 a 0,26 entre 0,5 e
+   1,8 m) e inclina (o pinheiro do bosquete deita ~0,4 m nesse trecho): um
+   círculo só erra 10–15 cm numa ponta ou na outra, e fatia de 0,6 m ainda
+   erra ±13 cm no pinheiro. Fatias de 0,3 m; cada uma é o círculo que
+   melhor reproduz a SILHUETA dos cortes da faixa (largura projetada em 16
+   direções — a caixa do contorno superestima a base com raízes). ESPELHO dos GLBs, medido
+   cortando a geometria assada (Scenery.bakedGeometry, altura normalizada)
+   por planos horizontais a cada 0,1 m; test/arvores-colisor.test.js varre
+   a MALHA desenhada e acusa se o modelo mudar. Raízes e moitas abaixo de
+   0,5 m ficam de fora; muda é folha, não madeira: não segura bala nem
+   corpo.
+
+   O colisor guarda r_madeira/√BALA.FATOR_R2: a regra da bala (r·√0,8) cai
+   exatamente na casca, e o corpo do jogador para ~4 cm antes dela.
+
+   Qual modelo e qual escala eram decididos no game.js DEPOIS do GLB chegar
+   (e o colisor não sabia); agora são dado da árvore (planejarArvores), pelo
+   número da candidata e o bioma, sem sorteio — o stream não muda. */
+export const ARVORE = Object.freeze({
+  MODELOS: Object.freeze(['giant_low_poly_tree', 'low_poly_tree_with_twisting_branches',
+    'low_poly__tree_assets', 'low_poly_tree_log_and_stump']),
+  TRONCOS: Object.freeze([
+    // gigante
+    [[[-0.08, 0.43, 0.61, 0.8], [-0.08, 0.39, 0.54, 1.1], [-0.08, 0.35, 0.51, 1.4], [-0.08, 0.30, 0.48, 1.7], [-0.08, 0.25, 0.45, null]]],
+    // retorcida
+    [[[0.14, -1.00, 0.44, 0.8], [0.15, -1.04, 0.37, 1.1], [0.12, -1.05, 0.31, 1.4], [0.08, -1.04, 0.26, 1.7], [0.06, -1.02, 0.26, null]]],
+    // bosquete: árvore seca, pinheiro, árvore vermelha
+    [[[3.25, -0.10, 0.405, 0.8], [3.05, -0.01, 0.357, 1.1], [3.08, -0.04, 0.309, 1.4], [3.19, -0.07, 0.267, 1.7], [3.30, 0.11, 0.219, null]],
+      [[0.67, 0.03, 0.394, 0.8], [0.67, 0.04, 0.349, 1.1], [0.53, 0.04, 0.309, 1.4], [0.34, 0.05, 0.278, 1.7], [0.27, 0.04, 0.232, null]],
+      [[-3.39, 0.13, 0.322, 0.8], [-3.40, 0.02, 0.249, 1.1], [-3.40, -0.09, 0.200, 1.4], [-3.40, -0.18, 0.161, 1.7], [-3.51, -0.22, 0.172, null]]],
+    // mudas
+    [],
+  ].map(troncos => Object.freeze(troncos.map(fatias => Object.freeze(fatias.map(f => Object.freeze(f))))))),
+  /* o tronco em que a árvore procedural de LONGE fica (-1: nenhuma — de
+     longe não se desenha árvore grande onde de perto há muda) */
+  PRINCIPAL: Object.freeze([0, 0, 1, -1]),
+  AFUNDA: 0.15,   // a instância desce 15 cm no chão (game.js, rebucketTrees)
+});
+/* campo: retorcidas; floresta: bosquetes densos; 1 em 12 mudas; a
+   gigante é marco raro (1 em 40, só em bioma de mata) */
+export function modeloDaArvore(i, bio) {
+  return (i % 40 === 0 && bio > 0.3) ? 0
+    : (i % 12 === 0) ? 3
+      : bio > 0.34 ? (i % 2 ? 1 : 2) : (i % 3 === 0 ? 2 : 1);
+}
+/* muda não vira gigante; a gigante é imponente (pelo índice: sem sorteio) */
+export function escalaDoModelo(i, modelo, s) {
+  return modelo === 3 ? 0.8 + (i % 5) * 0.1 : modelo === 0 ? 1.2 + (i % 5) * 0.1 : s;
+}
+/* as fatias de tronco de uma árvore no MUNDO: { x, z, rMadeira, y0, y1,
+   tronco } — y0/y1 alturas absolutas. A base da instância é o chão do pivô
+   menos AFUNDA; a primeira fatia desce até bem abaixo do chão e a última
+   sobe até o teto da bala acima do chão do pivô. Giro do three:
+   (x, z) → (x cos + z sen, −x sen + z cos). */
+export function troncosDaArvore(a) {
+  const c = Math.cos(a.rot), sn = Math.sin(a.rot), base = a.y - ARVORE.AFUNDA;
+  const out = [];
+  ARVORE.TRONCOS[a.modelo].forEach((fatias, tronco) => {
+    let y0 = a.y - 50;
+    for (const [dx, dz, r, ate] of fatias) {
+      const y1 = ate === null ? a.y + BALA.TETO_M : base + ate * a.s;
+      out.push({ x: a.x + (dx * c + dz * sn) * a.s, z: a.z + (-dx * sn + dz * c) * a.s, rMadeira: r * a.s, y0, y1, tronco });
+      y0 = y1;
+    }
+  });
+  return out;
+}
 export const raioDaPedra = s => s * 0.8;
 export const RAIO_CACTO = 0.35;
 export function sitioDoProp(x, z, meia, type) { return { x, z, r: meia + 3, type }; }
@@ -155,7 +248,12 @@ function criarExclusao({ CITY, VOLCANO, sitios }) {
 const tintaDaArvore = cv => (cv > 0.45 ? 0xffaa58 : cv > 0.3 ? 0xffd98a : cv < -0.45 ? 0x7ddf9a : 0xffffff);
 
 /* Árvores: bosques pelo ruído, floresta bem mais densa, nada em barranco,
-   areia ou deserto, nem a menos de r + 4 m de construção ou POI. */
+   areia ou deserto, nem a menos de r + 4 m de construção ou POI. A árvore é
+   o MODELO, não o pivô: os troncos (até ~5 m dele no bosquete) também
+   respeitam o spawn, as exclusões e as construções. O modelo sai do número
+   da candidata (`contadas`), que não muda quando outra é excluída — o
+   índice na lista mudava, e excluir uma árvore trocaria o modelo de todas
+   as seguintes. Nada disso consome sorteio: o stream é o mesmo. */
 export function planejarArvores({ rng, heightAt, slopeAt, biomeAt, noise, sitios, exclui, WORLD_SIZE, TREE_COUNT }) {
   const rand = sorteador(rng);
   const lim = WORLD_SIZE * VEGETACAO.LIMITE;
@@ -174,9 +272,13 @@ export function planejarArvores({ rng, heightAt, slopeAt, biomeAt, noise, sitios
     for (const st of sitios) if (Math.hypot(x - st.x, z - st.z) < st.r + 4) { perto = true; break; }
     if (perto) continue;
     const s = rand(0.75, 1.5), rot = rand(TAU);
-    contadas++;
+    const n = contadas++;
     if (exclui(x, z)) continue;
-    arvores.push({ x, y, z, s, rot, tint: tintaDaArvore(noise(x * 0.004 - 90, z * 0.004 + 60)) });
+    const modelo = modeloDaArvore(n, bio);
+    const a = { x, y, z, s: escalaDoModelo(n, modelo, s), rot, modelo, tint: tintaDaArvore(noise(x * 0.004 - 90, z * 0.004 + 60)) };
+    if (troncosDaArvore(a).some(t => Math.hypot(t.x, t.z) < 26 || exclui(t.x, t.z)
+      || sitios.some(st => Math.hypot(t.x - st.x, t.z - st.z) < st.r + 4))) continue;
+    arvores.push(a);
   }
   return arvores;
 }
@@ -244,7 +346,10 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
 
   const solidos = [];
   const add = (x, z, r, category, sourceId) => solidos.push({ x, z, r, category, sourceId });
-  for (const a of arvores) add(a.x, a.z, raioDaArvore(a.s), 'rigid', 'tree');
+  const aBala = Math.sqrt(BALA.FATOR_R2);
+  for (const a of arvores) {
+    for (const t of troncosDaArvore(a)) solidos.push({ x: t.x, z: t.z, r: t.rMadeira / aBala, category: 'rigid', sourceId: 'tree', y0: t.y0, y1: t.y1 });
+  }
   for (const p of pedras) if (p.solida) add(p.x, p.z, raioDaPedra(p.s), 'rigid', 'rock');
   for (const c of cactos) add(c.x, c.z, RAIO_CACTO, 'softVegetation', 'cactus');
   add(TENDA.x, TENDA.z, TENDA.r, 'rigid', 'tent');
@@ -257,7 +362,8 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
 /* ---------------- consulta: segmento × cilindros ----------------
    A regra do `rayBlockedAt`, contínua: o segmento a→b é barrado por um
    obstáculo se passa DENTRO do círculo de raio r·√0,8 (estrito) num ponto
-   que está a menos de 3,4 m acima do chão daquele ponto. Começar dentro do
+   que está a menos de 3,4 m acima do chão daquele ponto — ou, na fatia de
+   tronco (y0/y1), com a altura dentro da faixa absoluta dela. Começar dentro do
    cilindro também barra (o bot que atravessou uma pedra andando não enxerga
    de dentro dela, como com as paredes).
 
@@ -275,10 +381,12 @@ export function criarConsultaObstaculos(solidos, { heightAt, grade = null, celul
   if (typeof heightAt !== 'function') throw new Error('criarConsultaObstaculos: heightAt ausente');
   const n = solidos.length;
   const ox = new Float64Array(n), oz = new Float64Array(n), oR2 = new Float64Array(n);
+  const oY0 = new Float64Array(n), oY1 = new Float64Array(n).fill(NaN);   // faixa absoluta (NaN: regra do teto)
   let rMax = 0;
   for (let i = 0; i < n; i++) {
     const o = solidos[i];
     ox[i] = o.x; oz[i] = o.z; oR2[i] = o.r * o.r * BALA.FATOR_R2;
+    if (Number.isFinite(o.y1)) { oY0[i] = o.y0; oY1[i] = o.y1; }
     rMax = Math.max(rMax, Math.sqrt(oR2[i]));
   }
   const cel = celula, celulas = new Map();
@@ -332,6 +440,10 @@ export function criarConsultaObstaculos(solidos, { heightAt, grade = null, celul
       ta = Math.max(0, (-B - sq) / A); tb = Math.min(1, (-B + sq) / A);
       if (ta >= tb) return false;
     }
+    if (!Number.isNaN(oY1[k])) {
+      const [lo, hi] = trechoNaFaixa(a.y, dy, oY0[k], oY1[k]);
+      return Math.max(ta, lo) < Math.min(tb, hi);
+    }
     return abaixoDoTeto(a, dx, dy, dz, ta, tb);
   }
 
@@ -371,7 +483,8 @@ export function criarConsultaObstaculos(solidos, { heightAt, grade = null, celul
     if (!l) return false;
     for (const k of l) {
       const cx = p.x - ox[k], cz = p.z - oz[k];
-      if (cx * cx + cz * cz < oR2[k] && p.y - heightAt(p.x, p.z) < BALA.TETO_M) return true;
+      if (cx * cx + cz * cz >= oR2[k]) continue;
+      if (Number.isNaN(oY1[k]) ? p.y - heightAt(p.x, p.z) < BALA.TETO_M : p.y >= oY0[k] && p.y < oY1[k]) return true;
     }
     return false;
   }

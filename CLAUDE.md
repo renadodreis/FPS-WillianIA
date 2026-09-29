@@ -290,9 +290,23 @@ escrita pelo validador — quem constrói não edita).
   atravessa parede. **Bots conhecem pedra, árvore, cacto, tenda e POIs**
   (`js/obstaculos.js`, sorteios próprios da semente; paridade com o
   `obstaclesNear` em `test/obstaculos-paridade.test.js`). A regra é a do
-  `rayBlockedAt` (r·√0,8 até 3,4 m do chão), contínua: o bot é mais
-  conservador que a vítima. Quem está no helicóptero não é alvo de bot
-  (decisão do dono).
+  `rayBlockedAt` (r·√0,8 até 3,4 m do chão; fatia de tronco na faixa
+  absoluta dela), CONTÍNUA dos dois lados — amostrada a cada 1,6 m, a bala do
+  jogador passava por 899 de 1 855 obstáculos que barram o bot. Quem está no
+  helicóptero não é alvo de bot (decisão do dono).
+- **Árvore é o MODELO desenhado, não o pivô.** De perto cada árvore é um GLB
+  cujo tronco não fica no centro (retorcida a ~1 m, bosquete com 3 troncos em
+  fila); o colisor era um círculo no pivô — de 175 troncos vistos da
+  retorcida, 159 sem colisor, e pilar invisível ao lado. Hoje o colisor é
+  espelho medido dos GLBs em `js/obstaculos.js` (`ARVORE.TRONCOS`, fatias de
+  0,3 m porque o tronco afina e deita), o modelo é dado da árvore (não do
+  `game.js` depois do GLB), a exclusão vale para os troncos, e muda (folha)
+  não barra nada. **Âncora de teste é a malha desenhada** (`Raycaster` na
+  InstancedMesh, `test/arvores-colisor.test.js`), medindo silhueta (centro e
+  largura), não contagem de retas. **Armadilha do three:** o raycast da
+  InstancedMesh testa a `boundingSphere` CACHEADA — depois do LOD repartir as
+  instâncias ela é de outro lugar e o raio sai cedo (chame
+  `computeBoundingSphere()` antes de medir).
 - **Veículo segura bala, mas não para sempre** (decisão do dono, 2026-09-28):
   vida AUTORITATIVA no servidor (`vehicleHit`/`vehicleBlast`, mesmas travas e
   orçamento do tiro em jogador), regra única em `js/veiculo-vida.js`. Inteiro,

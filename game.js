@@ -23,7 +23,7 @@ import * as Climate from './js/climate.js';
 import { createCover } from './js/cover.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
-import { construirObstaculos, raioDoProp, sitioDoProp, VEGETACAO } from './js/obstaculos.js';
+import { construirObstaculos, raioDoProp, sitioDoProp, VEGETACAO, BALA, ARVORE, troncosDaArvore, trechoNaFaixa } from './js/obstaculos.js';
 import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
@@ -969,18 +969,31 @@ const Obstaculos = construirObstaculos({
 });
 /* registra no `obstaclesNear` exatamente o que o Node vê, família por família */
 function registrarObstaculos(sourceId) {
-  for (const o of Obstaculos.solidos) if (o.sourceId === sourceId) addObstacle(o.x, o.z, o.r, { category: o.category, sourceId });
+  for (const o of Obstaculos.solidos) {
+    if (o.sourceId !== sourceId) continue;
+    addObstacle(o.x, o.z, o.r, o.y1 === undefined ? { category: o.category, sourceId } : { category: o.category, sourceId, y0: o.y0, y1: o.y1 });
+  }
 }
 
 const treeSpots = []; // posições das árvores (LOD + minimapa)
 {
   for (const a of Obstaculos.arvores) {
-    treeSpots.push({ x: a.x, y: a.y, z: a.z, s: a.s, rot: a.rot, tint: a.tint });
-    const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * a.s, 1.8, 0.32 * a.s)) });
-    body.position.set(a.x, a.y + 1.8, a.z);
-    body.userData = { category: 'rigid', sourceId: 'tree:' + treeSpots.length, hardForVehicle: true };
-    body.updateAABB(); // idem paredes: AABB ficava na origem
-    world.addBody(body);
+    /* de longe a árvore procedural fica no tronco PRINCIPAL do modelo que
+       aparece de perto (sem isso o tronco pulava ~1 m aos 70 m); arbusto
+       não tem árvore de longe (js/obstaculos.js, ARVORE.PRINCIPAL) */
+    const pr = ARVORE.PRINCIPAL[a.modelo], troncos = troncosDaArvore(a);
+    treeSpots.push({ x: a.x, y: a.y, z: a.z, s: a.s, rot: a.rot, tint: a.tint, variant: a.modelo,
+      longe: pr >= 0 ? { x: troncos[pr].x, z: troncos[pr].z } : null });
+    // o carro bate no TRONCO desenhado: um corpo por tronco, na fatia de baixo
+    for (const t of troncos) {
+      if (t.y0 > a.y - 1) continue;
+      const lado = t.rMadeira * 0.85, chao = heightAt(t.x, t.z);
+      const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(lado, 1.8, lado)) });
+      body.position.set(t.x, chao + 1.8, t.z);
+      body.userData = { category: 'rigid', sourceId: 'tree:' + treeSpots.length, hardForVehicle: true };
+      body.updateAABB(); // idem paredes: AABB ficava na origem
+      world.addBody(body);
+    }
   }
   registrarObstaculos('tree');
 }
@@ -1004,7 +1017,11 @@ function rebucketTrees(px, pz) {
         const m = treeVariantMeshes[t.variant || 0];
         m.setColorAt(counts[t.variant || 0], _c.setHex(t.tint));
         m.setMatrixAt(counts[t.variant || 0]++, _dummy.matrix);
-      } else if (d < CFG.VIEW_DIST) { treeLoMesh.setColorAt(lo, _c.setHex(t.tint)); treeLoMesh.setMatrixAt(lo++, _dummy.matrix); }
+      } else if (d < CFG.VIEW_DIST && t.longe) {
+        _dummy.position.set(t.longe.x, heightAt(t.longe.x, t.longe.z) - 0.15, t.longe.z);
+        _dummy.updateMatrix();
+        treeLoMesh.setColorAt(lo, _c.setHex(t.tint)); treeLoMesh.setMatrixAt(lo++, _dummy.matrix);
+      }
     }
     treeVariantMeshes.forEach((m, i) => {
       m.count = counts[i];
@@ -1051,19 +1068,7 @@ const Scenery = createScenery();
     });
     treeHiMesh.count = 0;
     treeHiMesh.visible = false;
-    for (let i = 0; i < treeSpots.length; i++) {
-      const t = treeSpots[i];
-      const bio = biomeAt(t.x, t.z);
-      // campo: retorcidas; floresta: bosquetes densos; 8% tocos;
-      // a "giant tree" é uma ILHA FLUTUANTE com bonsai — vira marco raro (1/40)
-      t.variant = (i % 40 === 0 && bio > 0.3) ? 0
-        : (i % 12 === 0) ? 3
-          : bio > 0.34 ? (i % 2 ? 1 : 2) : (i % 3 === 0 ? 2 : 1);
-      // escala pelo índice (sem rand(): este bloco roda em timing assíncrono e
-      // o stream semeado precisa ficar idêntico entre os clientes)
-      if (t.variant === 3) t.s = 0.8 + (i % 5) * 0.1;  // toco não vira arbusto gigante
-      if (t.variant === 0) t.s = 1.2 + (i % 5) * 0.1;  // ilha flutuante imponente
-    }
+    // qual modelo cada árvore usa (e a escala dele) é dado: js/obstaculos.js
     rebucketTrees(player.pos.x, player.pos.z);
   } catch (err) { console.error('Árvores GLB falharam — mantendo procedurais:', err); }
 })();
@@ -2560,16 +2565,90 @@ function rayBlockedAt(origin, dir, maxDist, ignorar = null) {
   const wallT = Structures.rayHit(origin, dir, maxDist, ignorar); // paredes e veículos inteiros param bala
   const lim = Math.min(maxDist, wallT);
   const step = 1.6;
+  let chao = Infinity;
   for (let d = step; d < lim; d += step) {
     const x = origin.x + dir.x * d, y = origin.y + dir.y * d, z = origin.z + dir.z * d;
-    if (y < heightAt(x, z)) return d - step * 0.5;
-    if (y < heightAt(x, z) + 3.4) { // só checa árvores perto do chão
-      for (const o of obstaclesNear(x, z)) {
-        if ((x - o.x) * (x - o.x) + (z - o.z) * (z - o.z) < o.r * o.r * 0.8) return d;
+    if (y < heightAt(x, z)) { chao = d - step * 0.5; break; }
+  }
+  const obst = obstaculoNaReta(origin, dir, Math.min(lim, chao));
+  if (obst < Infinity) return obst;
+  return chao < Infinity ? chao : wallT;
+}
+
+/* OBSTÁCULO DO MAPA (árvore, pedra, cacto, barril, tenda, POI) na reta: a
+   MESMA regra da consulta dos bots (js/obstaculos.js), contínua — círculo
+   de raio r·√0,8, até 3,4 m acima do chão do ponto — ou, na fatia de
+   tronco, na faixa absoluta de altura dela (trechoNaFaixa). Amostrada a
+   cada 1,6 m, a bala só parava num cacto (0,31 m) se uma amostra caísse
+   dentro dele: passava por metade das árvores e cactos que barram o bot, e
+   parava metros depois da casca (test/obstaculos-paridade.test.js).
+   Devolve a distância da ENTRADA, ou Infinity.
+
+   O cilindro que CONTÉM a origem não barra essa reta: a bala do jogador
+   nunca nasce lá (o colisor o empurra a r + 0,42 m), mas a granada não
+   colide com tronco e pode explodir no pé dele. Conter é estar DENTRO — na
+   coluna e na faixa de altura: do helicóptero em cima do tronco a reta
+   que desce ainda bate nele. */
+const OBST_PASSO = 8; // metade da célula de 16 m: a vizinhança 3×3 do obstaclesNear cobre a reta
+function obstaculoNaReta(origin, dir, lim) {
+  if (!(lim > 0)) return Infinity;
+  if (!Number.isFinite(lim)) lim = 1000;
+  const A = dir.x * dir.x + dir.z * dir.z;
+  if (A < 1e-12) return Infinity; // reta vertical não cruza cilindro de fora
+  let melhor = Infinity, anterior = null;
+  for (let d = 0; ; d += OBST_PASSO) {
+    const dd = Math.min(d, lim);
+    const lista = obstaclesNear(origin.x + dir.x * dd, origin.z + dir.z * dd);
+    if (lista !== anterior) {
+      anterior = lista;
+      for (const o of lista) {
+        const cx = origin.x - o.x, cz = origin.z - o.z;
+        const C = cx * cx + cz * cz - o.r * o.r * BALA.FATOR_R2;
+        const B = cx * dir.x + cz * dir.z;
+        if (C > 0 && B >= 0) continue; // fora da coluna: as duas raízes têm o sinal de −B
+        const disc = B * B - A * C;
+        if (disc <= 0) continue;
+        const sq = Math.sqrt(disc);
+        const tb = Math.min((-B + sq) / A, lim, melhor);
+        let ta;
+        if (C <= 0) {
+          /* a origem está na COLUNA do obstáculo: dentro dele de fato (na
+             faixa da fatia / sob o teto), ele não barra esta reta; acima ou
+             abaixo da faixa, a reta ainda pode entrar nela */
+          if (o.y1 !== undefined ? origin.y >= o.y0 && origin.y < o.y1
+            : origin.y - heightAt(origin.x, origin.z) < BALA.TETO_M) continue;
+          ta = 0;
+        } else ta = (-B - sq) / A;
+        if (ta >= tb) continue;
+        let t;
+        if (o.y1 !== undefined) {   // fatia de tronco: faixa absoluta, exata
+          const [lo, hi] = trechoNaFaixa(origin.y, dir.y, o.y0, o.y1);
+          const a = Math.max(ta, lo);
+          t = a < Math.min(tb, hi) ? a : Infinity;
+        } else t = primeiroSobOTeto(origin, dir, ta, tb);
+        if (t < melhor) melhor = t;
       }
     }
+    if (dd >= lim) return melhor;
   }
-  return wallT;
+}
+/* primeiro ponto de [ta, tb] a menos de BALA.TETO_M do chão (o cilindro
+   barra só perto do chão: acima disso é copa, e a copa não segura bala).
+   Passo de 0,25 m; achado o trecho, bisseção até ~1 cm (a reta que entra
+   pela copa e desce não pode parar 25 cm depois de onde cruzou o teto). */
+function primeiroSobOTeto(origin, dir, ta, tb) {
+  const sob = u => origin.y + dir.y * u - heightAt(origin.x + dir.x * u, origin.z + dir.z * u) < BALA.TETO_M;
+  if (sob(ta)) return ta;
+  for (let a = ta; a < tb;) {
+    const b = Math.min(a + 0.25, tb);
+    if (sob(b)) {
+      let lo = a, hi = b;
+      for (let k = 0; k < 5; k++) { const m = (lo + hi) / 2; if (sob(m)) hi = m; else lo = m; }
+      return hi;
+    }
+    a = b;
+  }
+  return Infinity;
 }
 
 /* áudio espacial: listener na câmera + probe de oclusão barato.
@@ -5254,6 +5333,9 @@ window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Veiculos, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
+  /* QA: as árvores (posição, giro, escala, modelo) e as malhas que as desenham
+     de perto — a âncora de test/arvores-colisor.test.js é o que se VÊ */
+  treeSpots, get treeVariantMeshes() { return treeVariantMeshes; },
   XRArma, XRInterage, XRUI, XRHud, XRTato, XRTaxa, XRAndar,
   /* QA + menu de VR: a preferência de empunhadura (`apertar`/`manter`) e os
      getters `mirando()`/`apoiando()`. Sem isto não há como um teste — nem o

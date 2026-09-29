@@ -58,7 +58,8 @@ function lerGrade() {
     for (const o of g.obstaclesNear(x, z)) if (!vistos.has(o)) { vistos.add(o); out.push(o); }
   }
   return {
-    obst: out.map(o => ({ x: o.x, z: o.z, r: o.r, category: o.category || null, sourceId: o.sourceId || null })),
+    obst: out.map(o => ({ x: o.x, z: o.z, r: o.r, category: o.category || null, sourceId: o.sourceId || null,
+      y0: o.y0 === undefined ? null : o.y0, y1: o.y1 === undefined ? null : o.y1 })),
     sitios: g.Structures.sites.map(s => ({ x: s.x, z: s.z, r: s.r, type: s.type })),
     rotaCastelo: g.Structures.castle.rigidClearRadius,
     semente: window.__MP_init && window.__MP_init.worldSeed,
@@ -112,7 +113,9 @@ function comparar(jogo, node) {
         if (d < dm) { dm = d; melhor = i; }
       }
       const p = melhor >= 0 ? livres[melhor] : null;
-      const desvio = p ? Math.max(dm, Math.abs(p.r - o.r)) : Infinity;
+      /* fatia de tronco: a faixa de altura também (sem faixa dos dois lados = 0) */
+      const faixa = (u, w) => (u == null && w == null ? 0 : u == null || w == null ? Infinity : Math.abs(u - w));
+      const desvio = p ? Math.max(dm, Math.abs(p.r - o.r), faixa(p.y0, o.y0), faixa(p.y1, o.y1)) : Infinity;
       const marca = p && p.category !== o.category;
       if (p) livres.splice(melhor, 1);
       if (desvio > TOL || marca) {
@@ -182,8 +185,9 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
      e pela consulta dos bots. Só contam os que têm relevo e paredes livres
      pela conta do Node — aí quem barra é obstáculo.
 
-     O cliente AMOSTRA a reta a cada 1,6 m (a partir de 1,6 m da origem); a
-     consulta dos bots é contínua. Por isso dois números:
+     O cliente AMOSTRAVA a reta a cada 1,6 m (a partir de 1,6 m da origem);
+     hoje as duas são contínuas (caso "o tiro do jogador", abaixo). Os dois
+     números de antes continuam:
        • a regra: o `rayBlockedAt` chamado 16 vezes com a origem deslizada de
          0,1 m em 0,1 m cobre a reta a cada 0,1 m — é a MESMA regra (raio
          r·√0,8, teto de 3,4 m), sem a peneira. Com o início da reta livre
@@ -192,13 +196,34 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
          barra, o bot barra — senão o bot atiraria em quem a vítima diz estar
          coberto. O contrário (o bot barra e o cliente deixa passar entre duas
          amostras) é o bot mais conservador que a vítima: vai no diagnóstico. */
+  /* ÂNCORA independente do `rayBlockedAt` e da consulta analítica: marcha de
+     2 cm, ponto-dentro-de-cilindro sobre a lista de obstáculos, com a regra
+     escrita aqui (raio r·√0,8, até 3,4 m acima do chão do ponto; a fatia de
+     tronco, na faixa absoluta y0–y1 dela). Devolve a distância da primeira
+     amostra barrada, ou Infinity. */
+  function entradaNoObstaculo(solidos, heightAt, a, b, passo = 0.02) {
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, len = Math.hypot(dx, dy, dz);
+    const lx = Math.min(a.x, b.x) - 4, hx = Math.max(a.x, b.x) + 4, lz = Math.min(a.z, b.z) - 4, hz = Math.max(a.z, b.z) + 4;
+    const perto = solidos.filter(o => o.x > lx && o.x < hx && o.z > lz && o.z < hz);
+    const n = Math.ceil(len / passo);
+    for (let i = 0; i <= n; i++) {
+      const k = i / n, x = a.x + dx * k, y = a.y + dy * k, z = a.z + dz * k;
+      for (const o of perto) {
+        if ((x - o.x) ** 2 + (z - o.z) ** 2 < o.r * o.r * 0.8 &&
+          (Number.isFinite(o.y1) ? y >= o.y0 && y < o.y1 : y - heightAt(x, z) < 3.4)) return len * k;
+      }
+    }
+    return Infinity;
+  }
+
   describe('a regra da bala: rayBlockedAt do cliente × consulta dos bots', () => {
-    let seg = null, cli = null, no = null;
+    let seg = null, cli = null, no = null, solidos = null;
     before(async () => {
       const R = resultados.get('424242');
       assert.ok(R, 'o boot da semente 424242 (desktop) não rodou');
       const { h, node } = R;
       const { t, Par, mundo, Ob, ob } = node;
+      solidos = ob.solidos;
       const rng = mulberry32(2026);
       seg = [];
       for (let k = 0; k < 4000; k++) {
@@ -224,13 +249,14 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
           const len = d.length();
           d.multiplyScalar(1 / len);
           o.set(a.x, a.y, a.z);
-          const grossa = MP.rayBlockedAt(o, d, len) < len;
+          const dist = MP.rayBlockedAt(o, d, len);
+          const grossa = dist < len;
           let fina = false;
           for (let k = 0; k < 16 && !fina; k++) {
             o.set(a.x + d.x * 0.1 * k, a.y + d.y * 0.1 * k, a.z + d.z * 0.1 * k);
             fina = MP.rayBlockedAt(o, d, len - 0.1 * k) < len - 0.1 * k;
           }
-          return { grossa, fina, veiculo };
+          return { grossa, fina, veiculo, dist: Math.min(dist, len + 1) };
         });
       }, seg);
       const paredes = Par.criarConsultaParedes(Par.paredesDoJogo(mundo));
@@ -242,6 +268,8 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
           livre: Bots.lineOfSight(t, a, b) && !paredes.segmentoBloqueado(a, b) && !cli[i].veiculo,
           inicioLivre: !q.segmentoBloqueado(a, inicio),
           obst: q.segmentoBloqueado(a, b),
+          quem: q.quemBarra(a, b),
+          entrada: entradaNoObstaculo(ob.solidos, t.heightAt, a, b),
         };
       });
     });
@@ -271,9 +299,48 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
         } else if (no[i].obst) soBot++;
       });
       t.diagnostic(`${livres} segmentos com relevo e paredes livres: o rayBlockedAt barrou ${cliBarra}; o bot deixou passar ${violacoes} deles; ` +
-        `o bot barrou ${soBot} que o rayBlockedAt deixou passar entre duas amostras de 1,6 m (bot mais conservador que a vítima)`);
+        `o bot barrou ${soBot} que o rayBlockedAt deixou passar (bot mais conservador que a vítima: reta que nasce dentro de um cilindro)`);
       assert.ok(livres > 2000 && cliBarra > 500, `o cenário não exercita a regra: ${livres} livres, ${cliBarra} barrados pelo cliente`);
       assert.equal(violacoes, 0, `o bot vê por ${violacoes} segmentos que o cliente barra — ex.: ${JSON.stringify(primeira)}`);
+    });
+
+    /* O TIRO DO JOGADOR não pula obstáculo fino. Amostrando a cada 1,6 m, a
+       bala só parava num cacto (r·√0,8 = 0,31 m) se uma amostra caísse
+       dentro dele: o validador mediu a bala passando por cacto e árvore que
+       barram o bot. Aqui, UMA chamada do `rayBlockedAt` (a do tiro) contra a
+       consulta dos bots, por família, e o ponto em que ela para contra a
+       marcha de 2 cm — a bala para na casca, não depois dela. */
+    it('o tiro do jogador (uma chamada) barra o que o bot barra, por família, e para na entrada do obstáculo', (t) => {
+      const fam = {};
+      let livres = 0, soBot = 0, longe = 0, pior = 0, ex = null, dentro = 0, dentroDiverge = 0;
+      seg.forEach((s, i) => {
+        if (!no[i].livre || !no[i].obst) return;
+        /* a reta que NASCE dentro de um cilindro: o cliente não deixa esse
+           cilindro barrá-la (granada no pé do tronco; o jogador nunca nasce
+           lá), o bot deixa. Fora da conta, com o número no diagnóstico. */
+        if (no[i].entrada === 0) {
+          dentro++;
+          if (!cli[i].grossa || cli[i].dist > 0.05) dentroDiverge++;
+          return;
+        }
+        livres++;
+        const f = no[i].quem >= 0 ? solidos[no[i].quem].sourceId : '?';
+        const c = fam[f] || (fam[f] = { n: 0, passou: 0 });
+        c.n++;
+        if (!cli[i].grossa) { soBot++; c.passou++; ex ||= s; return; }
+        if (Number.isFinite(no[i].entrada)) {
+          const e = Math.abs(cli[i].dist - no[i].entrada);
+          pior = Math.max(pior, e);
+          if (e > 0.05) longe++;
+        }
+      });
+      const porFam = Object.entries(fam).map(([f, c]) => `${f} ${c.passou}/${c.n}`).join(', ');
+      t.diagnostic(`${livres} segmentos que o bot barra (relevo e paredes livres); a bala do jogador passou por ${soBot} (${porFam}); ` +
+        `impacto a mais de 5 cm da entrada: ${longe} (pior ${pior.toFixed(3)} m); nascem dentro de um cilindro: ${dentro} (${dentroDiverge} com o cliente seguindo)`);
+      assert.ok(livres > 500 && fam.cactus && fam.cactus.n > 20 && fam.tree && fam.tree.n > 20,
+        `o cenário não exercita cacto e árvore: ${porFam}`);
+      assert.ok(soBot <= livres * 0.01, `a bala do jogador atravessou ${soBot} de ${livres} obstáculos que barram o bot (${porFam}) — ex.: ${JSON.stringify(ex)}`);
+      assert.ok(longe <= livres * 0.01, `a bala parou longe da entrada em ${longe} de ${livres} (pior ${pior.toFixed(3)} m)`);
     });
   });
 });

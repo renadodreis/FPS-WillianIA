@@ -77,8 +77,9 @@ describe('obstaculos.js é dado puro', () => {
   it('mesma semente → mesmos obstáculos; semente diferente → vegetação diferente', async () => {
     const a = (await obstaculosDe(424242)).ob, b = (await obstaculosDe(424242)).ob, c = (await obstaculosDe(7)).ob;
     assert.deepEqual(a.solidos, b.solidos);
-    const perto = (o, l) => l.some(p => p.sourceId === o.sourceId && Math.hypot(p.x - o.x, p.z - o.z) < 1);
-    const iguais = a.solidos.filter(o => o.sourceId === 'tree' || o.sourceId === 'rock').filter(o => perto(o, c.solidos)).length;
+    // árvores e pedras (a árvore pelo pivô: cada tronco dela tem várias fatias na lista de sólidos)
+    const perto = (o, l) => l.some(p => Math.hypot(p.x - o.x, p.z - o.z) < 1);
+    const iguais = a.arvores.filter(o => perto(o, c.arvores)).length + a.pedras.filter(o => perto(o, c.pedras)).length;
     assert.ok(iguais < 10, `sementes 424242 e 7 dividem ${iguais} árvores/pedras no mesmo lugar`);
   });
 
@@ -133,7 +134,9 @@ describe('obstaculos.js é dado puro', () => {
       const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, n = Math.ceil(Math.hypot(dx, dy, dz) / 0.01);
       for (let i = 0; i <= n; i++) {
         const p = { x: a.x + dx * i / n, y: a.y + dy * i / n, z: a.z + dz * i / n };
-        if (perto.some(o => (p.x - o.x) ** 2 + (p.z - o.z) ** 2 < o.r * o.r * 0.8 && p.y - t.heightAt(p.x, p.z) < 3.4)) return true;
+        // fatia de tronco (y0/y1): só na faixa ABSOLUTA de altura dela
+        if (perto.some(o => (p.x - o.x) ** 2 + (p.z - o.z) ** 2 < o.r * o.r * 0.8 &&
+          (Number.isFinite(o.y1) ? p.y >= o.y0 && p.y < o.y1 : p.y - t.heightAt(p.x, p.z) < 3.4))) return true;
       }
       return false;
     };

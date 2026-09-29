@@ -84,7 +84,10 @@ function relevoEntre(a, b, passo = 0.05) {
   }
   return false;
 }
-const dentroCilindro = (o, p) => (p.x - o.x) ** 2 + (p.z - o.z) ** 2 < o.r * o.r * R2F && p.y - terrain.heightAt(p.x, p.z) < TETO;
+/* fatia de tronco (y0/y1, js/obstaculos.js): barra só na faixa ABSOLUTA de
+   altura dela; o resto, até 3,4 m acima do chão do ponto */
+const dentroCilindro = (o, p) => (p.x - o.x) ** 2 + (p.z - o.z) ** 2 < o.r * o.r * R2F &&
+  (Number.isFinite(o.y1) ? p.y >= o.y0 && p.y < o.y1 : p.y - terrain.heightAt(p.x, p.z) < TETO);
 /* marcha de 2 cm: algum ponto do segmento dentro de algum cilindro de `lista` */
 function obstaculoEntre(lista, a, b, passo = 0.02) {
   const lx = Math.min(a.x, b.x) - 4, hx = Math.max(a.x, b.x) + 4, lz = Math.min(a.z, b.z) - 4, hz = Math.max(a.z, b.z) + 4;
