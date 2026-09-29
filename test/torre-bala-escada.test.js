@@ -17,7 +17,7 @@
 'use strict';
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { mundoReal, comEstruturas, cruzaCaixa, randMeio, importar } = require('./helpers/pve-mundo');
+const { mundoReal, comEstruturas, cruzaCaixa, randMeio, randTopo, importar } = require('./helpers/pve-mundo');
 
 const HUMANO = 1.75 / 2.1; // escala do executivo (js/enemies.js: HUMAN_SCALE)
 
@@ -128,5 +128,52 @@ describe('Bala respeita o que está desenhado na escada', () => {
       Math.abs(w.z1 - grade.z1) < 1e-6);
     assert.ok(caixa, 'o guarda-corpo sumiu das paredes');
     assert.ok(!caixa.noCollide, 'o guarda-corpo deixou de segurar o corpo (dá pra cair no poço)');
+  });
+});
+
+describe('Acerto do executivo só com a reta até o corpo livre', () => {
+  /* Medido no jogo real depois do conserto dos degraus: 6 tiros acertaram
+     o jogador com o traçante passando 1,0–1,3 cm DENTRO do degrau. O tiro
+     sorteia um desvio e testa obstáculo ao longo da reta DESVIADA; se ela
+     passa a menos de 0,5 m do peito, conta acerto — e o dano (e o traçante)
+     vão para o PEITO, por uma reta que ninguém testou. Um poste fino no
+     meio do caminho mostra isso sem escada: a reta desviada passa ao lado
+     dele e a reta até o peito o atravessa. */
+  it('poste fino na frente do peito: a reta desviada passa ao lado, mas o acerto no peito não vale', async () => {
+    const poste = { x0: -0.05, x1: 0.05, y0: 0, y1: 3, z0: 3.95, z1: 4.05 };
+    const medir = async lista => {
+      const { E, P, dano } = await (async () => {
+        const THREE = await import('three');
+        const U = await importar('utils.js');
+        const { createEnemies } = await importar('enemies.js');
+        const S = await comEstruturas(lista);
+        const dano = [];
+        const P = { pos: new THREE.Vector3(0, 0, 8), vel: new THREE.Vector3(), dead: false, crouchT: 0 };
+        const E = createEnemies({
+          CFG: { ENEMY_COUNT: 1, WORLD_SIZE: 1100 }, clamp: U.clamp, lerp: U.lerp, damp: U.damp, rand: randTopo, TAU: U.TAU,
+          _v1: U._v1, _v2: U._v2, _v3: U._v3, heightAt: () => 0, slopeAt: () => 0, terrainNormal: (x, z, o) => o.set(0, 1, 0),
+          WATER_LEVEL: -50, obstaclesNear: () => [], SFX: { enemyShot() {} }, FX: { spawnTracer() {}, burst() {} },
+          scene: new THREE.Scene(), csmMat: m => m, Structures: S, addScore() {}, addKillFeed() {}, player: P,
+          playerDamage: d => dano.push(d), addTrauma() {},
+          Car: { speedKmh: () => 0, group: { position: new THREE.Vector3(1e6, 0, 1e6) } },
+          Pickups: { drop() {} }, knuckleMat: new THREE.MeshStandardMaterial(), lastShotInfo: { pos: new THREE.Vector3(), t: -99 },
+          Chars: null, state: { flying: false } });
+        return { E, P, dano };
+      })();
+      const e = E.list[0];
+      e.group.position.set(0, 0, 0); e.home = { x: 0, z: 0 };
+      e.waypoints = [0, 1, 2, 3].map(() => ({ x: 0, z: 0 })); e.yaw = 0;
+      // estava vendo o jogador: rajada armada
+      e.fsm = 'ATACAR'; e.losT = 0; e.lastKnown.copy(P.pos); e.senseAcc = 0; e.burstLeft = 3; e.nextShot = 0; e.nextBurst = 99;
+      for (let i = 0; i < 20; i++) { e.group.position.set(0, 0, 0); E.update(1 / 60, i / 60); }
+      return { total: soma(dano), tiros: dano.length, esc: e.group.scale.y };
+    };
+    const sem = await medir([]);
+    assert.ok(sem.total > 0, 'controle sem o poste: o executivo não acertou — o cenário não mede nada');
+    const cano = { x: 0, y: 1.45 * sem.esc, z: 0 };
+    assert.ok(cruzaCaixa(cano, { x: 0, y: 1.5, z: 8 }, poste) && cruzaCaixa(cano, { x: 0, y: 1.62, z: 8 }, poste),
+      'pré-condição: a reta do cano ao peito (e à cabeça) atravessa o poste');
+    const com = await medir([poste]);
+    assert.equal(com.total, 0, `${com.total} de dano em ${com.tiros} tiros com o poste entre o cano e o corpo`);
   });
 });

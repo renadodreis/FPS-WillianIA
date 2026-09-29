@@ -405,8 +405,18 @@ export function createEnemies(deps) {
     const acerta = miss < 0.5 && alcancavel();
     const ate = acerta ? proj : range + rand(2, 8);
     // a bala voa pela reta SORTEADA: parede, chão ou tronco no caminho param ela ali
-    const bate = primeiroObstaculo(_eFrom, _eDir, ate, mundo);
-    if (bate < ate) {
+    let bate = primeiroObstaculo(_eFrom, _eDir, ate, mundo);
+    /* ...e o ACERTO vai para o corpo (_eTo), que é por onde o traçante passa
+       e onde o dano cai. A reta sorteada só chega a 0,5 m dele: ela pode
+       passar ao lado de um obstáculo que a reta até o corpo atravessa —
+       medido no jogo real, 6 acertos com o traçante 1,0–1,3 cm dentro de um
+       degrau da escada da Torre Nexus. Acerto exige as DUAS livres. */
+    if (bate >= ate && acerta) {
+      _eV.copy(_eTo).sub(_eFrom).normalize();
+      const bateNoCorpo = primeiroObstaculo(_eFrom, _eV, range, mundo);
+      if (bateNoCorpo < range) { _eDir.copy(_eV); bate = bateNoCorpo; }
+    }
+    if (bate < ate || (acerta && bate < range)) {
       _eFim.copy(_eFrom).addScaledVector(_eDir, bate);
       FX.spawnTracer(_eFrom, _eFim, 0xff8866);
       FX.burst(_eFim, _eN.copy(_eDir).negate(), 'spark');
