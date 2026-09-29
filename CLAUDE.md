@@ -6,7 +6,10 @@ quebrou o jogo antes.
 
 ## Invariantes (quebram o jogo se ignorados)
 
-- **A ordem de consumo do `Math.random` seedado é um contrato.** A geração do mundo
+- **A ordem de consumo do `Math.random` seedado é um contrato.** (Desde
+  2026-09-28 construções e vegetação têm sorteio PRÓPRIO — js/paredes.js,
+  js/obstaculos.js — e não consomem mais o stream; o que vem depois delas,
+  inimigos, bichos e alien, continua sendo contrato.) A geração do mundo
   (`js/terrain.js`, `js/grass.js`, `js/structures.js`, baús) consome `rand` numa
   ordem fixa a partir do seed. Inserir, remover ou reordenar consumo muda o layout
   do mundo E quebra a reconstrução do terreno feita por bots/servidor a partir do
@@ -284,8 +287,13 @@ escrita pelo validador — quem constrói não edita).
   carregam JUNTOS — se um falhar o bot fica cego e grita no stderr (terreno sem
   paredes seria wallhack silencioso). A cidade troca de paredes no evento
   `cityDestruction` (`destroyed`; a cinemática ainda conta como de pé). O som
-  atravessa parede. Árvore e rocha continuam invisíveis para o bot (sorteadas
-  no stream global depois do terreno — o Node não as reconstrói).
+  atravessa parede. **Bots conhecem pedra, árvore, cacto, tenda e POIs**
+  (`js/obstaculos.js`, sorteios próprios da semente; paridade com o
+  `obstaclesNear` em `test/obstaculos-paridade.test.js`). A regra é a do
+  `rayBlockedAt` (r·√0,8 até 3,4 m do chão), contínua: o bot é mais
+  conservador que a vítima. Quem está no helicóptero não é alvo de bot
+  (decisão do dono). Veículo NÃO é cobertura para ninguém (nem no
+  `rayBlockedAt` do cliente) — pôr no bot sozinho criaria assimetria.
 - **Construção se ASSENTA no terreno** (`js/paredes.js`): fundação até o ponto
   mais baixo da pegada, muro de base em trechos que descem a encosta, caixote
   no chão debaixo dele, portão e rampa do castelo com aterro. Antes, peça
