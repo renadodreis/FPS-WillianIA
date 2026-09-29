@@ -214,9 +214,12 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
         seg.push([a, b]);
       }
       cli = await h.play(lista => {
-        const MP = window.__MP, T = MP.THREE;
+        const MP = window.__MP, T = MP.THREE, V = window.__game.Veiculos;
         const o = new T.Vector3(), d = new T.Vector3();
         return lista.map(([a, b]) => {
+          /* veículo inteiro também barra desde a vida de veículo (03e292f) —
+             ele não é obstáculo do mapa, é outra regra: sai da comparação */
+          const veiculo = !!(V && V.segmento && V.segmento(a, b));
           d.set(b.x - a.x, b.y - a.y, b.z - a.z);
           const len = d.length();
           d.multiplyScalar(1 / len);
@@ -227,16 +230,16 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
             o.set(a.x + d.x * 0.1 * k, a.y + d.y * 0.1 * k, a.z + d.z * 0.1 * k);
             fina = MP.rayBlockedAt(o, d, len - 0.1 * k) < len - 0.1 * k;
           }
-          return { grossa, fina };
+          return { grossa, fina, veiculo };
         });
       }, seg);
       const paredes = Par.criarConsultaParedes(Par.paredesDoJogo(mundo));
       const q = Ob.criarConsultaObstaculos(ob.solidos, { heightAt: t.heightAt, grade: t.losGrid });
-      no = seg.map(([a, b]) => {
+      no = seg.map(([a, b], i) => {
         const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, len = Math.hypot(dx, dy, dz);
         const inicio = { x: a.x + dx / len * 1.7, y: a.y + dy / len * 1.7, z: a.z + dz / len * 1.7 };
         return {
-          livre: Bots.lineOfSight(t, a, b) && !paredes.segmentoBloqueado(a, b),
+          livre: Bots.lineOfSight(t, a, b) && !paredes.segmentoBloqueado(a, b) && !cli[i].veiculo,
           inicioLivre: !q.segmentoBloqueado(a, inicio),
           obst: q.segmentoBloqueado(a, b),
         };
