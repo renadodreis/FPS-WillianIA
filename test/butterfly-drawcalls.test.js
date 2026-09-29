@@ -67,11 +67,16 @@ const FLAP_AMPLITUDE = 1.0;
    próprio (js/paredes.js) e o stream seedado depois delas encurtou 5.923
    sorteios na seed 424242 (borboletas, animais e esqueletos são a jusante).
    `animais` bate com o que test/animal-drawcalls.test.js colheu por conta
-   própria; os anteriores estão no histórico deste arquivo. */
+   própria; os anteriores estão no histórico deste arquivo.
+   RECAPTURADO de novo em 2026-09-28: árvores, pedras e cactos passaram a
+   sortear num PRNG próprio (js/obstaculos.js) para os bots os enxergarem
+   (B7), e o stream seedado depois da vegetação encurtou 7.756 sorteios na
+   seed 424242 — tudo aqui é a jusante. `animais` bate de novo com o que
+   test/animal-drawcalls.test.js colheu por conta própria. */
 const OURO_SEED = {
-  animais: [0.9287, 0.9671, 0.9958, 1.1298, 1.1333, 1.0754, 1.0907, 1.142,
+  animais: [1.0784, 1.094, 0.995, 1.0415, 0.9101, 1.1069, 1.0152, 1.0936,
     0.85, 0.85, 0.85, 0.85, 0.85],
-  esqueletos: [2.3006, 3.1617, 5.6136, 2.3402, 2.9624, 5.0139, 1.7401],
+  esqueletos: [1.581, 2.9857, 4.4827, 5.9104, 1.425, 0.9081, 1.3044],
 };
 
 /* CSM. O número absoluto de csmMaterials NÃO é asserção aqui de propósito: ele

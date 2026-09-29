@@ -268,7 +268,7 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
    basta testar as pontas da corda e esses cruzamentos. Sem grade, amostra a
    cada 0,25 m.
 
-   Os obstáculos moram numa grade uniforme (célula CEL m), em toda célula que
+   Os obstáculos moram numa grade uniforme (célula de 8 m), em toda célula que
    o quadrado envolvente do círculo toca; a reta percorre só as células por
    onde passa (Amanatides & Woo) — ~15 células num segmento de 100 m. */
 export function criarConsultaObstaculos(solidos, { heightAt, grade = null, celula = 8 } = {}) {

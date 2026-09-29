@@ -24,10 +24,12 @@
    de guarda (posição presa, como em test/postura-bots.test.js) — virar,
    perceber e atirar continuam com o `tickBots`.
 
-   Fora do alcance do Node (e desta entrega): ÁRVORES e ROCHAS. As duas moram
-   em `obstacles` do game.js, sorteadas no Math.random GLOBAL seedado depois de
-   terreno + grama; reconstruí-las exigiria reproduzir o boot (o motivo de
-   js/paredes.js existir). O bot continua vendo através de árvore e rocha.
+   Árvores, pedras, cactos, a tenda e os POIs são OUTRO módulo puro
+   (js/obstaculos.js, desde 2026-09-28) e têm o arquivo deles:
+   test/bots-obstaculos.test.js. Aqui os sentinelas montam o mundo com
+   terreno + paredes e SEM obstáculos (`world.obstacles` nulo), para que o que
+   se mede seja só a parede — os pares foram escolhidos pela âncora de caixas,
+   que não conhece pedra nem árvore.
 
    Antes (seed 424242, 93 humanos atrás de parede, 10 s cada): 534 disparos,
    172 `shotHit` emitidos, 93 viradas; bot contra bot, 110 disparos.

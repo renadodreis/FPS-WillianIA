@@ -66,8 +66,13 @@ const OURO = {
      pedras nasceram com outros raios. A madeira, sem sorteio, não mexeu — é
      o controle. A igualdade com as 7 pedras SOLTAS (pré-fusão) foi provada em
      bbe6b48 com os raios antigos; daqui pra frente este número trava
-     regressão. O antigo está no histórico deste arquivo. */
-  campoPedra: [[1.163, 2.444, -2.855], [2.873, 2.731, -1.108]],
+     regressão. O antigo está no histórico deste arquivo.
+     RECAPTURADA de novo em 2026-09-28: a vegetação passou a sortear num
+     PRNG próprio (js/obstaculos.js) e o stream seedado depois dela encurtou
+     7.756 sorteios — outros raios de novo. A madeira (controle) e os
+     barris, a casa e o mercado (a planta dos POIs não mudou) ficaram
+     idênticos. */
+  campoPedra: [[1.159, 2.44, -2.897], [2.863, 2.735, -1.152]],
   /* Drop de munição, em coordenadas LOCAIS do modelo. Estes dois não vêm de
      captura: saem da geometria escrita em js/pickups.js, e é justamente por
      isso que provam a fusão. A caixa é `RoundedBoxGeometry(0.5, 0.3, 0.34)`

@@ -47,7 +47,18 @@ const SEED = '424242';
    grama nascem antes; prova medida no relatório da entrega e em
    test/paredes-paridade.test.js). O retrato anterior (fingerprint do HEAD
    36022f1) está no histórico do git deste arquivo. Três capturas
-   seguidas deram o mesmo retrato byte a byte. */
+   seguidas deram o mesmo retrato byte a byte.
+
+   RECAPTURADO de novo em 2026-09-28, na mudança aprovada pelo dono em que
+   árvores, pedras e cactos passaram a sortear em PRNG próprio
+   (js/obstaculos.js) para os bots os enxergarem (B7). A vegetação deixou de
+   consumir o stream seedado: ele encurtou 7.756 sorteios na 424242, e
+   mudaram UMA vez os 12 inimigos de patrulha e o alien (leem `rand()` do
+   stream depois da vegetação). Castelo, sítios, clareiras, vagas, os 16
+   guardas, boss e `heightSamples` NÃO mudaram — o prefixo do stream até a
+   vegetação (terreno + grama, 1.588.093 sorteios) saiu idêntico chave a
+   chave (sonda do relatório). Três capturas seguidas: mesmo retrato byte a
+   byte. */
 const ANTES = {
   castle: { x: 279.78, z: -248.04 },
   sitesCount: 21,
@@ -91,18 +102,18 @@ const ANTES = {
   ],
   enemiesCount: 28,
   enemies: [
-    { x: -166.03, z: 8.97, fsm: 'PATRULHA', alive: true },
-    { x: 247.73, z: 358.11, fsm: 'PATRULHA', alive: true },
-    { x: 296, z: 172.7, fsm: 'PATRULHA', alive: true },
-    { x: 147.84, z: 250.22, fsm: 'PATRULHA', alive: true },
-    { x: -28.54, z: -118.79, fsm: 'PATRULHA', alive: true },
-    { x: 212.41, z: -219.84, fsm: 'PATRULHA', alive: true },
-    { x: -128.7, z: 19.7, fsm: 'PATRULHA', alive: true },
-    { x: 38.45, z: 117.76, fsm: 'PATRULHA', alive: true },
-    { x: 244.32, z: -197.31, fsm: 'PATRULHA', alive: true },
-    { x: 256.13, z: -381.29, fsm: 'PATRULHA', alive: true },
-    { x: 111.07, z: 63.13, fsm: 'PATRULHA', alive: true },
-    { x: -214.45, z: -266.55, fsm: 'PATRULHA', alive: true },
+    { x: 282.01, z: 67.33, fsm: 'PATRULHA', alive: true },
+    { x: 293.88, z: -40.17, fsm: 'PATRULHA', alive: true },
+    { x: -28.02, z: -359.7, fsm: 'PATRULHA', alive: true },
+    { x: 129.94, z: 172.25, fsm: 'PATRULHA', alive: true },
+    { x: 38.92, z: -344.67, fsm: 'PATRULHA', alive: true },
+    { x: 105.29, z: 233.46, fsm: 'PATRULHA', alive: true },
+    { x: -36.35, z: -146.02, fsm: 'PATRULHA', alive: true },
+    { x: -426.96, z: -169.8, fsm: 'PATRULHA', alive: true },
+    { x: -84.63, z: -407.7, fsm: 'PATRULHA', alive: true },
+    { x: -90.61, z: 221.26, fsm: 'PATRULHA', alive: true },
+    { x: 128.77, z: 47.73, fsm: 'PATRULHA', alive: true },
+    { x: 84.23, z: 258.65, fsm: 'PATRULHA', alive: true },
     { x: -337, z: 126.31, fsm: 'PATRULHA', alive: true },
     { x: -335.37, z: 131.44, fsm: 'PATRULHA', alive: true },
     { x: -337, z: 128.28, fsm: 'PATRULHA', alive: true },
@@ -121,7 +132,7 @@ const ANTES = {
     { x: 274.46, z: -70.37, fsm: 'PATRULHA', alive: true },
   ],
   boss: { x: 279.78, z: -248.04 },
-  alien: { x: -117.15, z: 143.29 },
+  alien: { x: -335.45, z: 20.37 },
   // idênticas às do retrato de 36022f1: o relevo nasce antes e não mudou
   heightSamples: [2.53, 4.4, 0.74, -1.1, 40.49],
 };

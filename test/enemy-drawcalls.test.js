@@ -126,13 +126,19 @@ const OURO_SEM_CSM = {
    sorteios na seed 424242 — tudo aqui é a jusante. Os valores novos batem,
    campo a campo, com os que test/animal-drawcalls.test.js e
    test/carregamento-determinismo.test.js colheram por conta própria. Os
-   anteriores estão no histórico deste arquivo. */
+   anteriores estão no histórico deste arquivo.
+   RECAPTURADO de novo em 2026-09-28: árvores, pedras e cactos passaram a
+   sortear num PRNG próprio (js/obstaculos.js) para os bots os enxergarem
+   (B7), e o stream seedado depois da vegetação encurtou 7.756 sorteios na
+   seed 424242 — tudo aqui é a jusante. De novo, `casas` e `animais` batem com
+   os que carregamento-determinismo e animal-drawcalls colheram por conta
+   própria (três boots independentes). */
 const OURO_SEED = {
-  casas: [[-166.0315, 8.9694], [247.7313, 358.1112], [296.002, 172.695]],
-  waypoints: [[-151.6932, 14.5094], [260.2361, 363.3933], [304.803, 177.7033]],
-  yaws: [2.4657, 1.8672, 2.7347],
+  casas: [[282.0061, 67.3333], [293.8766, -40.1685], [-28.0209, -359.6991]],
+  waypoints: [[296.755, 69.0576], [306.3085, -34.7652], [-17.3012, -353.6826]],
+  yaws: [3.3886, 1.096, 2.3368],
   // 8 herbívoros com tamanho sorteado + 5 predadores de tamanho fixo (0,85)
-  animais: [0.9287, 0.9671, 0.9958, 1.1298, 1.1333, 1.0754, 1.0907, 1.142,
+  animais: [1.0784, 1.094, 0.995, 1.0415, 0.9101, 1.1069, 1.0152, 1.0936,
     0.85, 0.85, 0.85, 0.85, 0.85],
 };
 

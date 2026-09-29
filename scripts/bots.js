@@ -573,7 +573,6 @@ function knownTargets(bot, candidates, t) {
   const out = [];
   for (const [id, a] of bot.aware || []) {
     const c = byId.get(id);
-    if (c && c.heli) continue; // entrou no helicóptero: nem a fila de reação vale
     const view = c && sampleAt(a, t - AI.REACTION_S);
     if (!view || !view.known) continue;
     const seen = !!view.seen;

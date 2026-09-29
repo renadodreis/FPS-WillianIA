@@ -86,63 +86,70 @@ const SOBRA_MAX = 0.30;
    pré-fusão prevê cada caixa nova a ≤ 0,00093 m (a tolerância aqui é
    0,002); as esferas batem com 0,55/0,62/0,24/0,85 × tamanho (os
    coeficientes que os dourados pré-fusão dão) a ≤ 0,00009 m; os 5 lobos
-   (tamanho fixo) saíram idênticos aos pré-fusão. */
+   (tamanho fixo) saíram idênticos aos pré-fusão.
+   RECAPTURADO de novo em 2026-09-28: árvores, pedras e cactos passaram a
+   sortear num PRNG próprio (js/obstaculos.js) para os bots os enxergarem
+   (B7), e o stream seedado depois da vegetação encurtou 7.756 sorteios na
+   seed 424242 — tudo aqui é a jusante.
+   Validados do mesmo jeito, sem passar pelo código atual: o modelo afim
+   ajustado nos 8 cervos da captura anterior prevê cada caixa nova a
+   ≤ 0,00077 m e cada esfera a ≤ 0,00007 m; os 5 lobos não mudaram. */
 const OURO = [
-  { size: 0.9287, predador: false,
-    caixaSombra: [[-0.52, 0.334, -0.23], [0.52, 0.817, 0.23]],
-    hitSpheres: [{ r: 0.5108, part: 'body', dy: 0.5758 }, { r: 0.2229, part: 'head', dy: 0.7894 }],
+  { size: 1.0784, predador: false,
+    caixaSombra: [[-0.604, 0.388, -0.267], [0.604, 0.949, 0.267]],
+    hitSpheres: [{ r: 0.5931, part: 'body', dy: 0.6686 }, { r: 0.2588, part: 'head', dy: 0.9166 }],
     porMaterial: {
-      '9a6b42|r0.8|m0': [[-0.573, 0.049, -0.404], [0.724, 0.994, 0.404]],
-      '9a7e54|r0.7|m0': [[0.323, 0.901, -0.159], [0.453, 1.177, 0.161]],
+      '9a6b42|r0.8|m0': [[-0.665, 0.057, -0.47], [0.841, 1.154, 0.47]],
+      '9a7e54|r0.7|m0': [[0.386, 1.069, -0.171], [0.515, 1.344, 0.173]],
     } },
-  { size: 0.9671, predador: false,
-    caixaSombra: [[-0.542, 0.348, -0.239], [0.542, 0.851, 0.239]],
-    hitSpheres: [{ r: 0.5319, part: 'body', dy: 0.5996 }, { r: 0.2321, part: 'head', dy: 0.822 }],
+  { size: 1.094, predador: false,
+    caixaSombra: [[-0.613, 0.394, -0.271], [0.613, 0.963, 0.271]],
+    hitSpheres: [{ r: 0.6017, part: 'body', dy: 0.6783 }, { r: 0.2626, part: 'head', dy: 0.9299 }],
     porMaterial: {
-      '9a6b42|r0.8|m0': [[-0.596, 0.051, -0.421], [0.754, 1.035, 0.421]],
-      '9a7e54|r0.7|m0': [[0.339, 0.944, -0.162], [0.469, 1.22, 0.164]],
+      '9a6b42|r0.8|m0': [[-0.675, 0.058, -0.476], [0.853, 1.171, 0.476]],
+      '9a7e54|r0.7|m0': [[0.392, 1.086, -0.172], [0.522, 1.362, 0.174]],
     } },
-  { size: 0.9958, predador: false,
-    caixaSombra: [[-0.558, 0.358, -0.246], [0.558, 0.876, 0.246]],
-    hitSpheres: [{ r: 0.5477, part: 'body', dy: 0.6174 }, { r: 0.239, part: 'head', dy: 0.8464 }],
+  { size: 0.995, predador: false,
+    caixaSombra: [[-0.557, 0.358, -0.246], [0.557, 0.876, 0.246]],
+    hitSpheres: [{ r: 0.5473, part: 'body', dy: 0.6169 }, { r: 0.2388, part: 'head', dy: 0.8458 }],
     porMaterial: {
-      '9a6b42|r0.8|m0': [[-0.614, 0.053, -0.434], [0.777, 1.065, 0.434]],
-      '9a7e54|r0.7|m0': [[0.351, 0.976, -0.164], [0.481, 1.252, 0.166]],
+      '9a6b42|r0.8|m0': [[-0.613, 0.053, -0.433], [0.776, 1.065, 0.433]],
+      '9a7e54|r0.7|m0': [[0.351, 0.975, -0.164], [0.48, 1.251, 0.166]],
     } },
-  { size: 1.1298, predador: false,
-    caixaSombra: [[-0.633, 0.407, -0.279], [0.633, 0.994, 0.279]],
-    hitSpheres: [{ r: 0.6214, part: 'body', dy: 0.7005 }, { r: 0.2712, part: 'head', dy: 0.9604 }],
+  { size: 1.0415, predador: false,
+    caixaSombra: [[-0.583, 0.375, -0.258], [0.583, 0.917, 0.258]],
+    hitSpheres: [{ r: 0.5728, part: 'body', dy: 0.6457 }, { r: 0.25, part: 'head', dy: 0.8853 }],
     porMaterial: {
-      '9a6b42|r0.8|m0': [[-0.697, 0.06, -0.492], [0.881, 1.209, 0.492]],
-      '9a7e54|r0.7|m0': [[0.407, 1.126, -0.175], [0.537, 1.402, 0.177]],
+      '9a6b42|r0.8|m0': [[-0.642, 0.055, -0.454], [0.812, 1.114, 0.454]],
+      '9a7e54|r0.7|m0': [[0.37, 1.027, -0.168], [0.5, 1.303, 0.17]],
     } },
-  { size: 1.1333, predador: false,
-    caixaSombra: [[-0.635, 0.408, -0.28], [0.635, 0.997, 0.28]],
-    hitSpheres: [{ r: 0.6233, part: 'body', dy: 0.7027 }, { r: 0.272, part: 'head', dy: 0.9633 }],
+  { size: 0.9101, predador: false,
+    caixaSombra: [[-0.51, 0.328, -0.225], [0.51, 0.801, 0.225]],
+    hitSpheres: [{ r: 0.5006, part: 'body', dy: 0.5643 }, { r: 0.2184, part: 'head', dy: 0.7736 }],
     porMaterial: {
-      '9a6b42|r0.8|m0': [[-0.699, 0.06, -0.494], [0.884, 1.213, 0.494]],
-      '9a7e54|r0.7|m0': [[0.409, 1.13, -0.175], [0.539, 1.406, 0.177]],
+      '9a6b42|r0.8|m0': [[-0.561, 0.048, -0.396], [0.71, 0.974, 0.396]],
+      '9a7e54|r0.7|m0': [[0.315, 0.88, -0.157], [0.445, 1.156, 0.159]],
     } },
-  { size: 1.0754, predador: false,
-    caixaSombra: [[-0.602, 0.387, -0.266], [0.602, 0.946, 0.266]],
-    hitSpheres: [{ r: 0.5915, part: 'body', dy: 0.6667 }, { r: 0.2581, part: 'head', dy: 0.9141 }],
+  { size: 1.1069, predador: false,
+    caixaSombra: [[-0.62, 0.398, -0.274], [0.62, 0.974, 0.274]],
+    hitSpheres: [{ r: 0.6088, part: 'body', dy: 0.6863 }, { r: 0.2656, part: 'head', dy: 0.9408 }],
     porMaterial: {
-      '9a6b42|r0.8|m0': [[-0.663, 0.057, -0.468], [0.839, 1.151, 0.468]],
-      '9a7e54|r0.7|m0': [[0.385, 1.065, -0.171], [0.514, 1.341, 0.172]],
+      '9a6b42|r0.8|m0': [[-0.682, 0.058, -0.482], [0.863, 1.184, 0.482]],
+      '9a7e54|r0.7|m0': [[0.398, 1.1, -0.173], [0.527, 1.376, 0.175]],
     } },
-  { size: 1.0907, predador: false,
-    caixaSombra: [[-0.611, 0.393, -0.27], [0.611, 0.96, 0.27]],
-    hitSpheres: [{ r: 0.5999, part: 'body', dy: 0.6762 }, { r: 0.2618, part: 'head', dy: 0.9271 }],
+  { size: 1.0152, predador: false,
+    caixaSombra: [[-0.569, 0.365, -0.251], [0.569, 0.893, 0.251]],
+    hitSpheres: [{ r: 0.5584, part: 'body', dy: 0.6294 }, { r: 0.2436, part: 'head', dy: 0.8629 }],
     porMaterial: {
-      '9a6b42|r0.8|m0': [[-0.672, 0.058, -0.475], [0.851, 1.167, 0.475]],
-      '9a7e54|r0.7|m0': [[0.391, 1.082, -0.172], [0.521, 1.358, 0.174]],
+      '9a6b42|r0.8|m0': [[-0.626, 0.054, -0.442], [0.792, 1.086, 0.442]],
+      '9a7e54|r0.7|m0': [[0.359, 0.998, -0.166], [0.489, 1.274, 0.167]],
     } },
-  { size: 1.142, predador: false,
-    caixaSombra: [[-0.64, 0.411, -0.282], [0.64, 1.005, 0.282]],
-    hitSpheres: [{ r: 0.6281, part: 'body', dy: 0.7081 }, { r: 0.2741, part: 'head', dy: 0.9707 }],
+  { size: 1.0936, predador: false,
+    caixaSombra: [[-0.612, 0.394, -0.27], [0.612, 0.962, 0.27]],
+    hitSpheres: [{ r: 0.6015, part: 'body', dy: 0.678 }, { r: 0.2625, part: 'head', dy: 0.9295 }],
     porMaterial: {
-      '9a6b42|r0.8|m0': [[-0.704, 0.06, -0.497], [0.891, 1.222, 0.497]],
-      '9a7e54|r0.7|m0': [[0.413, 1.14, -0.176], [0.542, 1.416, 0.178]],
+      '9a6b42|r0.8|m0': [[-0.674, 0.058, -0.476], [0.853, 1.17, 0.476]],
+      '9a7e54|r0.7|m0': [[0.392, 1.086, -0.172], [0.522, 1.361, 0.174]],
     } },
   { size: 0.85, predador: true,
     caixaSombra: [[-0.476, 0.306, -0.21], [0.476, 0.748, 0.21]],
@@ -181,12 +188,17 @@ const OURO = [
      está errado, não a fusão.
    Recapturados em 2026-09-28 (sorteio próprio das construções: o stream
    depois delas encurtou 5.923 sorteios na seed 424242 — o controle a
-   montante andou junto, como esperado; ver o comentário do OURO). */
+   montante andou junto, como esperado; ver o comentário do OURO).
+   RECAPTURADO de novo em 2026-09-28: árvores, pedras e cactos passaram a
+   sortear num PRNG próprio (js/obstaculos.js) para os bots os enxergarem
+   (B7), e o stream seedado depois da vegetação encurtou 7.756 sorteios na
+   seed 424242 — tudo aqui é a jusante. Os 12 de patrulha
+   (e o controle a montante) andaram junto. */
 const OURO_SEED = {
-  tamanhos: [0.9287, 0.9671, 0.9958, 1.1298, 1.1333, 1.0754, 1.0907, 1.142,
+  tamanhos: [1.0784, 1.094, 0.995, 1.0415, 0.9101, 1.1069, 1.0152, 1.0936,
     0.85, 0.85, 0.85, 0.85, 0.85],
-  alien: [-117.1521, 143.293],
-  inimigosCasa: [[-166.0315, 8.9694], [247.7313, 358.1112], [296.002, 172.695]],
+  alien: [-335.4505, 20.3701],
+  inimigosCasa: [[282.0061, 67.3333], [293.8766, -40.1685], [-28.0209, -359.6991]],
 };
 
 describe('Animais — corpo fundido sem mudar o que aparece',
