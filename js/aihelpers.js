@@ -1,5 +1,6 @@
 /* helpers de IA compartilhados entre as criaturas (PvE) */
 import * as THREE from 'three';
+import { retaNaMalha } from './obstaculos.js';
 
 const _from = new THREE.Vector3(), _to = new THREE.Vector3();
 
@@ -91,12 +92,19 @@ export function primeiroObstaculo(o, dir, maxDist, { Structures = null, heightAt
       for (let k = 0; k <= passos; k++) {
         const s = Math.min(best, k * CELULA_OBST);
         for (const c of obstaclesNear(o.x + dx * s, o.z + dz * s)) {
+          if (c.bala === false) continue;             // só segura corpo (o círculo da pedra)
+          if (c.malha) {                              // pedra: a malha desenhada, exata
+            const h = retaNaMalha(c.malha, o.x, o.y, o.z, dir.x, dir.y, dir.z);
+            if (h && h.entra && h.t < best) best = h.t;
+            continue;
+          }
           const t = ((c.x - o.x) * dx + (c.z - o.z) * dz) / h2;
           if (t <= 0 || t >= best) continue;
           const px = o.x + dx * t - c.x, pz = o.z + dz * t - c.z;
           if (px * px + pz * pz >= c.r * c.r * 0.8) continue;
           const y = o.y + dir.y * t;
-          if (typeof heightAt === 'function' && y >= heightAt(c.x, c.z) + TRONCO_ALTO) continue;
+          if (c.y1 !== undefined) { if (y < c.y0 || y >= c.y1) continue; }   // fatia: faixa absoluta
+          else if (typeof heightAt === 'function' && y >= heightAt(c.x, c.z) + TRONCO_ALTO) continue;
           best = t;
         }
       }
@@ -129,6 +137,7 @@ export function meleeBlocked(group, playerPos, Structures, obstaclesNear) {
   const len2 = dx * dx + dz * dz;
   if (len2 < 1e-8) return false;
   for (const o of obstaclesNear((_from.x + _to.x) * 0.5, (_from.z + _to.z) * 0.5)) {
+    if (o.corpo === false) continue;               // fatia de bala: o golpe usa o corpo da pedra
     const k = Math.max(0, Math.min(1,
       ((o.x - _from.x) * dx + (o.z - _from.z) * dz) / len2));
     const nx = _from.x + dx * k, nz = _from.z + dz * k;

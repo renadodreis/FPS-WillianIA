@@ -565,6 +565,7 @@ export function createEnemies(deps) {
       g.position.x += vx * dt;
       g.position.z += vz * dt;
       for (const o of obstaclesNear(g.position.x, g.position.z)) {
+        if (o.corpo === false) continue;           // fatia de bala não empurra
         const dx = g.position.x - o.x, dz = g.position.z - o.z;
         const d = Math.hypot(dx, dz), min = o.r + 0.4;
         if (d < min && d > 1e-4) { g.position.x = o.x + dx / d * min; g.position.z = o.z + dz / d * min; }

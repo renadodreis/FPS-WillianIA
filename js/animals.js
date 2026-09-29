@@ -20,6 +20,7 @@ export function createAnimals(deps) {
     if (len2 < 1e-6) return false;
     const mx = (_biteFrom.x + _biteTo.x) * 0.5, mz = (_biteFrom.z + _biteTo.z) * 0.5;
     for (const o of obstaclesNear(mx, mz)) {
+      if (o.corpo === false) continue;             // fatia de bala: o golpe usa o corpo da pedra
       const k = clamp(((o.x - _biteFrom.x) * dx + (o.z - _biteFrom.z) * dz) / len2, 0, 1);
       const nx = _biteFrom.x + dx * k, nz = _biteFrom.z + dz * k;
       const ox = nx - o.x, oz = nz - o.z;
@@ -213,6 +214,7 @@ export function createAnimals(deps) {
         }
       }
       if (typeof obstaclesNear === 'function') for (const o of obstaclesNear(g.position.x, g.position.z)) {
+        if (o.corpo === false) continue;           // fatia de bala não empurra
         let ox = g.position.x - o.x, oz = g.position.z - o.z;
         let d = Math.hypot(ox, oz);
         const rr = o.r + 0.28 * a.size;

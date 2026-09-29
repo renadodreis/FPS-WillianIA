@@ -307,6 +307,14 @@ escrita pelo validador — quem constrói não edita).
   InstancedMesh testa a `boundingSphere` CACHEADA — depois do LOD repartir as
   instâncias ela é de outro lugar e o raio sai cedo (chame
   `computeBoundingSphere()` antes de medir).
+- **Pedra: a bala usa a MALHA desenhada** (80 triângulos reconstruídos sem
+  three em `js/obstaculos.js` — mesma deformação pelo simplex do terreno,
+  mesma matriz —, Möller–Trumbore), e o corpo segue o círculo de sempre
+  (`corpo: false` / `bala: false` no obstáculo). O círculo de 0,8·s deixava a
+  borda visível sem colisão E parava bala no ar por cima de pedra baixa (58 e
+  124 de 197 silhuetas). **Fatia em altura não serve para domo** (perto do
+  topo o contorno encolhe e a fatia sai minúscula) e **casco convexo tapa a
+  reentrância** (bala parando no ar até 25 cm fora) — só a malha deu 0 e 0.
 - **Veículo segura bala, mas não para sempre** (decisão do dono, 2026-09-28):
   vida AUTORITATIVA no servidor (`vehicleHit`/`vehicleBlast`, mesmas travas e
   orçamento do tiro em jogador), regra única em `js/veiculo-vida.js`. Inteiro,

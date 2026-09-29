@@ -59,7 +59,8 @@ function lerGrade() {
   }
   return {
     obst: out.map(o => ({ x: o.x, z: o.z, r: o.r, category: o.category || null, sourceId: o.sourceId || null,
-      y0: o.y0 === undefined ? null : o.y0, y1: o.y1 === undefined ? null : o.y1 })),
+      y0: o.y0 === undefined ? null : o.y0, y1: o.y1 === undefined ? null : o.y1,
+      corpo: o.corpo !== false, bala: o.bala !== false, malha: o.malha ? Array.from(o.malha) : null })),
     sitios: g.Structures.sites.map(s => ({ x: s.x, z: s.z, r: s.r, type: s.type })),
     rotaCastelo: g.Structures.castle.rigidClearRadius,
     semente: window.__MP_init && window.__MP_init.worldSeed,
@@ -115,8 +116,12 @@ function comparar(jogo, node) {
       const p = melhor >= 0 ? livres[melhor] : null;
       /* fatia de tronco: a faixa de altura também (sem faixa dos dois lados = 0) */
       const faixa = (u, w) => (u == null && w == null ? 0 : u == null || w == null ? Infinity : Math.abs(u - w));
-      const desvio = p ? Math.max(dm, Math.abs(p.r - o.r), faixa(p.y0, o.y0), faixa(p.y1, o.y1)) : Infinity;
-      const marca = p && p.category !== o.category;
+      // malha da pedra: os mesmos triângulos (quantidade e coordenadas)
+      const malha = (u, w) => (!u && !w ? 0 : !u || !w || u.length !== w.length ? Infinity
+        : Array.from(u).reduce((m, v, i) => Math.max(m, Math.abs(v - w[i])), 0));
+      const desvio = p ? Math.max(dm, Math.abs(p.r - o.r), faixa(p.y0, o.y0), faixa(p.y1, o.y1), malha(p.malha, o.malha)) : Infinity;
+      // categoria e o papel (só corpo / só bala) também têm de bater
+      const marca = p && (p.category !== o.category || (p.corpo !== false) !== (o.corpo !== false) || (p.bala !== false) !== (o.bala !== false));
       if (p) livres.splice(melhor, 1);
       if (desvio > TOL || marca) {
         diferentes++;
@@ -201,6 +206,16 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
      escrita aqui (raio r·√0,8, até 3,4 m acima do chão do ponto; a fatia de
      tronco, na faixa absoluta y0–y1 dela). Devolve a distância da primeira
      amostra barrada, ou Infinity. */
+  const dentroDaMalha = (ml, x, y, z) => { let n = 0;
+  for (let i = 0; i < ml.length; i += 9) {                 // reta +Y: cruzamentos ímpares = dentro
+    const ax = ml[i], az = ml[i + 2], bx = ml[i + 3], bz = ml[i + 5], cx = ml[i + 6], cz = ml[i + 8];
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-12) continue;
+    const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d, l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d, l3 = 1 - l1 - l2;
+    if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+    if (l1 * ml[i + 1] + l2 * ml[i + 4] + l3 * ml[i + 7] > y) n++;
+  }
+  return n % 2 === 1; };
   function entradaNoObstaculo(solidos, heightAt, a, b, passo = 0.02) {
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, len = Math.hypot(dx, dy, dz);
     const lx = Math.min(a.x, b.x) - 4, hx = Math.max(a.x, b.x) + 4, lz = Math.min(a.z, b.z) - 4, hz = Math.max(a.z, b.z) + 4;
@@ -209,6 +224,8 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
     for (let i = 0; i <= n; i++) {
       const k = i / n, x = a.x + dx * k, y = a.y + dy * k, z = a.z + dz * k;
       for (const o of perto) {
+        if (o.bala === false) continue;               // só segura corpo
+        if (o.malha) { if (dentroDaMalha(o.malha, x, y, z)) return len * k; continue; }
         if ((x - o.x) ** 2 + (z - o.z) ** 2 < o.r * o.r * 0.8 &&
           (Number.isFinite(o.y1) ? y >= o.y0 && y < o.y1 : y - heightAt(x, z) < 3.4)) return len * k;
       }

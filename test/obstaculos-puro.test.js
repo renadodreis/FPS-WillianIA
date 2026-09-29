@@ -109,7 +109,8 @@ describe('obstaculos.js é dado puro', () => {
     for (const semente of [424242, 1, 987654]) {
       const { Ob, ob, t, mundo } = await obstaculosDe(semente);
       const forte = mundo.plano.sites.find(s => s.type === 'forte');
-      const veg = ob.solidos.filter(o => ['tree', 'rock', 'cactus'].includes(o.sourceId));
+      // a pedra pelo corpo (o pivô): as fatias de bala seguem o desenho, que já era esse
+      const veg = ob.solidos.filter(o => ['tree', 'rock', 'cactus'].includes(o.sourceId) && !(o.sourceId === 'rock' && o.corpo === false));
       const ruim = veg.filter(o => Math.hypot(o.x - t.CITY.x, o.z - t.CITY.z) < Ob.VEGETACAO.CIDADE_LIVRE_M
         || Math.hypot(o.x - t.VOLCANO.x, o.z - t.VOLCANO.z) < t.VOLCANO.r
         || Math.hypot(o.x - forte.x, o.z - forte.z) <= Ob.CASTELO_ROTA_LIVRE_M
@@ -127,6 +128,16 @@ describe('obstaculos.js é dado puro', () => {
     const { Ob, ob, t } = await obstaculosDe(424242);
     const q = Ob.criarConsultaObstaculos(ob.solidos, { heightAt: t.heightAt, grade: t.losGrid });
     const qSemGrade = Ob.criarConsultaObstaculos(ob.solidos, { heightAt: t.heightAt });
+    const dentroDaMalha = (ml, x, y, z) => { let n = 0;
+  for (let i = 0; i < ml.length; i += 9) {                 // reta +Y: cruzamentos ímpares = dentro
+    const ax = ml[i], az = ml[i + 2], bx = ml[i + 3], bz = ml[i + 5], cx = ml[i + 6], cz = ml[i + 8];
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-12) continue;
+    const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d, l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d, l3 = 1 - l1 - l2;
+    if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+    if (l1 * ml[i + 1] + l2 * ml[i + 4] + l3 * ml[i + 7] > y) n++;
+  }
+  return n % 2 === 1; };
     const ancora = (a, b) => {
       const lx = Math.min(a.x, b.x) - 5, hx = Math.max(a.x, b.x) + 5, lz = Math.min(a.z, b.z) - 5, hz = Math.max(a.z, b.z) + 5;
       const perto = ob.solidos.filter(o => o.x > lx && o.x < hx && o.z > lz && o.z < hz);
@@ -135,7 +146,8 @@ describe('obstaculos.js é dado puro', () => {
       for (let i = 0; i <= n; i++) {
         const p = { x: a.x + dx * i / n, y: a.y + dy * i / n, z: a.z + dz * i / n };
         // fatia de tronco (y0/y1): só na faixa ABSOLUTA de altura dela
-        if (perto.some(o => (p.x - o.x) ** 2 + (p.z - o.z) ** 2 < o.r * o.r * 0.8 &&
+        if (perto.some(o => o.bala !== false && o.malha && dentroDaMalha(o.malha, p.x, p.y, p.z))) return true;
+        if (perto.some(o => o.bala !== false && !o.malha && (p.x - o.x) ** 2 + (p.z - o.z) ** 2 < o.r * o.r * 0.8 &&
           (Number.isFinite(o.y1) ? p.y >= o.y0 && p.y < o.y1 : p.y - t.heightAt(p.x, p.z) < 3.4))) return true;
       }
       return false;
@@ -171,10 +183,21 @@ describe('obstaculos.js é dado puro', () => {
   it('`contem`: olho dentro do cilindro (abaixo do teto) sim; fora do raio ou acima de 3,4 m do chão, não', async () => {
     const { Ob, ob, t } = await obstaculosDe(424242);
     const q = Ob.criarConsultaObstaculos(ob.solidos, { heightAt: t.heightAt });
-    const pedra = ob.solidos.find(o => o.sourceId === 'rock' && o.r > 1.5);
+    // cilindro (cacto): a regra do teto
+    const cacto = ob.solidos.find(o => o.sourceId === 'cactus');
+    const y = t.heightAt(cacto.x, cacto.z);
+    assert.equal(q.contem({ x: cacto.x, y: y + 1.5, z: cacto.z }), true);
+    assert.equal(q.contem({ x: cacto.x, y: y + 3.5, z: cacto.z }), false);
+    assert.equal(q.contem({ x: cacto.x + cacto.r * Math.sqrt(0.8) + 0.01, y: y + 1.5, z: cacto.z }), false);
+  });
+
+  it('`contem` na pedra: dentro da MALHA sim; acima do topo dela ou fora do círculo que a cerca, não', async () => {
+    const { Ob, ob, t } = await obstaculosDe(424242);
+    const q = Ob.criarConsultaObstaculos(ob.solidos, { heightAt: t.heightAt });
+    const pedra = ob.solidos.find(o => o.malha && o.y1 - t.heightAt(o.x, o.z) > 0.8);
     const y = t.heightAt(pedra.x, pedra.z);
-    assert.equal(q.contem({ x: pedra.x, y: y + 1.5, z: pedra.z }), true);
-    assert.equal(q.contem({ x: pedra.x, y: y + 3.5, z: pedra.z }), false);
-    assert.equal(q.contem({ x: pedra.x + pedra.r * Math.sqrt(0.8) + 0.01, y: y + 1.5, z: pedra.z }), false);
+    assert.equal(q.contem({ x: pedra.x, y: (y + pedra.y1) / 2, z: pedra.z }), true, 'o meio da pedra, entre o chão e o topo');
+    assert.equal(q.contem({ x: pedra.x, y: pedra.y1 + 0.05, z: pedra.z }), false, 'acima do topo da pedra');
+    assert.equal(q.contem({ x: pedra.x + pedra.r + 0.05, y: (y + pedra.y1) / 2, z: pedra.z }), false, 'fora do círculo que a cerca');
   });
 });

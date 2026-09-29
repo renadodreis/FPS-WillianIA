@@ -197,6 +197,98 @@ export function troncosDaArvore(a) {
   return out;
 }
 export const raioDaPedra = s => s * 0.8;
+
+/* ---------------- pedra: a FORMA desenhada ----------------
+   A pedra do game.js é um IcosahedronGeometry(1, 1) do three (cada face
+   em 4: cantos e pontos médios, tudo no raio 1) deformado pelo simplex do
+   terreno (n = 1 + ruído·0,28; y × 0,78), escalado (s·scX, s, s·scZ),
+   girado (rX, rY, rZ, ordem XYZ) e posto em (x, y, z). O colisor era UM
+   círculo de 0,8·s no centro, até 3,4 m do chão: a bala parava a 0,72·s
+   enquanto a pedra desenhada ia de ~0,6·s a 1,66·s conforme o eixo (a
+   borda visível não segurava bala), e a bala que passava POR CIMA de uma
+   pedra baixa parava no ar (test/pedras-colisor.test.js).
+
+   Agora a BALA usa a pedra de verdade: os MESMOS 80 triângulos,
+   reconstruídos aqui (sem three) com a mesma deformação e a mesma matriz, e
+   a reta é cortada contra eles (Möller–Trumbore) — exato, reentrância
+   inclusive. Fatia em altura não serve (a pedra é domo: o contorno encolhe
+   rápido perto do topo) e casco convexo tapa as reentrâncias (bala parando
+   no ar até 25 cm fora da pedra). O CORPO continua com o círculo de sempre
+   (`bala: false`); a malha não empurra ninguém (`corpo: false`). */
+const ICO_T = (1 + Math.sqrt(5)) / 2;
+const ICO_V = [-1, ICO_T, 0, 1, ICO_T, 0, -1, -ICO_T, 0, 1, -ICO_T, 0, 0, -1, ICO_T, 0, 1, ICO_T,
+  0, -1, -ICO_T, 0, 1, -ICO_T, ICO_T, 0, -1, ICO_T, 0, 1, -ICO_T, 0, -1, -ICO_T, 0, 1];
+const ICO_F = [0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11, 1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
+  3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1];
+/* os 80 triângulos da pedra-base, deformados, com a normal para FORA
+   (coordenadas do modelo) — a subdivisão do PolyhedronGeometry: cantos e
+   pontos médios de cada face, projetados no raio 1 */
+export function formaDaPedra(noise) {
+  const unit = v => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; };
+  const meio = (a, b) => unit([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]);
+  const def = v => { const n = 1 + noise(v[0] * 1.7 + 9, v[1] * 1.7 - 4 + v[2]) * 0.28; return [v[0] * n, v[1] * n * 0.78, v[2] * n]; };
+  const vert = i => unit(ICO_V.slice(i * 3, i * 3 + 3));
+  const tris = [];
+  for (let f = 0; f < 20; f++) {
+    const a = vert(ICO_F[3 * f]), b = vert(ICO_F[3 * f + 1]), c = vert(ICO_F[3 * f + 2]);
+    const ab = meio(a, b), bc = meio(b, c), ca = meio(c, a);
+    for (const t of [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]) {
+      // normal para fora (a esfera-base: fora = mesmo lado do centroide)
+      const [p, q, r] = t, u = [q[0] - p[0], q[1] - p[1], q[2] - p[2]], v = [r[0] - p[0], r[1] - p[1], r[2] - p[2]];
+      const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      const fora = n[0] * (p[0] + q[0] + r[0]) + n[1] * (p[1] + q[1] + r[1]) + n[2] * (p[2] + q[2] + r[2]) > 0;
+      tris.push((fora ? [p, q, r] : [p, r, q]).map(def));
+    }
+  }
+  return tris;
+}
+/* a pedra no MUNDO: a matriz do three (escala, Euler XYZ, posição) →
+   Float64Array [ax, ay, az, bx, by, bz, cx, cy, cz, ...] */
+export function malhaDaPedra(tris, p) {
+  const [sx, sy, sz] = [p.s * p.scX, p.s, p.s * p.scZ];
+  const a = Math.cos(p.rX), b = Math.sin(p.rX), c = Math.cos(p.rY), d = Math.sin(p.rY), e = Math.cos(p.rZ), f = Math.sin(p.rZ);
+  const ae = a * e, af = a * f, be = b * e, bf = b * f;
+  const m = [c * e, af + be * d, bf - ae * d, -c * f, ae - bf * d, be + af * d, d, -b * c, a * c];
+  const out = new Float64Array(tris.length * 9);
+  let o = 0, r = 0, ymin = Infinity, ymax = -Infinity;
+  for (const t of tris) for (const v of t) {
+    const x = v[0] * sx, y = v[1] * sy, z = v[2] * sz;
+    const wx = m[0] * x + m[3] * y + m[6] * z + p.x, wy = m[1] * x + m[4] * y + m[7] * z + p.y, wz = m[2] * x + m[5] * y + m[8] * z + p.z;
+    out[o++] = wx; out[o++] = wy; out[o++] = wz;
+    r = Math.max(r, Math.hypot(wx - p.x, wz - p.z)); ymin = Math.min(ymin, wy); ymax = Math.max(ymax, wy);
+  }
+  return { tris: out, raio: r, ymin, ymax };
+}
+/* reta o + t·d × malha fechada: o primeiro t > 0 em que ela cruza a
+   superfície e se ali ela ENTRA (face de frente) ou SAI (a origem está
+   dentro). null se não cruza. Möller–Trumbore, frente e verso. */
+export function retaNaMalha(tris, ox, oy, oz, dx, dy, dz) {
+  let best = Infinity, entra = true;
+  for (let i = 0; i < tris.length; i += 9) {
+    const e1x = tris[i + 3] - tris[i], e1y = tris[i + 4] - tris[i + 1], e1z = tris[i + 5] - tris[i + 2];
+    const e2x = tris[i + 6] - tris[i], e2y = tris[i + 7] - tris[i + 1], e2z = tris[i + 8] - tris[i + 2];
+    const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
+    const det = e1x * px + e1y * py + e1z * pz;
+    if (Math.abs(det) < 1e-12) continue;
+    const inv = 1 / det, tx = ox - tris[i], ty = oy - tris[i + 1], tz = oz - tris[i + 2];
+    const u = (tx * px + ty * py + tz * pz) * inv;
+    if (u < 0 || u > 1) continue;
+    const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+    const v = (dx * qx + dy * qy + dz * qz) * inv;
+    if (v < 0 || u + v > 1) continue;
+    const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+    if (t <= 0 || t >= best) continue;
+    best = t;
+    // normal (e1 × e2) contra a direção: entra; a favor: sai
+    entra = (e1y * e2z - e1z * e2y) * dx + (e1z * e2x - e1x * e2z) * dy + (e1x * e2y - e1y * e2x) * dz < 0;
+  }
+  return best === Infinity ? null : { t: best, entra };
+}
+/* o ponto está DENTRO da malha fechada? (a reta para cima sai por uma face) */
+export function dentroDaMalha(tris, x, y, z) {
+  const h = retaNaMalha(tris, x, y, z, 0, 1, 0);
+  return !!h && !h.entra;
+}
 export const RAIO_CACTO = 0.35;
 export function sitioDoProp(x, z, meia, type) { return { x, z, r: meia + 3, type }; }
 
@@ -350,7 +442,14 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
   for (const a of arvores) {
     for (const t of troncosDaArvore(a)) solidos.push({ x: t.x, z: t.z, r: t.rMadeira / aBala, category: 'rigid', sourceId: 'tree', y0: t.y0, y1: t.y1 });
   }
-  for (const p of pedras) if (p.solida) add(p.x, p.z, raioDaPedra(p.s), 'rigid', 'rock');
+  const formaPedra = formaDaPedra(noise);
+  for (const p of pedras) {
+    if (!p.solida) continue;
+    // corpo: o círculo de sempre; bala: a malha da pedra desenhada
+    solidos.push({ x: p.x, z: p.z, r: raioDaPedra(p.s), category: 'rigid', sourceId: 'rock', bala: false });
+    const m = malhaDaPedra(formaPedra, p);
+    solidos.push({ x: p.x, z: p.z, r: m.raio, category: 'rigid', sourceId: 'rock', corpo: false, malha: m.tris, y0: m.ymin, y1: m.ymax });
+  }
   for (const c of cactos) add(c.x, c.z, RAIO_CACTO, 'softVegetation', 'cactus');
   add(TENDA.x, TENDA.z, TENDA.r, 'rigid', 'tent');
   add(pois.mercado.x, pois.mercado.z, raioDoProp(pois.mercado.meia), 'rigid', 'mercado');
@@ -377,15 +476,20 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
    Os obstáculos moram numa grade uniforme (célula de 8 m), em toda célula que
    o quadrado envolvente do círculo toca; a reta percorre só as células por
    onde passa (Amanatides & Woo) — ~15 células num segmento de 100 m. */
-export function criarConsultaObstaculos(solidos, { heightAt, grade = null, celula = 8 } = {}) {
+export function criarConsultaObstaculos(todos, { heightAt, grade = null, celula = 8 } = {}) {
   if (typeof heightAt !== 'function') throw new Error('criarConsultaObstaculos: heightAt ausente');
+  // o que só segura CORPO (`bala: false`, o círculo da pedra) não entra; `orig`
+  // devolve o índice em `todos` (quemBarra)
+  const orig = [], solidos = [];
+  todos.forEach((o, i) => { if (o.bala !== false) { orig.push(i); solidos.push(o); } });
   const n = solidos.length;
   const ox = new Float64Array(n), oz = new Float64Array(n), oR2 = new Float64Array(n);
   const oY0 = new Float64Array(n), oY1 = new Float64Array(n).fill(NaN);   // faixa absoluta (NaN: regra do teto)
   let rMax = 0;
   for (let i = 0; i < n; i++) {
     const o = solidos[i];
-    ox[i] = o.x; oz[i] = o.z; oR2[i] = o.r * o.r * BALA.FATOR_R2;
+    // malha (pedra): o círculo é o que CERCA a pedra — raio cheio, sem o fator da bala
+    ox[i] = o.x; oz[i] = o.z; oR2[i] = o.malha ? o.r * o.r : o.r * o.r * BALA.FATOR_R2;
     if (Number.isFinite(o.y1)) { oY0[i] = o.y0; oY1[i] = o.y1; }
     rMax = Math.max(rMax, Math.sqrt(oR2[i]));
   }
@@ -427,6 +531,11 @@ export function criarConsultaObstaculos(solidos, { heightAt, grade = null, celul
 
   /* o obstáculo k barra o segmento a→b (d = b − a)? */
   function barra(k, a, dx, dy, dz) {
+    const ml = solidos[k].malha;
+    if (ml) {                                     // pedra: a malha, exata; nascer dentro também barra
+      const h = retaNaMalha(ml, a.x, a.y, a.z, dx, dy, dz);
+      return !!h && (h.t < 1 || !h.entra);
+    }
     const cx = a.x - ox[k], cz = a.z - oz[k];
     const A = dx * dx + dz * dz, B = cx * dx + cz * dz, C = cx * cx + cz * cz - oR2[k];
     let ta, tb;
@@ -484,6 +593,7 @@ export function criarConsultaObstaculos(solidos, { heightAt, grade = null, celul
     for (const k of l) {
       const cx = p.x - ox[k], cz = p.z - oz[k];
       if (cx * cx + cz * cz >= oR2[k]) continue;
+      if (solidos[k].malha) { if (dentroDaMalha(solidos[k].malha, p.x, p.y, p.z)) return true; continue; }
       if (Number.isNaN(oY1[k]) ? p.y - heightAt(p.x, p.z) < BALA.TETO_M : p.y >= oY0[k] && p.y < oY1[k]) return true;
     }
     return false;
@@ -492,7 +602,7 @@ export function criarConsultaObstaculos(solidos, { heightAt, grade = null, celul
   function quemBarra(a, b) {
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
     let achou = -1;
-    percorrer(a, b, k => (barra(k, a, dx, dy, dz) ? ((achou = k), true) : false));
+    percorrer(a, b, k => (barra(k, a, dx, dy, dz) ? ((achou = orig[k]), true) : false));
     return achou;
   }
   return { n, rMax, celulas: celulas.size, segmentoBloqueado, contem, quemBarra };

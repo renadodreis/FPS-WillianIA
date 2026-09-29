@@ -464,6 +464,7 @@ export function createSkeletons(deps) {
 
       // árvore/pedra empurra pra fora, com deslize tangencial pra contornar.
       for (const o of obstaclesNear(g.position.x, g.position.z)) {
+        if (o.corpo === false) continue;           // fatia de bala não empurra
         const ox = g.position.x - o.x, oz = g.position.z - o.z;
         const d = Math.hypot(ox, oz), rr = o.r + 0.35;
         if (d >= rr || d < 1e-4) continue;

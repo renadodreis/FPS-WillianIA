@@ -23,7 +23,7 @@ import * as Climate from './js/climate.js';
 import { createCover } from './js/cover.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
-import { construirObstaculos, raioDoProp, sitioDoProp, VEGETACAO, BALA, ARVORE, troncosDaArvore, trechoNaFaixa } from './js/obstaculos.js';
+import { construirObstaculos, raioDoProp, sitioDoProp, VEGETACAO, BALA, ARVORE, troncosDaArvore, trechoNaFaixa, retaNaMalha } from './js/obstaculos.js';
 import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
@@ -971,7 +971,12 @@ const Obstaculos = construirObstaculos({
 function registrarObstaculos(sourceId) {
   for (const o of Obstaculos.solidos) {
     if (o.sourceId !== sourceId) continue;
-    addObstacle(o.x, o.z, o.r, o.y1 === undefined ? { category: o.category, sourceId } : { category: o.category, sourceId, y0: o.y0, y1: o.y1 });
+    const meta = { category: o.category, sourceId };
+    if (o.y1 !== undefined) { meta.y0 = o.y0; meta.y1 = o.y1; }
+    if (o.corpo === false) meta.corpo = false;     // só bala (fatia da pedra)
+    if (o.bala === false) meta.bala = false;       // só corpo (o círculo da pedra)
+    if (o.malha) meta.malha = o.malha;             // a malha da pedra
+    addObstacle(o.x, o.z, o.r, meta);
   }
 }
 
@@ -1859,8 +1864,9 @@ function playerUpdate(dt, t) {
     player.onGround = false;
   }
 
-  // colisão com árvores/pedras (push-out por círculo)
+  // colisão com árvores/pedras (push-out por círculo; fatia de bala não empurra)
   for (const o of obstaclesNear(player.pos.x, player.pos.z)) {
+    if (o.corpo === false) continue;
     const dx = player.pos.x - o.x, dz = player.pos.z - o.z;
     const d = Math.hypot(dx, dz), min = o.r + player.radius;
     if (d < min && d > 1e-4) {
@@ -2602,7 +2608,15 @@ function obstaculoNaReta(origin, dir, lim) {
     if (lista !== anterior) {
       anterior = lista;
       for (const o of lista) {
+        if (o.bala === false) continue;   // só segura corpo (o círculo da pedra)
         const cx = origin.x - o.x, cz = origin.z - o.z;
+        if (o.malha) {                     // pedra: a malha desenhada, exata
+          if (cx * cx + cz * cz > o.r * o.r && cx * dir.x + cz * dir.z >= 0) continue;   // fora do círculo e se afastando
+          const h = retaNaMalha(o.malha, origin.x, origin.y, origin.z, dir.x, dir.y, dir.z);
+          if (!h || !h.entra) continue;    // não cruza, ou nasce DENTRO (não barra essa reta)
+          if (h.t < Math.min(lim, melhor)) melhor = h.t;
+          continue;
+        }
         const C = cx * cx + cz * cz - o.r * o.r * BALA.FATOR_R2;
         const B = cx * dir.x + cz * dir.z;
         if (C > 0 && B >= 0) continue; // fora da coluna: as duas raízes têm o sinal de −B

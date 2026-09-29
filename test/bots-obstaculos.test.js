@@ -86,8 +86,20 @@ function relevoEntre(a, b, passo = 0.05) {
 }
 /* fatia de tronco (y0/y1, js/obstaculos.js): barra só na faixa ABSOLUTA de
    altura dela; o resto, até 3,4 m acima do chão do ponto */
-const dentroCilindro = (o, p) => (p.x - o.x) ** 2 + (p.z - o.z) ** 2 < o.r * o.r * R2F &&
-  (Number.isFinite(o.y1) ? p.y >= o.y0 && p.y < o.y1 : p.y - terrain.heightAt(p.x, p.z) < TETO);
+const dentroDaMalha = (ml, x, y, z) => { let n = 0;
+  for (let i = 0; i < ml.length; i += 9) {                 // reta +Y: cruzamentos ímpares = dentro
+    const ax = ml[i], az = ml[i + 2], bx = ml[i + 3], bz = ml[i + 5], cx = ml[i + 6], cz = ml[i + 8];
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-12) continue;
+    const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d, l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d, l3 = 1 - l1 - l2;
+    if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+    if (l1 * ml[i + 1] + l2 * ml[i + 4] + l3 * ml[i + 7] > y) n++;
+  }
+  return n % 2 === 1; };
+/* a pedra é a MALHA dela (triângulos, js/obstaculos.js); o resto, cilindro */
+const dentroCilindro = (o, p) => o.bala !== false && (o.malha ? dentroDaMalha(o.malha, p.x, p.y, p.z)
+  : (p.x - o.x) ** 2 + (p.z - o.z) ** 2 < o.r * o.r * R2F &&
+    (Number.isFinite(o.y1) ? p.y >= o.y0 && p.y < o.y1 : p.y - terrain.heightAt(p.x, p.z) < TETO));
 /* marcha de 2 cm: algum ponto do segmento dentro de algum cilindro de `lista` */
 function obstaculoEntre(lista, a, b, passo = 0.02) {
   const lx = Math.min(a.x, b.x) - 4, hx = Math.max(a.x, b.x) + 4, lz = Math.min(a.z, b.z) - 4, hz = Math.max(a.z, b.z) + 4;
@@ -380,12 +392,17 @@ describe('B7 — bots não veem nem atiram através de pedra, árvore, cacto e P
     assert.equal(tiros, 0, `o bot atirou ${tiros} vezes em quem ele só ouviu atrás do obstáculo`);
   });
 
-  /* bot com o olho DENTRO do colisor de uma pedra grande; humano a 15–50 m
-     com a reta livre de todo o resto (relevo, paredes, outros obstáculos) */
+  /* bot com o olho DENTRO de um obstáculo — pedra alta (a malha dela cobre
+     o olho a 1,5 m) ou tronco de árvore; humano a 15–50 m com a reta livre
+     de todo o resto (relevo, paredes, outros obstáculos). Desde que a pedra
+     é a malha desenhada (e não um cilindro até 3,4 m), o olho de pé fica
+     acima da maioria delas: o caso procura em toda a lista quem de fato o
+     cobre. */
   const dentroDePedra = () => {
-    const pedras = ob.solidos.filter(o => o.sourceId === 'rock' && o.r * Math.sqrt(R2F) > 1.2).slice(0, 25);
+    const cand = ob.solidos.filter(o => o.malha).concat(ob.solidos.filter(o => o.bala !== false && o.sourceId === 'tree'));
     const pares = [];
-    pedras.forEach((o, i) => {
+    cand.forEach((o, i) => {
+      if (pares.length >= 25) return;
       const bot = corpo(o.x, o.z);
       if (!dentroCilindro(o, bot.olho) || intactas.some(w => dentroCaixa(w, bot.olho))) return;
       const hum = pontoPerto(bot, 15, 50, 900 + i, h => !relevoEntre(bot.olho, h.cabeca) && !paredeEntre(bot.olho, h.cabeca)
@@ -396,7 +413,7 @@ describe('B7 — bots não veem nem atiram através de pedra, árvore, cacto e P
     return pares;
   };
 
-  it('bot DENTRO do colisor de uma pedra (atravessou andando) não enxerga nem atira para fora', (t) => {
+  it('bot DENTRO de uma pedra ou tronco (atravessou andando) não enxerga nem atira para fora', (t) => {
     const pares = dentroDePedra();
     let tiros = 0, viradas = 0, semObst = 0;
     pares.forEach((p, i) => {
@@ -405,8 +422,12 @@ describe('B7 — bots não veem nem atiram através de pedra, árvore, cacto e P
       if (virou(res)) viradas++;
       semObst += sentinela({ bot: p.bot, hum: () => p.hum, seed: i + 1, comObstaculos: false }).shots.length;
     });
-    t.diagnostic(`${pares.length} bots dentro de pedra grande, humano a 15–50 m com o resto livre: ${tiros} tiros, ${viradas} viradas; sem obstáculos, ${semObst} tiros`);
-    assert.ok(pares.length >= 8, `só ${pares.length} bots dentro de pedra`);
+    const pedras = pares.filter(p => p.o.malha).length;
+    t.diagnostic(`${pares.length} bots dentro de obstáculo (${pedras} em pedra), humano a 15–50 m com o resto livre: ${tiros} tiros, ${viradas} viradas; sem obstáculos, ${semObst} tiros`);
+    /* Pedra: nenhuma da semente cobre o olho de um bot EM PÉ (a malha real
+       é mais baixa que 1,5 m no centro — medido: 0). O `contem` na malha
+       está em test/obstaculos-puro.test.js; aqui o caso é o tronco. */
+    assert.ok(pares.length >= 8, `só ${pares.length} bots dentro de obstáculo (${pedras} em pedra)`);
     assert.ok(semObst > 0, 'o caso não exercita: sem obstáculos o bot também não atira');
     assert.equal(tiros, 0, `bot de dentro da pedra atirou ${tiros} vezes`);
     assert.equal(viradas, 0, `bot de dentro da pedra virou ${viradas} vezes para o humano`);
@@ -424,7 +445,7 @@ describe('B7 — bots não veem nem atiram através de pedra, árvore, cacto e P
     let antes = 0, deDentro = 0, rodadas = 0;
     dentroDePedra().forEach((p, i) => {
       const dx = p.hum.x - p.o.x, dz = p.hum.z - p.o.z, dl = Math.hypot(dx, dz);
-      const R = p.o.r * Math.sqrt(R2F);
+      const R = p.o.malha ? p.o.r : p.o.r * Math.sqrt(R2F);   // a malha: o raio que a CERCA
       const fora = corpo(p.o.x + dx / dl * (R + 1.2 + (i % 3) * 0.4), p.o.z + dz / dl * (R + 1.2 + (i % 3) * 0.4));
       if (!livre(fora) || !aVista(fora, p.hum)) return;
       for (let k = 0; k < 4; k++) {
