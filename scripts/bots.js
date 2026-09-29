@@ -430,14 +430,81 @@ function activeWalls(world) {
   return world.cityDestroyed ? world.solids.destroyed : world.solids.intact;
 }
 
-/* Visada completa: relevo, paredes E obstáculos. `walls`/`obstacles` nulos =
-   mundo sem construção/vegetação (os dublês de teste). No processo real os
-   três chegam JUNTOS (createBotWorldGeometry) — sem eles, `terrain` fica nulo
-   e o bot não vê ninguém (B12c). */
-function clearSight(terrain, walls, from, to, obstacles = null) {
+/* ---------------- veículos (cobertura com vida) ----------------
+   Decisão do dono (2026-09-28): "carro pode segurar tiro, mas não... pra
+   sempre!!". Veículo INTEIRO barra a bala no cliente (os três caminhos do
+   tiro) e a vítima recusa dano através dele — o bot segue a MESMA regra, com
+   o MESMO módulo (js/veiculo-vida.js): não enxerga através de veículo
+   inteiro, e o tiro que ele dá num humano com o veículo no caminho ACERTA O
+   VEÍCULO (`vehicleHit`, validado e descontado no servidor). Quando o
+   servidor anuncia a vida em zero (`vehicleBurning`) o veículo deixa de
+   barrar na hora; quando explode (`vehicleExploded`), sai do mundo.
+
+   Onde está cada um: a frota da semente vem do servidor (`plan.veiculos` no
+   `matchStart`; `init.veiculos` para quem conecta com a partida rodando) e
+   a pose de quem está sendo dirigido vem do `playerUpdate` do motorista
+   (`car` = índice, `pos` = a pose do veículo, `rotY` = o giro), igual ao que
+   os clientes desenham. Carro largado fica onde o motorista o deixou.
+   Referência: docs/mobile/referencia-veiculos.md. */
+let VV = null; // js/veiculo-vida.js (ESM): carregado com a geometria do mundo
+async function loadVehicleRules() {
+  if (!VV) VV = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'veiculo-vida.js')).href);
+  return VV;
+}
+/* `lista`: o formato do servidor — [{ v, tipo, pos: [x,y,z], ry, estado }] */
+function applyVehicleFleet(world, lista) {
+  world.vehicles = [];
+  world.vehicleById = new Map();
+  for (const e of Array.isArray(lista) ? lista : []) {
+    if (!e || !Array.isArray(e.pos) || e.pos.length < 3 || !e.pos.every(Number.isFinite)) continue;
+    const v = { id: e.v, tipo: e.tipo, inteiro: (e.estado || 'inteiro') === 'inteiro',
+      pose: { x: e.pos[0], y: e.pos[1], z: e.pos[2], yaw: Number(e.ry) || 0 } };
+    world.vehicles.push(v);
+    world.vehicleById.set(String(e.v), v);
+  }
+}
+/* quem está no veículo manda a pose dele no `playerUpdate` */
+function observeVehicleFromUpdate(world, update) {
+  if (!world.vehicleById || !update || !Array.isArray(update.pos)) return;
+  const pos = update.pos.slice(0, 3).map(Number);
+  if (pos.length < 3 || !pos.every(Number.isFinite)) return;
+  const id = Number.isInteger(update.car) && update.car >= 0 ? String(update.car) : update.heli ? 'heli' : null;
+  const v = id && world.vehicleById.get(id);
+  if (!v) return;
+  v.pose.x = pos[0]; v.pose.y = pos[1]; v.pose.z = pos[2];
+  if (Number.isFinite(Number(update.rotY))) v.pose.yaw = Number(update.rotY);
+}
+/* vida em zero (queimando) ou explodido: não barra mais nada */
+function vehicleOut(world, d) {
+  const v = d && world.vehicleById && world.vehicleById.get(String(d.v));
+  if (v) v.inteiro = false;
+}
+/* o primeiro veículo inteiro no segmento a→b: { t, alvo } (t ao longo da
+   reta, em metros) ou null. Sem a regra carregada ou sem frota: null. */
+function vehicleOnSegment(vehicles, a, b) {
+  if (!VV || !vehicles || !vehicles.length) return null;
+  const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+  const len = Math.hypot(dx, dy, dz);
+  if (len < 1e-4) return null;
+  const h = VV.raioNaFrota(a, { x: dx / len, y: dy / len, z: dz / len }, len, vehicles);
+  return h ? { t: h.t, alvo: h.alvo, dir: { x: dx / len, y: dy / len, z: dz / len } } : null;
+}
+/* olho do bot dentro de um veículo inteiro (atravessou andando): de dentro
+   ele não enxerga nem atira — a regra da parede */
+function eyeInsideVehicle(vehicles, eye) {
+  return !!(VV && vehicles && vehicles.length && VV.dentroDaFrota(eye, vehicles));
+}
+
+/* Visada completa: relevo, paredes, obstáculos E veículos inteiros.
+   `walls`/`obstacles`/`vehicles` nulos = mundo sem construção/vegetação/
+   frota (os dublês de teste). No processo real os três primeiros chegam
+   JUNTOS (createBotWorldGeometry) — sem eles, `terrain` fica nulo e o bot não
+   vê ninguém (B12c). */
+function clearSight(terrain, walls, from, to, obstacles = null, vehicles = null) {
   if (!lineOfSight(terrain, from, to)) return false;
   if (walls && walls.segmentBlocked(from, to)) return false;
-  return !obstacles || !obstacles.segmentoBloqueado(from, to);
+  if (obstacles && obstacles.segmentoBloqueado(from, to)) return false;
+  return !vehicleOnSegment(vehicles, from, to);
 }
 
 /* postura de um candidato: número em [0, 1]; qualquer outra coisa é em pé */
@@ -523,13 +590,14 @@ function eyeInsideWall(walls, eye) {
 /* Um passo de percepção de UM bot: atualiza o medidor, a memória e a fila de
    reação de cada candidato. Quem não está mais na lista (morreu, saiu, nave)
    é esquecido. `walls`: a consulta de paredes do estado atual da cidade;
-   `obstacles`: a de pedras, árvores, cactos e POIs. */
-function perceive(bot, candidates, terrain, t, dt, walls = null, obstacles = null) {
+   `obstacles`: a de pedras, árvores, cactos e POIs; `vehicles`: a frota
+   (só os inteiros barram). */
+function perceive(bot, candidates, terrain, t, dt, walls = null, obstacles = null, vehicles = null) {
   if (!bot.aware) bot.aware = new Map();
   const present = new Set();
   const inCombat = t - Math.max(bot.lastShotT ?? -Infinity, bot.hurtT ?? -Infinity) <= AI.COMBAT_WINDOW_S;
   const eye = { x: bot.x, y: (bot.y || 0) + AI.EYE_H, z: bot.z };
-  const walled = eyeInsideWall(walls, eye);
+  const walled = eyeInsideWall(walls, eye) || eyeInsideVehicle(vehicles, eye);
   for (const c of candidates) {
     if (!isTargetable(bot, c)) continue;
     present.add(c.id);
@@ -544,8 +612,8 @@ function perceive(bot, candidates, terrain, t, dt, walls = null, obstacles = nul
     const crouch = crouchOf(c);
     if (!walled && d <= AI.VIEW_RANGE && (alerted || inViewCone(bot.yaw, dx, dz, d))) {
       const cy = c.y || 0, h = bodyHeights(crouch);
-      visible = clearSight(terrain, walls, eye, { x: c.x, y: cy + h.head, z: c.z }, obstacles)
-        || clearSight(terrain, walls, eye, { x: c.x, y: cy + h.aim, z: c.z }, obstacles);
+      visible = clearSight(terrain, walls, eye, { x: c.x, y: cy + h.head, z: c.z }, obstacles, vehicles)
+        || clearSight(terrain, walls, eye, { x: c.x, y: cy + h.aim, z: c.z }, obstacles, vehicles);
     }
     if (visible) {
       const { speed } = targetMotion(a, c, t);
@@ -752,7 +820,7 @@ function botHitGap(target, bot, weapon) {
    não atravessa morro nem prédio); o cronômetro do token (humano só) antes da
    mira; e só o ACERTO consome o token. */
 function decideShot(bot, target, action, ctx) {
-  const { t, rng, terrain, walls = null, obstacles = null, director, moved } = ctx;
+  const { t, rng, terrain, walls = null, obstacles = null, vehicles = null, director, moved } = ctx;
   const weapon = action.weapon || bot.weapon;
   const profile = WEAPON_PROFILES[weapon] || WEAPON_PROFILES.FUZIL;
   const d = Math.hypot(target.x - bot.x, (target.y || 0) - (bot.y || 0), target.z - bot.z);
@@ -778,13 +846,19 @@ function decideShot(bot, target, action, ctx) {
   // vítima, que testa cobertura a pé + 1 m, nunca recusa um tiro que passou
   // aqui — a reta até um ponto mais alto do mesmo lugar só sobe)
   const aimPt = { x: target.x, y: (target.y || 0) + bodyHeights(crouchOf(target)).aim, z: target.z };
-  if (!lineOfSight(terrain, eye, aimPt)) return { hit: false, why: 'terreno' };
+  // veículo inteiro no caminho: a bala vai até a LATARIA dele, e o que vem
+  // depois (terreno, parede, obstáculo) só conta se estiver ANTES dela
+  const veh = eyeInsideVehicle(vehicles, eye) ? null : vehicleOnSegment(vehicles, eye, aimPt);
+  const reach = veh ? { x: eye.x + veh.dir.x * veh.t, y: eye.y + veh.dir.y * veh.t, z: eye.z + veh.dir.z * veh.t } : aimPt;
+  if (!lineOfSight(terrain, eye, reach)) return { hit: false, why: 'terreno' };
   // o bot atira sobre o que via 0,6 s atrás (reação): quem entrou atrás do
   // prédio nesse meio-tempo leva a bala na parede, não no corpo
-  if (walls && (eyeInsideWall(walls, eye) || walls.segmentBlocked(eye, aimPt))) return { hit: false, why: 'parede' };
+  if (walls && (eyeInsideWall(walls, eye) || walls.segmentBlocked(eye, reach))) return { hit: false, why: 'parede' };
   // idem pedra, árvore, cacto e POI (a vítima recusaria o dano por eles)
   // (a reta que nasce dentro do cilindro já sai barrada: não precisa de guarda à parte)
-  if (obstacles && obstacles.segmentoBloqueado(eye, aimPt)) return { hit: false, why: 'obstaculo' };
+  if (obstacles && obstacles.segmentoBloqueado(eye, reach)) return { hit: false, why: 'obstaculo' };
+  // ...e quem se escondeu atrás do veículo leva a bala no veículo
+  if (veh) return { hit: false, why: 'veiculo', vehicle: veh.alvo.id, at: [reach.x, reach.y, reach.z] };
   const human = !target.isBot;
   if (human && director && !director.claim(target.id, bot.id, t, hitGap(target, bot), botHitGap(target, bot, weapon))) {
     return { hit: false, why: 'token' };
@@ -1130,6 +1204,7 @@ function createBotWorld() {
     plan: null, t0: 0, bots: [],
     observedPlayers: new Map(), drops: new Map(), chests: new Map(),
     terrain: null, solids: null, obstacles: null, cityDestroyed: false, director: createHitDirector(), lastT: null,
+    vehicles: null, vehicleById: null,
   };
 }
 
@@ -1141,6 +1216,7 @@ async function createBotWorldGeometry(worldSeed) {
   const terrain = await createBotTerrain(worldSeed);
   const solids = await createBotSolids(worldSeed, terrain);
   const obstacles = await createBotObstacles(worldSeed, terrain);
+  await loadVehicleRules(); // a frota vem do servidor; a regra, daqui
   return { terrain, solids, obstacles };
 }
 
@@ -1159,8 +1235,9 @@ function tickPlayingBot(world, b, zone, t, dt, rng) {
   const { drops, chests, terrain } = world;
   const walls = activeWalls(world);
   const obstacles = world.obstacles || null;
+  const vehicles = world.vehicles || null;
   const candidates = buildCandidates(world);
-  perceive(b, candidates, terrain, t, dt, walls, obstacles);
+  perceive(b, candidates, terrain, t, dt, walls, obstacles, vehicles);
   const target = selectTarget(b, knownTargets(b, candidates, t), AI.VIEW_RANGE, {
     t, engaged: countAttackers(world.bots, b),
   });
@@ -1231,19 +1308,24 @@ function tickPlayingBot(world, b, zone, t, dt, rng) {
   // entrou andando)
   const boca = { x: fromPos[0], y: fromPos[1], z: fromPos[2] };
   if (canAttemptAttack(b, target, action, t, rng() * 0.45)
-    && !eyeInsideWall(walls, boca) && !eyeInsideObstacle(obstacles, boca)) {
+    && !eyeInsideWall(walls, boca) && !eyeInsideObstacle(obstacles, boca) && !eyeInsideVehicle(vehicles, boca)) {
     b.lastShot = t;
     const bursts = action.type === 'melee' ? 1 : Math.min(profile.bursts, b.ammo);
     // o bot decidiu sobre o que via 0,6 s atrás; a bala vai contra onde o
     // alvo ESTÁ agora (e contra o terreno de agora)
     const real = candidates.find(c => c.id === target.id) || target;
-    const verdict = decideShot(b, real, action, { t, rng, terrain, walls, obstacles, director: world.director, moved });
+    const verdict = decideShot(b, real, action, { t, rng, terrain, walls, obstacles, vehicles, director: world.director, moved });
     if (verdict.hit) for (let k = 0; k < bursts; k++) b.s.emit('shotHit', {
       targetId: real.id, dmg: profile.dmg,
       weapon: action.weapon,
       fromPos,
     });
-    else b.s.emit('shotFired', buildMissShot(b, real, rng));
+    else if (verdict.why === 'veiculo' && action.type === 'shoot') {
+      // a rajada para no veículo: cada bala desconta dele (o servidor valida),
+      // e o traçante que os outros veem termina na lataria
+      for (let k = 0; k < bursts; k++) b.s.emit('vehicleHit', { v: verdict.vehicle, dmg: profile.dmg, weapon: action.weapon, fromPos });
+      b.s.emit('shotFired', { weapon: action.weapon, fromPos, toPos: [verdict.at[0], verdict.at[1] - 1, verdict.at[2]] });
+    } else b.s.emit('shotFired', buildMissShot(b, real, rng));
     if (action.type === 'shoot') {
       b.ammo -= bursts;
       if (b.ammo <= 0) { b.weapon = 'FACA'; b.ammo = Infinity; }
@@ -1331,6 +1413,8 @@ function startBots(N, URL, { watchdog = true } = {}) {
     s.on('init', d => {
       b.id = d.id;
       applyCityState(world, d.cityDestruction);
+      // entrou com a partida rodando: a frota como está agora (vida/estado/pose)
+      if (Array.isArray(d.veiculos) && d.veiculos.length) applyVehicleFleet(world, d.veiculos);
       rebuildWorld(d.worldSeed, d.openedChests || []);
       for (const drop of d.drops || []) {
         if (drop && drop.id && Array.isArray(drop.pos)) drops.set(drop.id, { id: drop.id, pos: drop.pos.slice(0, 3) });
@@ -1342,11 +1426,15 @@ function startBots(N, URL, { watchdog = true } = {}) {
       world.director = createHitDirector();
       world.lastT = null;
       applyCityState(world, d.plan && d.plan.city); // partida nova: cidade de pé
+      applyVehicleFleet(world, d.plan && d.plan.veiculos); // e a frota inteira nas vagas
       resetBotForMatch(b);
       b.jumpAt = d.plan.ship.flyTime * (0.25 + 0.65 * Math.random());
       console.log(`[bot ${i}] partida começou — pulando aos ${b.jumpAt.toFixed(0)}s`);
     });
-    s.on('playerUpdate', d => observePlayerUpdate(observedPlayers, d));
+    s.on('playerUpdate', d => { observePlayerUpdate(observedPlayers, d); observeVehicleFromUpdate(world, d); });
+    // vida do veículo em zero: para de barrar na hora; explodiu: sai do mundo
+    s.on('vehicleBurning', d => vehicleOut(world, d));
+    s.on('vehicleExploded', d => vehicleOut(world, d));
     s.on('roster', d => {
       for (const p of (d && d.players) || []) {
         const observed = observedPlayers.get(p.id);
@@ -1378,6 +1466,7 @@ function startBots(N, URL, { watchdog = true } = {}) {
     s.on('nextMatch', d => {
       b.phase = 'LOBBY'; b.alive = false; observedPlayers.clear(); drops.clear(); chests.clear();
       applyCityState(world, null);
+      applyVehicleFleet(world, null); // mapa novo: a frota vem no próximo matchStart
       if (d && Number.isInteger(d.worldSeed)) rebuildWorld(d.worldSeed);
     });
     bots.push(b);
@@ -1423,4 +1512,5 @@ module.exports = {
   perceive, knownTargets, lineOfSight, inViewCone, hitChance, createHitDirector, decideShot,
   onPlayerFired, onBotHit,
   createBotSolids, createBotObstacles, createBotWorldGeometry, applyCityState, activeWalls, clearSight,
+  loadVehicleRules, applyVehicleFleet, observeVehicleFromUpdate, vehicleOut, vehicleOnSegment, eyeInsideVehicle,
 };
