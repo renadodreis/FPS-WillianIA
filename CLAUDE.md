@@ -292,8 +292,14 @@ escrita pelo validador — quem constrói não edita).
   `obstaclesNear` em `test/obstaculos-paridade.test.js`). A regra é a do
   `rayBlockedAt` (r·√0,8 até 3,4 m do chão), contínua: o bot é mais
   conservador que a vítima. Quem está no helicóptero não é alvo de bot
-  (decisão do dono). Veículo NÃO é cobertura para ninguém (nem no
-  `rayBlockedAt` do cliente) — pôr no bot sozinho criaria assimetria.
+  (decisão do dono).
+- **Veículo segura bala, mas não para sempre** (decisão do dono, 2026-09-28):
+  vida AUTORITATIVA no servidor (`vehicleHit`/`vehicleBlast`, mesmas travas e
+  orçamento do tiro em jogador), regra única em `js/veiculo-vida.js`. Inteiro,
+  barra bala nos três caminhos, na vítima e na visada do bot (o ponto único é a
+  composição de `Structures.rayHit/segBlocked` no game.js). Vida zero: para de
+  proteger na hora, queima 5 s, explode e some; quem está dentro morre.
+  O servidor passou a carregar `three` + terreno no boot (dependencies).
 - **Construção se ASSENTA no terreno** (`js/paredes.js`): fundação até o ponto
   mais baixo da pegada, muro de base em trechos que descem a encosta, caixote
   no chão debaixo dele, portão e rampa do castelo com aterro. Antes, peça
