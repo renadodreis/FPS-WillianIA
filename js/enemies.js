@@ -164,6 +164,87 @@ export function createEnemies(deps) {
   const _pOlho = new THREE.Vector3(), _eOlho = new THREE.Vector3(), _eFim = new THREE.Vector3(),
     _eV = new THREE.Vector3(), _eN = new THREE.Vector3();
 
+  /* raio em que o soldado OUVE o tiro do jogador (sentidos, lá embaixo) — e
+     por isso também o raio da briga: posto não renasce dentro dele */
+  const OUVIDO = 75;
+
+  /* ================================================================
+     O ANDAR DO POSTO É A LAJE DELE (executivos da Torre Nexus).
+     O executivo não usa escada: anda no piso `plan.floorY`. Antes a
+     altura era `max(terreno, floorY)` e o x/z era livre — perseguindo
+     quem estava na escada ele saía da laje e entrava no POÇO, parado no
+     ar sobre o lance que desce ou enterrado no que sobe (medido: 844
+     quadros fora da laje em 5 sorteios, test/torre-seguranca.test.js), e
+     de lá atirava para baixo por entre os degraus. As lajes do andar são
+     as caixas `noCollide` de js/paredes.js com topo no piso do posto; sem
+     nenhuma (a cidade caiu), vale o terreno.
+     ================================================================ */
+  function lajesDoPosto(e) {
+    if (!e.plan || e.plan.floorY === undefined) return null;
+    const walls = Structures.walls;
+    if (!walls) return null;
+    if (e._lajesN !== walls.length || e._lajesU !== walls[walls.length - 1]) {
+      e._lajes = walls.filter(b => b.noCollide && Math.abs(b.y1 - e.plan.floorY) < 1e-3);
+      e._lajesN = walls.length; e._lajesU = walls[walls.length - 1];
+    }
+    return e._lajes;
+  }
+  const sobre = (lajes, x, z) => {
+    for (let i = 0; i < lajes.length; i++) {
+      const b = lajes[i];
+      if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1) return true;
+    }
+    return false;
+  };
+  /* devolve o corpo à laje se o passo deste quadro o tirou dela (desliza
+     no eixo que ainda cabe); `true` = ele está na laje do posto. Quem já
+     estava fora dela (a cidade caiu, ou um cenário sem a laje dele) não é
+     preso: segue a regra antiga, `pisoDe` abaixo. */
+  function prenderNaLaje(e, px, pz) {
+    const lajes = lajesDoPosto(e);
+    if (!lajes || !lajes.length) return false;
+    const p = e.group.position;
+    if (sobre(lajes, p.x, p.z)) return true;
+    if (!sobre(lajes, px, pz)) return false;
+    if (sobre(lajes, px, p.z)) { p.x = px; e.ragVel.x = 0; }
+    else if (sobre(lajes, p.x, pz)) { p.z = pz; e.ragVel.z = 0; }
+    else { p.x = px; p.z = pz; e.ragVel.x = 0; e.ragVel.z = 0; }
+    return true;
+  }
+  // piso sob o corpo: a laje do posto (se está nela); fora dela, o de sempre
+  function pisoDe(e, naLaje) {
+    const h = heightAt(e.group.position.x, e.group.position.z);
+    if (!e.plan || e.plan.floorY === undefined) return h;
+    return naLaje ? e.plan.floorY : Math.max(h, e.plan.floorY);
+  }
+
+  /* ================================================================
+     POSTO NÃO RENASCE À VISTA. O inimigo de posto (executivo da torre,
+     guarda da base) voltava em 7–12 s NO MESMO PONTO — medido no jogo: a
+     9,18 m do jogador, com a linha de visada livre. Para quem estava ali
+     isso é "ele não morre". A regra é a do diretor do Left 4 Dead
+     (Michael Booth, "The AI Systems of Left 4 Dead", Valve, 2009): o
+     nascimento procura "a spot near the Survivors, not visible to any of
+     them" e os especiais usam "valid area in the AAS not visible by the
+     Survivor team". Aqui: o relógio de 7–12 s continua, mas só vale com
+     o posto E o corpo fora da vista do jogador e ele fora do raio da briga
+     (OUVIDO). Até lá o corpo fica onde caiu. O soldado sem posto nasce
+     sorteado a mais de 45 m e segue o ciclo de sempre.
+     ================================================================ */
+  const _post = new THREE.Vector3(), _corpo = new THREE.Vector3();
+  const VISTA = CFG.VIEW_DIST || Infinity; // além da névoa nada é desenhado
+  const avista = (olho, p) => olho.distanceTo(p) < VISTA && hasLOS(olho, p);
+  function podeRenascer(e) {
+    if (!e.plan) return true;
+    const olho = olhoDoJogador(_pOlho);
+    const py = e.plan.floorY !== undefined ? e.plan.floorY : heightAt(e.plan.x, e.plan.z);
+    _post.set(e.plan.x, py + 1.5, e.plan.z);
+    if (olho.distanceTo(_post) < OUVIDO) return false;
+    if (avista(olho, _post)) return false;
+    _corpo.copy(e.group.position); _corpo.y += 0.4;
+    return !avista(olho, _corpo);
+  }
+
   const NAMES = ['Sentinela', 'Vigia', 'Caçador', 'Lâmina', 'Falcão', 'Brutamontes'];
   const list = [];
 
@@ -346,24 +427,35 @@ export function createEnemies(deps) {
     for (const e of list) {
       const g = e.group;
 
-      /* ---------- morto: ragdoll falso + fade ---------- */
+      /* ---------- morto: ragdoll falso ----------
+         O corpo cai no chão EM QUE MORREU e bate em parede: antes ele só
+         conhecia o terreno — o executivo do 3º andar voava 7,6 m, passava
+         pela fachada e caía 6,8 m até a rua. Soldado sem posto encolhe e
+         some (renasce sorteado longe); o de posto fica caído até poder
+         renascer fora da vista (podeRenascer). */
       if (!e.alive) {
         e.deadT += dt;
         if (e.deadT < 1.5) {
+          const px = g.position.x, pz = g.position.z;
           e.ragVel.y -= 18 * dt;
           g.position.addScaledVector(e.ragVel, dt);
-          const gy = heightAt(g.position.x, g.position.z);
+          Structures.collide(g.position, 0.3, 0.6);
+          const naLaje = prenderNaLaje(e, px, pz);
+          const gy = pisoDe(e, naLaje);
           if (g.position.y < gy) { g.position.y = gy; e.ragVel.multiplyScalar(0.6); e.ragVel.y = 0; }
           g.rotation.x = Math.min(Math.PI / 2, g.rotation.x + dt * 5) * 1;
           g.rotation.z += e.ragSpin * dt * 2.4;
-          if (e.deadT > 1.1) {
+          if (!e.plan && e.deadT > 1.1) {
             const k = 1 - (e.deadT - 1.1) / 0.4;
             g.scale.setScalar(Math.max(0.001, k));
           }
         } else {
-          g.scale.setScalar(0.001);
+          if (!e.plan) g.scale.setScalar(0.001);
           e.respawnT -= dt;
-          if (e.respawnT <= 0) { g.rotation.set(0, 0, 0); e.respawn(); }
+          if (e.respawnT <= 0) {
+            if (podeRenascer(e)) { g.rotation.set(0, 0, 0); e.respawn(); }
+            else e.respawnT = 0.5; // olha de novo daqui a meio segundo
+          }
         }
         continue;
       }
@@ -394,7 +486,7 @@ export function createEnemies(deps) {
           if (sees) { e.lastKnown.copy(player.pos); e.losT = t; }
         }
         // ouviu tiro do player por perto
-        if (lastShotInfo.t > t - 0.4 && g.position.distanceTo(lastShotInfo.pos) < 75 && e.fsm === 'PATRULHA') {
+        if (lastShotInfo.t > t - 0.4 && g.position.distanceTo(lastShotInfo.pos) < OUVIDO && e.fsm === 'PATRULHA') {
           e.fsm = 'ALERTA'; e.alertT = t; e.lastKnown.copy(lastShotInfo.pos);
         }
       } else {
@@ -459,6 +551,7 @@ export function createEnemies(deps) {
         const d2 = dx * dx + dz * dz;
         if (d2 < 1.4 * 1.4 && d2 > 1e-4) { const d = Math.sqrt(d2); vx += dx / d * 2.2; vz += dz / d * 2.2; }
       }
+      const px = g.position.x, pz = g.position.z;
       g.position.x += vx * dt;
       g.position.z += vz * dt;
       for (const o of obstaclesNear(g.position.x, g.position.z)) {
@@ -467,9 +560,7 @@ export function createEnemies(deps) {
         if (d < min && d > 1e-4) { g.position.x = o.x + dx / d * min; g.position.z = o.z + dz / d * min; }
       }
       Structures.collide(g.position, 0.45, 1.9);
-      g.position.y = e.plan && e.plan.floorY !== undefined
-        ? Math.max(heightAt(g.position.x, g.position.z), e.plan.floorY)
-        : heightAt(g.position.x, g.position.z);
+      g.position.y = pisoDe(e, prenderNaLaje(e, px, pz));
 
       /* ---------- orientação + animação procedural ---------- */
       const spd = Math.hypot(vx, vz);
