@@ -253,6 +253,8 @@ const match = {
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
+  veiculos: null,            // id -> vida/estado/pose (montarVeiculos, no início da partida)
+  heliOwner: null,           // socket.id de quem pilota o helicóptero
   flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT }, // regras da sala (só o host altera)
   cityDestruction: { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null },
   countdownTimer: null, endTimer: null,
@@ -267,6 +269,8 @@ function resetRoundState() {
   match.bossMaxHp = 0;
   match.bossDead = !match.flags.golem;
   match.carOwners = {};
+  match.veiculos = null;
+  match.heliOwner = null;
 }
 
 /* troca de "bots na sala" pedida no meio da partida só materializa quando a
@@ -413,6 +417,12 @@ function startMatch() {
   match.plan.city = match.flags.cidade ? { ...match.cityDestruction } : null;
   match.bossMaxHp = match.plan.boss.hp;
   match.bossHp = match.bossMaxHp;
+  // veículos com vida cheia, nas vagas da semente (js/veiculo-vida.js)
+  let frota = null;
+  try { frota = frotaDaSemente(match.seed); } catch (err) { console.error(`[VEICULOS] frota falhou: ${err && err.message}`); }
+  if (!frota) console.error('[VEICULOS] frota indisponível nesta partida — veículo sem vida (regras não carregaram)');
+  montarVeiculos(frota);
+  match.plan.veiculos = [...match.veiculos.values()].map(resumoDoVeiculo);
   match.bossDead = !match.flags.golem; // GOLEM desligado = já "morto" pro servidor
   match.aliveCount = 0;
   // slots da nave: atribuídos AQUI (cliente não escolhe), fixos durante o voo;
@@ -472,6 +482,7 @@ function endMatch(winnerId) {
   match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
   match.endTimer = setTimeout(() => {
     match.seed = (Math.random() * 0xFFFFFFFF) >>> 0; // MAPA NOVO
+    setImmediate(() => frotaDaSemente(match.seed));   // a frota já pronta quando a próxima começar
     // O cliente recarrega assim que recebe nextMatch. Limpe ANTES de publicar
     // o lobby, senão o init dessa recarga ainda contém os baús da rodada velha.
     resetRoundState();
@@ -666,6 +677,189 @@ function combatImmune(p) {
   return match.plan && Date.now() - match.t0 < (match.plan.ship.flyTime + FALL_GRACE_S) * 1000;
 }
 
+/* ---------------- veículos com VIDA (autoridade do servidor) ----------------
+   Decisão do dono (2026-09-28): "carro pode segurar tiro, mas não... pra
+   sempre!!". Veículo inteiro segura bala no cliente e nos bots; a VIDA mora
+   aqui, para todos verem o mesmo. A regra (vida por tipo, dano por arma,
+   explosivo, queima, explosão) é UMA só, em js/veiculo-vida.js — o mesmo
+   módulo que cliente e bots importam. Referência: docs/mobile/referencia-veiculos.md.
+
+   Ciclo: inteiro → (vida 0) queimando: não segura mais bala, motor morto,
+   QUEIMA_S para sair → explode: quem ainda está dentro morre (crédito a quem
+   destruiu), quem está perto leva dano pela distância, e o veículo SOME.
+
+   ONDE ESTÁ CADA VEÍCULO: nasce na vaga da semente (js/paredes.js monta a
+   planta; o caminhão depende do relevo — daí o terreno aqui, o mesmo que os
+   bots constroem) e passa a valer a pose do MOTORISTA arbitrado (`carOwners`),
+   que já passou pelo anti-teleporte do `state`. Ninguém mais move um veículo
+   no servidor. O helicóptero (único) segue quem o pilota. */
+let VV = null;                  // js/veiculo-vida.js, carregado no boot
+let MundoNode = null;           // terreno + planta, para a frota por semente
+const frotaCache = new Map();   // semente -> frota (a planta é pura da semente)
+// QA: encurta a queima nos testes; em produção vale VV.QUEIMA_S
+const VEICULO_QUEIMA_MS = process.env.VEICULO_QUEIMA_S ? Math.max(200, +process.env.VEICULO_QUEIMA_S * 1000 || 0) : null;
+function carregarRegrasDeVeiculo() {
+  const url = f => require('url').pathToFileURL(path.join(__dirname, 'js', f)).href;
+  return Promise.all([import(url('veiculo-vida.js')), import(url('terrain.js')), import(url('config.js')), import(url('paredes.js'))])
+    .then(([vv, terrain, config, paredes]) => { VV = vv; MundoNode = { terrain, CFG: config.CFG, paredes }; })
+    .catch(err => {
+      // falha BARULHENTA: sem a regra, veículo vira cobertura eterna
+      console.error(`[VEICULOS] regras indisponíveis: ${err && err.message} — veículo NÃO terá vida nesta execução`);
+    });
+}
+/* a frota da semente: relevo (o Math.random seedado só durante a construção
+   do SimplexNoise, como o cliente e os bots) → planta → vagas */
+function frotaDaSemente(seed) {
+  if (!VV || !MundoNode) return null;
+  const s = Number(seed) >>> 0;
+  if (frotaCache.has(s)) return frotaCache.get(s);
+  const antes = Math.random;
+  let terreno;
+  Math.random = mulberry32(s);
+  try {
+    terreno = MundoNode.terrain.createTerrain({ lerp: (a, b, t) => a + (b - a) * t, clamp: (v, a, b) => Math.max(a, Math.min(b, v)) });
+    terreno.buildHeightGrid(MundoNode.CFG.WORLD_SIZE, MundoNode.CFG.TERRAIN_SEGS);
+  } finally { Math.random = antes; }
+  const P = MundoNode.paredes;
+  const plano = P.planejarEstruturas({ rng: P.rngEstruturas(P.sementeNormalizada(s)), heightAt: terreno.heightAt,
+    slopeAt: terreno.slopeAt, WATER_LEVEL: terreno.WATER_LEVEL, CITY: terreno.CITY });
+  const frota = VV.frotaDoPlano(plano, terreno.heightAt);
+  if (frotaCache.size > 4) frotaCache.delete(frotaCache.keys().next().value);
+  frotaCache.set(s, frota);
+  return frota;
+}
+/* estado da partida: id (índice da frota ou 'heli') -> veículo */
+function montarVeiculos(frota) {
+  match.veiculos = new Map();
+  match.heliOwner = null;
+  if (!frota) return;
+  for (const f of frota) {
+    const T = VV.TIPOS[f.tipo];
+    match.veiculos.set(String(f.id), {
+      id: f.id, tipo: f.tipo, vida: T.vida, vidaMax: T.vida, estado: 'inteiro',
+      x: f.x, y: f.y, z: f.z, yaw: f.ry, explodeEm: 0, autor: null,
+    });
+  }
+}
+const veiculoPorId = v => (typeof v === 'number' || typeof v === 'string') && match.veiculos
+  ? match.veiculos.get(String(v)) || null : null;
+const resumoDoVeiculo = veh => ({ v: veh.id, tipo: veh.tipo, vida: Math.round(veh.vida), vidaMax: veh.vidaMax,
+  estado: veh.estado, pos: [veh.x, veh.y, veh.z], ry: veh.yaw });
+/* quem está DENTRO: o motorista arbitrado, ou o piloto do helicóptero */
+function ocupanteDe(veh) {
+  if (!veh) return null;
+  if (veh.id === 'heli') return match.heliOwner;
+  return match.carOwners[veh.id] || null;
+}
+const dist3 = (a, b) => Math.hypot(a[0] - b.x, a[1] - b.y, a[2] - b.z);
+/* janelas COMPARTILHADAS com shotHit/explosionHit: acerto em veículo não
+   ganha cadência nem orçamento próprio — gasta o mesmo do tiro em jogador */
+function consumirJanelas(p, dmgReq, now) {
+  p.hitWindow = p.hitWindow.filter(t => now - t < 1000);
+  if (p.hitWindow.length >= 12) return false;
+  p.hitWindow.push(now);
+  if (dmgReq <= 0) return false;
+  p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
+  if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 520) return false;
+  p.dmgWindow.push({ t: now, d: dmgReq });
+  return true;
+}
+/* e um teto do que um atirador tira de veículo por segundo (já com o
+   multiplicador do explosivo) — VV.VEICULO_DANO_POR_S */
+function consumirTetoDeVeiculo(p, dano, now) {
+  p.vehWindow = (p.vehWindow || []).filter(e => now - e.t < 1000);
+  if (p.vehWindow.reduce((a, e) => a + e.d, 0) + dano > VV.VEICULO_DANO_POR_S) return false;
+  p.vehWindow.push({ t: now, d: dano });
+  return true;
+}
+function danificarVeiculo(veh, dano, autorId) {
+  if (veh.estado !== 'inteiro' || !(dano > 0)) return;
+  veh.vida = Math.max(0, veh.vida - dano);
+  veh.autor = autorId;
+  if (veh.vida > 0) {
+    /* CONFIÁVEL, não volátil: com o transporte ocupado (uma rajada acabou de
+       gerar playerFired para todos) o volátil é descartado, e cada cliente
+       ficaria com uma vida diferente — o contrário de "todos veem o mesmo".
+       Medido: 12 tiros seguidos de um `vehicleHit` perdiam o `vehicleHp`. */
+    io.emit('vehicleHp', { v: veh.id, vida: Math.round(veh.vida) });
+    return;
+  }
+  // vida zero: deixa de proteger AGORA; explode depois da queima
+  veh.estado = 'queimando';
+  veh.explodeEm = Date.now() + (VEICULO_QUEIMA_MS || VV.QUEIMA_S * 1000);
+  io.emit('vehicleBurning', { v: veh.id, pos: [veh.x, veh.y, veh.z], by: autorId });
+}
+function explodirVeiculo(veh) {
+  veh.estado = 'destruido';
+  const pos = [veh.x, veh.y, veh.z];
+  const dentro = ocupanteDe(veh);
+  if (veh.id === 'heli') match.heliOwner = null;
+  else if (match.carOwners[veh.id]) { delete match.carOwners[veh.id]; io.emit('carFree', { idx: veh.id }); }
+  io.emit('vehicleExploded', { v: veh.id, pos });
+  const autor = veh.autor && players.get(veh.autor);
+  const now = Date.now();
+  let mudou = false;
+  for (const [id, p] of players) {
+    if (p.spectator || !p.alive) continue;
+    if (id === dentro) {
+      // ainda dentro na explosão: morre (PUBG Mobile, Warzone)
+      p.alive = false;
+      p.placement = match.aliveCount;
+      match.lastDead = id;
+      freeCarsOf(id);
+      const killer = autor && veh.autor !== id && !autor.spectator ? autor : null;
+      if (killer) killer.kills++;
+      io.emit('playerKilled', {
+        victimId: id, victimNick: p.nick,
+        killerId: killer ? veh.autor : null, killerNick: killer ? killer.nick : null,
+        killerKills: killer ? killer.kills : 0,
+        weapon: 'VEÍCULO', byZone: false, cause: killer ? 'player' : 'explosion', placement: p.placement,
+      });
+      console.log(`[VEICULOS] ${p.nick} morreu dentro do veículo ${veh.id}`);
+      mudou = true;
+      match.aliveCount = Math.max(0, match.aliveCount - 1);
+      continue;
+    }
+    if (combatImmune(p)) continue;
+    const dmg = VV.danoDaExplosaoDoVeiculo(Math.hypot(p.pos[0] - pos[0], p.pos[1] + 1 - pos[1], p.pos[2] - pos[2]));
+    if (dmg <= 0) continue;
+    // crédito de kill: a vítima declara quem a feriu; vale se o servidor viu
+    if (autor && veh.autor !== id) (p.hitBy || (p.hitBy = {}))[veh.autor] = now;
+    io.to(id).emit('youWereHit', {
+      dmg, fromPos: [pos[0], pos[1] + 0.5, pos[2]],
+      shooterId: autor ? veh.autor : null, shooterNick: autor ? autor.nick : null,
+      weapon: 'VEICULO',
+    });
+  }
+  if (mudou) { broadcastRoster(); checkVictory(); }
+}
+setInterval(() => {
+  if (match.phase !== 'PLAYING' || !match.veiculos) return;
+  const now = Date.now();
+  for (const veh of match.veiculos.values()) {
+    if (veh.estado !== 'queimando' || now < veh.explodeEm) continue;
+    explodirVeiculo(veh);
+    if (match.phase !== 'PLAYING') break;
+  }
+}, 100).unref();
+/* a pose do veículo vem do seu ocupante — o `pos` dele já passou pelo
+   anti-teleporte. Carro: só o motorista ARBITRADO (`enterCar`). */
+function poseDoOcupante(socketId, p, d) {
+  if (!match.veiculos) return;
+  const car = Number.isInteger(d.car) ? d.car : -1;
+  if (car >= 0 && match.carOwners[car] === socketId) {
+    const veh = veiculoPorId(car);
+    if (veh && veh.estado !== 'destruido') { veh.x = p.pos[0]; veh.y = p.pos[1]; veh.z = p.pos[2]; veh.yaw = +d.rotY || 0; }
+  }
+  const heli = veiculoPorId('heli');
+  if (!heli) return;
+  if (d.heli && !p.ship && !p.fall && heli.estado !== 'destruido') {
+    const dono = match.heliOwner && players.get(match.heliOwner);
+    if (!dono || !dono.alive) match.heliOwner = socketId;   // o primeiro a pilotar leva
+    if (match.heliOwner === socketId) { heli.x = p.pos[0]; heli.y = p.pos[1]; heli.z = p.pos[2]; heli.yaw = +d.rotY || 0; }
+  } else if (match.heliOwner === socketId) match.heliOwner = null;
+}
+
 /* ---------------- conexões ---------------- */
 io.on('connection', socket => {
   // recusa a conexão acima do teto por IP (loopback isento)
@@ -703,6 +897,8 @@ io.on('connection', socket => {
     hostId,
     flags: match.flags,
     cityDestruction: match.cityDestruction,
+    // quem entra no meio vê a mesma vida/estado dos veículos que todos veem
+    veiculos: match.phase === 'PLAYING' && match.veiculos ? [...match.veiculos.values()].map(resumoDoVeiculo) : [],
     players: roster(true).filter(p => p.id !== socket.id),
     globalTop: topRank(),
   });
@@ -884,6 +1080,8 @@ io.on('connection', socket => {
     // agachar: sanitizado e limitado pela velocidade (crouchFromState)
     p.crouch = crouchFromState(p, d, now);
     p.lastState = now;
+    // veículo ocupado anda com quem está dentro (pose já validada acima)
+    if (match.phase === 'PLAYING' && p.alive && !p.spectator) poseDoOcupante(socket.id, p, d);
     socket.volatile.broadcast.emit('playerUpdate', {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
       ship: !!d.ship, chute: !!d.chute, car: Number.isInteger(d.car) ? d.car : -1,
@@ -982,6 +1180,52 @@ io.on('connection', socket => {
     });
   });
 
+  /* acerto de BALA em veículo: o mesmo modelo do shotHit — o cliente (ou
+     o bot) diz em que veículo acertou, o servidor confere alcance, origem,
+     cadência e orçamento (os MESMOS do tiro em jogador) e é quem desconta
+     a vida (js/veiculo-vida.js). */
+  socket.on('vehicleHit', d => {
+    const p = players.get(socket.id);
+    if (!p || !d || !VV || match.phase !== 'PLAYING' || !p.alive) return;
+    const veh = veiculoPorId(d.v);
+    if (!veh || veh.estado !== 'inteiro') return;
+    const weapon = weaponCode(d.weapon);
+    if (!weapon || !VV.DANO_BALA_MAX[weapon]) return;
+    if (combatImmune(p) || ocupanteDe(veh) === socket.id) return;
+    const maxRange = weapon === 'ESCOPETA' ? 120 : 320;
+    if (dist3(p.pos, veh) > maxRange + VV.TIPOS[veh.tipo].raio) return;
+    if (Array.isArray(d.fromPos)) {
+      const f = d.fromPos.slice(0, 3).map(Number);
+      if (f.length !== 3 || !f.every(Number.isFinite) ||
+          Math.hypot(f[0] - p.pos[0], f[1] - p.pos[1], f[2] - p.pos[2]) > 5) return;
+    }
+    const now = Date.now();
+    const dano = VV.danoDeBalaNoVeiculo(weapon, +d.dmg);
+    if (!consumirJanelas(p, dano, now) || !consumirTetoDeVeiculo(p, dano, now)) return;
+    danificarVeiculo(veh, dano, socket.id);
+  });
+
+  /* explosivo em veículo: o mesmo modelo do explosionHit (origem = ponto de
+     impacto), com o multiplicador de explosivo aplicado AQUI */
+  socket.on('vehicleBlast', d => {
+    const p = players.get(socket.id);
+    if (!p || !d || !VV || match.phase !== 'PLAYING' || !p.alive) return;
+    const veh = veiculoPorId(d.v);
+    if (!veh || veh.estado !== 'inteiro') return;
+    const kind = d.kind === 'GRANADA' || d.kind === 'BAZUCA' ? d.kind : null;
+    if (!kind || combatImmune(p) || ocupanteDe(veh) === socket.id) return;
+    const impact = Array.isArray(d.impactPos) ? d.impactPos.slice(0, 3).map(Number) : [];
+    if (impact.length !== 3 || !impact.every(Number.isFinite)) return;
+    if (Math.hypot(impact[0] - p.pos[0], impact[1] - p.pos[1], impact[2] - p.pos[2]) > (kind === 'BAZUCA' ? 340 : 80)) return;
+    // o estilhaço (7,5 m + folga de lag) até a lataria: centro + raio do tipo
+    if (dist3(impact, veh) > 12 + VV.TIPOS[veh.tipo].raio) return;
+    const now = Date.now();
+    const dmgReq = Math.min(Math.max(+d.dmg || 0, 0), VV.EXPLOSIVO_MAX);
+    const dano = VV.danoExplosivoNoVeiculo(kind, dmgReq);
+    if (!consumirJanelas(p, dmgReq, now) || !consumirTetoDeVeiculo(p, dano, now)) return;
+    danificarVeiculo(veh, dano, socket.id);
+  });
+
   socket.on('shotFired', d => {
     const p = players.get(socket.id);
     if (!p || !d || match.phase !== 'PLAYING' || !p.alive || p.ship || p.fall) return;
@@ -1030,6 +1274,7 @@ io.on('connection', socket => {
       placement: victim.placement,
     });
     freeCarsOf(socket.id); // motorista morto libera o carro
+    if (match.heliOwner === socket.id) match.heliOwner = null; // e o piloto, o helicóptero
     broadcastRoster();
     checkVictory();
     if (typeof cb === 'function') cb({ placement: victim.placement });
@@ -1139,6 +1384,7 @@ io.on('connection', socket => {
     // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
     if (hostId === socket.id) hostId = null;
     freeCarsOf(socket.id);
+    if (match.heliOwner === socket.id) match.heliOwner = null;
     if (players.size === 0) { // sala vazia: sessão volta ao estado de fábrica
       match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT };
       match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
@@ -1188,15 +1434,22 @@ process.on('exit', () => { if (botsProc) try { botsProc.kill(); } catch (e) { /*
 /* internos expostos pra suite de QA; o listen só roda quando executado
    direto (node server.js) — require() nos testes não abre porta */
 module.exports = { saveRankNow, buildPlan, zoneAt, shipPosAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank,
-  crouchFromState, CROUCH };
+  crouchFromState, CROUCH, carregarRegrasDeVeiculo, frotaDaSemente };
 
 if (require.main === module) {
-  server.listen(PORT, () => {
+  /* regras de veículo + a frota da semente inicial ANTES de abrir a porta:
+     "no ar" passa a significar que a 1ª partida já nasce com a frota (a
+     carga falhando é barulhenta e não segura o boot — ver carregarRegrasDeVeiculo) */
+  carregarRegrasDeVeiculo().then(() => {
+    try { frotaDaSemente(match.seed); } catch (err) {
+      console.error(`[VEICULOS] frota da semente ${match.seed} falhou: ${err && err.message}`);
+    }
+  }).finally(() => server.listen(PORT, () => {
     console.log(`Servidor BR no ar em http://localhost:${PORT} · seed inicial ${match.seed}`);
     console.log('====================================================');
     console.log(`  CÓDIGO DO ANFITRIÃO: ${HOST_CODE}`);
     console.log('  cole no lobby (campo "código do anfitrião") ou');
     console.log(`  abra o jogo com ?host=${HOST_CODE} na URL`);
     console.log('====================================================');
-  });
+  }));
 }
