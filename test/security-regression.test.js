@@ -361,3 +361,157 @@ describe('Queda — invulnerabilidade só na janela inicial', () => {
     assert.equal(hits.length, 0, 'quem cai de paraquedas no início deve ser invulnerável');
   });
 });
+
+/* =============== dano em veículo: as mesmas garantias do dano em jogador =============== */
+describe('Veículo — o servidor valida o dano reportado na lataria', () => {
+  const veic = (plan, id) => plan.veiculos.find(v => String(v.v) === String(id));
+  const junto = (v, dx) => [v.pos[0] + dx, v.pos[1], v.pos[2]];
+  async function cena(t, n = 2) {
+    const r = await playing(t, n);
+    assert.ok(Array.isArray(r.plan.veiculos) && r.plan.veiculos.length >= 5, 'partida sem frota anunciada');
+    return r;
+  }
+  /* a vida que o SERVIDOR guarda, lida por uma conexão nova (init.veiculos) —
+     não depende de ter visto (ou deixado de ver) um evento difundido */
+  async function vidaNoServidor(t, srv, id) {
+    const c = await connect(srv.port);
+    t.after(() => c.s.close());
+    const v = (c.init.veiculos || []).find(x => String(x.v) === String(id));
+    return v ? v.vida : null;
+  }
+
+  it('dado um acerto além do alcance da arma, então a vida do veículo não muda', async t => {
+    const { srv, clients, plan } = await cena(t);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: junto(veic(plan, 0), 200), rotY: 0 }); // escopeta: 120 m
+    await sleep(150);
+    const hp = collect(b.s, 'vehicleHp');
+    a.s.emit('vehicleHit', { v: 0, dmg: 88, weapon: 'ESCOPETA' });
+    await sleep(300);
+    assert.equal(hp.length, 0);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780);
+  });
+
+  it('dado uma arma que não fura lataria ou um código desconhecido, então nada muda', async t => {
+    const { srv, clients, plan } = await cena(t);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: junto(veic(plan, 0), 2), rotY: 0 });
+    await sleep(150);
+    const hp = collect(b.s, 'vehicleHp');
+    for (const weapon of ['FACA', 'BAZUCA', 'LASER', null]) a.s.emit('vehicleHit', { v: 0, dmg: 30, weapon });
+    await sleep(300);
+    assert.equal(hp.length, 0);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780);
+  });
+
+  it('dado um dano declarado acima do da arma, então só o teto da arma é descontado', async t => {
+    const { srv, clients, plan } = await cena(t);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: junto(veic(plan, 0), 20), rotY: 0 });
+    await sleep(150);
+    const hp = collect(b.s, 'vehicleHp');
+    a.s.emit('vehicleHit', { v: 0, dmg: 5000, weapon: 'FUZIL' });
+    await sleep(300);
+    assert.equal(hp.length, 1);
+    assert.equal(hp[0].vida, 780 - 26);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780 - 26);
+  });
+
+  it('dado a janela de acertos já cheia com tiros em jogador, então o acerto em veículo também é recusado', async t => {
+    const { srv, clients, plan } = await cena(t, 3);
+    const [a, b, c] = clients;
+    a.s.emit('state', { pos: junto(veic(plan, 0), 20), rotY: 0 });
+    c.s.emit('state', { pos: junto(veic(plan, 0), 25), rotY: 0 });
+    await sleep(150);
+    const hp = collect(b.s, 'vehicleHp');
+    for (let i = 0; i < 12; i++) a.s.emit('shotHit', { targetId: c.init.id, dmg: 5, weapon: 'FUZIL' });
+    a.s.emit('vehicleHit', { v: 0, dmg: 26, weapon: 'FUZIL' });
+    await sleep(300);
+    assert.equal(hp.length, 0);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780);
+  });
+
+  it('dado quem está dentro atirando no próprio veículo, então nada muda', async t => {
+    const { srv, clients, plan } = await cena(t);
+    const [a, b] = clients;
+    const buggy = veic(plan, 0);
+    assert.equal((await ack(a.s, 'enterCar', { idx: 0 })).ok, true);
+    a.s.emit('state', { pos: buggy.pos, rotY: 0, car: 0 });
+    await sleep(150);
+    const hp = collect(b.s, 'vehicleHp');
+    a.s.emit('vehicleHit', { v: 0, dmg: 26, weapon: 'FUZIL' });
+    a.s.emit('vehicleBlast', { v: 0, dmg: 130, kind: 'GRANADA', impactPos: buggy.pos });
+    await sleep(300);
+    assert.equal(hp.length, 0);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780);
+  });
+
+  it('dado uma origem declarada longe do atirador, então o acerto é recusado', async t => {
+    const { srv, clients, plan } = await cena(t);
+    const [a, b] = clients;
+    const buggy = veic(plan, 0);
+    a.s.emit('state', { pos: junto(buggy, 20), rotY: 0 });
+    await sleep(150);
+    const hp = collect(b.s, 'vehicleHp');
+    a.s.emit('vehicleHit', { v: 0, dmg: 26, weapon: 'FUZIL', fromPos: junto(buggy, 2) });
+    await sleep(300);
+    assert.equal(hp.length, 0);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780);
+  });
+
+  it('dado um explosivo longe do veículo ou de tipo desconhecido, então nada muda', async t => {
+    const { srv, clients, plan } = await cena(t);
+    const [a, b] = clients;
+    const buggy = veic(plan, 0);
+    a.s.emit('state', { pos: junto(buggy, 20), rotY: 0 });
+    await sleep(150);
+    const hp = collect(b.s, 'vehicleHp'), queima = collect(b.s, 'vehicleBurning');
+    a.s.emit('vehicleBlast', { v: 0, dmg: 130, kind: 'BAZUCA', impactPos: junto(buggy, 40) });
+    a.s.emit('vehicleBlast', { v: 0, dmg: 130, kind: 'MISSIL', impactPos: junto(buggy, 1) });
+    await sleep(300);
+    assert.equal(hp.length + queima.length, 0);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780);
+  });
+
+  it('dado vários explosivos no mesmo segundo, então o dano em veículo por atirador tem teto', async t => {
+    const { srv, clients, plan } = await cena(t);
+    const [a, b] = clients;
+    const cam = plan.veiculos.find(v => v.tipo === 'caminhao');
+    assert.ok(cam, 'semente sem caminhão');
+    a.s.emit('state', { pos: junto(cam, 20), rotY: 0 });
+    await sleep(150);
+    const hp = collect(b.s, 'vehicleHp'), queima = collect(b.s, 'vehicleBurning');
+    for (let i = 0; i < 3; i++) a.s.emit('vehicleBlast', { v: cam.v, dmg: 130, kind: 'BAZUCA', impactPos: junto(cam, 1) });
+    await sleep(300);
+    assert.equal(queima.length, 0);
+    assert.deepEqual(hp.map(h => h.vida), [1760 - 975]);
+    assert.equal(await vidaNoServidor(t, srv, cam.v), 1760 - 975);
+  });
+
+  it('dado um jogador que não é o motorista declarando estar no veículo, então a posição do veículo não muda', async t => {
+    const { srv, clients, plan } = await cena(t, 3);
+    const [a, b, c] = clients;
+    const buggy = veic(plan, 0);
+    c.s.emit('state', { pos: junto(buggy, 300), rotY: 0, car: 0 }); // sem enterCar
+    a.s.emit('state', { pos: junto(buggy, 380), rotY: 0 });          // perto de C, longe da vaga
+    await sleep(200);
+    const hp = collect(b.s, 'vehicleHp');
+    a.s.emit('vehicleHit', { v: 0, dmg: 88, weapon: 'ESCOPETA' });
+    await sleep(300);
+    assert.equal(hp.length, 0);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780);
+  });
+
+  it('dado um jogador morto, então o acerto em veículo é ignorado', async t => {
+    const { srv, clients, plan } = await cena(t, 3);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: junto(veic(plan, 0), 20), rotY: 0 });
+    await sleep(150);
+    await ack(a.s, 'died', { cause: { type: 'environment' } });
+    const hp = collect(b.s, 'vehicleHp');
+    a.s.emit('vehicleHit', { v: 0, dmg: 26, weapon: 'FUZIL' });
+    await sleep(300);
+    assert.equal(hp.length, 0);
+    assert.equal(await vidaNoServidor(t, srv, 0), 780);
+  });
+});
