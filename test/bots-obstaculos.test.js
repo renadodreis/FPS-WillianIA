@@ -377,7 +377,9 @@ describe('B7 — bots não veem nem atiram através de pedra, árvore, cacto e P
     assert.equal(tiros, 0, `o bot atirou ${tiros} vezes em quem ele só ouviu atrás do obstáculo`);
   });
 
-  it('bot DENTRO do colisor de uma pedra (atravessou andando) não enxerga nem atira para fora', (t) => {
+  /* bot com o olho DENTRO do colisor de uma pedra grande; humano a 15–50 m
+     com a reta livre de todo o resto (relevo, paredes, outros obstáculos) */
+  const dentroDePedra = () => {
     const pedras = ob.solidos.filter(o => o.sourceId === 'rock' && o.r * Math.sqrt(R2F) > 1.2).slice(0, 25);
     const pares = [];
     pedras.forEach((o, i) => {
@@ -386,8 +388,13 @@ describe('B7 — bots não veem nem atiram através de pedra, árvore, cacto e P
       const hum = pontoPerto(bot, 15, 50, 900 + i, h => !relevoEntre(bot.olho, h.cabeca) && !paredeEntre(bot.olho, h.cabeca)
         && !obstaculoEntre(ob.solidos.filter(x => x !== o), bot.olho, h.cabeca)
         && !obstaculoEntre(ob.solidos.filter(x => x !== o), bot.olho, h.tronco));
-      if (hum) pares.push({ bot, hum });
+      if (hum) pares.push({ bot, hum, o });
     });
+    return pares;
+  };
+
+  it('bot DENTRO do colisor de uma pedra (atravessou andando) não enxerga nem atira para fora', (t) => {
+    const pares = dentroDePedra();
     let tiros = 0, viradas = 0, semObst = 0;
     pares.forEach((p, i) => {
       const res = sentinela({ bot: p.bot, hum: () => p.hum, seed: i + 1 });
@@ -400,6 +407,35 @@ describe('B7 — bots não veem nem atiram através de pedra, árvore, cacto e P
     assert.ok(semObst > 0, 'o caso não exercita: sem obstáculos o bot também não atira');
     assert.equal(tiros, 0, `bot de dentro da pedra atirou ${tiros} vezes`);
     assert.equal(viradas, 0, `bot de dentro da pedra virou ${viradas} vezes para o humano`);
+  });
+
+  it('de dentro da pedra o bot não dispara — nem na cauda da reação (o traçante nasceria dentro dela)', (t) => {
+    /* A reta que NASCE dentro do cilindro já sai barrada (o bot de dentro não
+       enxerga — caso acima). O que sobra é a cauda da reação: o bot via o
+       humano de FORA e, andando, entrou na pedra; por 0,6 s ele age sobre o
+       que via e o tiro sairia de dentro dela. Cenário: bot de guarda a
+       1,2–2 m da borda do colisor, na reta até o humano; aos T s ele passa
+       para o centro da pedra. Âncora do "de dentro": o ponto do fromPos
+       contra a lista de obstáculos (cilindro), não a consulta do bot. */
+    const T = 10;
+    let antes = 0, deDentro = 0, rodadas = 0;
+    dentroDePedra().forEach((p, i) => {
+      const dx = p.hum.x - p.o.x, dz = p.hum.z - p.o.z, dl = Math.hypot(dx, dz);
+      const R = p.o.r * Math.sqrt(R2F);
+      const fora = corpo(p.o.x + dx / dl * (R + 1.2 + (i % 3) * 0.4), p.o.z + dz / dl * (R + 1.2 + (i % 3) * 0.4));
+      if (!livre(fora) || !aVista(fora, p.hum)) return;
+      for (let k = 0; k < 4; k++) {
+        rodadas++;
+        const res = sentinela({ bot: fora, hum: () => p.hum, dur: T + 1.5, seed: 60 + i * 4 + k,
+          onTick: (tt, w, b) => { if (tt >= T) { b.x = p.bot.x; b.z = p.bot.z; b.y = p.bot.y; } } });
+        antes += res.shots.filter(s => s.t < T).length;
+        deDentro += res.shots.filter(s => s.t >= T && ob.solidos.some(o => dentroCilindro(o,
+          { x: s.payload.fromPos[0], y: s.payload.fromPos[1], z: s.payload.fromPos[2] }))).length;
+      }
+    });
+    t.diagnostic(`${rodadas} rodadas: ${antes} disparos de fora (o bot via o humano); depois de entrar na pedra, ${deDentro} disparos com a boca dentro dela`);
+    assert.ok(rodadas >= 20 && antes >= rodadas, `o caso não exercita o bot atirando antes de entrar: ${antes} disparos em ${rodadas} rodadas`);
+    assert.equal(deDentro, 0, `${deDentro} disparos saíram de dentro da pedra`);
   });
 
   it('custo a 10 Hz: 16 bots + 4 humanos — na floresta (o pior caso dos obstáculos) e na cidade', (t) => {

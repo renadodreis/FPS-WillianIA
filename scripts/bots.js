@@ -407,8 +407,12 @@ async function createBotObstacles(worldSeed, terrain) {
 }
 
 /* O olho do bot dentro do colisor de um obstáculo (o bot anda em linha reta
-   e atravessa pedra e árvore): de dentro ele não enxerga nem atira — o mesmo
-   contrato de `eyeInsideWall`. */
+   e atravessa pedra e árvore). De dentro ele não ENXERGA porque a consulta já
+   barra a reta que nasce dentro do cilindro (js/obstaculos.js) — ao contrário
+   do `Structures.rayHit`, que ignora a caixa onde a reta nasce e por isso
+   precisa do `eyeInsideWall` na percepção. Aqui a guarda serve para o FOGO:
+   na cauda da reação (0,6 s) o bot age sobre o que via de fora, e o traçante
+   sairia de dentro da pedra. */
 function eyeInsideObstacle(obstacles, eye) {
   return !!obstacles && obstacles.contem(eye);
 }
@@ -525,7 +529,7 @@ function perceive(bot, candidates, terrain, t, dt, walls = null, obstacles = nul
   const present = new Set();
   const inCombat = t - Math.max(bot.lastShotT ?? -Infinity, bot.hurtT ?? -Infinity) <= AI.COMBAT_WINDOW_S;
   const eye = { x: bot.x, y: (bot.y || 0) + AI.EYE_H, z: bot.z };
-  const walled = eyeInsideWall(walls, eye) || eyeInsideObstacle(obstacles, eye);
+  const walled = eyeInsideWall(walls, eye);
   for (const c of candidates) {
     if (!isTargetable(bot, c)) continue;
     present.add(c.id);
@@ -779,7 +783,8 @@ function decideShot(bot, target, action, ctx) {
   // prédio nesse meio-tempo leva a bala na parede, não no corpo
   if (walls && (eyeInsideWall(walls, eye) || walls.segmentBlocked(eye, aimPt))) return { hit: false, why: 'parede' };
   // idem pedra, árvore, cacto e POI (a vítima recusaria o dano por eles)
-  if (obstacles && (eyeInsideObstacle(obstacles, eye) || obstacles.segmentoBloqueado(eye, aimPt))) return { hit: false, why: 'obstaculo' };
+  // (a reta que nasce dentro do cilindro já sai barrada: não precisa de guarda à parte)
+  if (obstacles && obstacles.segmentoBloqueado(eye, aimPt)) return { hit: false, why: 'obstaculo' };
   const human = !target.isBot;
   if (human && director && !director.claim(target.id, bot.id, t, hitGap(target, bot), botHitGap(target, bot, weapon))) {
     return { hit: false, why: 'token' };
