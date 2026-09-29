@@ -32,6 +32,22 @@ Escreve o que reprova.
 > sair do carro"* → **E15** (e E4, que já existia).
 > Nenhum limiar antigo foi tocado. Denominador: **62** (69 no total).
 
+> **Revisão 2026-09-29 — decisões do dono (2026-09-28/29), escritas pelo
+> validador.** Quatro mudanças de régua e duas decisões sem mudança:
+> (1) **C10** — *"já entra dirigindo"*: ao ENTRAR no veículo o polegar que está no
+> analógico vira volante na hora; só os botões (tiro, pulo, mira) soltam. Ao
+> SAIR, continua soltando tudo. (2) **P3** — os **bots** também não acertam quem
+> está no helicóptero (antes o dano de bot ficava fora, como PvP). (3) critério
+> NOVO **V1** — *"carro pode segurar tiro, mas não pra sempre"*: veículo inteiro
+> barra bala (do jogador, do bot, e cobre a vítima), vida autoritativa no
+> servidor, vida zero = para de proteger, queima 5 s e explode. (4) **B7**
+> reescrito — *o principal para o dono: "bots atirando através de parede"* —
+> passa a cobrar TODAS as coberturas (prédio, Torre Nexus, pedra, árvore, cacto,
+> tenda/POI, veículo inteiro) e o avesso (guarda-corpo `noBullet` e veículo
+> destruído NÃO cobrem). Sem mudança: *agachado no mato pode aparecer* (fica
+> como está — A2/C12 seguem cobrando só o que tem 0 px); o ET o dono vai olhar
+> depois (**P1** segue como está). Denominador: **63** (70 no total).
+
 ---
 
 ## 0. As regras que governam este documento
@@ -44,7 +60,7 @@ A queixa do dono, que é a razão de esta régua existir, jogando **no celular**
 Regras, herdadas da régua do VR (`docs/vr/criterio-aaa.md`) sem margem:
 
 1. **Um critério reprovado reprova a entrega inteira.** Não existe "passou em
-   61 de 62", não existe "esse é menor", não existe média.
+   62 de 63", não existe "esse é menor", não existe média.
 2. **Teste verde não prova tela certa.** Todo critério traz o campo **"por que a
    suíte atual não pega"**. Critério que não sabe responder isso não entra.
 3. **Todo critério traz o defeito a reinjetar.** Se a sonda ou o teste não fica
@@ -645,14 +661,22 @@ quaternion com ela DESLIGADA pelo menu, mesmo cenário, mesmo seed, mesma entrad
   `keys` (W/A/S/D/Space/ControlLeft/Tab/E), `mouse.shooting`, `mouse.aiming`,
   classe `.on`, velocidade do jogador 0,5 s depois.
 - **Limiar:** tudo falso/zero e velocidade < 0,5 m/s, para: `pointercancel`, `blur`,
-  aba escondida, virar para retrato, pausa, morte, entrar/sair do carro,
-  entrar/sair do helicóptero, início/fim da cinemática, fim de partida, abrir o chat.
+  aba escondida, virar para retrato, pausa, morte, SAIR do carro, SAIR do
+  helicóptero, início/fim da cinemática, fim de partida, abrir o chat.
+  **ENTRAR no veículo (decisão do dono, 2026-09-28: *"já entra dirigindo"*):** os
+  BOTÕES soltam (`mouse.shooting`, `mouse.aiming`, `Space`/`ControlLeft` do
+  pulo/agachar a pé: 0 disparos e 0 m de subida do helicóptero pelo ⇧ que estava
+  apertado); o polegar que já está no analógico vira volante sem ser levantado
+  — o carro anda (> 2 m/s em ≤ 1 s) e o helicóptero translada, no rumo do
+  polegar. Motivo: o contrato antigo ("tudo solto ao entrar") obrigava a
+  levantar o dedo e encostar de novo, e o dono relatou *"o carro não anda"*.
 - **Fonte:** regra de ouro de `js/touchcontrols.js` — *"todo keydown tem keyup
   casado"*; *"dedo que ficou apertado = tiro infinito"*.
 - **Por que a suíte não pega:** cobre `pointercancel`, `blur` e pausa; o caso do
   carro solta o analógico ANTES de sair, e entra/sai por `teleportToCar` e
   `tryToggleCar`, não pelo botão USAR.
-- **Reinjetar:** não emitir o `keyup` do volante ao sair do veículo → KeyW preso.
+- **Reinjetar:** não emitir o `keyup` do volante ao sair do veículo → KeyW preso;
+  soltar também o analógico ao entrar → o carro não anda com o polegar no talo.
 
 ### C11 · O analógico anda o que o teclado anda, e corre onde o polegar chega *(novo, 2026-09-28)*
 - **Relato do dono:** *"a sensibilidade ali na movimentação deve ser melhorada"*.
@@ -811,18 +835,44 @@ N ≥ 30 engajamentos por caso (≥ 500 disparos nos casos de taxa), seeds decla
   concordam.
 - **Reinjetar:** `lineOfSight` → `true` → vermelho.
 
-### B7 · Visão não atravessa prédio, rocha nem castelo
-- **Mede:** o mesmo de B6, com o humano dentro/atrás de prédio da cidade, do
-  castelo ou de rocha, sem linha livre pelo `rayBlockedAt` do cliente.
-- **Limiar:** 0 disparos contra ele e 0 viradas por 10 s; perseguição para a
-  última posição vista.
-- **Fonte:** B6; PUBG 12.1 — os jogadores acusaram os bots de *wallhack*
-  (referência §1.2). O dano não passa (a vítima recusa por cobertura), mas o bot
-  que persegue e metralha a parede É a sensação de wallhack.
-- **Por que a suíte não pega:** o bot não tem paredes; nenhum teste põe prédio
-  entre bot e humano.
-- **Hoje (leitura):** **reprova** — `lineOfSight` só conhece o heightmap;
-  `37b5ca5`: "Fora desta entrega: ... P3 (postura, paredes, grama)".
+### B7 · Bot não vê nem atira através de NENHUMA cobertura — e a que não segura bala não o cega *(reescrito, 2026-09-29)*
+- **Decisão do dono (2026-09-29):** *"o principal: bots atirando através de
+  parede"*. A versão anterior cobrava prédio, rocha e castelo; esta cobra TODA
+  cobertura que para a bala do jogador, e o avesso.
+- **Mede:** pelo caminho REAL (`server.js` + `scripts/bots.js` pela flag do
+  anfitrião, humanos-dublê por socket), o humano parado e calado atrás/dentro de
+  cada tipo de cobertura, de frente para um bot armado a 8–40 m que o veria sem
+  ela: disparos do bot contra ele, dano aplicado, viradas (rumo do bot a ≤ 10°
+  dele), por 12 s. Tipos: **(1) prédio da cidade e muralha do castelo; (2) Torre
+  Nexus — parede, laje e degraus da escada; (3) pedra; (4) árvore; (5) cacto;
+  (6) tenda/POI (mercado, refúgio, barris); (7) veículo INTEIRO**. E o avesso:
+  **(8) guarda-corpo do poço da Torre (`noBullet`) e (9) veículo DESTRUÍDO** —
+  não seguram a bala do jogador, então não escondem ninguém do bot.
+  Paralelamente, pares geométricos bot→humano (olho 1,5 m → cabeça 1,6 m e
+  tronco 1,0 m) sorteados pelo mapa inteiro, classificados pelo que tampa.
+- **Âncora:** o `rayBlockedAt` do CLIENTE numa página do jogo com a mesma
+  semente (terreno + `Structures.rayHit` + obstáculos + veículos inteiros) — não
+  a consulta do bot (`clearSight`), que é o código sob teste.
+- **Limiar:** tipos (1)–(7): **0 disparos, 0 de dano e 0 viradas** enquanto
+  cabeça E tronco estiverem tampados para o cliente, N ≥ 10 por tipo;
+  perseguição para a última posição vista (B6). Pares: **0** em que o cliente
+  tampa e o bot vê, por tipo, N ≥ 30 tampados por tipo. Avesso (8)–(9): o bot
+  engaja o humano visível através do guarda-corpo e do veículo destruído
+  (controle > 0 disparos), e nos pares o bot não é cego onde o cliente vê
+  (≤ 5 % dos visíveis, a folga de amostragem das duas marchas).
+- **Fonte:** decisão do dono (2026-09-29); B6; PUBG 12.1 — os jogadores acusaram
+  os bots de *wallhack* (referência §1.2). O dano não passa (a vítima recusa por
+  cobertura), mas o bot que persegue e metralha a parede É a sensação de
+  wallhack. O avesso é a mesma regra de B6: o bot vê o que o jogador veria.
+- **Por que a suíte não pega:** os testes de bots usam as paredes e os
+  obstáculos dos MESMOS módulos puros que o bot consulta (`js/paredes.js`,
+  `js/obstaculos.js`, `js/veiculo-vida.js`); só a página do jogo mostra se o
+  que ela desenha e o que para a bala ali são o que o bot consulta.
+- **Reinjetar:** consulta de obstáculos desligada no bot → (3)–(6) vermelhos;
+  veículo fora da visada do bot → (7) vermelho; `noBullet` barrando a visada do
+  bot → (8) vermelho.
+- **Histórico:** `070502f` mediu prédios 0 de 1 542 e **pedra 33 de 41** (árvore
+  21 de 23), pelos pares.
 
 ### B8 · Cone de visão, tempo para notar, e o tiro que revela
 - **Mede:** viradas e disparos contra o humano conforme a posição dele no cone do
@@ -990,15 +1040,21 @@ com as flags da sala (animais, zumbis, Visitante, golem).
   o golpe do bicho não pode ter regra mais frouxa **[INFERÊNCIA]**.
 - **Reinjetar:** golpe/tiro de PvE sem checar obstáculo → vermelho.
 
-### P3 · No helicóptero, nenhum bicho alcança
+### P3 · No helicóptero, nenhum bicho — e nenhum bot — alcança
 - **Relato do dono:** *"eles não deveriam conseguir te pegar ou te dar dano se
   você está no helicóptero"*.
 - **Mede:** dano de PvE em 60 s com o jogador VOANDO (≥ 3 m acima do chão) e PvE
   ativo a ≤ 20 m; o controle: o mesmo PvE com o jogador a pé.
-- **Limiar:** 0 de dano de PvE voando; controle > 0. Dano de BOT e de jogador no
-  helicóptero é PvP (servidor) e fica fora — medido e declarado.
-- **Fonte:** relato do dono.
-- **Reinjetar:** tirar o portão do voo do dano de PvE → vermelho.
+- **Limiar:** 0 de dano de PvE voando; controle > 0. **Bots (decisão do dono,
+  2026-09-29):** humano no helicóptero (o `state` que o cliente manda, `heli:
+  true`, ≥ 3 m) de frente para bot armado a ≤ 30 m, caminho real (`server.js` +
+  `scripts/bots.js`), 12 s: **0 disparos e 0 de dano** do bot nele, N ≥ 10;
+  controle: o mesmo humano a pé no mesmo ponto leva tiro. Dano de JOGADOR no
+  helicóptero continua PvP e fica fora.
+- **Fonte:** relato do dono; a extensão aos bots é decisão dele (2026-09-29) —
+  antes o laudo `070502f` registrou 19 de 20 bots acertando o piloto como PvP.
+- **Reinjetar:** tirar o portão do voo do dano de PvE → vermelho; o bot voltar a
+  aceitar alvo com `heli` → vermelho.
 
 ### P4 · Prédio é sólido para o jogador e está no chão
 - **Relato do dono:** *"precisa ver nos prédios, se temos bugs"*.
@@ -1010,6 +1066,43 @@ com as flags da sala (animais, zumbis, Visitante, golem).
   prédios" é amplo, e estas são as duas classes que o próprio histórico da base
   registra (`702079d`: construções flutuando; colisão de parede).
 - **Reinjetar:** tirar a colisão de uma parede → (a) vermelho.
+
+---
+
+## 5c. V — Veículo como cobertura *(nova, 2026-09-29)*
+
+### V1 · O veículo segura tiro — mas não para sempre
+- **Decisão do dono (2026-09-28/29):** *"carro pode segurar tiro, mas não pra
+  sempre"*.
+- **Mede:** (a) bala do JOGADOR contra alvo atrás de veículo inteiro, nos três
+  caminhos do tiro (hitscan, projétil do BR, foguete): onde para (âncora: a
+  caixa do veículo desenhado, pixels/pose do quadro); (b) bala do BOT contra
+  humano atrás de veículo inteiro (caminho real): dano no humano; (c) a VÍTIMA
+  atrás do veículo recusa o acerto que o atirador reportar através dele; (d) a
+  vida do veículo no servidor: quanto cada acerto tira, igual para todos os
+  clientes, e um cliente não consegue zerá-la sem acertar (o `security-regression`
+  e um cliente mentindo por socket); (e) vida zero: para de proteger no MESMO
+  instante para jogador, bot e vítima, queima **5 s** e explode (quem está dentro
+  morre, crédito para quem destruiu).
+- **Limiar:** (a)–(c): 0 de dano no humano atrás de veículo inteiro com cabeça e
+  tronco tampados; o acerto conta no veículo; (d) o dano em veículo passa pelas
+  MESMAS garantias do dano em jogador — alcance, origem do tiro perto do
+  atirador, 12 acertos/s e 520/s por atirador (somados aos acertos em jogador),
+  morto/imune não fere, o ocupante não fere o próprio veículo; um cliente que
+  despeja `vehicleHit` acima disso não tira mais vida do que o teto; (e) depois
+  de zerar, o controle volta a acertar o humano através do casco em ≤ 1 s, e a
+  explosão sai a 5 ± 0,5 s.
+  *(Redação de (d) ajustada antes de medir, 2026-09-29: o servidor deste jogo
+  não confere linha de visada em dano nenhum — modelo client-authoritative do
+  CLAUDE.md —, então V1 cobra paridade com o dano em jogador, não mais que ele.)*
+- **Fonte:** decisão do dono; `docs/mobile/referencia-veiculos.md` (PUBG,
+  Warzone, Fortnite, Apex — citada pelo construtor, **não conferida pelo
+  validador**); o anti-cheat do servidor (CLAUDE.md: "não reabra vetores").
+- **Por que a suíte não pega:** a regra é um módulo puro importado pelos três
+  lados; o teste pode concordar consigo mesmo. A âncora aqui é o que a tela
+  desenha e o que o servidor aceita de um cliente que mente.
+- **Reinjetar:** veículo sem vida continuar barrando → (e) vermelho; servidor
+  aceitar `vehicleHit` sem validar → (d) vermelho.
 
 ---
 
@@ -1257,13 +1350,14 @@ humano, a rodada não está validada.
 | C — Controles e HUD | C1–C12 | 12 | — |
 | B — Bots | B1–B14 | 13 | B13 (humano) |
 | P — PvE | P1–P4 | 4 | — |
+| V — Veículo | V1 | 1 | — |
 | D — Desempenho | D1–D8 | 5 | D1, D7, D8 (aparelho) |
 | E — Estados | E1–E15 | 13 | E13 (aparelho), E14 (humano + aparelho) |
-| **Total** | **69** | **62** | **7** |
+| **Total** | **70** | **63** | **7** |
 
-**Denominador honesto: 62** (53 → 54 com B14 e → 62 com M7, C11, C12, P1–P4 e E15, revisões de 2026-09-28). Os 7 da última coluna só fecham com o aparelho ligado
+**Denominador honesto: 63** (53 → 54 com B14, → 62 com M7, C11, C12, P1–P4 e E15, revisões de 2026-09-28, e → 63 com V1, revisão de 2026-09-29). Os 7 da última coluna só fecham com o aparelho ligado
 ou com um humano, e nenhum placar pode contá-los como verdes sem isso. **A entrega
-só está aprovada com 69 de 69** — os 62 automatizáveis verdes são condição
+só está aprovada com 70 de 70** — os 63 automatizáveis verdes são condição
 necessária, não suficiente.
 
 Sete critérios são **regressão** do que já foi corrigido e têm de continuar
@@ -1369,5 +1463,5 @@ arquivada no laudo da rodada.
 ### Passo 6 — veredito
 Uma linha por critério (M1…E14), verde/vermelho/não medido, com o número medido e a
 condição ao lado. Laudo em `docs/mobile/validacao-<commit>.md`, com o placar sobre
-**62**, os defeitos novos medidos e quantos deles nasceram de uma correção.
+**63**, os defeitos novos medidos e quantos deles nasceram de uma correção.
 Sem "quase", sem "só falta", sem média.
