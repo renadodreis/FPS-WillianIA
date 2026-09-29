@@ -491,6 +491,80 @@
       if (at) { _dmgAt.copy(at); MP.DmgNums.spawn(_dmgAt, verdict.dmg, false); }
     }
 
+    /* ================================================================
+       VEÍCULO COM VIDA — a rede (decisão do dono, 2026-09-28: "carro pode
+       segurar tiro, mas não... pra sempre!!"). A vida é do SERVIDOR; aqui
+       só se REPORTA o acerto que parou numa lataria (`vehicleHit`, e
+       `vehicleBlast` no estilhaço), pelo MESMO portão do tiro em jogador —
+       as janelas de cadência/orçamento são as mesmas no servidor. Quem
+       desconta, difunde e explode é ele (vehicleHp/Burning/Exploded).
+       ================================================================ */
+    const VEI = G.Veiculos;
+    const VEI_JANELA = [];     // { t, d }: teto de dano EM VEÍCULO por segundo (espelho)
+    function veiculoCabe(now, dano) {
+      while (VEI_JANELA.length && now - VEI_JANELA[0].t >= 1000) VEI_JANELA.shift();
+      let soma = 0;
+      for (const e of VEI_JANELA) soma += e.d;
+      const teto = VEI.regra.VEICULO_DANO_POR_S;
+      if (soma + dano > teto) return false;
+      VEI_JANELA.push({ t: now, d: dano });
+      return true;
+    }
+    const distAoVeiculo = (item, x, y, z) => Math.max(0,
+      Math.hypot(item.pose.x - x, item.pose.y - y, item.pose.z - z) - VEI.TIPOS[item.tipo].raio);
+    /* bala: agregada por veículo (a escopeta vira 1 mensagem, não 8) */
+    const pendVei = new Map();
+    let veiFlush = false;
+    function flushVeiculos() {
+      veiFlush = false;
+      syncSentPos();
+      const now = Date.now();
+      const fromPos = origemDoAcerto();
+      const originDist = dist3(sentPos, fromPos[0], fromPos[1], fromPos[2]);
+      for (const [item, e] of pendVei) {
+        const teto = VEI.ARMAS[e.weapon] || 0;   // faca e explosivo não vêm por aqui
+        const dano = Math.min(Math.round(e.dmg), teto);
+        const verdict = hitGate.admitShot(now, {
+          weapon: e.weapon, dmg: dano, dist: distAoVeiculo(item, sentPos[0], sentPos[1], sentPos[2]), originDist,
+          playing: matchRunning(), shooterAlive: !MP.player.dead, victimAlive: item.inteiro,
+          shooterImmune: iAmImmune(), victimImmune: false,
+        });
+        if (!teto || !verdict.ok || !veiculoCabe(now, verdict.dmg)) continue;
+        socket.emit('vehicleHit', { v: item.id, dmg: verdict.dmg, weapon: e.weapon, fromPos });
+      }
+      pendVei.clear();
+    }
+    VEI.rede = {
+      /* `arma`: o código que a bala carrega (projétil, que pode chegar depois
+         da troca de arma) ou o objeto da arma (hitscan, a da mão agora) */
+      bala(item, dano, arma) {
+        const weapon = typeof arma === 'string' ? arma : localWeaponCode();
+        const e = pendVei.get(item) || { dmg: 0, weapon };
+        e.dmg += dano;
+        pendVei.set(item, e);
+        if (!veiFlush) { veiFlush = true; queueMicrotask(flushVeiculos); }
+      },
+      explosao(item, dano, kind, impacto) {
+        syncSentPos();
+        const now = Date.now();
+        const verdict = hitGate.admitBlast(now, {
+          kind, dmg: Math.round(dano),
+          distShooterToImpact: dist3(sentPos, impacto.x, impacto.y, impacto.z),
+          distImpactToVictim: distAoVeiculo(item, impacto.x, impacto.y, impacto.z),
+          playing: matchRunning(), shooterAlive: !MP.player.dead, victimAlive: item.inteiro,
+          shooterImmune: iAmImmune(), victimImmune: false,
+        });
+        const noVeiculo = VEI.regra.danoExplosivoNoVeiculo(kind, verdict.dmg);
+        if (!verdict.ok || !veiculoCabe(now, noVeiculo)) return;
+        socket.emit('vehicleBlast', { v: item.id, dmg: verdict.dmg, kind, impactPos: [impacto.x, impacto.y, impacto.z] });
+      },
+    };
+    /* o que o SERVIDOR decidiu: vida, queima (deixa de proteger) e explosão */
+    socket.on('vehicleHp', d => { if (d) VEI.aplicarVida(d.v, +d.vida); });
+    socket.on('vehicleBurning', d => { if (d) VEI.queimar(d.v); });
+    socket.on('vehicleExploded', d => { if (d) VEI.explodir(d.v, Array.isArray(d.pos) ? d.pos : null); });
+    if (Array.isArray(INIT.veiculos)) VEI.aplicarLista(INIT.veiculos); // entrou no meio: o estado de todos
+
     /* =============== balística (projéteis com queda) =============== */
     const bullets = [];
     const _bv = new THREE.Vector3(), _bp = new THREE.Vector3();
@@ -500,6 +574,8 @@
     /* dano de área (granada/bazuca) nos jogadores remotos e no boss —
        sem isto explosivo era inútil no BR (só feria bots do modo solo) */
     window.__BR_splash = function (p, radius, maxDmg, kind = 'GRANADA') {
+      // a lataria também leva o estilhaço (o servidor aplica o multiplicador)
+      VEI.explosao(p, kind, radius, maxDmg);
       for (const rp of window.__MP_remotePlayers) {
         if (!rp.alive) continue;
         const d = rp.group.position.distanceTo(p);
@@ -547,6 +623,7 @@
         drop: gun.projDrop || 6, life: 1.7, dmg: gun.dmg, laser: !!gun.laser,
         vis: boca.clone(),                                // início do desenho
         from: boca, weapon: localWeaponCode(), // p/ replicar o erro (e o traçante remoto)
+        ignorar: VEI.meu(),                    // de dentro do heli, a própria lataria não conta
       });
     };
 
@@ -633,12 +710,15 @@
             if (d >= 0 && d < bestD) { bestD = d; bestMeta = meta; bestPart = s.part; }
           }
         }
-        const blockD = MP.rayBlockedAt(b.p, _bp, Math.min(segLen, bestD));
+        const blockD = MP.rayBlockedAt(b.p, _bp, Math.min(segLen, bestD), b.ignorar);
         const col = b.laser ? 0x52ffe6 : 0xffe9a8;
-        if (blockD < Math.min(segLen, bestD)) { // terreno/parede
+        if (blockD < Math.min(segLen, bestD)) { // terreno/parede/veículo inteiro
           _bv.copy(b.p).addScaledVector(_bp, blockD);
           MP.FX.spawnTracer(b.vis, _bv, col);   // DESENHO: parte da boca no 1º passo
-          MP.FX.burst(_bv, _bp.clone().negate(), 'dirt');
+          // parou numa lataria: o veículo leva o dano (o servidor desconta)
+          const vh = VEI.raio(b.p, _bp, blockD + 1e-3, b.ignorar);
+          if (vh && vh.t <= blockD + 1e-6) VEI.acertarBala(vh.alvo, b.dmg, b.weapon, _bv);
+          else MP.FX.burst(_bv, _bp.clone().negate(), 'dirt');
           window.__BR_shotMiss(b.from, _bv, b.weapon);
           bullets.splice(i, 1);
           continue;
@@ -1841,7 +1921,8 @@
       const len = _bp.length();
       if (len > 1e-4) {
         _bp.multiplyScalar(1 / len);
-        if (MP.rayBlockedAt(_bv, _bp, len) < len - 0.15) return;
+        // veículo INTEIRO no caminho recusa o dano; o MEU veículo não conta
+        if (MP.rayBlockedAt(_bv, _bp, len, VEI.meu()) < len - 0.15) return;
       }
       MP.playerDamage(d.dmg, { x: f[0], y: f[1], z: f[2] },
         { type: 'player', attackerId: d.shooterId, weapon: d.weapon });
@@ -2252,7 +2333,7 @@
         // um boneco flutuando e o carro parado no estacionamento)
         if (rp.car >= 0) {
           const v = G.Car.vehicles[rp.car];
-          if (v && !(G.state.driving && v.group === G.Car.group)) {
+          if (v && !v.destruido && !(G.state.driving && v.group === G.Car.group)) {
             const gp = rp.group.position;
             /* Dica VISUAL de giro/esterço das rodas (nunca autoridade — só
                alimenta a animação em js/car.js).
@@ -2317,7 +2398,7 @@
           rp.carHintPos = null;
         }
         // voando: o helicóptero (único no mapa) segue o piloto remoto
-        if (rp.heli && !G.state.flying) {
+        if (rp.heli && !G.state.flying && !G.Heli.destruido) {
           G.Heli.group.position.copy(rp.group.position);
           G.Heli.group.rotation.set(0, rp.yaw, 0);
         }

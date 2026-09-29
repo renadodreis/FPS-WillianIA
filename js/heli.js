@@ -3,6 +3,7 @@
    ================================================================ */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { TIPOS } from './veiculo-vida.js';
 
 export function createHeli(deps) {
   const { CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos,
@@ -90,6 +91,7 @@ export function createHeli(deps) {
   }
 
   function tryEnter() {
+    if (api.destruido) return false;
     if (player.pos.distanceTo(group.position) > 5) return false;
     if (window.__BR_heliTaken) { centerMsg('Helicóptero ocupado!', 1400); return false; }
     state.flying = true;
@@ -127,7 +129,11 @@ export function createHeli(deps) {
       const fx = Math.cos(yaw), fz = -Math.sin(yaw); // nariz = +X girado
       vel.x = damp(vel.x, fx * fwdIn * 27, 1.8, dt);
       vel.z = damp(vel.z, fz * fwdIn * 27, 1.8, dt);
-      const vyT = keys['Space'] ? 8 : (keys['ControlLeft'] || keys['ControlRight']) ? -7 : 0;
+      /* vida em zero (js/veiculos.js): sem sustentação — desce, e o piloto
+         ainda manobra na horizontal ("The pilot can still move in any
+         horizontal direction when the Choppa is falling", Fortnite) */
+      const vyT = api.semSustentacao ? -9
+        : keys['Space'] ? 8 : (keys['ControlLeft'] || keys['ControlRight']) ? -7 : 0;
       vel.y = damp(vel.y, vyT, 3, dt);
       group.position.addScaledVector(vel, dt);
       const lim = CFG.WORLD_SIZE * 0.49;
@@ -145,7 +151,51 @@ export function createHeli(deps) {
       SFX.heliUpdate(true, keys['Space'] ? 1 : 0.45);
     } else {
       SFX.heliUpdate(false, 0);
+      empurrarDaFuselagem();
     }
   }
-  return { group, update, tryEnter, exit, assentoXR, get vel() { return vel; } };
+  /* O CORPO NÃO ENTRA NA FUSELAGEM. Desde que o helicóptero inteiro segura
+     bala (js/veiculo-vida.js), ficar DENTRO dele seria esconderijo, não
+     cobertura: a bala e a visada param na lataria e quem está lá dentro fica
+     imune até a vida acabar. O carro já empurra o jogador (game.js, círculo
+     do chassi); o helicóptero não tinha colisão nenhuma com o corpo. Aqui ele
+     empurra para fora das MESMAS caixas que seguram a bala, pela face mais
+     perto, no plano — quem está em cima (pé acima do teto) não é empurrado. */
+  const ALTURA_CORPO = 1.7;
+  function empurrarDaFuselagem() {
+    if (state.flying || api.destruido || !player || !player.pos) return;
+    const r = player.radius || 0.42;
+    const c = Math.cos(group.rotation.y), s = Math.sin(group.rotation.y);
+    for (const cx of TIPOS.heli.caixas) {
+      if (player.pos.y + ALTURA_CORPO < group.position.y + cx.min[1] || player.pos.y >= group.position.y + cx.max[1] - 0.12) continue;
+      const dx = player.pos.x - group.position.x, dz = player.pos.z - group.position.z;
+      let lx = dx * c - dz * s, lz = dx * s + dz * c;
+      const x0 = cx.min[0] - r, x1 = cx.max[0] + r, z0 = cx.min[2] - r, z1 = cx.max[2] + r;
+      if (lx <= x0 || lx >= x1 || lz <= z0 || lz >= z1) continue;
+      const saida = Math.min(lx - x0, x1 - lx, lz - z0, z1 - lz);
+      if (saida === lx - x0) lx = x0; else if (saida === x1 - lx) lx = x1;
+      else if (saida === lz - z0) lz = z0; else lz = z1;
+      player.pos.x = group.position.x + lx * c + lz * s;
+      player.pos.z = group.position.z - lx * s + lz * c;
+    }
+  }
+  /* EXPLODIU: some do mundo. O grupo desce para longe — o prompt de PILOTAR
+     (js/interact.js, js/xr/xrinteract.js) mede distância até ele. */
+  function remover() {
+    api.destruido = true;
+    api.semSustentacao = true;
+    group.visible = false;
+    group.position.y = -5000;
+    vel.set(0, 0, 0);
+  }
+  /* solo, JOGAR DE NOVO: de volta ao heliponto (a pose vem do reset) */
+  function restaurar() {
+    api.destruido = false;
+    api.semSustentacao = false;
+    group.visible = true;
+    if (group.position.y < -1000) group.position.set(hs.x, hs.y + 0.05, hs.z);
+  }
+  const api = { group, update, tryEnter, exit, assentoXR, remover, restaurar,
+    destruido: false, semSustentacao: false, get vel() { return vel; } };
+  return api;
 }

@@ -32,6 +32,12 @@ describe('Helicóptero no jogo real: nenhum PvE fere quem está nele', { skip: !
       const hy = MP.groundAt(hx, hz, 999);
       if (G.state.flying) G.Heli.exit();
       G.Heli.group.position.set(hx, hy + 0.05, hz);
+      /* ISOLA O PORTÃO DE `state`: desde 2026-09-28 o helicóptero inteiro é
+         COBERTURA (js/veiculo-vida.js) e barra a visada do PvE — com ele no
+         meio, o caso "no helicóptero não" passaria pela lataria mesmo sem o
+         portão (e o Colosso, a −5 m, nem alcançava o controle a pé). O que
+         este arquivo mede é a fiação do `state`, não a cobertura. */
+      G.Veiculos.porId('heli').inteiro = false;
       window.QA.reset(hx + 2, hz);
       P.health = P.maxHealth; P.armor = 0; P.invulnUntil = 0;
       if (embarca) {
@@ -83,6 +89,7 @@ describe('Helicóptero no jogo real: nenhum PvE fere quem está nele', { skip: !
       G.Skeletons.list[0].group.position.set(9999, 0, 9999);
       for (const e of G.Enemies.list) e.alive = false;
       G.Boss.pos().set(casa.x, MP.groundAt(casa.x, casa.z, 999), casa.z); G.Boss.state.active = false;
+      G.Veiculos.porId('heli').inteiro = true;
       P.dead = false; P.health = P.maxHealth;
       return { perdeu: +(P.maxHealth - minVida).toFixed(1), causa, voando: embarca };
     }, embarca, quem);

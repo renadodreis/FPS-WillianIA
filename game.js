@@ -73,6 +73,7 @@ import { createMapToys } from './js/maptoys.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
 import { createSecrets } from './js/secrets.js';
 import { buildChest } from './js/chestmodel.js';
+import { criarVeiculos } from './js/veiculos.js';
 
 /* ================================================================
    PORTÃO DO MENU — o estado dos botões é DERIVADO do estado ATUAL.
@@ -2553,9 +2554,10 @@ function updateReload(t) {
   }
 }
 
-/* marcha ao longo do raio testando terreno e troncos (LOS barato em heightfield) */
-function rayBlockedAt(origin, dir, maxDist) {
-  const wallT = Structures.rayHit(origin, dir, maxDist); // paredes param bala
+/* marcha ao longo do raio testando terreno e troncos (LOS barato em heightfield).
+   `ignorar`: um veículo que não conta (ver `Veiculos`, depois do Heli) */
+function rayBlockedAt(origin, dir, maxDist, ignorar = null) {
+  const wallT = Structures.rayHit(origin, dir, maxDist, ignorar); // paredes e veículos inteiros param bala
   const lim = Math.min(maxDist, wallT);
   const step = 1.6;
   for (let d = step; d < lim; d += step) {
@@ -2950,12 +2952,19 @@ function fire(t) {
         }
       }
     }
-    const blockT = rayBlockedAt(_rayOrig, _rayDir, Math.min(bestT, 240));
+    // de dentro do helicóptero, a própria cauda não segura o tiro
+    const meuVeiculo = Veiculos.meu();
+    const blockT = rayBlockedAt(_rayOrig, _rayDir, Math.min(bestT, 240), meuVeiculo);
 
     if (blockT < bestT) {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, blockT);
-      terrainNormal(_hitPos.x, _hitPos.z, _v1);
-      FX.burst(_hitPos, _v1, p % 2 ? 'spark' : 'dirt');
+      // parou numa LATARIA: o veículo leva o dano (a vida é do servidor no BR)
+      const vh = Veiculos.raio(_rayOrig, _rayDir, blockT + 1e-3, meuVeiculo);
+      if (vh && vh.t <= blockT + 1e-6) Veiculos.acertarBala(vh.alvo, gun.dmg, gun, _hitPos);
+      else {
+        terrainNormal(_hitPos.x, _hitPos.z, _v1);
+        FX.burst(_hitPos, _v1, p % 2 ? 'spark' : 'dirt');
+      }
       FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
     } else if (bestEnemy || bestBoss || bestExtra || bestRemote) {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, bestT);
@@ -3117,6 +3126,34 @@ const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, c
 
 const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos, isMobile: __mobile,
   aoTrocar: soltarToqueDaTroca });
+
+/* VEÍCULO SEGURA BALA — MAS NÃO PRA SEMPRE (decisão do dono, 2026-09-28).
+   Veículo INTEIRO passa a ser sólido para bala e visada; a vida dele é do
+   servidor no BR (js/veiculo-vida.js é a regra, js/veiculos.js o cliente).
+   O mundo sólido de bala do jogo é o `Structures.rayHit/segBlocked`: é por
+   ele que passam o `rayBlockedAt` (hitscan, projétil do BR, a vítima do
+   `youWereHit`, a assistência, o som), o foguete, a granada (quica na
+   lataria) e a visada da IA (aihelpers, bicho, boss, alien). Compor AQUI,
+   uma vez, alcança todos — consertar um caminho não alcança os outros.
+   `ignorar` (4º argumento, opcional): um veículo que não conta — o da
+   própria vítima, ou o de quem atira de dentro dele. */
+const ARMA_POR_INDICE = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA', 'SNIPER', 'ESCOPETA']; // posicional com o arsenal
+const Veiculos = criarVeiculos({ Car, Heli, FX, rand, state,
+  getGrenades: () => Grenades,
+  sairDoVeiculo: () => { if (state.driving || state.flying) tryToggleCar(); },
+  matarOcupante: () => playerDamage(99999, null, { type: 'explosion' }),
+  avisar: (msg, ms) => centerMsg(msg, ms),
+  codigoDaArma: g => ARMA_POR_INDICE[arsenal.indexOf(g)] || null,
+  rayBlockedAt });
+{
+  const rayHitMundo = Structures.rayHit, segMundo = Structures.segBlocked;
+  Structures.rayHit = (o, d, maxDist, ignorar = null) =>
+    Math.min(rayHitMundo(o, d, maxDist), Veiculos.bloqueio(o, d, maxDist, ignorar));
+  Structures.segBlocked = (a, b, ignorar = null) => segMundo(a, b) || Veiculos.segmento(a, b, ignorar);
+}
+/* SOLO sem sala: o estilhaço (js/grenades.js) também fere a lataria. No BR o
+   br-game.js troca este gancho pelo dele, que faz o mesmo e fere os remotos. */
+if (!window.__BR_splash) window.__BR_splash = (p, raio, max, kind) => Veiculos.explosao(p, kind, raio, max);
 
 /* ================== entrar/sair + câmera de perseguição ================== */
 let driveBlend = 0;
@@ -4353,6 +4390,7 @@ function tick(forceDt) {
   stepPhysics(dt, intendedDt);
   Car.update(dt, t);
   if (!heliAntesDoTiro) Heli.update(dt, t);
+  Veiculos.update(dt, camera.position); // fumaça, fogo e o relógio da queima no solo
   if (!window.__BR_active) Enemies.update(dt, t); // BR: sem inimigos comuns
   if (!window.__BR_active || (window.__BR_debug && window.__BR_debug.S.phase === 'PLAY')) Skeletons.update(dt, t);
   Animals.update(dt, t);
@@ -4824,6 +4862,7 @@ function resetarPartida() {
   for (const s of I.pickups) Pickups.spawn({ x: s.x, z: s.z }, s.type);
 
   /* ---- veículos (posição E sono do Cannon) ---- */
+  Veiculos.restaurar(); // os que explodiram voltam inteiros, na vaga de antes
   for (let i = 0; i < Car.vehicles.length; i++) {
     const v = Car.vehicles[i], s = I.veiculos[i];
     if (!s) break;
@@ -5213,7 +5252,7 @@ capturarInicio();
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
-  state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
+  state, player, Car, Heli, Veiculos, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   XRArma, XRInterage, XRUI, XRHud, XRTato, XRTaxa, XRAndar,
   /* QA + menu de VR: a preferência de empunhadura (`apertar`/`manter`) e os

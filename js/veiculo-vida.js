@@ -43,18 +43,22 @@ import { NEXUS } from './paredes.js';
    [INFERÊNCIA] a escala em tiros de fuzil: buggy 30, esportivo 45 (o sedã
    do PUBG), caminhão ×1,5 do esportivo (a razão caminhão/sedã do Fortnite)
    = 68, helicóptero ×1,875 (Choppa/sedã) = 84. */
+/* Caixas CALIBRADAS pelo desenho (test/veiculo-vida-jogo.test.js mede os
+   vértices da lataria no referencial do chassi, percentis 0,5–99,5 % em
+   planta e 99,5 % no teto): buggy x ±1,73 z ±0,73 teto 0,54; esportivo
+   x −1,82…1,81 z ±0,74 teto 0,52; caminhão x −2,47…2,54 z ±1,03 teto 2,14. */
 export const TIPOS = Object.freeze({
   buggy: Object.freeze({
     nome: 'BUGGY', vida: 780, acimaDoChao: 0.58, raio: 1.95,
-    caixas: Object.freeze([{ min: [-1.764, -0.40, -0.833], max: [1.764, 0.55, 0.833] }]),
+    caixas: Object.freeze([{ min: [-1.73, -0.40, -0.73], max: [1.73, 0.54, 0.73] }]),
   }),
   esportivo: Object.freeze({
     nome: 'ESPORTIVO GT', vida: 1170, acimaDoChao: 0.555, raio: 2.05,
-    caixas: Object.freeze([{ min: [-1.862, -0.45, -0.862], max: [1.862, 0.55, 0.862] }]),
+    caixas: Object.freeze([{ min: [-1.82, -0.42, -0.74], max: [1.81, 0.52, 0.74] }]),
   }),
   caminhao: Object.freeze({
     nome: 'CAMINHÃO MILITAR', vida: 1760, acimaDoChao: 0.554, raio: 2.84,
-    caixas: Object.freeze([{ min: [-2.646, -0.20, -1.029], max: [2.646, 1.68, 1.029] }]),
+    caixas: Object.freeze([{ min: [-2.47, -0.20, -1.03], max: [2.54, 2.14, 1.03] }]),
   }),
   /* fuselagem + cabine de vidro (js/heli.js: 3,1 × 1,5 × 1,6 em x 0,2,
      vidro até x 2,05) e o cone da cauda com o leme. O rotor não segura bala. */
@@ -124,16 +128,21 @@ export function danoDaExplosaoDoVeiculo(dist) {
    (único) fica à parte, com id HELI, no topo da Torre Nexus
    (`Structures.heliSpot` + 5 cm, js/heli.js). `plano` é o de
    `planejarEstruturas` (js/paredes.js). Com `heightAt`, a altura dos
-   carros sai do chão + `acimaDoChao`. */
+   carros sai do chão + `acimaDoChao`. As três vagas da cidade ficam NA RUA,
+   e a rua tem laje física acima do relevo (game.js, "lajes FÍSICAS do
+   pavimento urbano": topo do asfalto em gy + 0,14) — sem ela o servidor
+   punha os esportivos 0,24–0,37 m abaixo de onde o cliente os assenta. */
+export const TOPO_DO_ASFALTO = 0.14;
 export function frotaDoPlano(plano, heightAt = null) {
   const { x: cx, z: cz, gy } = plano.cidade;
+  const chao = (x, z, naRua) => Math.max(heightAt(x, z), naRua ? gy + TOPO_DO_ASFALTO : -Infinity);
   const lista = [
     { tipo: 'buggy', x: 7.5, z: -6, ry: 0 },
-    { tipo: 'esportivo', x: cx + 14, z: cz + 26, ry: 0 },
-    { tipo: 'esportivo', x: cx - 8, z: cz + 26, ry: Math.PI },
-    { tipo: 'esportivo', x: cx + 26, z: cz - 16, ry: -Math.PI / 2 },
+    { tipo: 'esportivo', x: cx + 14, z: cz + 26, ry: 0, rua: true },
+    { tipo: 'esportivo', x: cx - 8, z: cz + 26, ry: Math.PI, rua: true },
+    { tipo: 'esportivo', x: cx + 26, z: cz - 16, ry: -Math.PI / 2, rua: true },
     ...(plano.bases || []).map(b => ({ tipo: 'caminhao', x: b.x, z: b.z - 4, ry: b.caminhaoRy })),
-  ].map((v, id) => ({ id, ...v, y: heightAt ? heightAt(v.x, v.z) + TIPOS[v.tipo].acimaDoChao : null }));
+  ].map(({ rua, ...v }, id) => ({ id, ...v, y: heightAt ? chao(v.x, v.z, rua) + TIPOS[v.tipo].acimaDoChao : null }));
   lista.push({ id: HELI, tipo: 'heli', x: cx, z: cz, ry: 0, y: gy + NEXUS.NF * NEXUS.FH + 0.25 + 0.05 });
   return lista;
 }

@@ -391,6 +391,7 @@ export function createCar(deps) {
 
   function update(dt) {
     for (const v of vehicles) {
+      if (v.destruido) continue; // explodiu: fora do mundo (js/veiculos.js)
       const hasDriver = state.driving && v === cur;
       const driven = hasDriver && !state.paused;
       const remoteActive = !!(v.remoteHint && v.remoteHint.ttl > 0);
@@ -420,6 +421,9 @@ export function createCar(deps) {
           if (fwdSpeed > 2) brake = v.cfg.brake;       // freia antes de dar ré
           else force = -v.cfg.force * 0.55;
         }
+        // vida em zero: "engines are now disabled and set on fire" (PUBG 7.3)
+        // — o freio continua, o motor não empurra mais
+        if (v.semMotor) force = 0;
         if (keys['Space']) { brake = v.cfg.brake; force = 0; } // freio de mão
         for (let i = 0; i < 4; i++) v.vehicle.setBrake(brake, i);
         if (v.cfg.awd) { // tração integral: divide a força nas 4 rodas
@@ -555,17 +559,45 @@ export function createCar(deps) {
   function nearest(p) {
     let best = vehicles[0], bd = 1e9;
     for (const v of vehicles) {
+      if (v.destruido) continue; // explodiu: não se entra no que não existe
       const d = p.distanceTo(v.group.position);
       if (d < bd) { bd = d; best = v; }
     }
     return { v: best, d: bd };
   }
 
+  /* EXPLODIU (js/veiculos.js): sai da física e da cena. O índice na frota
+     fica — é a identidade do veículo no protocolo (`carOwners`, `car` do
+     `state`). O grupo desce para longe: quem mede distância até ele (o
+     empurrão do jogador em game.js, o prompt de ENTRAR) não o acha mais. */
+  const LONGE_Y = -5000;
+  function remover(v) {
+    if (!v || v.destruido) return;
+    v.destruido = true;
+    v.semMotor = true;
+    v.vehicle.removeFromWorld(world);   // corpo + o callback de suspensão
+    v._suspensionActive = false;
+    v.remoteHint = null;
+    scene.remove(v.group);
+    v.group.position.y = LONGE_Y;
+  }
+  /* solo, JOGAR DE NOVO: devolve o veículo inteiro (a pose vem do reset) */
+  function restaurar(v) {
+    if (!v) return;
+    v.semMotor = false;
+    if (!v.destruido) return;
+    v.destruido = false;
+    v.vehicle.addToWorld(world);
+    v._suspensionActive = true;
+    v._parkedT = 0;
+    scene.add(v.group);
+  }
+
   return {
-    vehicles, nearest, update, speedKmh, ready, wake: wakeVehicle,
+    vehicles, nearest, update, speedKmh, ready, wake: v => { if (!v.destruido) wakeVehicle(v); }, remover, restaurar,
     setCur(v) {
       cur = v;
-      wakeVehicle(v);
+      if (!v.destruido) wakeVehicle(v);
     },
     get cfg() { return cur.cfg; },
     get vehicle() { return cur.vehicle; },
