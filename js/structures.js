@@ -530,7 +530,7 @@ function criarEstruturas(deps, noSeed) {
        test.js) e `nexus.ops`, a lista ordenada do que existe lá dentro — cada
        op traz a parede/plataforma que gera. Aqui só se DESENHA, e todo o VISUAL
        vai pro cityInteriorMesh (some no evento de destruição, ver cityVisual). */
-    const { half: HALF, zMid, zBot, railHeight: RAILH, slabT: SLABT, riserCount: STEPS } = nexus.info;
+    const { half: HALF, zMid, zBot, railHeight: RAILH, slabT: SLABT } = nexus.info;
     const _ic = new THREE.Color();
     const iBox = (w, h, d, x, y, z, hex) => { // caixa vertex-color no mesh interior
       const g = new THREE.BoxGeometry(w, h, d); g.translate(cx + x, y, cz + z);
@@ -563,13 +563,10 @@ function criarEstruturas(deps, noSeed) {
       paintGeometry(g, _ic.setHex(hex)); cityInteriorGeos.push(g);
       for (let i = 0; i <= 5; i++) { const t = i / 5; iBox(0.06, RAILH, 0.06, x, yN + dy * t + RAILH / 2, zMid + dz * t, hex); }
     };
-    // um lance: rampa lógica contínua (colisão SUAVE) + degraus SÓ visuais por cima
-    const flight = ({ xL, xR, yN, yS, plataforma }) => {
-      platforms.push(plataforma);
-      const dz = (zBot - zMid) / STEPS;
-      for (let i = 0; i < STEPS; i++) { const t = (i + 0.5) / STEPS;
-        iBox(xR - xL, 0.34, dz + 0.02, (xL + xR) / 2, (yN + (yS - yN) * t) - 0.17, zMid + t * (zBot - zMid), 0x83888f); }
-    };
+    // um lance: a rampa lógica contínua (colisão SUAVE); os degraus vêm a seguir
+    const flight = ({ plataforma }) => platforms.push(plataforma);
+    // degrau: desenhado com a MESMA caixa que barra a bala (js/paredes.js)
+    const degrau = d => iBox(d.x1 - d.x0, d.y1 - d.y0, d.z1 - d.z0, (d.x0 + d.x1) / 2, (d.y0 + d.y1) / 2, (d.z0 + d.z1) / 2, 0x83888f);
 
     heliSpot = { x: cx, y: towerTopY, z: cz };
     bazookaSpot = { x: cx + 6.5, y: towerTopY, z: cz + 6.5 };
@@ -602,6 +599,7 @@ function criarEstruturas(deps, noSeed) {
       laje: op => iSlab(op),
       corrimao: op => railRun(op),
       lance: op => flight(op),
+      degrau: op => degrau(op),
       corrimaoInclinado: op => railSlope(op),
       luminaria: op => iLamp(op.w, op.d, op.x, op.y, op.z),
       placa: op => floorSign(op),
@@ -735,13 +733,14 @@ function criarEstruturas(deps, noSeed) {
      ruínas no destroy da cidade, o castelo ao carregar o GLB, o QA). Trocou
      o tamanho ou o último elemento, reempacota; `invalidateWallCache()`
      força na mão. */
-  let wpack = new Float64Array(0), wnc = new Uint8Array(0);
+  let wpack = new Float64Array(0), wnc = new Uint8Array(0), wnb = new Uint8Array(0);
   let wpackLen = -1, wpackLast;
   function packWalls() {
     const n = walls.length;
     if (wpack.length < n * 6) {
       wpack = new Float64Array(n * 6 + 768);
       wnc = new Uint8Array(n + 128);
+      wnb = new Uint8Array(n + 128);
     }
     for (let i = 0, o = 0; i < n; i++, o += 6) {
       const b = walls[i];
@@ -749,6 +748,7 @@ function criarEstruturas(deps, noSeed) {
       wpack[o + 2] = b.y0; wpack[o + 3] = b.y1;
       wpack[o + 4] = b.z0; wpack[o + 5] = b.z1;
       wnc[i] = b.noCollide ? 1 : 0;
+      wnb[i] = b.noBullet ? 1 : 0;
     }
     wpackLen = n;
     wpackLast = walls[n - 1]; // n = 0 => undefined, e o teste abaixo bate
@@ -759,11 +759,14 @@ function criarEstruturas(deps, noSeed) {
   }
   function invalidateWallCache() { wpackLen = -1; }
 
-  /* ---- raio vs AABBs (slab test, sem alocação) ---- */
+  /* ---- raio vs AABBs (slab test, sem alocação) ----
+     Guarda-corpo (`noBullet`, js/paredes.js) segura corpo e deixa a bala
+     passar: o desenho dele é grade vazada. */
   function rayHit(o, d, maxDist) {
     let best = maxDist;
     const n = syncWalls(), w = wpack;
     for (let i = 0, p = 0; i < n; i++, p += 6) {
+      if (wnb[i]) continue;
       let t0 = 0, t1 = best, ta, tb;
       const bx0 = w[p], bx1 = w[p + 1], by0 = w[p + 2], by1 = w[p + 3], bz0 = w[p + 4], bz1 = w[p + 5];
       if (Math.abs(d.x) < 1e-8) { if (o.x < bx0 || o.x > bx1) continue; }

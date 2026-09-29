@@ -43,6 +43,8 @@
      { x0, x1, y0, y1, z0, z1 }            AABB em metros, mundo
      + city: true      → urbana (sai do mundo na destruição da cidade)
      + noCollide: true → laje: barra bala, não empurra corpo
+     + noBullet: true  → grade: empurra corpo, não barra bala (o
+                         `playerclip` do Source: "blocks only players")
      + castle: true    → castelo do boss (com `part`, como castle.js)
    ================================================================ */
 import * as CityLayout from './citylayout.js';
@@ -642,14 +644,14 @@ export function interiorNexus(cx, cz, gy) {
   const towerTopY = gy + NF * fh + 0.25;
   const HALF = W / 2 - 0.25;               // 8.75: meia-largura interna (casca 0.5)
   const WELL = { x0: -HALF, x1: -4.9, z0: -HALF, z1: -4.1 }; // poço fixo (NO)
-  const GAP = 0.2, SLABT = 0.24, RAILH = 0.98, STEPS = 10;
+  const GAP = 0.2, SLABT = 0.24, RAILH = 0.98, STEPS = 10, DEGRAU_H = 0.34;
   const FLW = (WELL.x1 - WELL.x0 - GAP) / 2;
   const xA0 = WELL.x0, xA1 = WELL.x0 + FLW;  // lance A (oeste)
   const xB0 = WELL.x1 - FLW, xB1 = WELL.x1;  // lance B (leste)
   const zMid = WELL.z0 + 1.75;               // topo dos lances / borda sul do patamar
   const zBot = WELL.z1;                       // base dos lances (borda norte do apron)
   const info = { W, fh, floors: NF, well: WELL, flightWidth: FLW, flightRun: zBot - zMid,
-    gap: GAP, midDepth: 1.75, riserCount: STEPS, railHeight: RAILH, slabT: SLABT,
+    gap: GAP, midDepth: 1.75, riserCount: STEPS, railHeight: RAILH, slabT: SLABT, stepThick: DEGRAU_H,
     xA0, xA1, xB0, xB1, zMid, zBot, half: HALF, gy, towerTopY };
   const ops = [];
   const panelH = NF * fh;
@@ -661,17 +663,38 @@ export function interiorNexus(cx, cz, gy) {
   const laje = (x0, x1, z0, z1, y) => ops.push({ tipo: 'laje', x0, x1, z0, z1, y,
     parede: { x0: cx + x0, x1: cx + x1, y0: y - SLABT, y1: y, z0: cz + z0, z1: cz + z1, noCollide: true, city: true },
     plataforma: { x0: cx + x0, x1: cx + x1, z0: cz + z0, z1: cz + z1, y, city: true } });
-  // corrimão horizontal; colisor fino contínuo opcional
+  /* corrimão horizontal; colisor fino contínuo opcional.
+     O colisor é GUARDA-CORPO, não parede: segura quem anda (ninguém cai no
+     poço) e deixa a bala passar, porque o desenho é grade — barra a 0,98 m,
+     barra a 0,49 m e montantes a cada ~1,1 m, quase tudo vazado. Barrando
+     bala, o jogador via o executivo entre as barras, atirava e a bala
+     parava no ar (test/torre-bala-escada.test.js). */
   const corrimao = (x0, x1, z0, z1, yb, colide) => {
     const horiz = Math.abs(x1 - x0) >= Math.abs(z1 - z0);
     const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, t = 0.12;
     ops.push({ tipo: 'corrimao', x0, x1, z0, z1, yb, colide,
       parede: colide ? { x0: cx + (horiz ? x0 : mx - t / 2), x1: cx + (horiz ? x1 : mx + t / 2),
-        y0: yb, y1: yb + RAILH, z0: cz + (horiz ? mz - t / 2 : z0), z1: cz + (horiz ? mz + t / 2 : z1), city: true } : null });
+        y0: yb, y1: yb + RAILH, z0: cz + (horiz ? mz - t / 2 : z0), z1: cz + (horiz ? mz + t / 2 : z1),
+        city: true, noBullet: true } : null });
   };
-  // um lance: rampa lógica contínua (colisão SUAVE); degraus são só desenho
-  const lance = (xL, xR, yN, yS) => ops.push({ tipo: 'lance', xL, xR, yN, yS,
-    plataforma: { ramp: true, axis: 'z', x0: cx + xL, x1: cx + xR, z0: cz + zMid, z1: cz + zBot, y0: yN, y1: yS, city: true } });
+  /* um lance: rampa lógica contínua (colisão SUAVE para quem anda) e os
+     degraus, que são o que a tela mostra MACIÇO. Cada degrau é uma caixa
+     `noCollide`: barra bala e não empurra ninguém (quem anda segue a
+     rampa). Antes o lance era só rampa e a bala passava pelos degraus:
+     de 42 tiros de um executivo no andar contra quem subia o lance de
+     baixo, 8 acertaram através dos degraus do lance de cima (sonda no
+     jogo real). O desenho sai destas MESMAS caixas (js/structures.js). */
+  const lance = (xL, xR, yN, yS) => {
+    ops.push({ tipo: 'lance', xL, xR, yN, yS,
+      plataforma: { ramp: true, axis: 'z', x0: cx + xL, x1: cx + xR, z0: cz + zMid, z1: cz + zBot, y0: yN, y1: yS, city: true } });
+    const dz = (zBot - zMid) / STEPS;
+    for (let i = 0; i < STEPS; i++) {
+      const t = (i + 0.5) / STEPS, topo = yN + (yS - yN) * t, zc = zMid + t * (zBot - zMid);
+      const d = { x0: xL, x1: xR, y0: topo - DEGRAU_H, y1: topo, z0: zc - dz / 2 - 0.01, z1: zc + dz / 2 + 0.01 };
+      ops.push({ tipo: 'degrau', ...d,
+        parede: { x0: cx + d.x0, x1: cx + d.x1, y0: d.y0, y1: d.y1, z0: cz + d.z0, z1: cz + d.z1, noCollide: true, city: true } });
+    }
+  };
   const corrimaoInclinado = (x, yN, yS) => ops.push({ tipo: 'corrimaoInclinado', x, yN, yS });
   const stairGuards = (y) => {
     corrimao(WELL.x1, WELL.x1, WELL.z0, zBot, y, true);   // borda leste do poço
@@ -800,12 +823,14 @@ export function paredesComCidadeDestruida(mundo) {
 /* ---------------- consulta: raio / segmento × caixas ----------------
    A MESMA conta de Structures.rayHit (slab test): distância até a primeira
    face atingida à frente da origem, ou Infinity. Origem dentro da caixa não
-   conta (t0 = 0), como no jogo. Lajes `noCollide` barram bala, então entram. */
+   conta (t0 = 0), como no jogo. Lajes `noCollide` barram bala, então entram;
+   guarda-corpo `noBullet` não barra, então fica de fora. */
 export function criarConsultaParedes(paredes) {
-  const n = paredes.length;
+  const solidas = paredes.filter(b => !b.noBullet);
+  const n = solidas.length;
   const w = new Float64Array(n * 6);
   for (let i = 0, o = 0; i < n; i++, o += 6) {
-    const b = paredes[i];
+    const b = solidas[i];
     w[o] = b.x0; w[o + 1] = b.x1; w[o + 2] = b.y0; w[o + 3] = b.y1; w[o + 4] = b.z0; w[o + 5] = b.z1;
   }
   function raio(o, d, maxDist) {

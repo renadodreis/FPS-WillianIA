@@ -173,7 +173,10 @@ describe('planta nova mantém os invariantes (varredura em Node)', () => {
     // somou 78: o muro das 2 bases virou 25 + 38 trechos que acompanham a
     // encosta (eram 5 + 5 caixas inteiras) e o castelo ganhou a fundação sob
     // o portão + 12 degraus de aterro e 12 lajes de bala sob a rampa.
-    assert.equal(contagem, 381, 'a semente 424242 devia ter 381 paredes (sem o cofre)');
+    // 381 → 581: os 10 degraus de cada um dos 20 lances da Torre Nexus
+    // viraram caixas `noCollide` (barram bala, não empurram quem anda) —
+    // antes a bala passava pelos degraus desenhados (test/torre-bala-escada).
+    assert.equal(contagem, 581, 'a semente 424242 devia ter 581 paredes (sem o cofre)');
   });
 });
 
