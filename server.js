@@ -253,6 +253,8 @@ const match = {
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
+  carSolto: {},              // idx -> { id, ate, t }: quem saiu reporta o carro que ainda rola
+  alturaDoChao: null,        // heightAt do relevo da semente (o helicóptero no chão)
   veiculos: null,            // id -> vida/estado/pose (montarVeiculos, no início da partida)
   heliOwner: null,           // socket.id de quem pilota o helicóptero
   flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT }, // regras da sala (só o host altera)
@@ -269,8 +271,10 @@ function resetRoundState() {
   match.bossMaxHp = 0;
   match.bossDead = !match.flags.golem;
   match.carOwners = {};
+  match.carSolto = {};
   match.veiculos = null;
   match.heliOwner = null;
+  match.alturaDoChao = null;
 }
 
 /* troca de "bots na sala" pedida no meio da partida só materializa quando a
@@ -422,6 +426,7 @@ function startMatch() {
   try { frota = frotaDaSemente(match.seed); } catch (err) { console.error(`[VEICULOS] frota falhou: ${err && err.message}`); }
   if (!frota) console.error('[VEICULOS] frota indisponível nesta partida — veículo sem vida (regras não carregaram)');
   montarVeiculos(frota);
+  match.alturaDoChao = frota ? relevoCache.get(Number(match.seed) >>> 0) || null : null;
   match.plan.veiculos = [...match.veiculos.values()].map(resumoDoVeiculo);
   match.bossDead = !match.flags.golem; // GOLEM desligado = já "morto" pro servidor
   match.aliveCount = 0;
@@ -696,6 +701,7 @@ function combatImmune(p) {
 let VV = null;                  // js/veiculo-vida.js, carregado no boot
 let MundoNode = null;           // terreno + planta, para a frota por semente
 const frotaCache = new Map();   // semente -> frota (a planta é pura da semente)
+const relevoCache = new Map();  // semente -> heightAt (o chão, para o helicóptero)
 // QA: encurta a queima nos testes; em produção vale VV.QUEIMA_S
 const VEICULO_QUEIMA_MS = process.env.VEICULO_QUEIMA_S ? Math.max(200, +process.env.VEICULO_QUEIMA_S * 1000 || 0) : null;
 function carregarRegrasDeVeiculo() {
@@ -724,8 +730,11 @@ function frotaDaSemente(seed) {
   const plano = P.planejarEstruturas({ rng: P.rngEstruturas(P.sementeNormalizada(s)), heightAt: terreno.heightAt,
     slopeAt: terreno.slopeAt, WATER_LEVEL: terreno.WATER_LEVEL, CITY: terreno.CITY });
   const frota = VV.frotaDoPlano(plano, terreno.heightAt);
-  if (frotaCache.size > 4) frotaCache.delete(frotaCache.keys().next().value);
-  frotaCache.set(s, frota);
+  if (frotaCache.size > 4) {
+    const velha = frotaCache.keys().next().value;
+    frotaCache.delete(velha); relevoCache.delete(velha);
+  }
+  frotaCache.set(s, frota); relevoCache.set(s, terreno.heightAt);
   return frota;
 }
 /* estado da partida: id (índice da frota ou 'heli') -> veículo */
@@ -848,22 +857,30 @@ setInterval(() => {
    entra a 4,5 m (carro) / 5 m (heli); a folga cobre o carro parado que a
    física local de cada cliente deixou rolar um pouco. */
 const POSSE_VEICULO_M = 12;
+const CARRO_SOLTO_JANELA_MS = 12000;   // o esportivo a 118 km/h rola ~53 m em poucos segundos
+const CARRO_SOLTO_MS = 45;             // m/s por pacote (o esportivo faz ~42)
 // sem frota montada (terreno indisponível) não há pose para comparar
 const posseArbitrada = () => !!(match.veiculos && match.veiculos.size);
 function pertoDoVeiculo(p, veh) {
   return !!veh && Array.isArray(p.pos) && veh.estado !== 'destruido'
     && Math.hypot(p.pos[0] - veh.x, p.pos[1] - veh.y, p.pos[2] - veh.z) <= POSSE_VEICULO_M;
 }
+/* o helicóptero pilotado está NO AR: o cliente o segura a 0,55 m do chão
+   (js/heli.js), pousado inclusive. Quem declara pilotar com o pé no relevo
+   está a pé — e o bot não mira em quem pilota. */
+const HELI_SOBRE_O_CHAO_M = 0.4;
+const heliNoAr = pos => !match.alturaDoChao
+  || pos[1] >= match.alturaDoChao(pos[0], pos[2]) + HELI_SOBRE_O_CHAO_M;
 function poseDoOcupante(socketId, p, d) {
   if (!match.veiculos) return;
   const car = Number.isInteger(d.car) ? d.car : -1;
   if (car >= 0 && match.carOwners[car] === socketId) {
     const veh = veiculoPorId(car);
-    if (veh && veh.estado !== 'destruido') { veh.x = p.pos[0]; veh.y = p.pos[1]; veh.z = p.pos[2]; veh.yaw = +d.rotY || 0; }
+    if (veh && veh.estado !== 'destruido') { veh.x = p.pos[0]; veh.y = p.pos[1]; veh.z = p.pos[2]; veh.yaw = +d.rotY || 0; veh.poseT = Date.now(); }
   }
   const heli = veiculoPorId('heli');
   if (!heli) return;
-  if (d.heli && !p.ship && !p.fall && heli.estado !== 'destruido') {
+  if (d.heli && !p.ship && !p.fall && heli.estado !== 'destruido' && heliNoAr(p.pos)) {
     const dono = match.heliOwner && players.get(match.heliOwner);
     // o primeiro a pilotar leva — estando ao lado dele
     if ((!dono || !dono.alive) && pertoDoVeiculo(p, heli)) match.heliOwner = socketId;
@@ -1005,8 +1022,34 @@ io.on('connection', socket => {
     const idx = d && Number.isInteger(d.idx) ? d.idx : -1;
     if (match.carOwners[idx] === socket.id) {
       delete match.carOwners[idx];
+      const now = Date.now(), veh = veiculoPorId(idx);
+      // `t`: a hora da pose que o servidor tem do carro (o último estado dirigindo)
+      match.carSolto[idx] = { id: socket.id, ate: now + CARRO_SOLTO_JANELA_MS, t: (veh && veh.poseT) || now };
       io.emit('carFree', { idx });
     }
+  });
+  /* carro SOLTO (laudo d381d29, NC-2): o carro segue rolando depois que o
+     motorista sai, e só o cliente dele o simula — o servidor e os outros
+     ficavam com a pose de onde ele saiu, a até 53 m de onde o carro parou
+     ("Veículo ocupado!" para quem chegava nele). Quem saiu segue dono da
+     física até ele parar: só dele, na janela, sem dono novo, com velocidade
+     de carro por pacote. Não dá poder novo — ele podia dirigir até ali. */
+  socket.on('carSolto', d => {
+    const idx = d && Number.isInteger(d.idx) ? d.idx : -1;
+    const solto = match.carSolto[idx];
+    const now = Date.now();
+    if (!solto || solto.id !== socket.id || now > solto.ate || match.carOwners[idx]) return;
+    const veh = veiculoPorId(idx), pos = d.pos;
+    if (!veh || veh.estado === 'destruido' || !Array.isArray(pos) || pos.length < 3) return;
+    const [x, y, z] = pos;
+    if (![x, y, z].every(Number.isFinite)) return;
+    const dt = Math.min(Math.max((now - solto.t) / 1000, 0.05), 0.5);
+    // + folga: pacotes chegam amontoados (jitter), e o intervalo medido encolhe
+    if (Math.hypot(x - veh.x, y - veh.y, z - veh.z) > CARRO_SOLTO_MS * dt + 1.5) return;
+    veh.x = x; veh.y = y; veh.z = z;
+    if (Number.isFinite(+d.rotY)) veh.yaw = +d.rotY;
+    solto.t = now;
+    socket.broadcast.volatile.emit('carRola', { idx, pos: [x, y, z], rotY: veh.yaw });
   });
 
   socket.on('state', d => {

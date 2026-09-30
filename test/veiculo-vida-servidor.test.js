@@ -187,6 +187,55 @@ describe('vida, queima e explosão (autoritativas)', () => {
     assert.equal((await ack(c.s, 'enterCar', { idx: 0 })).ok, false, 'assumiu um carro destruído');
   });
 
+  /* laudo d381d29, NC-2: o carro que continua rolando depois que o motorista
+     sai ficava com a pose VELHA no servidor — a 53 m de onde parou, e ninguém
+     conseguia entrar de novo ("Veículo ocupado!"). Quem saiu reporta a pose do
+     carro solto até ele parar; o servidor só aceita dele, na janela e com
+     velocidade de carro. */
+  it('o carro que rolou depois que o motorista saiu segue pegável onde parou', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a, b, c] = clients;
+    const buggy = veic(plan, 0), [x0, y0, z0] = buggy.pos;
+    await aoLado(a, buggy);
+    assert.equal((await ack(a.s, 'enterCar', { idx: 0 })).ok, true);
+    for (let k = 0; k <= 10; k++) { a.s.emit('state', { pos: [x0 + 2 * k, y0, z0], rotY: 0, car: 0 }); await sleep(100); }
+    const rola = collect(b.s, 'carRola');
+    a.s.emit('leaveCar', { idx: 0 });
+    a.s.emit('state', { pos: [x0 + 20, y0, z0 + 2], rotY: 0 });
+    // o carro solto rola mais 40 m (20 m/s) e para
+    for (let k = 1; k <= 20; k++) { a.s.emit('carSolto', { idx: 0, pos: [x0 + 20 + 2 * k, y0, z0], rotY: 0 }); await sleep(100); }
+    /* quem NÃO dirigia não mexe no carro solto — nem com pose plausível
+       (2 m de lado, dentro do teto de velocidade: é a posse que recusa) */
+    await sleep(150);
+    c.s.emit('carSolto', { idx: 0, pos: [x0 + 60, y0, z0 + 2], rotY: 0 });
+    await sleep(150);
+    b.s.emit('state', { pos: [x0 + 62, y0, z0], rotY: 0 });
+    await sleep(150);
+    assert.equal((await ack(b.s, 'enterCar', { idx: 0 })).ok, true, 'o carro parado 40 m adiante não aceitou quem está ao lado dele');
+    // os outros recebem a pose do carro solto (e a de quem não dirigia, não)
+    assert.ok(rola.length >= 15, `repassou só ${rola.length} de 20 poses do carro solto`);
+    assert.ok(Math.abs(rola.at(-1).pos[0] - (x0 + 60)) < 0.01, `última pose repassada em x=${rola.at(-1).pos[0]}`);
+    assert.ok(rola.every(r => r.idx === 0 && Math.abs(r.pos[2] - z0) < 0.01), 'repassou a pose de quem não dirigia');
+  });
+
+  it('carro solto: a pose com velocidade de carro vale, a que salta (teleporte) é recusada', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a, b] = clients;
+    const buggy = veic(plan, 0), [x0, y0, z0] = buggy.pos;
+    await aoLado(a, buggy);
+    assert.equal((await ack(a.s, 'enterCar', { idx: 0 })).ok, true);
+    a.s.emit('leaveCar', { idx: 0 });
+    await sleep(120);
+    // rola 12 m a 20 m/s — vale
+    for (let k = 1; k <= 6; k++) { a.s.emit('carSolto', { idx: 0, pos: [x0 + 2 * k, y0, z0], rotY: 0 }); await sleep(100); }
+    a.s.emit('carSolto', { idx: 0, pos: [x0 + 262, y0, z0], rotY: 0 });   // 250 m num pacote
+    await sleep(150);
+    // a 2 m de onde ele PAROU e a 14 m da vaga: só pega se o rolar valeu e o salto não
+    b.s.emit('state', { pos: [x0 + 14, y0, z0], rotY: 0 });
+    await sleep(150);
+    assert.equal((await ack(b.s, 'enterCar', { idx: 0 })).ok, true, 'o carro não está onde parou (rolar recusado ou salto aceito)');
+  });
+
   it('o veículo anda com quem o dirige: a pose é a do motorista arbitrado, e a de mais ninguém', async t => {
     const { clients, plan } = await playing(t, 3);
     const [a, b, c] = clients;

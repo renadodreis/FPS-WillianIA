@@ -2086,6 +2086,12 @@
 
     /* posse de veículo arbitrada no servidor (mata a corrida do "mesmo carro") */
     let myCarClaim = -1;
+    /* carro SOLTO (laudo d381d29, NC-2): o carro segue rolando depois que eu
+       saio, e só o MEU cliente o simula. Até ele parar eu continuo dono da
+       física dele e mando a pose (o servidor confere e repassa aos outros) —
+       senão o servidor e os outros o deixavam onde eu saí, a até 53 m de onde
+       ele parou, e quem chegava nele ouvia "Veículo ocupado!". */
+    let carroSolto = null;   // { idx, ate, parado }
     function claimCar(idx) {
       myCarClaim = idx;
       socket.timeout(2500).emit('enterCar', { idx }, (err, res) => {
@@ -2099,6 +2105,7 @@
       });
     }
     socket.on('carTaken', d => { // outro levou o carro que estou tentando usar
+      if (carroSolto && carroSolto.idx === d.idx) carroSolto = null;   // a física passou a ser dele
       if (d.id !== INIT.id && G.state.driving && myCarClaim === d.idx) {
         G.tryToggleCar();
         MP.centerMsg('Veículo ocupado!', 1500);
@@ -2129,7 +2136,20 @@
       // transições de posse (só em partida; no solo o servidor recusaria)
       if (S.phase === 'PLAY') {
         if (car >= 0 && myCarClaim !== car) claimCar(car);
-        else if (car < 0 && myCarClaim >= 0) { socket.emit('leaveCar', { idx: myCarClaim }); myCarClaim = -1; }
+        else if (car < 0 && myCarClaim >= 0) {
+          socket.emit('leaveCar', { idx: myCarClaim });
+          carroSolto = { idx: myCarClaim, ate: performance.now() + 10000, parado: 0 };
+          myCarClaim = -1;
+        }
+        const solto = carroSolto && G.Car.vehicles[carroSolto.idx];
+        if (carroSolto && (!solto || solto.destruido || car === carroSolto.idx || performance.now() > carroSolto.ate)) carroSolto = null;
+        else if (carroSolto) {
+          const b = solto.chassisBody;
+          _eulSolto.setFromQuaternion(solto.group.quaternion);
+          socket.emit('carSolto', { idx: carroSolto.idx, pos: [b.position.x, b.position.y, b.position.z], rotY: _eulSolto.y });
+          // parado meio segundo: acabou (a física dos outros assenta dali)
+          if (b.velocity.length() < 0.3) { if (++carroSolto.parado >= 5) carroSolto = null; } else carroSolto.parado = 0;
+        }
       }
       const st = {
         pos: [p.x, p.y, p.z], rotY, car, heli,
@@ -2148,7 +2168,16 @@
       sentEver = true;
       socket.volatile.emit('state', st);
     }, 100);
-    const _eul = new THREE.Euler(0, 0, 0, 'YXZ');
+    const _eul = new THREE.Euler(0, 0, 0, 'YXZ'), _eulSolto = new THREE.Euler(0, 0, 0, 'YXZ');
+    /* o carro solto de OUTRO: segue a pose que o servidor repassou, como o
+       carro de quem dirige (abaixo), até os pacotes pararem */
+    socket.on('carRola', d => {
+      const v = d && Number.isInteger(d.idx) ? G.Car.vehicles[d.idx] : null;
+      if (!v || v.destruido || !Array.isArray(d.pos)) return;
+      const [x, y, z] = d.pos;
+      if (![x, y, z, d.rotY].every(Number.isFinite)) return;
+      v.soltoRede = { x, y, z, yaw: d.rotY, ate: performance.now() + 600 };
+    });
 
     /* watchdog de aba oculta: o loop de frames congela quando o navegador some
        da tela — sem isto o jogador ficava eterno "na nave"/no ar, imortal fora
@@ -2334,6 +2363,7 @@
         if (rp.car >= 0) {
           const v = G.Car.vehicles[rp.car];
           if (v && !v.destruido && !(G.state.driving && v.group === G.Car.group)) {
+            v.soltoRede = null;   // tem motorista de novo: vale a pose dele
             const gp = rp.group.position;
             /* Dica VISUAL de giro/esterço das rodas (nunca autoridade — só
                alimenta a animação em js/car.js).
@@ -2402,6 +2432,18 @@
           G.Heli.group.position.copy(rp.group.position);
           G.Heli.group.rotation.set(0, rp.yaw, 0);
         }
+      }
+      // carro solto de outro (carRola): persegue a pose repassada e assenta
+      for (const v of G.Car.vehicles) {
+        const a = v.soltoRede;
+        if (!a) continue;
+        if (performance.now() > a.ate || v.destruido || (G.state.driving && v.group === G.Car.group)) { v.soltoRede = null; continue; }
+        const b = v.chassisBody.position, k = 1 - Math.exp(-12 * dt);
+        G.Car.wake(v);
+        b.set(b.x + (a.x - b.x) * k, b.y + (a.y - b.y) * k, b.z + (a.z - b.z) * k);
+        v.chassisBody.velocity.set(0, 0, 0);
+        v.chassisBody.angularVelocity.set(0, 0, 0);
+        v.chassisBody.quaternion.setFromAxisAngle(_yAxis, a.yaw);
       }
 
       /* corpo a corpo: não dá pra atravessar outro jogador vivo */

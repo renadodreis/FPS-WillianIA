@@ -326,6 +326,13 @@ escrita pelo validador — quem constrói não edita).
   composição de `Structures.rayHit/segBlocked` no game.js). Vida zero: para de
   proteger na hora, queima 5 s, explode e some; quem está dentro morre.
   O servidor passou a carregar `three` + terreno no boot (dependencies).
+  **O carro SOLTO é do último motorista até parar** (`carSolto` → servidor
+  confere posse, janela e velocidade → `carRola` aos outros). Antes o servidor
+  e os outros ficavam com a pose da SAÍDA, a até 53 m de onde o carro parou.
+  Teste disso em tempo de relógio: o laço do renderer segue rodando no
+  harness, e `QA.tick` por cima faz o jogo andar MAIS RÁPIDO que o relógio
+  (medido: 47 m/s aparentes a 105 km/h) — regra de servidor que mede
+  velocidade por relógio recusa o que é legítimo. Use `sleep`, não tick.
 - **Marca `noBullet` em parede** (js/paredes.js): segura o CORPO mas deixa a
   bala passar — guarda-corpo vazado da escada da Torre Nexus (como o
   `playerclip` do Source). Antes barrava bala: 90 quadros de fuzil, 120 → 120

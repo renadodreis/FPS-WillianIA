@@ -288,6 +288,27 @@ describe('Veículo — posse arbitrada pela posição que o servidor conhece', (
     const deA = ups.filter(u => u.id === a.init.id);
     assert.ok(deA.some(u => u.heli), 'o piloto de verdade não foi repassado como piloto');
   });
+
+  it('dado o piloto com o pé no chão longe do helicóptero, então ele deixa de ser tratado como piloto', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a, b] = clients;
+    const heli = veic(plan, 'heli');
+    const carro = (plan.veiculos || []).find(v => v.v !== 'heli');
+    const ups = collect(b.s, 'playerUpdate');
+    for (let i = 0; i < 5; i++) {
+      a.s.emit('state', { pos: [heli.pos[0], heli.pos[1] + 0.5, heli.pos[2]], rotY: 0, heli: true });
+      await sleep(60);
+    }
+    // o carro parado está a ~0,58 m do chão: ali, o chão é carro.y − 0,58
+    const chao = [carro.pos[0] + 3, carro.pos[1] - 0.58, carro.pos[2]];
+    for (let i = 0; i < 14; i++) { a.s.emit('state', { pos: chao, rotY: 0, heli: true }); await sleep(80); }
+    await sleep(150);
+    const deA = ups.filter(u => u.id === a.init.id);
+    assert.ok(deA.some(u => u.heli), 'cenário inválido: não chegou a ser piloto');
+    const ultimo = deA.filter(u => Math.hypot(u.pos[0] - chao[0], u.pos[2] - chao[2]) < 1).at(-1);
+    assert.ok(ultimo, 'cenário inválido: a pose no chão não foi aceita');
+    assert.equal(ultimo.heli, false, 'repassado como piloto com o pé no chão');
+  });
 });
 
 /* =============== crédito de kill exige acerto validado =============== */
