@@ -368,6 +368,16 @@ escrita pelo validador — quem constrói não edita).
   dele. **Teste de bala contra um sólido descarta a reta que outro sólido
   corta antes** (relevo rente, tronco) — senão acusa "parou cedo" onde a tela
   também para.
+- **O vulcão desenhado segura bala** (`js/vulcao-solido.js`: o GLB lido sem
+  three, na MESMA transformação do `js/volcano.js`, grade XZ de 2 m +
+  Möller–Trumbore). O relevo é uma grade 56 × 56 de 8 bits do modelo e a
+  rocha desenhada passa dele em 45 % da superfície (até 6,7 m na saia; a
+  calota de lava cobre o poço da cratera): 417 de 513 retas atravessavam a
+  rocha. Entra na composição única de `Structures.rayHit/segBlocked` e no
+  `lineOfSight` do bot (que lê o GLB do disco). O CORPO ainda pisa no relevo
+  (fase 2). **No QA o `composer.render` é no-op: nada atualiza a
+  `matrixWorld` de modelo carregado depois do boot** — teste que lê vértice
+  ou faz raycast nele chama `updateWorldMatrix(true, true)` antes.
 - **Inimigo de POSTO (Executivos da torre, guardas) não renasce à vista:** só
   com o jogador a > 75 m e sem ver o posto nem o corpo (Left 4 Dead, Valve
   2009). O corpo cai no piso do andar em que morreu, não no terreno.

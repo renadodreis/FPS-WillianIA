@@ -3266,11 +3266,16 @@ const Veiculos = criarVeiculos({ Car, Heli, FX, rand, state,
   avisar: (msg, ms) => centerMsg(msg, ms),
   codigoDaArma: g => ARMA_POR_INDICE[arsenal.indexOf(g)] || null,
   rayBlockedAt });
+/* ...e a rocha DESENHADA do vulcão (js/vulcao-solido.js): o relevo é uma
+   grade suave dela, e a rocha passa dele em quase metade da superfície (a
+   calota de lava cobre o poço da cratera). A bala e a visada param no que
+   a tela mostra; o bot faz a mesma conta (scripts/bots.js, lineOfSight). */
 {
   const rayHitMundo = Structures.rayHit, segMundo = Structures.segBlocked;
   Structures.rayHit = (o, d, maxDist, ignorar = null) =>
-    Math.min(rayHitMundo(o, d, maxDist), Veiculos.bloqueio(o, d, maxDist, ignorar));
-  Structures.segBlocked = (a, b, ignorar = null) => segMundo(a, b) || Veiculos.segmento(a, b, ignorar);
+    Math.min(rayHitMundo(o, d, maxDist), Veiculos.bloqueio(o, d, maxDist, ignorar), Volcano.reta(o, d, maxDist));
+  Structures.segBlocked = (a, b, ignorar = null) =>
+    segMundo(a, b) || Veiculos.segmento(a, b, ignorar) || Volcano.segmento(a, b);
 }
 /* SOLO sem sala: o estilhaço (js/grenades.js) também fere a lataria. No BR o
    br-game.js troca este gancho pelo dele, que faz o mesmo e fere os remotos. */

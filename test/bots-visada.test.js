@@ -79,11 +79,20 @@ describe('Bots: visada contra o relevo real da seed (B6) e sem terreno (B12c)', 
   before(async () => {
     terrain = await Bots.createBotTerrain(SEED);
     pairs = makePairs(terrain, 30000);
+    /* "à vista" também exige a rocha DESENHADA do vulcão fora da reta
+       (js/vulcao-solido.js, conferido contra força bruta em
+       test/vulcao-solido.test.js): ela tampa o que o relevo deixa passar */
+    const rocha = (a, b) => {
+      if (!terrain.vulcao) return false;
+      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, len = Math.hypot(dx, dy, dz);
+      return terrain.vulcao.reta(a.x, a.y, a.z, dx / len, dy / len, dz / len, len) < len;
+    };
     for (const p of pairs) {
       table.push({
         client: clientBlocked(terrain, p.eye, p.head) && clientBlocked(terrain, p.eye, p.trunk),
         fine: marchBlocked(terrain, p.eye, p.head, 0.05) && marchBlocked(terrain, p.eye, p.trunk, 0.05),
-        fineVisible: !marchBlocked(terrain, p.eye, p.head, 0.05) || !marchBlocked(terrain, p.eye, p.trunk, 0.05),
+        fineVisible: (!marchBlocked(terrain, p.eye, p.head, 0.05) && !rocha(p.eye, p.head))
+          || (!marchBlocked(terrain, p.eye, p.trunk, 0.05) && !rocha(p.eye, p.trunk)),
         old2m: marchBlocked(terrain, p.eye, p.head, 2) && marchBlocked(terrain, p.eye, p.trunk, 2),
         bot: Bots.lineOfSight(terrain, p.eye, p.head) || Bots.lineOfSight(terrain, p.eye, p.trunk),
       });

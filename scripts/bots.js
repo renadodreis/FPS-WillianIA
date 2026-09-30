@@ -257,6 +257,17 @@ function inViewCone(yaw, dx, dz, d) {
    aparece no log (`[bots] terreno indisponível`, startBots). */
 const LOS_MARCH_M = 0.5;
 function lineOfSight(terrain, from, to) {
+  if (!relevoLivre(terrain, from, to)) return false;
+  /* a rocha DESENHADA do vulcão (js/vulcao-solido.js), a mesma que para a
+     bala do cliente: o relevo é uma grade suave dela */
+  const v = terrain.vulcao;
+  if (v) {
+    const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, len = Math.hypot(dx, dy, dz);
+    if (len > 1e-6 && v.reta(from.x, from.y, from.z, dx / len, dy / len, dz / len, len) < len) return false;
+  }
+  return true;
+}
+function relevoLivre(terrain, from, to) {
   if (!terrain || typeof terrain.heightAt !== 'function') return false;
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
   const above = k => terrain.heightAt(from.x + dx * k, from.z + dz * k) <= from.y + dy * k;
@@ -1011,16 +1022,33 @@ async function createBotTerrain(worldSeed) {
   const { CFG } = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'config.js')).href);
   const previousRandom = Math.random;
   Math.random = mulberry32(Number(worldSeed) >>> 0);
+  let terrain;
   try {
-    const terrain = terrainModule.createTerrain({
+    terrain = terrainModule.createTerrain({
       lerp: (a, b, t) => a + (b - a) * t,
       clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
     });
     terrain.buildHeightGrid(CFG.WORLD_SIZE, CFG.TERRAIN_SEGS);
     terrain.losGrid = { half: CFG.WORLD_SIZE / 2, cell: CFG.WORLD_SIZE / CFG.TERRAIN_SEGS, segs: CFG.TERRAIN_SEGS };
-    return terrain;
   } finally {
     Math.random = previousRandom;
+  }
+  terrain.vulcao = await createBotVolcano(terrain.VOLCANO);
+  return terrain;
+}
+
+/* a rocha desenhada do vulcão: o MESMO GLB que o cliente desenha, lido do
+   disco. Sem ele o bot veria através da rocha — falha BARULHENTA. */
+async function createBotVolcano(VOLCANO) {
+  try {
+    const Vul = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'vulcao-solido.js')).href);
+    const bytes = require('fs').readFileSync(path.join(__dirname, '..', Vul.VULCAO_GLB));
+    const m = Vul.montarVulcao(bytes, VOLCANO);
+    return { m, reta: (ox, oy, oz, dx, dy, dz, len) => Vul.retaNoVulcao(m, ox, oy, oz, dx, dy, dz, len),
+      topo: (x, z) => Vul.topoDoVulcao(m, x, z) };
+  } catch (err) {
+    console.error(`[bots] vulcão indisponível (${err && err.message}) — a visada ignora a rocha desenhada`);
+    return null;
   }
 }
 
