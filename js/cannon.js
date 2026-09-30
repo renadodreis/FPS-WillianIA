@@ -11,7 +11,7 @@
    ================================================================ */
 import * as THREE from 'three';
 import {
-  LAUNCH, launchVelocity, pickSpot, betterRecord, horizontalSpeed,
+  LAUNCH, launchVelocity, betterRecord, horizontalSpeed,
 } from './cannon-core.js';
 
 const BEST_KEY = 'callofai_cannonBest';
@@ -21,8 +21,8 @@ const _f = new THREE.Vector3();
 
 export function createCannon(deps) {
   const {
-    scene, camera, player, SFX, FX, csmMat, Structures, heightAt, slopeAt,
-    WATER_LEVEL, CITY, centerMsg,
+    scene, camera, player, SFX, FX, csmMat, heightAt, centerMsg,
+    spot,   // o ponto planejado (js/maptoys-core.js, planejarAtracoes)
   } = deps;
 
   // PRNG seedado do worldgen mora em Math.random durante a sessão inteira
@@ -35,15 +35,11 @@ export function createCannon(deps) {
     try { return fn(); } finally { Math.random = _R; }
   };
 
-  // ---- ponto: o lugar mais vazio, seco e plano num anel ao redor da cidade
-  const cx = (CITY && CITY.x) || 0, cz = (CITY && CITY.z) || 0;
-  const sampler = (x, z) => ({ h: heightAt(x, z), slope: slopeAt ? slopeAt(x, z) : 0 });
-  const picked = pickSpot({
-    sites: Structures.sites, cx, cz, sampler, waterLevel: WATER_LEVEL,
-  });
-  // fallback determinístico: se nada no anel serviu, planta a 220 m a leste da
-  // cidade, no chão (raro; pickSpot só falha em mapas quase todos água/serra).
-  const spot = picked || { x: cx + 220, z: cz };
+  /* ---- ponto: o lugar mais vazio, seco e plano num anel ao redor da
+     cidade — escolhido FORA daqui, pela semente (planejarAtracoes), para que
+     todo cliente e o bot concordem (antes lia `Structures.sites` ao vivo, que
+     ganha o mercado quando o GLB dele chega) */
+  if (!spot) throw new Error('createCannon: spot ausente (planejarAtracoes)');
   const baseY = heightAt(spot.x, spot.z);
 
   // ---- malhas (todas em noSeed) --------------------------------------------
@@ -211,7 +207,7 @@ export function createCannon(deps) {
     get state() { return state; },
     get best() { return best; },
     get lastFlightDist() { return lastDist; }, // QA: distância do último voo medida pelo módulo
-    get spot() { return { x: spot.x, z: spot.z, clearance: picked ? picked.clearance : 0 }; },
+    get spot() { return { x: spot.x, z: spot.z }; },
     // hook de QA: velocidade horizontal teórica do lançamento
     get launchHSpeed() { return horizontalSpeed(); },
   };

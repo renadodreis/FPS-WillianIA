@@ -53,6 +53,7 @@
    `rayBlockedAt` de verdade.
    ================================================================ */
 import { mulberry32, sementeNormalizada } from './paredes.js';
+import { planejarAtracoes } from './maptoys-core.js';
 
 const TAU = Math.PI * 2;
 
@@ -555,7 +556,18 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
     const chao = heightAt(b.x, b.z);
     solidos.push({ x: b.x, z: b.z, r: PROPS.barril.r, category: 'rigid', sourceId: 'barrel', y0: chao - 50, y1: chao + PROPS.barril.altura });
   }
-  return { semente, pois, arvores, pedras, cactos, solidos };
+  // canhão e atrações: evitam construções E POIs (os sítios da semente, não os
+  // de `Structures.sites`, que ganham o mercado quando o GLB dele chega)
+  const atracoes = planejarAtracoes({ sitios: construcoes.concat(pois.sitios), heightAt, slopeAt, WATER_LEVEL, CITY });
+  return { semente, pois, arvores, pedras, cactos, solidos, atracoes };
+}
+
+/* só as atrações (o bot monta as paredes sem precisar da vegetação): a MESMA
+   conta do `construirObstaculos` — POIs da semente, depois as atrações */
+export function atracoesDaSemente({ worldSeed, heightAt, slopeAt, biomeAt, WATER_LEVEL, CITY, sitios }) {
+  const construcoes = sitios.map(s => ({ x: s.x, z: s.z, r: s.r, type: s.type }));
+  const pois = planejarPois({ worldSeed: sementeNormalizada(worldSeed), heightAt, slopeAt, biomeAt, WATER_LEVEL, sitios: construcoes });
+  return planejarAtracoes({ sitios: construcoes.concat(pois.sitios), heightAt, slopeAt, WATER_LEVEL, CITY });
 }
 
 /* ---------------- consulta: segmento × cilindros ----------------

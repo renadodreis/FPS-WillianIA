@@ -104,6 +104,15 @@ function relevoEntre(terrain, a, b, passo = 0.05) {
 /* ---------------- mundo da semente ---------------- */
 
 let terrain = null, Par = null, mundo = null, intactas = null, destruidas = null, solids = null;
+/* o painel do campo de tiro (js/maptoys-core.js) é parede no cliente e no bot,
+   com a cidade de pé ou destruída */
+async function paredesDasAtracoes() {
+  const Ob = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'obstaculos.js')).href);
+  const Toys = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'maptoys-core.js')).href);
+  const atracoes = Ob.atracoesDaSemente({ worldSeed: SEED, heightAt: terrain.heightAt, slopeAt: terrain.slopeAt,
+    biomeAt: terrain.biomeAt, WATER_LEVEL: terrain.WATER_LEVEL, CITY: terrain.CITY, sitios: mundo.plano.sites });
+  return Toys.paredesDasAtracoes(atracoes, terrain.heightAt);
+}
 
 const corpo = (x, z) => {
   const y = terrain.heightAt(x, z);
@@ -225,8 +234,9 @@ describe('B7 — bots não veem através de prédio, castelo nem construção (p
     terrain = await Bots.createBotTerrain(SEED);
     mundo = Par.construirMundoSolido({ worldSeed: SEED, heightAt: terrain.heightAt, slopeAt: terrain.slopeAt,
       WATER_LEVEL: terrain.WATER_LEVEL, CITY: terrain.CITY });
-    intactas = Par.paredesDoJogo(mundo);
-    destruidas = Par.paredesComCidadeDestruida(mundo);
+    const extras = await paredesDasAtracoes();
+    intactas = Par.paredesDoJogo(mundo).concat(extras);
+    destruidas = Par.paredesComCidadeDestruida(mundo).concat(extras);
     solids = await Bots.createBotSolids(SEED, terrain);
 
     const cidade = { x: mundo.cidade.cx, z: mundo.cidade.cz };
@@ -282,7 +292,7 @@ describe('B7 — bots não veem através de prédio, castelo nem construção (p
     });
   });
 
-  it('o mundo sólido do bot é o de js/paredes.js: intacto = paredesDoJogo, destruído = paredesComCidadeDestruida', () => {
+  it('o mundo sólido do bot é o de js/paredes.js: intacto = paredesDoJogo, destruído = paredesComCidadeDestruida (+ o painel do campo de tiro)', () => {
     assert.deepEqual(solids.intact.walls, intactas, 'as caixas do bot (cidade de pé) não são as do jogo');
     assert.deepEqual(solids.destroyed.walls, destruidas, 'as caixas do bot (cidade destruída) não são as do jogo');
     // a consulta do bot responde o mesmo que a de paredes.js (a conta do Structures.rayHit)
@@ -689,7 +699,7 @@ describe('B7 no processo real: o servidor derruba a cidade e os bots trocam as p
       terrain = await Bots.createBotTerrain(SEED);
       mundo = Par.construirMundoSolido({ worldSeed: SEED, heightAt: terrain.heightAt, slopeAt: terrain.slopeAt,
         WATER_LEVEL: terrain.WATER_LEVEL, CITY: terrain.CITY });
-      intactas = Par.paredesDoJogo(mundo);
+      intactas = Par.paredesDoJogo(mundo).concat(await paredesDasAtracoes());
     }
     const port = await portaLivre();
     const rank = path.join(os.tmpdir(), `fps-bots-paredes-rank-${process.pid}-${port}.json`);

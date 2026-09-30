@@ -173,10 +173,19 @@ async function doNode(semente, { consumoExtra = 0 } = {}) {
   }
   const mundo = Par.construirMundoSolido({ worldSeed: semente, heightAt: t.heightAt, slopeAt: t.slopeAt,
     WATER_LEVEL: t.WATER_LEVEL, CITY: t.CITY, rng });
+  /* e o painel do campo de tiro, que as atrações empurram no fim do boot */
+  const Ob = await import(url.pathToFileURL(path.join(__dirname, '..', 'js', 'obstaculos.js')).href);
+  const Toys = await import(url.pathToFileURL(path.join(__dirname, '..', 'js', 'maptoys-core.js')).href);
+  const atracoes = Ob.atracoesDaSemente({ worldSeed: semente, heightAt: t.heightAt, slopeAt: t.slopeAt, biomeAt: t.biomeAt,
+    WATER_LEVEL: t.WATER_LEVEL, CITY: t.CITY, sitios: mundo.plano.sites });
+  const extras = Toys.paredesDasAtracoes(atracoes, t.heightAt);
+  // ordem do boot: construções e castelo, as atrações (createMapToys) e,
+  // por último, o cofre dos segredos (createSecrets)
+  const cofre = mundo.cofre ? [mundo.cofre] : [];
   return {
     mundo,
-    paredes: Par.paredesDoJogo(mundo).map(simples),
-    origens: mundo.cofre ? mundo.origens.concat(['cofre']) : mundo.origens,
+    paredes: mundo.paredes.concat(extras, cofre).map(simples),
+    origens: mundo.origens.concat(extras.map(w => 'atração:' + w.atracao), cofre.map(() => 'cofre')),
     escombros: mundo.escombros.map(simples),
   };
 }

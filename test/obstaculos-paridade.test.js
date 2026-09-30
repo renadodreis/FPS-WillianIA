@@ -276,7 +276,9 @@ describe('obstáculos: cliente (jogo real) × Node (caminho dos bots)', { skip: 
           return { grossa, fina, veiculo, dist: Math.min(dist, len + 1) };
         });
       }, seg);
-      const paredes = Par.criarConsultaParedes(Par.paredesDoJogo(mundo));
+      // as paredes do jogo e as das atrações (o painel do campo de tiro)
+      const Toys = await importar('maptoys-core.js');
+      const paredes = Par.criarConsultaParedes(Par.paredesDoJogo(mundo).concat(Toys.paredesDasAtracoes(ob.atracoes, t.heightAt)));
       const q = Ob.criarConsultaObstaculos(ob.solidos, { heightAt: t.heightAt, grade: t.losGrid });
       no = seg.map(([a, b], i) => {
         const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, len = Math.hypot(dx, dy, dz);

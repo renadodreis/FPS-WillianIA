@@ -10,7 +10,7 @@
    ================================================================ */
 import * as THREE from 'three';
 import {
-  pickSpot, bounceVelocity, passedRing, plateAt, XYLO_NOTES,
+  bounceVelocity, passedRing, plateAt, XYLO_NOTES, painelDaGaleria,
   betterMax, betterTime,
 } from './maptoys-core.js';
 import { LAUNCH, horizontalSpeed } from './cannon-core.js';
@@ -22,10 +22,12 @@ const saveNum = (k, v) => { try { localStorage.setItem(k, String(Math.round(v)))
 
 export function createMapToys(deps) {
   const {
-    scene, player, SFX, FX, csmMat, Structures, heightAt, slopeAt,
-    WATER_LEVEL, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state,
-    cannonSpot,
+    scene, player, SFX, FX, csmMat, Structures, heightAt,
+    CITY, centerMsg, showBanner, extraTargets, Car, Heli, state,
+    atracoes,   // os pontos, pela semente (js/maptoys-core.js, planejarAtracoes)
   } = deps;
+  if (!atracoes) throw new Error('createMapToys: atracoes ausente (planejarAtracoes)');
+  const cannonSpot = atracoes.canhao;
 
   let _us = 0x5EED42 >>> 0;
   const noSeed = (fn) => {
@@ -35,15 +37,7 @@ export function createMapToys(deps) {
   };
 
   const cx = (CITY && CITY.x) || 0, cz = (CITY && CITY.z) || 0;
-  const sampler = (x, z) => ({ h: heightAt(x, z), slope: slopeAt ? slopeAt(x, z) : 0 });
-  const avoid = [];
-  if (cannonSpot) avoid.push({ x: cannonSpot.x, z: cannonSpot.z, r: 40 });
-  function place(fallbackAngle) {
-    const p = pickSpot({ sites: Structures.sites, avoid: avoid.slice(), cx, cz, sampler, waterLevel: WATER_LEVEL });
-    const spot = p || { x: cx + Math.cos(fallbackAngle) * 240, z: cz + Math.sin(fallbackAngle) * 240 };
-    avoid.push({ x: spot.x, z: spot.z, r: 46 });
-    return { x: spot.x, z: spot.z, y: heightAt(spot.x, spot.z) };
-  }
+  const place = nome => ({ ...atracoes[nome] });
 
   const MAT = {};
   const mat = (hex, o = {}) => csmMat(new THREE.MeshStandardMaterial({ color: hex, roughness: 0.55, ...o }));
@@ -54,7 +48,7 @@ export function createMapToys(deps) {
   // ===================================================================== //
   const tramp = { spot: null, pads: [], flash: 0 };
   noSeed(() => {
-    tramp.spot = place(0.3);
+    tramp.spot = place('cama');
     MAT.frame = mat(0x8a3ffb, { roughness: 0.5 });
     for (let i = 0; i < 4; i++) {
       const ox = (i % 2 ? 1 : -1) * 2.4, oz = (i < 2 ? 1 : -1) * 2.4;
@@ -85,9 +79,15 @@ export function createMapToys(deps) {
   // ===================================================================== //
   const gal = { spot: null, targets: [], active: false, endT: 0, score: 0, best: loadNum('callofai_galleryBest') };
   noSeed(() => {
-    gal.spot = place(1.4);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(9, 3.4, 0.4), mat(0x3a2a5a));
-    back.position.set(gal.spot.x, gal.spot.y + 1.7, gal.spot.z - 2); back.castShadow = true; scene.add(back);
+    gal.spot = place('galeria');
+    /* o painel é PAREDE (corpo e bala, no cliente e no bot): desenho e colisor
+       são a mesma caixa, assentada no chão mais baixo da pegada */
+    const pw = painelDaGaleria(gal.spot, heightAt);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(pw.x1 - pw.x0, pw.y1 - pw.y0, pw.z1 - pw.z0), mat(0x3a2a5a));
+    back.position.set((pw.x0 + pw.x1) / 2, (pw.y0 + pw.y1) / 2, (pw.z0 + pw.z1) / 2); back.castShadow = true; scene.add(back);
+    back.name = 'painelGaleria';
+    Structures.walls.push(pw);
+    Structures.invalidateWallCache();
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 1.3, 8), mat(0xffe14a, { metalness: 0.5 }));
     post.position.set(gal.spot.x - 4.6, gal.spot.y + 0.65, gal.spot.z + 1.4); scene.add(post);
     gal.leverPos = { x: gal.spot.x - 4.6, z: gal.spot.z + 1.4 };
@@ -142,7 +142,7 @@ export function createMapToys(deps) {
   // ===================================================================== //
   const fw = { spot: null, shells: [], cd: 0 };
   noSeed(() => {
-    fw.spot = place(2.5);
+    fw.spot = place('fogos');
     for (let i = 0; i < 4; i++) {
       const seg = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.7, 1.1), mat(RAINBOW[i * 2 + 1]));
       seg.position.set(fw.spot.x, fw.spot.y + 0.4 + i * 0.7, fw.spot.z); seg.castShadow = true; scene.add(seg);
@@ -184,7 +184,7 @@ export function createMapToys(deps) {
     // As argolas moram NO ARCO DO CANHÃO: alturas seguem a trajetória REAL do
     // disparo rumo à cidade — ser cuspido pelo canhão atravessa o curso inteiro
     // (~2.5 s). Soltas no mapa, argolas a 3-10 m de altura não faziam sentido a pé.
-    const cs = cannonSpot || { x: cx + 220, z: cz };
+    const cs = cannonSpot;
     const y0 = heightAt(cs.x, cs.z) + 0.4;            // pés do jogador ao ser disparado
     ring.spot = { x: cs.x, y: y0, z: cs.z };
     const dx = cx - cs.x, dz = cz - cs.z, dl = Math.hypot(dx, dz) || 1;
@@ -246,7 +246,7 @@ export function createMapToys(deps) {
   // ===================================================================== //
   const xyl = { spot: null, plates: [], meshes: [], last: -1 };
   noSeed(() => {
-    xyl.spot = place(5.2);
+    xyl.spot = place('xilofone');
     for (let i = 0; i < 8; i++) {
       const w = 1.6, d = 3.0 - i * 0.12;
       const px = xyl.spot.x + (i - 3.5) * (w + 0.14), pz = xyl.spot.z, py = heightAt(px, pz);
@@ -304,7 +304,7 @@ export function createMapToys(deps) {
       feixes.push({ x, y, z, cor: color, altura: 46, raioTopo: 0.45, raioBase: 0.95 });
       landmarks.push({ x, z, color });
     };
-    if (cannonSpot) mk(cannonSpot.x + 3.2, cannonSpot.z, 0xd7343a); // canhão + argolas
+    mk(cannonSpot.x + 3.2, cannonSpot.z, 0xd7343a); // canhão + argolas
     mk(tramp.spot.x + 3.4, tramp.spot.z, 0x8a3ffb);
     mk(gal.spot.x - 6, gal.spot.z, 0xffe14a);
     mk(fw.spot.x + 2.2, fw.spot.z + 2.2, 0xff8ad4);

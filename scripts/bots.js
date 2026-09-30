@@ -362,13 +362,23 @@ function createWallQuery(walls, Par) {
    createBotTerrain: o relevo decide onde cada construção assenta. */
 async function createBotSolids(worldSeed, terrain) {
   const Par = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'paredes.js')).href);
+  const Ob = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'obstaculos.js')).href);
+  const Toys = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'maptoys-core.js')).href);
   const mundo = Par.construirMundoSolido({
     worldSeed, heightAt: terrain.heightAt, slopeAt: terrain.slopeAt,
     WATER_LEVEL: terrain.WATER_LEVEL, CITY: terrain.CITY,
   });
+  /* o painel do campo de tiro é parede no cliente (js/maptoys.js) — e fica
+     de pé com a cidade destruída (não é urbano) */
+  const atracoes = Ob.atracoesDaSemente({
+    worldSeed, heightAt: terrain.heightAt, slopeAt: terrain.slopeAt, biomeAt: terrain.biomeAt,
+    WATER_LEVEL: terrain.WATER_LEVEL, CITY: terrain.CITY, sitios: mundo.plano.sites,
+  });
+  const dasAtracoes = Toys.paredesDasAtracoes(atracoes, terrain.heightAt);
   return {
-    intact: createWallQuery(Par.paredesDoJogo(mundo), Par),
-    destroyed: createWallQuery(Par.paredesComCidadeDestruida(mundo), Par),
+    intact: createWallQuery(Par.paredesDoJogo(mundo).concat(dasAtracoes), Par),
+    destroyed: createWallQuery(Par.paredesComCidadeDestruida(mundo).concat(dasAtracoes), Par),
+    atracoes,
   };
 }
 

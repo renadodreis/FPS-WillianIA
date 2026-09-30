@@ -5281,12 +5281,12 @@ Grass.refreshAll();
 
 /* Canhão de Circo: criado DEPOIS de todo o worldgen — a geometria é feita em
    noSeed dentro do módulo, então nunca desloca o rand seedado do mundo. */
-Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, Structures, heightAt, slopeAt, WATER_LEVEL, CITY, centerMsg });
+Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, centerMsg, spot: Obstaculos.atracoes.canhao });
 
 /* 5 atrações do mapa (cama elástica, campo de tiro, fogos, aros, xilofone):
-   mesmo padrão do canhão — geometria em noSeed, pontos espalhados via pickSpot
-   evitando estruturas e o canhão. */
-MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, slopeAt, WATER_LEVEL, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state, cannonSpot: Cannon.spot });
+   mesmo padrão do canhão — geometria em noSeed; os pontos saem da semente
+   (Obstaculos.atracoes: construções + POIs), iguais no bot. */
+MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state, atracoes: Obstaculos.atracoes });
 
 /* ATRAÇÕES EM CHÃO LIMPO. Canhão e atrações nascem DEPOIS do refill que
    abre as clareiras da grama, e nenhuma delas limpava o mato: com o layout

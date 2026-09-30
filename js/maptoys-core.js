@@ -4,7 +4,59 @@
    xilofone gigante, campo de tiro e fogos. Mesmo código no navegador
    (js/maptoys.js) e nos testes de Node. Reusa pickSpot de cannon-core.
    ================================================================ */
-export { pickSpot } from './cannon-core.js';
+import { pickSpot } from './cannon-core.js';
+import { ASSENTO } from './paredes.js';
+export { pickSpot };
+
+/* ---- ONDE FICA CADA ATRAÇÃO ---------------------------------------------
+   Puro: relevo + sítios, sem sorteio (pickSpot é varredura determinística).
+   Antes cada módulo escolhia na hora, lendo `Structures.sites` AO VIVO — e o
+   mercado e o refúgio entram ali depois do `await` do GLB deles (game.js).
+   Quem baixava o GLB antes do fim do boot via o canhão e as atrações em
+   outro lugar; e o bot não sabia onde ficava o painel do campo de tiro, que
+   é parede (laudo d381d29, §2c: 10 acertos num humano escondido atrás dele).
+   `sitios`: construções (js/paredes.js, plano.sites) + POIs
+   (js/obstaculos.js, pois.sitios) — os mesmos em todo cliente e no Node.
+   A ordem é contrato: cada atração evita as anteriores. */
+export function planejarAtracoes({ sitios, heightAt, slopeAt, WATER_LEVEL, CITY }) {
+  if (!Array.isArray(sitios) || typeof heightAt !== 'function') throw new Error('planejarAtracoes: sitios/heightAt ausentes');
+  const cx = (CITY && CITY.x) || 0, cz = (CITY && CITY.z) || 0;
+  const sampler = (x, z) => ({ h: heightAt(x, z), slope: slopeAt ? slopeAt(x, z) : 0 });
+  const noChao = p => ({ x: p.x, z: p.z, y: heightAt(p.x, p.z) });
+  // canhão: o lugar mais vazio do anel; sem nada seco, 220 m a leste da cidade
+  const canhao = noChao(pickSpot({ sites: sitios, cx, cz, sampler, waterLevel: WATER_LEVEL }) || { x: cx + 220, z: cz });
+  const evita = [{ x: canhao.x, z: canhao.z, r: 40 }];
+  const lugar = angulo => {
+    const p = pickSpot({ sites: sitios, avoid: evita.slice(), cx, cz, sampler, waterLevel: WATER_LEVEL })
+      || { x: cx + Math.cos(angulo) * 240, z: cz + Math.sin(angulo) * 240 };
+    evita.push({ x: p.x, z: p.z, r: 46 });
+    return noChao(p);
+  };
+  const cama = lugar(0.3), galeria = lugar(1.4), fogos = lugar(2.5), xilofone = lugar(5.2);
+  return { canhao, cama, galeria, fogos, xilofone };
+}
+
+/* ---- o painel do campo de tiro é PAREDE (corpo e bala) -------------------
+   9 × 3,4 × 0,4 m, 2 m atrás do ponto, alinhado aos eixos. Assenta como as
+   construções (js/paredes.js, ASSENTO): o topo fica, a base desce até o chão
+   mais baixo da pegada — em encosta o painel flutuava e a bala passava por
+   baixo. O desenho (js/maptoys.js) é esta mesma caixa. */
+export const PAINEL_GALERIA = Object.freeze({ larg: 9, alt: 3.4, esp: 0.4, atras: 2 });
+export function painelDaGaleria(galeria, heightAt) {
+  const P = PAINEL_GALERIA;
+  const x0 = galeria.x - P.larg / 2, x1 = galeria.x + P.larg / 2;
+  const zc = galeria.z - P.atras, z0 = zc - P.esp / 2, z1 = zc + P.esp / 2;
+  const nx = Math.ceil(P.larg / ASSENTO.PASSO), nz = Math.max(1, Math.ceil(P.esp / ASSENTO.PASSO));
+  let chao = Infinity;
+  for (let i = 0; i <= nx; i++)
+    for (let k = 0; k <= nz; k++) chao = Math.min(chao, heightAt(x0 + (x1 - x0) * i / nx, z0 + (z1 - z0) * k / nz));
+  const y1 = galeria.y + P.alt;
+  return { x0, x1, y0: Math.min(galeria.y, chao - ASSENTO.ENTERRO), y1, z0, z1, atracao: 'galeria' };
+}
+/* as paredes das atrações (hoje só o painel) */
+export function paredesDasAtracoes(plano, heightAt) {
+  return [painelDaGaleria(plano.galeria, heightAt)];
+}
 
 // ---- Cama Elástica -------------------------------------------------------
 // Impulso pra cima ao pousar numa placa. Bem abaixo do teto vertical do

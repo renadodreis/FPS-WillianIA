@@ -358,6 +358,16 @@ escrita pelo validador — quem constrói não edita).
   dobrou (586 → 1 133)** e `rayHit` varre linear: blocos de 16 paredes
   consecutivas com caixa-união podam a varredura (3,45 µs por reta contra
   5,25 com a metade das paredes) — no cliente e na consulta dos bots.
+- **Canhão e atrações saem da SEMENTE** (`planejarAtracoes` em
+  `js/maptoys-core.js`, via `construirObstaculos().atracoes`): antes cada
+  módulo lia `Structures.sites` AO VIVO, que ganha o mercado e o refúgio
+  depois do `await` do GLB deles — onde as atrações nasciam dependia da rede,
+  e o bot não sabia do painel do campo de tiro. O painel (9 × 3,4 m) é PAREDE
+  (corpo e bala) no cliente e no bot (`paredesDasAtracoes`), assentado como as
+  construções; antes o bot deu 10 acertos num humano que a tela escondia atrás
+  dele. **Teste de bala contra um sólido descarta a reta que outro sólido
+  corta antes** (relevo rente, tronco) — senão acusa "parou cedo" onde a tela
+  também para.
 - **Inimigo de POSTO (Executivos da torre, guardas) não renasce à vista:** só
   com o jogador a > 75 m e sem ver o posto nem o corpo (Left 4 Dead, Valve
   2009). O corpo cai no piso do andar em que morreu, não no terreno.
