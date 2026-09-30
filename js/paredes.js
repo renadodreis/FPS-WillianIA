@@ -663,6 +663,13 @@ export function faceDaFachada(face, w, d) {
 }
 const acab = (w, h, d, x, y, z, cor) => ({ forma: 'caixa', w, h, d, x, y, z, cor });
 const tambor = (r, h, x, y, z, cor, seg = 10) => ({ forma: 'cilindro', r, h, x, y, z, cor, seg });
+/* peça que também segura o CORPO (não é laje): o que dá para entrar andando
+   — casa de máquinas, caixa d'água, mobiliário, postes. Laje de bala sem
+   corpo deixava o jogador entrar e ficar imune atirando para fora (a reta que
+   nasce dentro não é barrada; laudo d381d29, NC-1). Parapeito, pódio,
+   cornija, porta e marquise seguem só de bala: rentes à fachada ou acima da
+   cabeça, não dá para pôr o olho dentro deles. */
+const macica = p => Object.assign(p, { corpo: true });
 
 /* as caixas de bala de uma peça de acabamento. Cilindro vira a união de 5
    caixas DENTRO do círculo (canto ≤ 1,003·r; falta no máximo 7 % do raio,
@@ -720,20 +727,20 @@ export function acabamentoDaCidade({ lotes, cx, cz, gy, towerTopY }) {
     {
       const mh = brand(1.5, 2.4), mw = w * brand(0.32, 0.44), md = d * brand(0.32, 0.44);
       const mx = bx + brand(-w * 0.12, w * 0.12), mz = bz + brand(-d * 0.12, d * 0.12);
-      pecas.push(acab(mw, mh, md, mx, py + mh / 2, mz, 0x2e323a));
+      pecas.push(macica(acab(mw, mh, md, mx, py + mh / 2, mz, 0x2e323a)));
       if (brand() < 0.65) {
         const tr = brand(0.7, 1.05), th = brand(1.4, 2.1);
         const tx = bx + brand(-w * 0.22, w * 0.22), tz = bz + brand(-d * 0.22, d * 0.22);
-        pecas.push(tambor(tr, th, tx, py + th / 2, tz, 0x8f9aa2, 12));
+        pecas.push(macica(tambor(tr, th, tx, py + th / 2, tz, 0x8f9aa2, 12)));
       }
       for (let i = 0; i < 2; i++) {
         const aw = brand(0.6, 1.1), ah = brand(0.4, 0.8), ad = brand(0.6, 1.1);
         const ax = bx + brand(-w * 0.3, w * 0.3), az = bz + brand(-d * 0.3, d * 0.3);
-        pecas.push(acab(aw, ah, ad, ax, py + 0.4, az, 0x474c55));
+        pecas.push(macica(acab(aw, ah, ad, ax, py + 0.4, az, 0x474c55)));
       }
       if (arch === 'office' || arch === 'corner') {
         const ah = brand(2.6, 4.2), ax = bx + brand(-w * 0.2, w * 0.2), az = bz + brand(-d * 0.2, d * 0.2);
-        pecas.push(acab(0.13, ah, 0.13, ax, py + ah / 2, az, 0x20242a));
+        pecas.push(macica(acab(0.13, ah, 0.13, ax, py + ah / 2, az, 0x20242a)));
       }
     }
     return { tinta, pecas };
@@ -761,8 +768,8 @@ export function acabamentoDaCidade({ lotes, cx, cz, gy, towerTopY }) {
     /* haste: cilindro de 6 lados que afina de 0,13 (pé) a 0,10 (topo). Duas
        metades, cada uma no raio efetivo do hexágono dela (média entre a face,
        0,87·r, e o vértice) — só a bala usa isto; o desenho é o do structures.js */
-    pecasDosPostes.push(tambor(0.114, 2.1, wx, gy + 1.05, wz, 0x3a3e44, 6));
-    pecasDosPostes.push(tambor(0.100, 2.1, wx, gy + 3.15, wz, 0x3a3e44, 6));
+    pecasDosPostes.push(macica(tambor(0.114, 2.1, wx, gy + 1.05, wz, 0x3a3e44, 6)));
+    pecasDosPostes.push(macica(tambor(0.100, 2.1, wx, gy + 3.15, wz, 0x3a3e44, 6)));
     pecasDosPostes.push(acab(0.5, 0.22, 0.9, wx + L.hx, gy + 4.15, wz + L.hz, 0x2a2d33)); // luminária
   }
 
@@ -773,14 +780,14 @@ export function acabamentoDaCidade({ lotes, cx, cz, gy, towerTopY }) {
     acab(1.0, 0.5, 1.0, cx - 11, gy + 0.3, cz + 7, 0x2f6b3a),     // floreira
     tambor(0.26, 1.0, cx + 10, gy + 0.5, cz - 8, 0xb23a2a),       // hidrante
     acab(0.6, 0.9, 0.6, cx + 14, gy + 0.45, cz + 6, 0x33383f),    // lixeira
-  ];
+  ].map(macica);
 
   // Torre Nexus: o acabamento de fora (a casca e o interior já são paredes)
   const { W, FH: fh, NF } = NEXUS, torre = [];
   for (const sx of [-1, 1]) for (const sz of [-1, 1])
-    torre.push(acab(0.8, NF * fh + 1, 0.8, cx + sx * W / 2, gy + (NF * fh + 1) / 2, cz + sz * W / 2, 0x474d57)); // pilar de canto
-  torre.push(acab(0.4, 3.4, 0.4, cx - 2, gy + 1.7, cz + W / 2 + 0.05, 0x8a909a));  // jamba esq da porta
-  torre.push(acab(0.4, 3.4, 0.4, cx + 2, gy + 1.7, cz + W / 2 + 0.05, 0x8a909a));  // jamba dir
+    torre.push(macica(acab(0.8, NF * fh + 1, 0.8, cx + sx * W / 2, gy + (NF * fh + 1) / 2, cz + sz * W / 2, 0x474d57))); // pilar de canto
+  torre.push(macica(acab(0.4, 3.4, 0.4, cx - 2, gy + 1.7, cz + W / 2 + 0.05, 0x8a909a)));  // jamba esq da porta
+  torre.push(macica(acab(0.4, 3.4, 0.4, cx + 2, gy + 1.7, cz + W / 2 + 0.05, 0x8a909a)));  // jamba dir
   torre.push(acab(5, 0.4, 0.5, cx, gy + 3.3, cz + W / 2 + 0.05, 0x8a909a));        // verga
   torre.push(acab(6.4, 0.2, 1.8, cx, gy + 3.7, cz + W / 2 + 0.85, 0x2c3038));      // marquise de entrada
   torre.push(acab(W + 0.6, 0.5, 0.4, cx, gy + 3.0, cz - W / 2, 0x5a616b));         // faixa do térreo (perímetro)
@@ -793,14 +800,15 @@ export function acabamentoDaCidade({ lotes, cx, cz, gy, towerTopY }) {
     acab(W, 0.6, 0.4, cx, towerTopY + 0.3, cz + W / 2 - 0.2, 0x3a3f48),
     acab(0.4, 0.6, W, cx - W / 2 + 0.2, towerTopY + 0.3, cz, 0x3a3f48),
     acab(0.4, 0.6, W, cx + W / 2 - 0.2, towerTopY + 0.3, cz, 0x3a3f48),
-    acab(1.2, 0.7, 0.7, cx + 6.5, towerTopY + 0.35, cz + 6.5, 0x4a5240),   // caixa da bazuca
+    macica(acab(1.2, 0.7, 0.7, cx + 6.5, towerTopY + 0.35, cz + 6.5, 0x4a5240)),   // caixa da bazuca
   ].map(p => ({ ...p, malha: 'interior' })).concat([
-    acab(0.16, 5.5, 0.16, cx - W / 2 + 1.6, towerTopY + 2.75, cz - W / 2 + 1.6, 0x20242a), // antena
-    acab(1.6, 0.5, 1.6, cx - W / 2 + 1.6, towerTopY + 0.25, cz - W / 2 + 1.6, 0x2e323a),   // casa de máquinas
+    macica(acab(0.16, 5.5, 0.16, cx - W / 2 + 1.6, towerTopY + 2.75, cz - W / 2 + 1.6, 0x20242a)), // antena
+    macica(acab(1.6, 0.5, 1.6, cx - W / 2 + 1.6, towerTopY + 0.25, cz - W / 2 + 1.6, 0x2e323a)),   // casa de máquinas
   ]);
 
   const solidos = [];
-  const bala = (p, nome) => { for (const b of caixasDeBala(p)) solidos.push(Object.assign(b, { city: true, noCollide: true, acabamento: nome })); };
+  // peça maciça segura corpo e bala; o resto é laje (bala só, não empurra)
+  const bala = (p, nome) => { for (const b of caixasDeBala(p)) solidos.push(Object.assign(b, p.corpo ? { city: true, acabamento: nome } : { city: true, noCollide: true, acabamento: nome })); };
   predios.forEach((pr, i) => pr.pecas.forEach(p => bala(p, `lote#${lotes[i].idx}`)));
   pecasDosPostes.forEach(p => bala(p, 'poste'));
   praca.forEach(p => bala(p, 'praça'));

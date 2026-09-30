@@ -23,7 +23,7 @@ import * as Climate from './js/climate.js';
 import { createCover } from './js/cover.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
-import { construirObstaculos, raioDoProp, sitioDoProp, VEGETACAO, BALA, ARVORE, troncosDaArvore, trechoNaFaixa, retaNaMalha } from './js/obstaculos.js';
+import { construirObstaculos, raioDoProp, sitioDoProp, VEGETACAO, BALA, ARVORE, troncosDaArvore, trechoNaFaixa, retaNaMalha, dentroDaMalha } from './js/obstaculos.js';
 import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
@@ -975,7 +975,8 @@ function registrarObstaculos(sourceId) {
     if (o.y1 !== undefined) { meta.y0 = o.y0; meta.y1 = o.y1; }
     if (o.corpo === false) meta.corpo = false;     // só bala (fatia da pedra)
     if (o.bala === false) meta.bala = false;       // só corpo (o círculo da pedra)
-    if (o.malha) meta.malha = o.malha;             // a malha da pedra
+    if (o.malha) meta.malha = o.malha;             // a malha da pedra / do cacto
+    if (o.pecas) meta.pecas = o.pecas;             // peças da malha (cacto: a união se sobrepõe)
     addObstacle(o.x, o.z, o.r, meta);
   }
 }
@@ -1876,6 +1877,29 @@ function playerUpdate(dt, t) {
     if (d < min && d > 1e-4) {
       player.pos.x = o.x + dx / d * min;
       player.pos.z = o.z + dz / d * min;
+    }
+  }
+  /* A CABEÇA NÃO ENTRA NA PEDRA NEM NO CACTO. O corpo bate no círculo de
+     sempre, mas a malha desenhada — a que segura a bala — incha além dele: o
+     agachado encostado ficava com o olho DENTRO da pedra, escondido na tela e
+     da bala de fora, e atirando para fora (a reta que nasce dentro não é
+     barrada). Laudo d381d29, NC-3. Olho dentro da malha: o corpo sai do centro
+     para fora até o olho ficar 10 cm fora dela (o corte da câmera é 0,08 m). */
+  {
+    const olhoY = player.pos.y + lerp(1.62, 1.04, player.crouchT);
+    for (const o of obstaclesNear(player.pos.x, player.pos.z)) {
+      if (!o.malha || olhoY < o.y0 || olhoY > o.y1) continue;
+      const dx = player.pos.x - o.x, dz = player.pos.z - o.z, d = Math.hypot(dx, dz);
+      if (d > o.r) continue;
+      if (!dentroDaMalha(o.malha, player.pos.x, olhoY, player.pos.z, o.pecas)) continue;
+      const ux = d > 1e-4 ? dx / d : 1, uz = d > 1e-4 ? dz / d : 0;
+      let lo = d, hi = o.r + 0.05;   // além do círculo que cerca a malha: fora dela
+      for (let k = 0; k < 14; k++) {
+        const m = (lo + hi) / 2;
+        if (dentroDaMalha(o.malha, o.x + ux * m, olhoY, o.z + uz * m, o.pecas)) lo = m; else hi = m;
+      }
+      player.pos.x = o.x + ux * (hi + 0.1);
+      player.pos.z = o.z + uz * (hi + 0.1);
     }
   }
   Structures.collide(player.pos, player.radius, 1.7); // paredes das construções
