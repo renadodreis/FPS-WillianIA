@@ -6,16 +6,16 @@
    montam o desenho e o sólido: não há dois vulcões. */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { montarVulcao, retaNoVulcao, topoDoVulcao, VULCAO_GLB } from './vulcao-solido.js';
+import { montarVulcao, retaNoVulcao, topoDoVulcao, chaoDoVulcao, VULCAO_GLB } from './vulcao-solido.js';
 
 export function createVolcano(deps) {
-  const { scene, VOLCANO, player, playerDamage, csmMat } = deps;
+  const { scene, VOLCANO, player, playerDamage, csmMat, platforms = null, heightAt = null } = deps;
 
   const group = new THREE.Group();
   group.name = 'volcano';
   scene.add(group);
 
-  const api = { VOLCANO, group, update, modelReady: false, solido: null, reta, segmento, topo };
+  const api = { VOLCANO, group, update, modelReady: false, solido: null, reta, segmento, topo, chao };
 
   /* a rocha desenhada como sólido: Infinity / false enquanto o modelo não
      chegou (vale o relevo, como sempre valeu) */
@@ -31,12 +31,21 @@ export function createVolcano(deps) {
     return retaNoVulcao(api.solido, a.x, a.y, a.z, _d.x, _d.y, _d.z, len) < len;
   }
   function topo(x, z) { return api.solido ? topoDoVulcao(api.solido, x, z) : -Infinity; }
+  /* onde o CORPO pisa: a rocha desenhada menos a calota de lava */
+  function chao(x, z) { return api.solido && heightAt ? chaoDoVulcao(api.solido, x, z, heightAt, VOLCANO) : -Infinity; }
 
   fetch(VULCAO_GLB).then(r => {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.arrayBuffer();
   }).then(buf => {
     api.solido = montarVulcao(new Uint8Array(buf), VOLCANO);
+    /* o chão do jogador (groundAt, js/terrain.js) passa a ser o MAIOR entre o
+       relevo e a rocha desenhada: antes o corpo pisava no relevo e ficava
+       com as pernas — ou o tronco, na saia — dentro da rocha */
+    if (platforms && heightAt) {
+      const m = api.solido;
+      platforms.push({ x0: m.x0, x1: m.x0 + m.nx * m.celula, z0: m.z0, z1: m.z0 + m.nz * m.celula, superficie: chao, vulcao: true });
+    }
     new GLTFLoader().parse(buf, '', gltf => {
       const root = gltf.scene;
       // mesma transformação do bake: bbox centrado em (x,z), escala pelo

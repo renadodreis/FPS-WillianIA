@@ -260,3 +260,19 @@ export function retaNoVulcao(m, ox, oy, oz, dx, dy, dz, len) {
     else { k += sk; tmk += tdk; if (k < 0 || k >= m.nz) return melhor; }
   }
 }
+
+/* ---------------- o CHÃO do vulcão (onde o corpo pisa) ----------------
+   A rocha desenhada, menos a CALOTA DE LAVA: o modelo cobre o poço da
+   cratera (o relevo desce até a lava, VOLCANO.lavaY) com uma tampa opaca
+   de lava. Pisar nela é afundar na lava — o corpo cai para o poço do
+   relevo, onde a regra de sempre queima. Calota: perto do centro da lava
+   (CALOTA_R) e mais de CALOTA_ALTURA acima do relevo (o poço embaixo).
+   Fora do vulcão, ou onde a rocha fica abaixo do relevo: -Infinity (vale o
+   relevo, que também é desenhado). Uma regra só, para o cliente e o bot. */
+export const CALOTA_R = 16, CALOTA_ALTURA = 3;
+export function chaoDoVulcao(m, x, z, heightAt, VOLCANO) {
+  const y = topoDoVulcao(m, x, z);
+  if (!(y > -Infinity)) return -Infinity;
+  if (Math.hypot(x - VOLCANO.lavaX, z - VOLCANO.lavaZ) < CALOTA_R && y - heightAt(x, z) > CALOTA_ALTURA) return -Infinity;
+  return y;
+}

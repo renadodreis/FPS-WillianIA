@@ -1842,7 +1842,17 @@ function playerUpdate(dt, t) {
     SFX.jump();
   }
 
+  const _px = player.pos.x, _pz = player.pos.z;
   player.pos.addScaledVector(player.vel, dt);
+  /* a rocha desenhada do vulcão é PAREDE onde sobe mais que um degrau: o
+     groundAt só a aceita como chão até pé + 0,65 m, e acima disso o corpo
+     entraria nela andando pelo relevo por baixo */
+  if (Volcano.solido && Volcano.chao(player.pos.x, player.pos.z) > player.pos.y + 0.65
+      && !(Volcano.chao(_px, _pz) > player.pos.y + 0.65)) {
+    if (!(Volcano.chao(player.pos.x, _pz) > player.pos.y + 0.65)) player.pos.z = _pz;
+    else if (!(Volcano.chao(_px, player.pos.z) > player.pos.y + 0.65)) player.pos.x = _px;
+    else { player.pos.x = _px; player.pos.z = _pz; }
+  }
 
   // colisão com chão (terreno OU plataforma/andar de prédio)
   const groundY = groundAt(player.pos.x, player.pos.z, player.pos.y);
@@ -3241,7 +3251,7 @@ function playerDamage(dmg, fromPos, cause) {
   }
 }
 
-const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat });
+const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat, platforms, heightAt });
 
 const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY, stampTrack: Grass.stampTrack });
 
@@ -3460,7 +3470,7 @@ for (const r of Structures.fieldRoofs)
     sourceId: r.castle ? 'castle' : 'campo',
   });
 for (const p of platforms) {
-  if (p.ramp) continue;
+  if (p.ramp || p.superficie) continue;   // rampa e superfície (vulcão) não são laje
   if ((p.x1 - p.x0) * (p.z1 - p.z0) < 6) continue; // só lajes com área de teto
   Cover.addRoofRect({ x0: p.x0, x1: p.x1, z0: p.z0, z1: p.z1, y: 0, roofY: p.y,
     sourceId: p.city ? 'city' : p.castle ? 'castle' : 'slab' });

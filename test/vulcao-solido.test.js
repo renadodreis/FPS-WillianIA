@@ -119,6 +119,33 @@ describe('o vulcão desenhado como sólido', () => {
     assert.equal(dif, 0, `${dif} pontos com topo diferente da força bruta`);
   });
 
+  it('o chão: a rocha desenhada onde ela está, menos a calota de lava sobre o poço', () => {
+    const W = V0();
+    // centro da lava: a calota (desenhada muito acima do poço do relevo) não é chão
+    const noCentro = V.topoDoVulcao(m, W.lavaX, W.lavaZ);
+    assert.ok(noCentro - terrain.heightAt(W.lavaX, W.lavaZ) > 20, 'cenário: a calota não cobre o poço aqui');
+    assert.equal(V.chaoDoVulcao(m, W.lavaX, W.lavaZ, terrain.heightAt, W), -Infinity, 'a calota de lava virou chão');
+    // encosta: o chão é a rocha desenhada (força bruta de cima)
+    let n = 0, dif = 0, acimaRelevo = 0;
+    for (let i = 0; i < 800; i++) {
+      const [x, , z] = pontoSobre(0, 0);
+      if (Math.hypot(x - W.lavaX, z - W.lavaZ) < V.CALOTA_R + 2) continue;
+      const bruto = retaBruta([x, 500, z], [0, -1, 0], 1000);
+      if (bruto === Infinity) continue;
+      n++;
+      if (Math.abs(V.chaoDoVulcao(m, x, z, terrain.heightAt, W) - (500 - bruto)) > 1e-6) dif++;
+      if (500 - bruto > terrain.heightAt(x, z) + 0.3) acimaRelevo++;
+    }
+    assert.ok(n > 300 && acimaRelevo > 50, `cenário: ${n} pontos na encosta, ${acimaRelevo} com a rocha acima do relevo`);
+    assert.equal(dif, 0, `${dif} de ${n} pontos da encosta com chão diferente da rocha desenhada`);
+    // o bot pisa no maior dos dois
+    for (let i = 0; i < 200; i++) {
+      const [x, , z] = pontoSobre(0, 0);
+      const esperado = Math.max(terrain.heightAt(x, z), V.chaoDoVulcao(m, x, z, terrain.heightAt, W));
+      assert.ok(Math.abs(Bots.chaoDoBot(terrain, x, z) - esperado) < 1e-9, `chão do bot em (${x.toFixed(1)}, ${z.toFixed(1)})`);
+    }
+  });
+
   it('o bot: com o relevo livre, a rocha desenhada tampa a visada — e por cima dela não', () => {
     let casos = 0, tampou = 0, livres = 0, viu = 0;
     for (let i = 0; i < 6000 && casos < 200; i++) {

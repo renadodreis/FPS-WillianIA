@@ -374,8 +374,12 @@ escrita pelo validador — quem constrói não edita).
   rocha desenhada passa dele em 45 % da superfície (até 6,7 m na saia; a
   calota de lava cobre o poço da cratera): 417 de 513 retas atravessavam a
   rocha. Entra na composição única de `Structures.rayHit/segBlocked` e no
-  `lineOfSight` do bot (que lê o GLB do disco). O CORPO ainda pisa no relevo
-  (fase 2). **No QA o `composer.render` é no-op: nada atualiza a
+  `lineOfSight` do bot (que lê o GLB do disco). **O corpo pisa na rocha
+  desenhada** (`chaoDoVulcao`: plataforma `superficie(x, z)` no `groundAt`,
+  parede onde ela sobe mais que o degrau de 0,65 m; o bot anda no maior dos
+  dois) — **menos a calota de lava** que cobre o poço da cratera: pisar nela
+  é afundar na lava (cai no poço do relevo e queima pela regra de sempre).
+  Carro ainda roda no heightfield do relevo. **No QA o `composer.render` é no-op: nada atualiza a
   `matrixWorld` de modelo carregado depois do boot** — teste que lê vértice
   ou faz raycast nele chama `updateWorldMatrix(true, true)` antes.
 - **Inimigo de POSTO (Executivos da torre, guardas) não renasce à vista:** só

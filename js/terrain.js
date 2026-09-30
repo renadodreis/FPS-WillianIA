@@ -156,13 +156,17 @@ function surfaceAt(x, z) {
   return out;
 }
 /* plataformas pisáveis (andares e rampas de prédios) além do terreno */
-const platforms = []; // {x0,x1,z0,z1,y} | rampa linear ou com heightAt(coordenada)
+const platforms = []; // {x0,x1,z0,z1,y} | rampa linear ou com heightAt(coordenada) | superficie(x, z)
 function groundAt(x, z, curY) {
   let g = heightAt(x, z);
   for (const p of platforms) {
     if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
     let top = p.y;
-    if (p.ramp) {
+    if (typeof p.superficie === 'function') {
+      // superfície de altura por (x, z) — a rocha desenhada do vulcão
+      top = p.superficie(x, z);
+      if (!(top > -Infinity)) continue;
+    } else if (p.ramp) {
       if (typeof p.heightAt === 'function') {
         top = p.heightAt(p.axis === 'x' ? x : z);
       } else {

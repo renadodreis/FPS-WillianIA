@@ -267,6 +267,13 @@ function lineOfSight(terrain, from, to) {
   }
   return true;
 }
+/* onde o bot pisa: o relevo, ou a rocha desenhada do vulcão quando ela está
+   por cima (a mesma regra do jogador, js/vulcao-solido.js chaoDoVulcao) */
+function chaoDoBot(terrain, x, z) {
+  const h = terrain.heightAt(x, z);
+  const v = terrain.vulcao ? terrain.vulcao.chao(x, z) : -Infinity;
+  return v > h ? v : h;
+}
 function relevoLivre(terrain, from, to) {
   if (!terrain || typeof terrain.heightAt !== 'function') return false;
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
@@ -1033,19 +1040,20 @@ async function createBotTerrain(worldSeed) {
   } finally {
     Math.random = previousRandom;
   }
-  terrain.vulcao = await createBotVolcano(terrain.VOLCANO);
+  terrain.vulcao = await createBotVolcano(terrain.VOLCANO, terrain.heightAt);
   return terrain;
 }
 
 /* a rocha desenhada do vulcão: o MESMO GLB que o cliente desenha, lido do
    disco. Sem ele o bot veria através da rocha — falha BARULHENTA. */
-async function createBotVolcano(VOLCANO) {
+async function createBotVolcano(VOLCANO, heightAt) {
   try {
     const Vul = await import(pathToFileURL(path.join(__dirname, '..', 'js', 'vulcao-solido.js')).href);
     const bytes = require('fs').readFileSync(path.join(__dirname, '..', Vul.VULCAO_GLB));
     const m = Vul.montarVulcao(bytes, VOLCANO);
     return { m, reta: (ox, oy, oz, dx, dy, dz, len) => Vul.retaNoVulcao(m, ox, oy, oz, dx, dy, dz, len),
-      topo: (x, z) => Vul.topoDoVulcao(m, x, z) };
+      topo: (x, z) => Vul.topoDoVulcao(m, x, z),
+      chao: (x, z) => Vul.chaoDoVulcao(m, x, z, heightAt, VOLCANO) };
   } catch (err) {
     console.error(`[bots] vulcão indisponível (${err && err.message}) — a visada ignora a rocha desenhada`);
     return null;
@@ -1333,7 +1341,7 @@ function tickPlayingBot(world, b, zone, t, dt, rng) {
     b.x += (dx / d) * step; b.z += (dz / d) * step;
     moved = step > 0.01;
   }
-  if (terrain) b.y = terrain.heightAt(b.x, b.z);
+  if (terrain) b.y = chaoDoBot(terrain, b.x, b.z);
   b.yaw = combatFacingYaw(b, target, action, dx, dz);
   b.s.volatile.emit('state', {
     pos: [b.x, b.y, b.z], rotY: b.yaw, heldWeapon: b.weapon, car: -1,
@@ -1394,7 +1402,7 @@ function tickBots(world, t, rng = Math.random) {
       if (t >= b.jumpAt) b.phase = 'FALL';
       b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, shipLocal: local, heldWeapon: 'FACA', car: -1 });
     } else if (b.phase === 'FALL') {
-      const groundY = terrain ? terrain.heightAt(b.x, b.z) : 4;
+      const groundY = terrain ? chaoDoBot(terrain, b.x, b.z) : 4;
       b.y = Math.max(groundY, b.y - 4.2);
       if (b.y <= groundY + 0.01) b.phase = 'PLAY';
       b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, fall: true, chute: true, heldWeapon: 'FACA', car: -1 });
@@ -1547,7 +1555,7 @@ module.exports = {
   startBots, createBotWorld, createBotState, buildCandidates, tickBots, selectTarget, isPointInGas, chooseWaypoint,
   movementYaw, combatFacingYaw, observePlayerUpdate, applyLoot, chooseCombatAction,
   createBotTerrain, createBotChestSpots, resetBotForMatch, canAttemptAttack, buildMissShot, dropLootOnce,
-  perceive, knownTargets, lineOfSight, inViewCone, hitChance, createHitDirector, decideShot,
+  perceive, knownTargets, lineOfSight, chaoDoBot, inViewCone, hitChance, createHitDirector, decideShot,
   onPlayerFired, onBotHit,
   createBotSolids, createBotObstacles, createBotWorldGeometry, applyCityState, activeWalls, clearSight,
   loadVehicleRules, applyVehicleFleet, observeVehicleFromUpdate, vehicleOut, vehicleOnSegment, eyeInsideVehicle,
