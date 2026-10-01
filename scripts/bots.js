@@ -493,6 +493,8 @@ function applyVehicleFleet(world, lista) {
 }
 /* quem está no veículo manda a pose dele no `playerUpdate` */
 function observeVehicleFromUpdate(world, update) {
+  // o carro SOLTO que o ex-motorista ainda simula vem junto (server.js)
+  if (update && update.solto) observeLooseCar(world, update.solto);
   if (!world.vehicleById || !update || !Array.isArray(update.pos)) return;
   const pos = update.pos.slice(0, 3).map(Number);
   if (pos.length < 3 || !pos.every(Number.isFinite)) return;
@@ -501,6 +503,17 @@ function observeVehicleFromUpdate(world, update) {
   if (!v) return;
   v.pose.x = pos[0]; v.pose.y = pos[1]; v.pose.z = pos[2];
   if (Number.isFinite(Number(update.rotY))) v.pose.yaw = Number(update.rotY);
+}
+/* o carro solto (`carRola` ou o `solto` do playerUpdate): sem isso o bot o
+   via onde o motorista SAIU — 14 disparos e 8 acertos em humano escondido
+   atrás do carro rolado (laudo afb1ae8, B7) */
+function observeLooseCar(world, d) {
+  if (!world.vehicleById || !d || !Number.isInteger(d.idx) || !Array.isArray(d.pos)) return;
+  const v = world.vehicleById.get(String(d.idx));
+  const pos = d.pos.slice(0, 3).map(Number);
+  if (!v || !pos.every(Number.isFinite)) return;
+  v.pose.x = pos[0]; v.pose.y = pos[1]; v.pose.z = pos[2];
+  if (Number.isFinite(Number(d.rotY))) v.pose.yaw = Number(d.rotY);
 }
 /* vida em zero (queimando) ou explodido: não barra mais nada */
 function vehicleOut(world, d) {
@@ -1478,6 +1491,7 @@ function startBots(N, URL, { watchdog = true } = {}) {
       console.log(`[bot ${i}] partida começou — pulando aos ${b.jumpAt.toFixed(0)}s`);
     });
     s.on('playerUpdate', d => { observePlayerUpdate(observedPlayers, d); observeVehicleFromUpdate(world, d); });
+    s.on('carRola', d => observeLooseCar(world, d));
     // vida do veículo em zero: para de barrar na hora; explodiu: sai do mundo
     s.on('vehicleBurning', d => vehicleOut(world, d));
     s.on('vehicleExploded', d => vehicleOut(world, d));
@@ -1555,7 +1569,7 @@ module.exports = {
   startBots, createBotWorld, createBotState, buildCandidates, tickBots, selectTarget, isPointInGas, chooseWaypoint,
   movementYaw, combatFacingYaw, observePlayerUpdate, applyLoot, chooseCombatAction,
   createBotTerrain, createBotChestSpots, resetBotForMatch, canAttemptAttack, buildMissShot, dropLootOnce,
-  perceive, knownTargets, lineOfSight, chaoDoBot, inViewCone, hitChance, createHitDirector, decideShot,
+  perceive, knownTargets, lineOfSight, chaoDoBot, observeLooseCar, inViewCone, hitChance, createHitDirector, decideShot,
   onPlayerFired, onBotHit,
   createBotSolids, createBotObstacles, createBotWorldGeometry, applyCityState, activeWalls, clearSight,
   loadVehicleRules, applyVehicleFleet, observeVehicleFromUpdate, vehicleOut, vehicleOnSegment, eyeInsideVehicle,

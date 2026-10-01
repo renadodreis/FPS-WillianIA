@@ -326,9 +326,15 @@ escrita pelo validador — quem constrói não edita).
   composição de `Structures.rayHit/segBlocked` no game.js). Vida zero: para de
   proteger na hora, queima 5 s, explode e some; quem está dentro morre.
   O servidor passou a carregar `three` + terreno no boot (dependencies).
-  **O carro SOLTO é do último motorista até parar** (`carSolto` → servidor
-  confere posse, janela e velocidade → `carRola` aos outros). Antes o servidor
-  e os outros ficavam com a pose da SAÍDA, a até 53 m de onde o carro parou.
+  **O carro SOLTO é do último motorista até parar**: a pose vai DENTRO do
+  `state` dele (`solto`) e volta DENTRO do `playerUpdate` (servidor confere
+  posse, janela, velocidade, chão e parede; o bot lê o mesmo `solto`). Antes
+  o servidor e os outros ficavam com a pose da SAÍDA, a até 53 m de onde o
+  carro parou. **Dois voláteis seguidos para o mesmo destino: o socket.io
+  descarta o segundo** — um `carSolto` à parte no tique do `state` sumia com
+  o ex-motorista por 2–2,65 s, e o `carRola` antes do `playerUpdate` fazia o
+  mesmo no servidor (0 updates em 4 s, medido). Dado novo vai DENTRO do
+  pacote que já existe.
   Teste disso em tempo de relógio: o laço do renderer segue rodando no
   harness, e `QA.tick` por cima faz o jogo andar MAIS RÁPIDO que o relógio
   (medido: 47 m/s aparentes a 105 km/h) — regra de servidor que mede
@@ -379,9 +385,24 @@ escrita pelo validador — quem constrói não edita).
   parede onde ela sobe mais que o degrau de 0,65 m; o bot anda no maior dos
   dois) — **menos a calota de lava** que cobre o poço da cratera: pisar nela
   é afundar na lava (cai no poço do relevo e queima pela regra de sempre).
-  Carro ainda roda no heightfield do relevo. **No QA o `composer.render` é no-op: nada atualiza a
+  Carro ainda roda no heightfield do relevo — e quem SAI dele debaixo da
+  rocha sobe para a superfície (corpo dentro da rocha, venha de onde vier,
+  sobe); o painel do campo de tiro tem corpo CANNON próprio (nasce depois do
+  laço de boot). **No QA o `composer.render` é no-op: nada atualiza a
   `matrixWorld` de modelo carregado depois do boot** — teste que lê vértice
   ou faz raycast nele chama `updateWorldMatrix(true, true)` antes.
+- **A vítima aceita o dano se o TRONCO OU a CABEÇA estão alcançáveis**
+  (`youWereHit`, br-game.js). Com um ponto só (pé + 1 m), em pé atrás de
+  mureta na cintura o jogador ficava IMUNE com a cabeça de fora (vida 100 com
+  o tiro do anfitrião), e com esse ponto dentro de um sólido (pedra em pé na
+  encosta, degrau da escada) recusava tudo e atirava. O empurrão da malha
+  (pedra/cacto) cobre tronco e olho, e debaixo dos degraus baixos da escada
+  da Torre há bloqueio só de corpo (`vao`, o `playerclip` do Source).
+- **O servidor conhece o sólido da coluna** (`soloDaSemente`: paredes da
+  semente nos dois estados da cidade, as das atrações e a rocha do vulcão).
+  Piloto de helicóptero precisa estar 0,4 m acima do chão MAIS ALTO da
+  coluna (laje e telhado contam); carro solto não sai do chão nem atravessa
+  parede.
 - **Inimigo de POSTO (Executivos da torre, guardas) não renasce à vista:** só
   com o jogador a > 75 m e sem ver o posto nem o corpo (Left 4 Dead, Valve
   2009). O corpo cai no piso do andar em que morreu, não no terreno.

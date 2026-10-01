@@ -928,16 +928,25 @@ export function interiorNexus(cx, cz, gy, saguao = null) {
      rampa). Antes o lance era só rampa e a bala passava pelos degraus:
      de 42 tiros de um executivo no andar contra quem subia o lance de
      baixo, 8 acertaram através dos degraus do lance de cima (sonda no
-     jogo real). O desenho sai destas MESMAS caixas (js/structures.js). */
-  const lance = (xL, xR, yN, yS) => {
+     jogo real). O desenho sai destas MESMAS caixas (js/structures.js).
+     DEBAIXO do lance, onde a folga até o piso é menor que um corpo em pé,
+     entra um bloqueio só de CORPO (`noBullet`, o `playerclip` do Source):
+     sem ele o jogador andava para baixo do lance e ficava com o tronco dentro
+     de um degrau — a vítima testa a cobertura ali, todo tiro de fora era
+     recusado e ele atirava de dentro (laudo afb1ae8, §4.6). O `collide` não o
+     sente de cima (pé acima do topo), então quem sobe a rampa não esbarra. */
+  const VAO_LIVRE = 1.9;
+  const lance = (xL, xR, yN, yS, piso) => {
     ops.push({ tipo: 'lance', xL, xR, yN, yS,
       plataforma: { ramp: true, axis: 'z', x0: cx + xL, x1: cx + xR, z0: cz + zMid, z1: cz + zBot, y0: yN, y1: yS, city: true } });
     const dz = (zBot - zMid) / STEPS;
     for (let i = 0; i < STEPS; i++) {
       const t = (i + 0.5) / STEPS, topo = yN + (yS - yN) * t, zc = zMid + t * (zBot - zMid);
       const d = { x0: xL, x1: xR, y0: topo - DEGRAU_H, y1: topo, z0: zc - dz / 2 - 0.01, z1: zc + dz / 2 + 0.01 };
+      const vao = piso != null && d.y0 > piso + 0.05 && d.y0 - piso < VAO_LIVRE
+        ? { x0: cx + d.x0, x1: cx + d.x1, y0: piso, y1: d.y0, z0: cz + d.z0, z1: cz + d.z1, noBullet: true, city: true } : null;
       ops.push({ tipo: 'degrau', ...d,
-        parede: { x0: cx + d.x0, x1: cx + d.x1, y0: d.y0, y1: d.y1, z0: cz + d.z0, z1: cz + d.z1, noCollide: true, city: true } });
+        parede: { x0: cx + d.x0, x1: cx + d.x1, y0: d.y0, y1: d.y1, z0: cz + d.z0, z1: cz + d.z1, noCollide: true, city: true }, vao });
     }
   };
   const corrimaoInclinado = (x, yN, yS) => ops.push({ tipo: 'corrimaoInclinado', x, yN, yS });
@@ -945,11 +954,14 @@ export function interiorNexus(cx, cz, gy, saguao = null) {
     corrimao(WELL.x1, WELL.x1, WELL.z0, zBot, y, true);   // borda leste do poço
     corrimao(xA1, xB0, zBot, zBot, y, true);              // vão central na borda do apron
   };
-  const buildStaircase = (yBottom, yTop) => {
+  /* `pisoSob`: o piso de verdade debaixo dos lances — só no térreo (a laje
+     inteira do saguão). Nos andares de cima, debaixo dos lances fica o vão da
+     escada, com os lances do andar de baixo a ~3 m: sem bloqueio */
+  const buildStaircase = (yBottom, yTop, pisoSob = null) => {
     const ym = (yBottom + yTop) / 2;
     laje(xA0, xB1, WELL.z0, zMid, ym);                    // patamar intermediário (norte)
-    lance(xA0, xA1, ym, yBottom);                         // lance A: patamar -> piso baixo
-    lance(xB0, xB1, ym, yTop);                            // lance B: patamar -> piso alto
+    lance(xA0, xA1, ym, yBottom, pisoSob);                // lance A: patamar -> piso baixo
+    lance(xB0, xB1, ym, yTop, pisoSob);                   // lance B: patamar -> piso alto
     corrimaoInclinado(xA1, ym, yBottom); corrimaoInclinado(xB0, ym, yTop);
     corrimao(WELL.x1, WELL.x1, WELL.z0, zMid, ym, true);  // borda leste do patamar
   };
@@ -958,7 +970,7 @@ export function interiorNexus(cx, cz, gy, saguao = null) {
   for (let k = 1; k <= NF; k++) {
     const yTop = k === NF ? towerTopY : gy + k * fh;
     if (k < NF) { buildFloor(gy + k * fh); stairGuards(gy + k * fh); }
-    buildStaircase(gy + (k - 1) * fh, yTop);
+    buildStaircase(gy + (k - 1) * fh, yTop, k === 1 ? piso.y : null);
     ops.push({ tipo: 'luminaria', w: 1.4, d: 0.4, x: 3.5, y: gy + k * fh - 0.35, z: 0 });
     /* luz do poço: pendurada SOB o patamar de cima, sobre o patamar deste
        lance (3,05 m acima dele). Ficava na altura do teto do ANDAR, em
@@ -1045,7 +1057,10 @@ export function construirMundoSolido({ worldSeed, heightAt, slopeAt, WATER_LEVEL
   const casca = cascaNexus(cx, cz, gy);
   for (const b of casca) add(caixaDaPeca(b, { city: true }), 'nexus/casca');
   const nexus = interiorNexus(cx, cz, gy, pisoDoSaguao(heightAt, cx, cz, gy));
-  for (const op of nexus.ops) if (op.parede) add(op.parede, `nexus/${op.tipo}`);
+  for (const op of nexus.ops) {
+    if (op.parede) add(op.parede, `nexus/${op.tipo}`);
+    if (op.vao) add(op.vao, 'nexus/vao');   // bloqueio de corpo debaixo do lance
+  }
   const acabamento = acabamentoDaCidade({ lotes, cx, cz, gy, towerTopY: nexus.info.towerTopY });
   for (const b of acabamento.solidos) add(b, `acabamento/${b.acabamento}`);
 

@@ -82,6 +82,16 @@ describe('o carro solto (rola depois que o motorista sai)', { skip: !CHROME && '
       kmh = await h.play(i => window.__game.Car.vehicles[i].chassisBody.velocity.length() * 3.6, car.i);
     }
     const rola = collect(host, 'carRola');
+    /* o ex-motorista continua EXISTINDO para os outros enquanto o carro rola
+       (laudo afb1ae8, §4.1: o `carSolto` normal e o `state` volátil no mesmo
+       tique — o socket.io descartava o volátil, 0 playerUpdate dele por até
+       2,65 s, e o outro cliente prendia o carro no ponto de saída) */
+    const ups = [];
+    host.on('playerUpdate', d => {
+      if (d && d.id === pageId) ups.push(Date.now());
+      if (d && d.solto) rola.push(d.solto);   // o carro solto vem dentro do playerUpdate
+    });
+    const tSaida = Date.now();
     const saida = await h.play(i => {
       const G = window.__game;
       G.keys.KeyW = false;
@@ -104,6 +114,11 @@ describe('o carro solto (rola depois que o motorista sai)', { skip: !CHROME && '
     t.diagnostic(`saiu a ${kmh.toFixed(1)} km/h; rolou ${rolou.toFixed(2)} m; ${rola.length} poses repassadas; ` +
       `última a ${ultima ? Math.hypot(ultima.pos[0] - fim.x, ultima.pos[2] - fim.z).toFixed(3) : '—'} m do carro parado`);
     assert.ok(rolou > 15, `cenário: o carro rolou só ${rolou.toFixed(2)} m depois da saída (precisa passar da folga de 12 m)`);
+    const marcas = [tSaida, ...ups.filter(u => u > tSaida && u < tSaida + 4000)];
+    let buraco = 0;
+    for (let i = 1; i < marcas.length; i++) buraco = Math.max(buraco, marcas[i] - marcas[i - 1]);
+    t.diagnostic(`playerUpdate do ex-motorista nos 4 s depois da saída: ${marcas.length - 1}; maior buraco ${buraco} ms`);
+    assert.ok(marcas.length - 1 >= 20 && buraco < 600, `o ex-motorista sumiu para os outros enquanto o carro rolava: ${marcas.length - 1} playerUpdate em 4 s, buraco de ${buraco} ms`);
     assert.ok(ultima, 'o servidor não repassou nenhuma pose do carro solto');
     assert.ok(Math.hypot(ultima.pos[0] - fim.x, ultima.pos[2] - fim.z) < 0.5,
       `a última pose repassada está a ${Math.hypot(ultima.pos[0] - fim.x, ultima.pos[2] - fim.z).toFixed(2)} m do carro parado`);
@@ -131,7 +146,12 @@ describe('o carro solto (rola depois que o motorista sai)', { skip: !CHROME && '
     host.emit('leaveCar', { idx: car.i });
     host.emit('state', { pos: [car.x + 20, car.y, car.z + 2.5], rotY: 0, heldWeapon: 'FUZIL' });
     const fim = [car.x + 60, car.y, car.z];
-    for (let k = 1; k <= 20; k++) { host.emit('carSolto', { idx: car.i, pos: [car.x + 20 + 2 * k, car.y, car.z], rotY: 0 }); await quadro(); }
+    // como o cliente de verdade: o carro solto vai DENTRO do state do ex-motorista
+    for (let k = 1; k <= 20; k++) {
+      host.emit('state', { pos: [car.x + 20, car.y, car.z + 2.5], rotY: 0, heldWeapon: 'FUZIL',
+        solto: { idx: car.i, pos: [car.x + 20 + 2 * k, car.y, car.z], rotY: 0 } });
+      await quadro();
+    }
     const logo = await h.play(i => { const p = window.__game.Car.vehicles[i].chassisBody.position; return [p.x, p.z]; }, car.i);
     for (let k = 0; k < 20; k++) await quadro();   // 2 s depois: os pacotes pararam, a física assenta
     const depois = await h.play(i => { const p = window.__game.Car.vehicles[i].chassisBody.position; return [p.x, p.z]; }, car.i);

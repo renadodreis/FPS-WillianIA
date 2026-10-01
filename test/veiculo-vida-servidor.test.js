@@ -192,30 +192,58 @@ describe('vida, queima e explosão (autoritativas)', () => {
      conseguia entrar de novo ("Veículo ocupado!"). Quem saiu reporta a pose do
      carro solto até ele parar; o servidor só aceita dele, na janela e com
      velocidade de carro. */
+  /* uma trilha de 64 m a partir da vaga que um carro de verdade rolaria:
+     sem parede no caminho, e a pose sempre no relevo da semente (o servidor
+     só aceita carro solto no chão) */
+  async function trilha(veh) {
+    const terrain = await require('../scripts/bots.js').createBotTerrain(SEED);
+    const Par = await import(url.pathToFileURL(path.join(__dirname, '..', 'js', 'paredes.js')).href);
+    const mundo = Par.construirMundoSolido({ worldSeed: SEED, heightAt: terrain.heightAt, slopeAt: terrain.slopeAt,
+      WATER_LEVEL: terrain.WATER_LEVEL, CITY: terrain.CITY });
+    const q = Par.criarConsultaParedes(Par.paredesDoJogo(mundo).filter(w => !w.noCollide));
+    const [x0, y0, z0] = veh.pos, sobe = y0 - terrain.heightAt(x0, z0);
+    for (let k = 0; k < 16; k++) {
+      const a = k * Math.PI / 8, ux = Math.cos(a), uz = Math.sin(a);
+      const at = d => { const x = x0 + ux * d, z = z0 + uz * d; return [x, terrain.heightAt(x, z) + sobe, z]; };
+      let ok = true;
+      for (let d = 0; d < 64 && ok; d += 2) {
+        const p = at(d), n = at(d + 2);
+        if (Math.abs(n[1] - p[1]) > 1.2 || q.segmentoBloqueado({ x: p[0], y: p[1] + 0.6, z: p[2] }, { x: n[0], y: n[1] + 0.6, z: n[2] })) ok = false;
+      }
+      if (ok) return { at, ux, uz };
+    }
+    return null;
+  }
+
   it('o carro que rolou depois que o motorista saiu segue pegável onde parou', async t => {
     const { clients, plan } = await playing(t, 3);
     const [a, b, c] = clients;
-    const buggy = veic(plan, 0), [x0, y0, z0] = buggy.pos;
+    const buggy = veic(plan, 0);
+    const T = await trilha(buggy);
+    assert.ok(T, 'cenário: nenhuma trilha livre de 64 m a partir da vaga');
     await aoLado(a, buggy);
     assert.equal((await ack(a.s, 'enterCar', { idx: 0 })).ok, true);
-    for (let k = 0; k <= 10; k++) { a.s.emit('state', { pos: [x0 + 2 * k, y0, z0], rotY: 0, car: 0 }); await sleep(100); }
+    for (let k = 0; k <= 10; k++) { a.s.emit('state', { pos: T.at(2 * k), rotY: 0, car: 0 }); await sleep(100); }
     const rola = collect(b.s, 'carRola');
     a.s.emit('leaveCar', { idx: 0 });
-    a.s.emit('state', { pos: [x0 + 20, y0, z0 + 2], rotY: 0 });
+    const lado = T.at(20); a.s.emit('state', { pos: [lado[0] - T.uz * 2, lado[1], lado[2] + T.ux * 2], rotY: 0 });
     // o carro solto rola mais 40 m (20 m/s) e para
-    for (let k = 1; k <= 20; k++) { a.s.emit('carSolto', { idx: 0, pos: [x0 + 20 + 2 * k, y0, z0], rotY: 0 }); await sleep(100); }
+    for (let k = 1; k <= 20; k++) { a.s.emit('carSolto', { idx: 0, pos: T.at(20 + 2 * k), rotY: 0 }); await sleep(100); }
     /* quem NÃO dirigia não mexe no carro solto — nem com pose plausível
        (2 m de lado, dentro do teto de velocidade: é a posse que recusa) */
     await sleep(150);
-    c.s.emit('carSolto', { idx: 0, pos: [x0 + 60, y0, z0 + 2], rotY: 0 });
+    const fim = T.at(60);
+    c.s.emit('carSolto', { idx: 0, pos: [fim[0] - T.uz * 2, fim[1], fim[2] + T.ux * 2], rotY: 0 });
     await sleep(150);
-    b.s.emit('state', { pos: [x0 + 62, y0, z0], rotY: 0 });
+    const perto = T.at(62);
+    b.s.emit('state', { pos: perto, rotY: 0 });
     await sleep(150);
     assert.equal((await ack(b.s, 'enterCar', { idx: 0 })).ok, true, 'o carro parado 40 m adiante não aceitou quem está ao lado dele');
     // os outros recebem a pose do carro solto (e a de quem não dirigia, não)
     assert.ok(rola.length >= 15, `repassou só ${rola.length} de 20 poses do carro solto`);
-    assert.ok(Math.abs(rola.at(-1).pos[0] - (x0 + 60)) < 0.01, `última pose repassada em x=${rola.at(-1).pos[0]}`);
-    assert.ok(rola.every(r => r.idx === 0 && Math.abs(r.pos[2] - z0) < 0.01), 'repassou a pose de quem não dirigia');
+    assert.ok(Math.hypot(rola.at(-1).pos[0] - fim[0], rola.at(-1).pos[2] - fim[2]) < 0.01, `última pose repassada em ${rola.at(-1).pos}`);
+    const naTrilha = r => { const d = (r.pos[0] - buggy.pos[0]) * T.ux + (r.pos[2] - buggy.pos[2]) * T.uz, p = T.at(d); return Math.hypot(r.pos[0] - p[0], r.pos[2] - p[2]) < 0.05; };
+    assert.ok(rola.every(r => r.idx === 0 && naTrilha(r)), 'repassou a pose de quem não dirigia');
   });
 
   it('carro solto: a pose com velocidade de carro vale, a que salta (teleporte) é recusada', async t => {
@@ -234,6 +262,23 @@ describe('vida, queima e explosão (autoritativas)', () => {
     b.s.emit('state', { pos: [x0 + 14, y0, z0], rotY: 0 });
     await sleep(150);
     assert.equal((await ack(b.s, 'enterCar', { idx: 0 })).ok, true, 'o carro não está onde parou (rolar recusado ou salto aceito)');
+  });
+
+  it('carro solto: rola no chão — subir pelo ar não move a pose do servidor', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a, b] = clients;
+    const buggy = veic(plan, 0), [x0, y0, z0] = buggy.pos;
+    await aoLado(a, buggy);
+    assert.equal((await ack(a.s, 'enterCar', { idx: 0 })).ok, true);
+    a.s.emit('leaveCar', { idx: 0 });
+    await sleep(120);
+    // 20 pacotes de 4,5 m para cima (dentro do teto de velocidade por pacote)
+    for (let k = 1; k <= 20; k++) { a.s.emit('carSolto', { idx: 0, pos: [x0, y0 + 4.5 * k, z0], rotY: 0 }); await sleep(100); }
+    await sleep(150);
+    // a pose do servidor continua no chão: quem chega ao lado da vaga entra
+    b.s.emit('state', { pos: [x0 + 2, y0, z0], rotY: 0 });
+    await sleep(150);
+    assert.equal((await ack(b.s, 'enterCar', { idx: 0 })).ok, true, 'o carro solto subiu no ar com a pose do servidor');
   });
 
   it('o veículo anda com quem o dirige: a pose é a do motorista arbitrado, e a de mais ninguém', async t => {

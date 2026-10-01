@@ -142,6 +142,48 @@ describe('o painel do campo de tiro é parede', { skip: !CHROME && 'Chrome não 
     assert.equal(r.cruzou, 0, `o jogador atravessou o painel em ${r.cruzou} quadros`);
   });
 
+  /* laudo afb1ae8, §4.4: o painel não tinha corpo CANNON (nasce depois do
+     laço de boot) e o carro o atravessava nos dois sentidos */
+  it('carro: o buggy acelerando contra o painel não o atravessa', async t => {
+    const r = await h.play(() => {
+      const G = window.__game, MP = window.__MP, QA = window.QA, CANNON_Q = MP.THREE;
+      const w = G.Structures.walls.find(x => x.atracao === 'galeria');
+      const zc = (w.z0 + w.z1) / 2, cx = (w.x0 + w.x1) / 2;
+      const v = G.Car.vehicles.find(c => /BUGGY/.test(c.cfg.name));
+      const out = { lados: [] };
+      for (const lado of [1, -1]) {
+        const z0 = zc + lado * 9;
+        QA.reset(cx + 2.5, z0); QA.tick(2);
+        v.chassisBody.position.set(cx, MP.heightAt(cx, z0) + 0.8, z0);
+        // nariz (+X do carro) apontando para o painel: yaw ±90°
+        const q = new CANNON_Q.Quaternion().setFromAxisAngle(new CANNON_Q.Vector3(0, 1, 0), lado * Math.PI / 2);
+        v.chassisBody.quaternion.set(q.x, q.y, q.z, q.w);
+        v.chassisBody.velocity.set(0, 0, 0); v.chassisBody.angularVelocity.set(0, 0, 0);
+        G.Car.wake(v); QA.tick(20);
+        MP.player.pos.set(cx + 1.6, MP.heightAt(cx + 1.6, z0), z0);
+        G.tryToggleCar(); QA.tick(2);
+        const dirigindo = G.state.driving;
+        let atravessou = false, maxKmh = 0;
+        for (let f = 0; f < 60 * 5; f++) {
+          G.keys.KeyW = true; QA.tick(1);
+          const p = v.chassisBody.position;
+          maxKmh = Math.max(maxKmh, v.chassisBody.velocity.length() * 3.6);
+          if (Math.sign(p.z - zc) !== lado && Math.abs(p.x - cx) < (w.x1 - w.x0) / 2) atravessou = true;
+        }
+        G.keys.KeyW = false;
+        if (G.state.driving) G.tryToggleCar();
+        QA.tick(2);
+        out.lados.push({ dirigindo, atravessou, maxKmh: +maxKmh.toFixed(1) });
+      }
+      return out;
+    });
+    t.diagnostic(JSON.stringify(r.lados));
+    for (const l of r.lados) {
+      assert.ok(l.dirigindo && l.maxKmh > 15, `cenário: ${JSON.stringify(l)}`);
+      assert.equal(l.atravessou, false, `o carro atravessou o painel (${l.maxKmh} km/h)`);
+    }
+  });
+
   it('boot limpo: sem erro de página', () => {
     assert.deepEqual(h.pageErrors, []);
   });

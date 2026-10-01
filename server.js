@@ -255,6 +255,7 @@ const match = {
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
   carSolto: {},              // idx -> { id, ate, t }: quem saiu reporta o carro que ainda rola
   alturaDoChao: null,        // heightAt do relevo da semente (o helicóptero no chão)
+  solo: null,                // o sólido da semente (montarSolo): coluna, paredes, rocha
   veiculos: null,            // id -> vida/estado/pose (montarVeiculos, no início da partida)
   heliOwner: null,           // socket.id de quem pilota o helicóptero
   flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT }, // regras da sala (só o host altera)
@@ -275,6 +276,7 @@ function resetRoundState() {
   match.veiculos = null;
   match.heliOwner = null;
   match.alturaDoChao = null;
+  match.solo = null;
 }
 
 /* troca de "bots na sala" pedida no meio da partida só materializa quando a
@@ -427,6 +429,7 @@ function startMatch() {
   if (!frota) console.error('[VEICULOS] frota indisponível nesta partida — veículo sem vida (regras não carregaram)');
   montarVeiculos(frota);
   match.alturaDoChao = frota ? relevoCache.get(Number(match.seed) >>> 0) || null : null;
+  match.solo = frota ? soloDaSemente(match.seed) : null;
   match.plan.veiculos = [...match.veiculos.values()].map(resumoDoVeiculo);
   match.bossDead = !match.flags.golem; // GOLEM desligado = já "morto" pro servidor
   match.aliveCount = 0;
@@ -487,7 +490,7 @@ function endMatch(winnerId) {
   match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
   match.endTimer = setTimeout(() => {
     match.seed = (Math.random() * 0xFFFFFFFF) >>> 0; // MAPA NOVO
-    setImmediate(() => frotaDaSemente(match.seed));   // a frota já pronta quando a próxima começar
+    setImmediate(() => { frotaDaSemente(match.seed); soloDaSemente(match.seed); });   // frota e sólido prontos quando a próxima começar
     // O cliente recarrega assim que recebe nextMatch. Limpe ANTES de publicar
     // o lobby, senão o init dessa recarga ainda contém os baús da rodada velha.
     resetRoundState();
@@ -702,12 +705,16 @@ let VV = null;                  // js/veiculo-vida.js, carregado no boot
 let MundoNode = null;           // terreno + planta, para a frota por semente
 const frotaCache = new Map();   // semente -> frota (a planta é pura da semente)
 const relevoCache = new Map();  // semente -> heightAt (o chão, para o helicóptero)
+const soloCache = new Map();    // semente -> o que é sólido na coluna (paredes, atrações, rocha do vulcão)
+const terrenoCache = new Map(); // semente -> terreno (para montar o sólido quando os módulos chegarem)
 // QA: encurta a queima nos testes; em produção vale VV.QUEIMA_S
 const VEICULO_QUEIMA_MS = process.env.VEICULO_QUEIMA_S ? Math.max(200, +process.env.VEICULO_QUEIMA_S * 1000 || 0) : null;
 function carregarRegrasDeVeiculo() {
   const url = f => require('url').pathToFileURL(path.join(__dirname, 'js', f)).href;
   return Promise.all([import(url('veiculo-vida.js')), import(url('terrain.js')), import(url('config.js')), import(url('paredes.js'))])
     .then(([vv, terrain, config, paredes]) => { VV = vv; MundoNode = { terrain, CFG: config.CFG, paredes }; })
+    .then(() => Promise.all([import(url('obstaculos.js')), import(url('maptoys-core.js')), import(url('vulcao-solido.js'))]))
+    .then(([obst, toys, vulcao]) => { Object.assign(MundoNode, { obst, toys, vulcao }); })
     .catch(err => {
       // falha BARULHENTA: sem a regra, veículo vira cobertura eterna
       console.error(`[VEICULOS] regras indisponíveis: ${err && err.message} — veículo NÃO terá vida nesta execução`);
@@ -732,10 +739,78 @@ function frotaDaSemente(seed) {
   const frota = VV.frotaDoPlano(plano, terreno.heightAt);
   if (frotaCache.size > 4) {
     const velha = frotaCache.keys().next().value;
-    frotaCache.delete(velha); relevoCache.delete(velha);
+    frotaCache.delete(velha); relevoCache.delete(velha); soloCache.delete(velha); terrenoCache.delete(velha);
   }
-  frotaCache.set(s, frota); relevoCache.set(s, terreno.heightAt);
+  frotaCache.set(s, frota); relevoCache.set(s, terreno.heightAt); terrenoCache.set(s, terreno);
   return frota;
+}
+/* o sólido da semente, montado uma vez quando os módulos puros já chegaram */
+function soloDaSemente(seed) {
+  const s = Number(seed) >>> 0;
+  if (soloCache.has(s)) return soloCache.get(s);
+  const terreno = terrenoCache.get(s);
+  if (!terreno || !MundoNode || !MundoNode.obst) return null;
+  let solo = null;
+  try { solo = montarSolo(s, terreno); } catch (err) {
+    console.error(`[SOLO] sólido da semente indisponível: ${err && err.message} — vale só o relevo`);
+  }
+  soloCache.set(s, solo);
+  return solo;
+}
+/* O QUE É SÓLIDO NA COLUNA (x, z), pela semente: as paredes do jogo (pisos,
+   telhados, lajes — js/paredes.js), as das atrações e a rocha desenhada do
+   vulcão. O servidor só conhecia o relevo. Usos: o helicóptero pilotado tem
+   de estar ACIMA do chão mais alto da coluna, e o carro solto não sobe no
+   ar nem atravessa parede. */
+const SOLO_CEL = 8;
+function montarSolo(seed, terreno) {
+  const M = MundoNode;
+  const mundo = M.paredes.construirMundoSolido({ worldSeed: seed, heightAt: terreno.heightAt, slopeAt: terreno.slopeAt,
+    WATER_LEVEL: terreno.WATER_LEVEL, CITY: terreno.CITY });
+  const atracoes = M.obst.atracoesDaSemente({ worldSeed: seed, heightAt: terreno.heightAt, slopeAt: terreno.slopeAt,
+    biomeAt: terreno.biomeAt, WATER_LEVEL: terreno.WATER_LEVEL, CITY: terreno.CITY, sitios: mundo.plano.sites });
+  const extras = M.toys.paredesDasAtracoes(atracoes, terreno.heightAt);
+  const estado = paredes => {
+    const celulas = new Map();
+    paredes.forEach((w, i) => {
+      for (let a = Math.floor(w.x0 / SOLO_CEL); a <= Math.floor(w.x1 / SOLO_CEL); a++)
+        for (let b = Math.floor(w.z0 / SOLO_CEL); b <= Math.floor(w.z1 / SOLO_CEL); b++) {
+          const k = a * 100000 + b;
+          if (!celulas.has(k)) celulas.set(k, []);
+          celulas.get(k).push(i);
+        }
+    });
+    // o carro bate no que segura corpo e não é laje de piso
+    const corpo = M.paredes.criarConsultaParedes(paredes.filter(w => !w.noCollide));
+    return { paredes, celulas, corpo };
+  };
+  let vulcao = null;
+  try {
+    const bytes = fs.readFileSync(path.join(__dirname, M.vulcao.VULCAO_GLB.replace(/^\//, '')));
+    vulcao = M.vulcao.montarVulcao(bytes, terreno.VOLCANO);
+  } catch (err) { console.error(`[SOLO] vulcão indisponível: ${err && err.message}`); }
+  return {
+    heightAt: terreno.heightAt, VOLCANO: terreno.VOLCANO, vulcao,
+    deFe: estado(M.paredes.paredesDoJogo(mundo).concat(extras)),
+    destruida: estado(M.paredes.paredesComCidadeDestruida(mundo).concat(extras)),
+  };
+}
+const soloAtual = () => (match.solo ? (match.cityDestruction && match.cityDestruction.state === 'destroyed' ? match.solo.destruida : match.solo.deFe) : null);
+/* o chão mais alto da coluna: relevo, topo das paredes que a cobrem, rocha */
+function chaoMaisAlto(x, z) {
+  const S = match.solo;
+  if (!S) return match.alturaDoChao ? match.alturaDoChao(x, z) : -Infinity;
+  let g = S.heightAt(x, z);
+  const E = soloAtual();
+  for (const i of E.celulas.get(Math.floor(x / SOLO_CEL) * 100000 + Math.floor(z / SOLO_CEL)) || []) {
+    const w = E.paredes[i];
+    if (x >= w.x0 && x <= w.x1 && z >= w.z0 && z <= w.z1 && w.y1 > g) g = w.y1;
+  }
+  if (S.vulcao) {
+    const v = MundoNode.vulcao.chaoDoVulcao(S.vulcao, x, z, S.heightAt, S.VOLCANO);
+    if (v > g) g = v;
+  }
+  return g;
 }
 /* estado da partida: id (índice da frota ou 'heli') -> veículo */
 function montarVeiculos(frota) {
@@ -859,6 +934,7 @@ setInterval(() => {
 const POSSE_VEICULO_M = 12;
 const CARRO_SOLTO_JANELA_MS = 12000;   // o esportivo a 118 km/h rola ~53 m em poucos segundos
 const CARRO_SOLTO_MS = 45;             // m/s por pacote (o esportivo faz ~42)
+const CARRO_SOLTO_ALTURA_M = 3;        // acima do chão mais alto da coluna (pulo de lombada)
 // sem frota montada (terreno indisponível) não há pose para comparar
 const posseArbitrada = () => !!(match.veiculos && match.veiculos.size);
 function pertoDoVeiculo(p, veh) {
@@ -870,7 +946,7 @@ function pertoDoVeiculo(p, veh) {
    está a pé — e o bot não mira em quem pilota. */
 const HELI_SOBRE_O_CHAO_M = 0.4;
 const heliNoAr = pos => !match.alturaDoChao
-  || pos[1] >= match.alturaDoChao(pos[0], pos[2]) + HELI_SOBRE_O_CHAO_M;
+  || pos[1] >= chaoMaisAlto(pos[0], pos[2]) + HELI_SOBRE_O_CHAO_M;
 function poseDoOcupante(socketId, p, d) {
   if (!match.veiculos) return;
   const car = Number.isInteger(d.car) ? d.car : -1;
@@ -1035,22 +1111,38 @@ io.on('connection', socket => {
      física até ele parar: só dele, na janela, sem dono novo, com velocidade
      de carro por pacote. Não dá poder novo — ele podia dirigir até ali. */
   socket.on('carSolto', d => {
+    const r = aplicarCarroSolto(socket, d);
+    if (r) socket.broadcast.volatile.emit('carRola', r);
+  });
+  /* o cliente manda o carro solto DENTRO do `state`, e o servidor o repassa
+     DENTRO do `playerUpdate` (um pacote só nos dois sentidos): dois voláteis
+     seguidos para o mesmo destino, o socket.io descarta o segundo — o
+     ex-motorista sumia para todos enquanto o carro rolava (laudo afb1ae8,
+     §4.1). O evento `carSolto` à parte segue aceito, com a MESMA conta.
+     Devolve a pose aceita ({ idx, pos, rotY }) ou null. */
+  function aplicarCarroSolto(socket, d) {
     const idx = d && Number.isInteger(d.idx) ? d.idx : -1;
     const solto = match.carSolto[idx];
     const now = Date.now();
-    if (!solto || solto.id !== socket.id || now > solto.ate || match.carOwners[idx]) return;
+    if (!solto || solto.id !== socket.id || now > solto.ate || match.carOwners[idx]) return null;
     const veh = veiculoPorId(idx), pos = d.pos;
-    if (!veh || veh.estado === 'destruido' || !Array.isArray(pos) || pos.length < 3) return;
+    if (!veh || veh.estado === 'destruido' || !Array.isArray(pos) || pos.length < 3) return null;
     const [x, y, z] = pos;
-    if (![x, y, z].every(Number.isFinite)) return;
+    if (![x, y, z].every(Number.isFinite)) return null;
     const dt = Math.min(Math.max((now - solto.t) / 1000, 0.05), 0.5);
     // + folga: pacotes chegam amontoados (jitter), e o intervalo medido encolhe
-    if (Math.hypot(x - veh.x, y - veh.y, z - veh.z) > CARRO_SOLTO_MS * dt + 1.5) return;
+    if (Math.hypot(x - veh.x, y - veh.y, z - veh.z) > CARRO_SOLTO_MS * dt + 1.5) return null;
+    // o carro solto rola no chão: não sobe no ar, não afunda, não atravessa parede
+    if (match.alturaDoChao) {
+      if (y > chaoMaisAlto(x, z) + CARRO_SOLTO_ALTURA_M || y < match.alturaDoChao(x, z) - 2) return null;
+      const E = soloAtual();
+      if (E && E.corpo.segmentoBloqueado({ x: veh.x, y: veh.y + 0.6, z: veh.z }, { x, y: y + 0.6, z })) return null;
+    }
     veh.x = x; veh.y = y; veh.z = z;
     if (Number.isFinite(+d.rotY)) veh.yaw = +d.rotY;
     solto.t = now;
-    socket.broadcast.volatile.emit('carRola', { idx, pos: [x, y, z], rotY: veh.yaw });
-  });
+    return { idx, pos: [x, y, z], rotY: veh.yaw };
+  }
 
   socket.on('state', d => {
     const p = players.get(socket.id);
@@ -1137,11 +1229,13 @@ io.on('connection', socket => {
     p.lastState = now;
     // veículo ocupado anda com quem está dentro (pose já validada acima)
     if (match.phase === 'PLAYING' && p.alive && !p.spectator) poseDoOcupante(socket.id, p, d);
+    const soltoAceito = d.solto && match.phase === 'PLAYING' ? aplicarCarroSolto(socket, d.solto) : null;
     // ocupante repassado é o ARBITRADO pelo servidor, não o declarado
     const carDecl = Number.isInteger(d.car) ? d.car : -1;
     const noCarro = carDecl >= 0 && (!posseArbitrada() || match.carOwners[carDecl] === socket.id) ? carDecl : -1;
     const noHeli = !!d.heli && (!posseArbitrada() || match.heliOwner === socket.id);
     socket.volatile.broadcast.emit('playerUpdate', {
+      ...(soltoAceito ? { solto: soltoAceito } : {}),
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
       ship: !!d.ship, chute: !!d.chute, car: noCarro,
       heli: noHeli, fall: p.fall,
@@ -1504,7 +1598,7 @@ if (require.main === module) {
      "no ar" passa a significar que a 1ª partida já nasce com a frota (a
      carga falhando é barulhenta e não segura o boot — ver carregarRegrasDeVeiculo) */
   carregarRegrasDeVeiculo().then(() => {
-    try { frotaDaSemente(match.seed); } catch (err) {
+    try { frotaDaSemente(match.seed); soloDaSemente(match.seed); } catch (err) {
       console.error(`[VEICULOS] frota da semente ${match.seed} falhou: ${err && err.message}`);
     }
   }).finally(() => server.listen(PORT, () => {

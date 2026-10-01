@@ -274,3 +274,26 @@ describe('veículo inteiro é cobertura para o bot; sem vida, deixa de ser', () 
     assert.equal(world.vehicles.length, 0);
   });
 });
+
+/* laudo afb1ae8, B7: o carro SOLTO (rola depois que o motorista sai) vinha
+   para os humanos e não para o bot — ele o via onde o motorista saiu: 14
+   disparos e 8 acertos em humano escondido atrás do carro rolado. O servidor
+   repassa a pose dentro do `playerUpdate` do ex-motorista (`solto`) e, no
+   caminho antigo, no evento `carRola`. */
+describe('o bot vê o carro solto onde ele parou', () => {
+  it('a pose do carro solto (playerUpdate.solto e carRola) move o carro no mundo do bot, e a reta passa a bater nele lá', async () => {
+    await Bots.loadVehicleRules();
+    const world = Bots.createBotWorld();
+    Bots.applyVehicleFleet(world, [{ v: 0, tipo: 'esportivo', estado: 'inteiro', pos: [0, 0.6, 0], ry: 0 }]);
+    const reta = x => Bots.vehicleOnSegment(world.vehicles, { x, y: 0.8, z: -10 }, { x, y: 0.8, z: 10 });
+    assert.ok(reta(0), 'cenário: a reta pela vaga não bate no carro parado nela');
+    assert.equal(reta(40), null, 'cenário: a reta 40 m adiante já bate em algo');
+    // o ex-motorista manda o state a pé; o carro solto vem junto
+    Bots.observeVehicleFromUpdate(world, { id: 'ex', pos: [3, 0, 2], rotY: 0, car: -1, solto: { idx: 0, pos: [40, 0.6, 0], rotY: 0 } });
+    assert.ok(reta(40), 'o bot não vê o carro onde ele parou (playerUpdate.solto)');
+    assert.equal(reta(0), null, 'o bot ainda vê o carro na vaga de saída');
+    // e pelo evento à parte
+    Bots.observeLooseCar(world, { idx: 0, pos: [-30, 0.6, 0], rotY: 0 });
+    assert.ok(reta(-30) && !reta(40), 'o bot não segue o carro solto pelo carRola');
+  });
+});

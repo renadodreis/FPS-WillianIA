@@ -199,7 +199,9 @@ describe('planta nova mantém os invariantes (varredura em Node)', () => {
     // 212 dos prédios, 308 dos 28 postes — haste em 2 metades de 5 caixas +
     // luminária —, 9 da praça, 18 da Torre) e o castelo ganhou a laje do piso
     // do pátio (test/acabamento-bala, test/castelo-piso-bala).
-    assert.equal(contagem, 1133, 'a semente 424242 devia ter 1133 paredes (sem o cofre)');
+    // 1133 → 1144: debaixo dos degraus baixos da escada que nasce do saguão
+    // entra um bloqueio só de corpo (`noBullet`, laudo afb1ae8 §4.6) — 11 caixas
+    assert.equal(contagem, 1144, 'a semente 424242 devia ter 1144 paredes (sem o cofre)');
   });
 });
 

@@ -70,6 +70,7 @@ import { createXrFrameRate } from './js/xr/xrframerate.js';
 import { criarLocomocaoXR, ROTULOS as ROTULOS_ANDAR } from './js/xr/xrlocomotion.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
+import { paredesDasAtracoes } from './js/maptoys-core.js';
 import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
 import { createSecrets } from './js/secrets.js';
 import { buildChest } from './js/chestmodel.js';
@@ -1878,6 +1879,19 @@ function playerUpdate(dt, t) {
   } else {
     player.onGround = false;
   }
+  /* DENTRO da rocha do vulcão (o chão desenhado mais de um degrau acima do
+     pé): sobe para a superfície. Andando não se entra (a "parede" acima),
+     mas o carro roda no relevo, e quem saía dele debaixo da rocha nascia
+     5 m enterrado — imune, invisível, andando por dentro (laudo afb1ae8,
+     §4.3). Qualquer outro caminho que deixe o corpo lá dentro sai igual. */
+  if (Volcano.solido) {
+    const v = Volcano.chao(player.pos.x, player.pos.z);
+    if (v > player.pos.y + 0.65) {
+      player.pos.y = v;
+      player.vel.y = Math.max(0, player.vel.y);
+      player.onGround = true;
+    }
+  }
 
   // colisão com árvores/pedras (push-out por círculo; fatia de bala não empurra)
   for (const o of obstaclesNear(player.pos.x, player.pos.z)) {
@@ -1894,22 +1908,29 @@ function playerUpdate(dt, t) {
      agachado encostado ficava com o olho DENTRO da pedra, escondido na tela e
      da bala de fora, e atirando para fora (a reta que nasce dentro não é
      barrada). Laudo d381d29, NC-3. Olho dentro da malha: o corpo sai do centro
-     para fora até o olho ficar 10 cm fora dela (o corte da câmera é 0,08 m). */
+     para fora até o olho ficar 10 cm fora dela (o corte da câmera é 0,08 m).
+     E o TRONCO também (laudo afb1ae8, §4.5): a vítima testa a cobertura no
+     pé + 1 m, e em pé, do lado de baixo da encosta, esse ponto ficava dentro
+     da malha com o olho fora — vida 100 com a cabeça à mostra, atirando. */
   {
-    const olhoY = player.pos.y + lerp(1.62, 1.04, player.crouchT);
+    const alturas = [1.0, lerp(1.62, 1.04, player.crouchT)];   // tronco (o da vítima) e olho
     for (const o of obstaclesNear(player.pos.x, player.pos.z)) {
-      if (!o.malha || olhoY < o.y0 || olhoY > o.y1) continue;
-      const dx = player.pos.x - o.x, dz = player.pos.z - o.z, d = Math.hypot(dx, dz);
-      if (d > o.r) continue;
-      if (!dentroDaMalha(o.malha, player.pos.x, olhoY, player.pos.z, o.pecas)) continue;
-      const ux = d > 1e-4 ? dx / d : 1, uz = d > 1e-4 ? dz / d : 0;
-      let lo = d, hi = o.r + 0.05;   // além do círculo que cerca a malha: fora dela
-      for (let k = 0; k < 14; k++) {
-        const m = (lo + hi) / 2;
-        if (dentroDaMalha(o.malha, o.x + ux * m, olhoY, o.z + uz * m, o.pecas)) lo = m; else hi = m;
+      if (!o.malha) continue;
+      for (const h of alturas) {
+        const y = player.pos.y + h;
+        if (y < o.y0 || y > o.y1) continue;
+        const dx = player.pos.x - o.x, dz = player.pos.z - o.z, d = Math.hypot(dx, dz);
+        if (d > o.r) continue;
+        if (!dentroDaMalha(o.malha, player.pos.x, y, player.pos.z, o.pecas)) continue;
+        const ux = d > 1e-4 ? dx / d : 1, uz = d > 1e-4 ? dz / d : 0;
+        let lo = d, hi = o.r + 0.05;   // além do círculo que cerca a malha: fora dela
+        for (let k = 0; k < 14; k++) {
+          const m = (lo + hi) / 2;
+          if (dentroDaMalha(o.malha, o.x + ux * m, y, o.z + uz * m, o.pecas)) lo = m; else hi = m;
+        }
+        player.pos.x = o.x + ux * (hi + 0.1);
+        player.pos.z = o.z + uz * (hi + 0.1);
       }
-      player.pos.x = o.x + ux * (hi + 0.1);
-      player.pos.z = o.z + uz * (hi + 0.1);
     }
   }
   Structures.collide(player.pos, player.radius, 1.7); // paredes das construções
@@ -5302,6 +5323,17 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, center
    mesmo padrão do canhão — geometria em noSeed; os pontos saem da semente
    (Obstaculos.atracoes: construções + POIs), iguais no bot. */
 MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state, atracoes: Obstaculos.atracoes });
+/* as paredes das atrações (o painel do campo de tiro) nascem DEPOIS do laço
+   que dá corpo CANNON às paredes no boot: sem o próprio corpo, o jogador e a
+   bala paravam e o CARRO atravessava (laudo afb1ae8, §4.4). Não é urbano: não
+   some com a cidade. */
+for (const w of paredesDasAtracoes(Obstaculos.atracoes, heightAt)) {
+  const b = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3((w.x1 - w.x0) / 2, (w.y1 - w.y0) / 2, (w.z1 - w.z0) / 2)) });
+  b.position.set((w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2, (w.z0 + w.z1) / 2);
+  b.userData = { category: 'rigid', sourceId: 'atracao', hardForVehicle: true };
+  b.updateAABB();
+  world.addBody(b);
+}
 
 /* ATRAÇÕES EM CHÃO LIMPO. Canhão e atrações nascem DEPOIS do refill que
    abre as clareiras da grama, e nenhuma delas limpava o mato: com o layout

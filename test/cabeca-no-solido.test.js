@@ -12,6 +12,10 @@
      além do círculo que empurra o corpo — o agachado encostado ficava com o
      olho dentro dela.
 
+   E o TRONCO (pé + 1 m), que é onde a VÍTIMA testa a cobertura: em pé, do
+   lado de baixo da encosta, ele ficava dentro da malha com o olho fora
+   (laudo afb1ae8, §4.5).
+
    ÂNCORA independente: a MALHA desenhada. O olho está dentro quando a reta
    para cima cruza a superfície um número ÍMPAR de vezes (material em dois
    lados só para a medida). O jogador anda de verdade (tecla, laço do jogo)
@@ -61,6 +65,9 @@ describe('o olho não entra no sólido (pedra, cacto, casa de máquinas)', { ski
             cam.updateMatrixWorld(true); olho.setFromMatrixPosition(cam.matrixWorld);
             quadros++;
             if (testar()) dentroN++;
+            // o TRONCO também: é o ponto (pé + 1 m) em que a vítima testa a cobertura
+            olho.set(MP.player.pos.x, MP.player.pos.y + 1, MP.player.pos.z);
+            if (testar()) dentroN++;
           }
           G.keys.KeyW = false; G.keys.ControlLeft = false; QA.tick(2);
         }
@@ -68,9 +75,9 @@ describe('o olho não entra no sólido (pedra, cacto, casa de máquinas)', { ski
       };
       const res = { pedra: { alvos: 0, dentro: 0, quadros: 0 }, cacto: { alvos: 0, dentro: 0, quadros: 0 }, telhado: { alvos: 0, dentro: 0, quadros: 0 } };
       /* pedras sólidas (escala y > 1,1) */
-      for (let i = 0; i < rochas.count && res.pedra.alvos < 6; i++) {
+      for (let i = 0; i < rochas.count && res.pedra.alvos < 14; i++) {
         rochas.getMatrixAt(i, m4); m4.decompose(pos, q, esc);
-        if (esc.y <= 1.4 || G.Structures.sites.some(s => Math.hypot(s.x - pos.x, s.z - pos.z) < s.r + 10)) continue;
+        if (esc.y <= 1.1 || G.Structures.sites.some(s => Math.hypot(s.x - pos.x, s.z - pos.z) < s.r + 10)) continue;
         res.pedra.alvos++;
         rochas.computeBoundingSphere();
         for (const ag of [true, false]) {
@@ -109,11 +116,11 @@ describe('o olho não entra no sólido (pedra, cacto, casa de máquinas)', { ski
   after(async () => { if (h) await h.close(); });
 
   for (const [tipo, minAlvos] of [['pedra', 4], ['cacto', 3], ['telhado', 3]]) {
-    it(`${tipo}: andando contra o sólido de oito lados, o olho nunca fica dentro do desenho`, t => {
+    it(`${tipo}: andando contra o sólido de oito lados, nem o olho nem o tronco ficam dentro do desenho`, t => {
       const x = r[tipo];
       t.diagnostic(`${tipo}: ${x.alvos} alvos, ${x.quadros} quadros, olho dentro em ${x.dentro}`);
       assert.ok(x.alvos >= minAlvos, `cenário: só ${x.alvos} alvos`);
-      assert.equal(x.dentro, 0, `o olho ficou dentro do ${tipo} desenhado em ${x.dentro} de ${x.quadros} quadros`);
+      assert.equal(x.dentro, 0, `olho ou tronco dentro do ${tipo} desenhado em ${x.dentro} medidas (${x.quadros} quadros)`);
     });
   }
 

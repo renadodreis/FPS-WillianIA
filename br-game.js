@@ -1795,6 +1795,7 @@
       updateSpectBar();
     });
     socket.on('playerUpdate', d => {
+      if (d && d.solto) aplicarRola(d.solto);   // o carro solto vem junto (server.js)
       if (d.id === INIT.id) return;
       if (!Array.isArray(d.pos) || !d.pos.every(Number.isFinite)) return; // NaN quebraria o lerp pra sempre
       let rp = remotes.get(d.id);
@@ -1916,14 +1917,21 @@
       // mesmo que a cobertura anule o dano — a explosão existiu ali.
       if (d.weapon === 'GRANADA' || d.weapon === 'BAZUCA') remoteBlast(f[0], f[1], f[2]);
       _bv.set(f[0], f[1], f[2]);
-      _bp.copy(MP.player.pos); _bp.y += 1;
-      _bp.sub(_bv);
-      const len = _bp.length();
-      if (len > 1e-4) {
+      /* cobertura: recusa o dano só se o TRONCO E a CABEÇA estão tampados. Um
+         ponto só (pé + 1 m) dentro de um sólido recusava tudo — inclusive o tiro
+         na cabeça que a tela do atirador mostrava (laudo afb1ae8, §4.5–6) */
+      const P = MP.player, cabeca = 1.62 - (1.62 - 1.04) * (P.crouchT || 0);
+      let alcanca = false;
+      for (const h of [1, cabeca]) {
+        _bp.copy(P.pos); _bp.y += h;
+        _bp.sub(_bv);
+        const len = _bp.length();
+        if (len <= 1e-4) { alcanca = true; break; }
         _bp.multiplyScalar(1 / len);
         // veículo INTEIRO no caminho recusa o dano; o MEU veículo não conta
-        if (MP.rayBlockedAt(_bv, _bp, len, VEI.meu()) < len - 0.15) return;
+        if (!(MP.rayBlockedAt(_bv, _bp, len, VEI.meu()) < len - 0.15)) { alcanca = true; break; }
       }
+      if (!alcanca) return;
       MP.playerDamage(d.dmg, { x: f[0], y: f[1], z: f[2] },
         { type: 'player', attackerId: d.shooterId, weapon: d.weapon });
     });
@@ -2117,7 +2125,7 @@
     setInterval(() => {
       if (!window.__BR_active || !MP.state.started || MP.state.paused) return;
       if (S.phase === 'SPECT' || S.phase === 'ENDED' || MP.player.dead) return;
-      let p = MP.player.pos, rotY, car = -1, heli = false;
+      let p = MP.player.pos, rotY, car = -1, heli = false, soltoDoTique = null;
       if (G.state.driving) { // dentro de carro: manda a pose do VEÍCULO, não a do boneco
         car = G.Car.vehicles.findIndex(v => v.group === G.Car.group);
         p = G.Car.group.position;
@@ -2146,7 +2154,11 @@
         else if (carroSolto) {
           const b = solto.chassisBody;
           _eulSolto.setFromQuaternion(solto.group.quaternion);
-          socket.emit('carSolto', { idx: carroSolto.idx, pos: [b.position.x, b.position.y, b.position.z], rotY: _eulSolto.y });
+          /* vai DENTRO do `state` (abaixo): um `carSolto` à parte, normal, no
+             mesmo tique ocupava o transporte e o socket.io descartava o
+             `state` volátil — o ex-motorista sumia para todos enquanto o
+             carro rolava (laudo afb1ae8, §4.1) */
+          soltoDoTique = { idx: carroSolto.idx, pos: [b.position.x, b.position.y, b.position.z], rotY: _eulSolto.y };
           // parado meio segundo: acabou (a física dos outros assenta dali)
           if (b.velocity.length() < 0.3) { if (++carroSolto.parado >= 5) carroSolto = null; } else carroSolto.parado = 0;
         }
@@ -2159,6 +2171,7 @@
            confere de novo (e derruba para em pé quem anda rápido demais) */
         crouch: S.phase === 'PLAY' && car < 0 && !heli ? Math.round(MP.player.crouchT * 100) / 100 : 0,
       };
+      if (soltoDoTique) st.solto = soltoDoTique;
       // na nave o servidor valida e reconstrói TUDO pela posição local
       if (S.phase === 'SHIP' && shipLocalPos)
         st.shipLocal = [shipLocalPos.x, shipLocalPos.y, shipLocalPos.z];
@@ -2171,13 +2184,14 @@
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ'), _eulSolto = new THREE.Euler(0, 0, 0, 'YXZ');
     /* o carro solto de OUTRO: segue a pose que o servidor repassou, como o
        carro de quem dirige (abaixo), até os pacotes pararem */
-    socket.on('carRola', d => {
+    function aplicarRola(d) {
       const v = d && Number.isInteger(d.idx) ? G.Car.vehicles[d.idx] : null;
       if (!v || v.destruido || !Array.isArray(d.pos)) return;
       const [x, y, z] = d.pos;
       if (![x, y, z, d.rotY].every(Number.isFinite)) return;
       v.soltoRede = { x, y, z, yaw: d.rotY, ate: performance.now() + 600 };
-    });
+    }
+    socket.on('carRola', aplicarRola);   // o evento à parte (o servidor manda no playerUpdate)
 
     /* watchdog de aba oculta: o loop de frames congela quando o navegador some
        da tela — sem isto o jogador ficava eterno "na nave"/no ar, imortal fora

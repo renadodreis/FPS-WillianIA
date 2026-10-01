@@ -105,6 +105,60 @@ describe('o corpo pisa na rocha desenhada do vulcão', { skip: !CHROME && 'Chrom
     assert.ok(r.morto || r.vida < 100, 'caiu no poço de lava e não queimou');
   });
 
+  /* laudo afb1ae8, §4.3: o carro roda no relevo, e quem saía dele debaixo
+     da rocha nascia enterrado (pé 5 m e olho 3,4 m abaixo do desenho) */
+  it('sair do carro debaixo da rocha: o corpo sobe para a superfície desenhada', async t => {
+    const r = await h.play(() => {
+      const G = window.__game, MP = window.__MP, T = MP.THREE, QA = window.QA, V = G.Volcano.VOLCANO;
+      const malhas = [];
+      G.Volcano.group.updateWorldMatrix(true, true);
+      G.terrainMesh.updateWorldMatrix(true, false);
+      G.Volcano.group.traverse(o => { if (o.isMesh) malhas.push(o); });
+      const rc = new T.Raycaster(), o = new T.Vector3(), baixo = new T.Vector3(0, -1, 0);
+      const desenho = (x, z) => {
+        o.set(x, 400, z); rc.set(o, baixo); rc.near = 0; rc.far = 800;
+        const hv = rc.intersectObjects(malhas, false)[0], ht = rc.intersectObject(G.terrainMesh, false)[0];
+        return Math.max(hv ? hv.point.y : -Infinity, ht ? ht.point.y : -Infinity);
+      };
+      // pontos onde a rocha desenhada fica > 2 m acima do relevo (fora da calota)
+      const pontos = [];
+      for (let k = 0; k < 3000 && pontos.length < 14; k++) {
+        const a = k * 2.399, rr = 30 + (k % 9) * 8;
+        const x = V.lavaX + Math.cos(a) * rr, z = V.lavaZ + Math.sin(a) * rr;
+        if (desenho(x, z) - MP.heightAt(x, z) > 2.0 && Math.abs(MP.heightAt(x, z + 2.6) - MP.heightAt(x, z)) < 0.8) pontos.push([x, z]);
+      }
+      const v = G.Car.vehicles.find(c => /BUGGY/.test(c.cfg.name));
+      const out = { pontos: pontos.length, casos: [] };
+      for (const [x, z] of pontos) {
+        if (out.casos.length >= 4) break;
+        /* o carro de nariz para +X (yaw 0): a porta de saída fica 2,6 m em −Z
+           (game.js, tryToggleCar) — põe o carro de modo que ela caia no ponto
+           debaixo da rocha; o carro fica no relevo (o heightfield, como roda) */
+        const cx = x, cz = z + 2.6;
+        QA.reset(cx + 3, cz); QA.tick(2);
+        v.chassisBody.position.set(cx, MP.heightAt(cx, cz) + 0.7, cz);
+        v.chassisBody.quaternion.set(0, 0, 0, 1);
+        v.chassisBody.velocity.set(0, 0, 0); v.chassisBody.angularVelocity.set(0, 0, 0);
+        G.Car.wake(v); QA.tick(10);
+        MP.player.pos.set(cx + 1.5, MP.heightAt(cx + 1.5, cz), cz);
+        G.tryToggleCar(); QA.tick(3);
+        if (!G.state.driving) continue;
+        G.tryToggleCar();   // sem tique: onde a saída PÕE o corpo
+        const P = MP.player.pos;
+        const saida = { x: P.x, z: P.z };
+        const caso = { naSaida: +(desenho(saida.x, saida.z) - P.y).toFixed(2) };   // quanto a saída nasce abaixo da rocha
+        QA.tick(60);
+        caso.enterrado = +(desenho(P.x, P.z) - P.y).toFixed(2);
+        caso.noChao = MP.player.onGround; caso.dirigindo = G.state.driving;
+        if (caso.naSaida > 1) out.casos.push(caso);   // só vale a saída que nasceu dentro da rocha
+      }
+      return out;
+    });
+    t.diagnostic(`${r.pontos} pontos debaixo da rocha; ${JSON.stringify(r.casos)}`);
+    assert.ok(r.casos.length >= 1 && r.casos.every(c => !c.dirigindo && c.noChao), `cenário: ${JSON.stringify(r)}`);
+    for (const c of r.casos) assert.ok(c.enterrado < 0.3, `saiu do carro ${c.enterrado} m abaixo da rocha desenhada`);
+  });
+
   it('boot limpo: sem erro de página', () => {
     assert.deepEqual(h.pageErrors, []);
   });

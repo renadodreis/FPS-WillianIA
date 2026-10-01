@@ -289,6 +289,26 @@ describe('Veículo — posse arbitrada pela posição que o servidor conhece', (
     assert.ok(deA.some(u => u.heli), 'o piloto de verdade não foi repassado como piloto');
   });
 
+  it('dado o piloto com o pé numa laje abaixo do telhado da coluna, então ele deixa de ser tratado como piloto', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a, b] = clients;
+    const heli = veic(plan, 'heli');
+    const ups = collect(b.s, 'playerUpdate');
+    for (let i = 0; i < 5; i++) {
+      a.s.emit('state', { pos: [heli.pos[0], heli.pos[1] + 0.5, heli.pos[2]], rotY: 0, heli: true });
+      await sleep(60);
+    }
+    // 7 m abaixo do heliponto, na mesma coluna: bem acima do relevo, abaixo do telhado
+    const laje = [heli.pos[0] + 1, heli.pos[1] - 7, heli.pos[2] + 1];
+    for (let i = 0; i < 14; i++) { a.s.emit('state', { pos: laje, rotY: 0, heli: true }); await sleep(80); }
+    await sleep(150);
+    const deA = ups.filter(u => u.id === a.init.id);
+    assert.ok(deA.some(u => u.heli), 'cenário inválido: não chegou a ser piloto');
+    const ultimo = deA.filter(u => Math.hypot(u.pos[0] - laje[0], u.pos[2] - laje[2]) < 1 && Math.abs(u.pos[1] - laje[1]) < 1).at(-1);
+    assert.ok(ultimo, 'cenário inválido: a pose na laje não foi aceita');
+    assert.equal(ultimo.heli, false, 'repassado como piloto debaixo do telhado');
+  });
+
   it('dado o piloto com o pé no chão longe do helicóptero, então ele deixa de ser tratado como piloto', async t => {
     const { clients, plan } = await playing(t, 3);
     const [a, b] = clients;
