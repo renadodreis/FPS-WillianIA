@@ -2181,6 +2181,10 @@
            confere de novo (e derruba para em pé quem anda rápido demais) */
         crouch: S.phase === 'PLAY' && car < 0 && !heli ? Math.round(MP.player.crouchT * 100) / 100 : 0,
       };
+      /* a saída vai DENTRO deste `state`, antes do `solto` dele: o servidor
+         abre a janela do carro solto e já aceita a pose deste tique (o
+         `leaveCar` abaixo segue, para o caso de este volátil cair) */
+      if (largar >= 0) st.largar = largar;
       if (soltoDoTique) st.solto = soltoDoTique;
       // na nave o servidor valida e reconstrói TUDO pela posição local
       if (S.phase === 'SHIP' && shipLocalPos)

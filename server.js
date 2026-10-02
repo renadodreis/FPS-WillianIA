@@ -824,6 +824,11 @@ function montarSolo(seed, terreno) {
   const extras = M.toys.paredesDasAtracoes(atracoes, terreno.heightAt);
   const plataformas = M.castelo.castleGeometry({ center: mundo.plano.forte, heightAt: terreno.heightAt }).walkSurfaces
     .concat(...mundo.plano.torres.map(t => M.torre.towerPlatforms(t.x, t.z, t.y)));
+  /* o interior da Torre Nexus: as MESMAS plataformas que o cliente empilha
+     (js/structures.js) — os lances são rampa lógica contínua, e os degraus
+     (caixas de bala) deixavam, no começo de cada degrau, uma faixa de 5–7 cm
+     sem chão debaixo (o lance do andar de baixo, a 3,3 m) */
+  const daTorre = mundo.cidade.nexus.ops.filter(op => op.plataforma).map(op => op.plataforma);
   const indexar = lista => {
     const celulas = new Map();
     lista.forEach((w, i) => {
@@ -836,12 +841,12 @@ function montarSolo(seed, terreno) {
     });
     return celulas;
   };
-  const estado = paredes => {
+  const estado = (paredes, plats) => {
     // pisável: tudo menos o acabamento sem corpo (cobertura, caixa d'água de bala...)
     const piso = paredes.filter(w => !(w.noCollide && w.acabamento));
     // o carro bate no que segura corpo e nas lajes (piso de andar)
     const corpo = M.paredes.criarConsultaParedes(paredes.filter(w => !w.noCollide || !w.acabamento));
-    return { piso, celulas: indexar(piso), corpo };
+    return { piso, celulas: indexar(piso), corpo, plataformas: plats, celulasPlat: indexar(plats) };
   };
   let vulcao = null;
   try {
@@ -850,9 +855,8 @@ function montarSolo(seed, terreno) {
   } catch (err) { console.error(`[SOLO] vulcão indisponível: ${err && err.message}`); }
   return {
     heightAt: terreno.heightAt, VOLCANO: terreno.VOLCANO, vulcao,
-    plataformas, celulasPlat: indexar(plataformas),
-    deFe: estado(M.paredes.paredesDoJogo(mundo).concat(extras)),
-    destruida: estado(M.paredes.paredesComCidadeDestruida(mundo).concat(extras)),
+    deFe: estado(M.paredes.paredesDoJogo(mundo).concat(extras), plataformas.concat(daTorre)),
+    destruida: estado(M.paredes.paredesComCidadeDestruida(mundo).concat(extras), plataformas),
   };
 }
 const soloAtual = () => (match.solo ? (match.cityDestruction && match.cityDestruction.state === 'destroyed' ? match.solo.destruida : match.solo.deFe) : null);
@@ -874,8 +878,8 @@ function superficieSob(x, z, y) {
     const w = E.piso[i];
     if (x >= w.x0 && x <= w.x1 && z >= w.z0 && z <= w.z1 && w.y1 <= lim && w.y1 > g) g = w.y1;
   }
-  for (const i of S.celulasPlat.get(cel) || []) {
-    const p = S.plataformas[i];
+  for (const i of E.celulasPlat.get(cel) || []) {
+    const p = E.plataformas[i];
     if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
     const t = topoDaPlataforma(p, x, z);
     if (t <= lim && t > g) g = t;
@@ -1013,6 +1017,57 @@ const CARRO_SOLTO_VY_MAX = 15;         // m/s de subida na decolagem (≈ 11 m d
 const CARRO_SOLTO_FOLGA_M = 1.2;       // folga da parábola (jitter, pose amostrada)
 const CARRO_SOLTO_ALTURA_MAX_M = 14;   // acima do que tem debaixo, nunca
 const CARRO_SOLTO_RODANDO_MS = 1.5;    // abaixo disto, o carro saiu parado: não há o que rolar
+const CARRO_SOLTO_QUIQUE = 0.7;        // fração da velocidade do impacto que volta no quique
+const CARRO_SOLTO_CONTATO_M = 0.5;     // o centro do chassi acima do chão no toque
+/* teto da parábola do carro solto no ar, no instante `agora`. A decolagem
+   (ou o toque do quique) aconteceu em algum instante de [t0, t1] — entre o
+   último pacote no chão e o primeiro no ar —, e o teto é o MAIOR dos
+   lançamentos possíveis: nascendo só em t0, a descida chegava antes do carro
+   que decolou depois. A janela é limitada a meio segundo: esperar parado no
+   chão não compra um platô no ápice */
+const tetoDoAr = (ar, agora) => {
+  const a = (agora - ar.t0) / 1000, b = Math.max(0, (agora - ar.t1) / 1000), tA = ar.vy0 / 9.8;
+  const h = b <= tA && tA <= a ? ar.vy0 * ar.vy0 / 19.6
+    : Math.max(ar.vy0 * a - 4.9 * a * a, ar.vy0 * b - 4.9 * b * b);
+  return ar.y0 + h + CARRO_SOLTO_FOLGA_M;
+};
+/* QUIQUE: entre dois pacotes (10 Hz) o carro tocou o chão e voltou a subir —
+   nenhum pacote cai no toque, e a parábola da decolagem recusava o carro
+   legítimo que quicava (laudo 4433c4d, §4.3: 12 de 12 recusas). A parábola é
+   um TETO, não a trajetória: a velocidade do carro no pacote anterior não se
+   conhece, mas a ENERGIA tem limite — o ápice do teto. Vale se, caindo dali
+   o mais rápido que essa energia permite, ele chega ao chão antes deste
+   pacote; o quique sai do toque com no máximo CARRO_SOLTO_QUIQUE da
+   velocidade do impacto — o ápice cai a menos da metade a cada quique, então
+   quicar não vira pairar. */
+function quiqueDoCarro(solto, veh, chao, agora) {
+  const ar = solto.ar, toque = chao + CARRO_SOLTO_CONTATO_M;
+  const apice = ar.y0 + ar.vy0 * ar.vy0 / 19.6 + CARRO_SOLTO_FOLGA_M;
+  const h = Math.max(0, veh.y - toque);
+  const vDesce = Math.sqrt(Math.max(0, 19.6 * (apice - veh.y)));   // o mais rápido que ele pode estar caindo
+  const tau = (-vDesce + Math.sqrt(vDesce * vDesce + 19.6 * h)) / 9.8;
+  if (solto.t + tau * 1000 > agora) return null;
+  const vImpacto = Math.sqrt(Math.max(0, 19.6 * (apice - toque)));
+  // o toque foi do mais cedo possível até meio segundo depois (no máximo agora)
+  return { t0: solto.t + tau * 1000, t1: Math.min(agora, solto.t + tau * 1000 + 500), y0: toque,
+    vy0: Math.min(CARRO_SOLTO_VY_MAX, CARRO_SOLTO_QUIQUE * vImpacto) };
+}
+/* meia-medida do casco por tipo (js/veiculo-vida.js, referencial do chassi:
+   X = comprimento, Z = largura), com folga para o carro que raspa a parede */
+const cantosDoTipo = new Map();
+function cantosDoCarro(tipo) {
+  let c = cantosDoTipo.get(tipo);
+  if (c) return c;
+  const T = VV.TIPOS[tipo];
+  let hl = 1.5, hw = 0.7;
+  if (T && T.caixas) {
+    hl = Math.max(...T.caixas.flatMap(b => [Math.abs(b.min[0]), Math.abs(b.max[0])]));
+    hw = Math.max(...T.caixas.flatMap(b => [Math.abs(b.min[2]), Math.abs(b.max[2])]));
+  }
+  c = [[0, 0], [hl - 0.2, hw - 0.15], [hl - 0.2, -(hw - 0.15)], [-(hl - 0.2), hw - 0.15], [-(hl - 0.2), -(hw - 0.15)]];
+  cantosDoTipo.set(tipo, c);
+  return c;
+}
 // sem frota montada (terreno indisponível) não há pose para comparar
 const posseArbitrada = () => !!(match.veiculos && match.veiculos.size);
 function pertoDoVeiculo(p, veh) {
@@ -1181,6 +1236,14 @@ io.on('connection', socket => {
   });
   socket.on('leaveCar', d => {
     const idx = d && Number.isInteger(d.idx) ? d.idx : -1;
+    if (largarCarro(socket, idx)) io.emit('carFree', { idx });
+  });
+  /* sair do carro: também vem DENTRO do `state` do tique da saída (`largar`),
+     antes do `solto` dele — com o `leaveCar` à parte, chegando depois, o
+     `solto` desse tique era recusado e o carro ficava 100 ms parado na pose
+     do último tique dirigindo (laudo 4433c4d, §4.6). O `leaveCar` segue
+     (o `state` é volátil e pode cair); o segundo não acha dono e não faz nada */
+  function largarCarro(socket, idx) {
     if (match.carOwners[idx] === socket.id) {
       delete match.carOwners[idx];
       const now = Date.now(), veh = veiculoPorId(idx);
@@ -1189,9 +1252,10 @@ io.on('connection', socket => {
       if (veh && (veh.vel || 0) >= CARRO_SOLTO_RODANDO_MS)
         match.carSolto[idx] = { id: socket.id, ate: now + CARRO_SOLTO_JANELA_MS, t: veh.poseT || now };
       else delete match.carSolto[idx];
-      io.emit('carFree', { idx });
+      return true;
     }
-  });
+    return false;
+  }
   /* carro SOLTO (laudo d381d29, NC-2): o carro segue rolando depois que o
      motorista sai, e só o cliente dele o simula — o servidor e os outros
      ficavam com a pose de onde ele saiu, a até 53 m de onde o carro parou
@@ -1227,16 +1291,32 @@ io.on('connection', socket => {
     if (match.alturaDoChao) {
       if (y < match.alturaDoChao(x, z) - 2) return null;
       const altura = y - superficieSob(x, z, y);
+      let ar = solto.ar;
       if (altura > CARRO_SOLTO_NO_AR_M) {
-        // decolagem: a subida cabe na rampa — não passa da velocidade horizontal
-        if (!solto.ar) solto.ar = { t0: solto.t, y0: veh.y,
-          vy0: Math.min(CARRO_SOLTO_VY_MAX, Math.hypot(x - veh.x, z - veh.z) / dt, Math.max(0, (y - veh.y) / dt)) };
-        const T = (now - solto.ar.t0) / 1000;
-        const teto = solto.ar.y0 + solto.ar.vy0 * T - 4.9 * T * T + CARRO_SOLTO_FOLGA_M;
-        if (y > teto || altura > CARRO_SOLTO_ALTURA_MAX_M) return null;
-      } else solto.ar = null;
+        /* decolagem: a subida cabe na rampa — não passa da velocidade
+           horizontal do pacote (+25 % do jitter do relógio). É o TETO, não
+           uma estimativa: medir a subida pelo deslocamento do 1º pacote no ar
+           dava 7,9 m/s a um carro que saiu a 10, e a parábola caía antes dele */
+        /* a janela é ANCORADA no último pacote aceito no chão: pacote
+           recusado não a renova (nem a velocidade, medida no tempo real) */
+        if (!ar) ar = { t0: solto.t, t1: Math.min(now, solto.t + 500), y0: veh.y,
+          vy0: Math.min(CARRO_SOLTO_VY_MAX, 1.25 * Math.hypot(x - veh.x, z - veh.z) / Math.max(0.05, (now - solto.t) / 1000)) };
+        else if (y > tetoDoAr(ar, now)) ar = quiqueDoCarro(solto, veh, y - altura, now) || ar;
+        if (y > tetoDoAr(ar, now) || altura > CARRO_SOLTO_ALTURA_MAX_M) return null;
+      } else ar = null;
+      /* parede e laje: o CASCO, não só o centro — pela reta do centro o carro
+         entrava pela porta da Torre com metade dele dentro da parede */
       const E = soloAtual();
-      if (E && E.corpo.segmentoBloqueado({ x: veh.x, y: veh.y + 0.6, z: veh.z }, { x, y: y + 0.6, z })) return null;
+      if (E) {
+        const a0 = veh.yaw || 0, a1 = Number.isFinite(+d.rotY) ? +d.rotY : a0;
+        const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+        for (const [lx, lz] of cantosDoCarro(veh.tipo)) {
+          if (E.corpo.segmentoBloqueado(
+            { x: veh.x + lx * c0 + lz * s0, y: veh.y + 0.6, z: veh.z - lx * s0 + lz * c0 },
+            { x: x + lx * c1 + lz * s1, y: y + 0.6, z: z - lx * s1 + lz * c1 })) return null;
+        }
+      }
+      solto.ar = ar;
     }
     veh.x = x; veh.y = y; veh.z = z;
     if (Number.isFinite(+d.rotY)) veh.yaw = +d.rotY;
@@ -1329,6 +1409,8 @@ io.on('connection', socket => {
     p.lastState = now;
     // veículo ocupado anda com quem está dentro (pose já validada acima)
     if (match.phase === 'PLAYING' && p.alive && !p.spectator) poseDoOcupante(socket.id, p, d);
+    // o `carFree` (normal) sai DEPOIS do `playerUpdate` volátil: antes dele, ocupava o transporte e o descartava
+    const largou = Number.isInteger(d.largar) && match.phase === 'PLAYING' && largarCarro(socket, d.largar);
     const soltoAceito = d.solto && match.phase === 'PLAYING' ? aplicarCarroSolto(socket, d.solto) : null;
     // ocupante repassado é o ARBITRADO pelo servidor, não o declarado
     const carDecl = Number.isInteger(d.car) ? d.car : -1;
@@ -1345,6 +1427,7 @@ io.on('connection', socket => {
       nick: p.nick, colors: p.colors, bot: !!p.bot, heldWeapon: p.heldWeapon,
       crouch: p.crouch,
     });
+    if (largou) io.emit('carFree', { idx: d.largar });
   });
 
   socket.on('shotHit', d => {

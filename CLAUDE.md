@@ -427,6 +427,21 @@ escrita pelo validador — quem constrói não edita).
   lajes contam (só o acabamento fica de fora). Piloto precisa de 0,4 m sobre
   esse chão; carro solto no ar segue a parábola da decolagem e não atravessa
   parede; a janela do carro solto só abre para quem DIRIGIU.
+  **O que o cliente PISA o servidor tem de conhecer, peça por peça**: os
+  degraus da escada da Torre são caixas de bala com topo no meio do degrau,
+  e no começo de cada um a rampa que o cliente anda ficava sem chão debaixo
+  (o lance do andar de baixo, 3,3 m) — as plataformas do interior da Torre
+  entram no estado "de pé" (somem com a cidade destruída). Carro solto: a
+  parábola é um TETO, não a trajetória — subida pela velocidade horizontal
+  (o deslocamento medido subestimava com o jitter), e lançada do MAIOR
+  instante possível entre o último pacote no chão e meio segundo depois
+  (nascendo só no pacote do chão, a descida chegava antes do carro). A
+  janela é ancorada no último pacote ACEITO: ancorada em "agora", cada
+  recusa a renovava e o pairar a 2,8 m voltou a 20 de 40. O QUIQUE entre
+  dois pacotes reinicia a parábola com ≤ 70 % da velocidade que a energia do
+  teto permite (o ápice cai à metade a cada quique). A parede se testa pelos
+  CANTOS do casco (`VV.TIPOS`), não pela reta do centro; a saída vem DENTRO
+  do `state` (`largar`), e o `carFree` sai depois do `playerUpdate` volátil.
 - **Modelo 3D vai em gzip no fio** (server.js, `modeloGz`): a borda comprime
   o JS mas passa `model/gltf-binary` cru — medido em produção, o fuzil chegava
   com os mesmos 557 KB do disco, e os modelos são 14 dos 17 MB do boot em 4G.

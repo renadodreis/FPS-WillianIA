@@ -348,6 +348,59 @@ describe('Veículo — posse arbitrada pela posição que o servidor conhece', (
     }
   });
 
+  it('dado o piloto a pé na rampa da escada da Torre, onde os degraus não dão chão, então ele deixa de ser piloto', async t => {
+    const G = await geometria();
+    /* os degraus são caixas com o topo no meio do degrau: no começo de cada
+       um, a rampa que o cliente anda passa abaixo do topo dele, e o que sobra
+       debaixo é o lance do andar de baixo. A âncora é a rampa da semente (a
+       que o cliente empilha), e o vão é medido contra TODAS as paredes */
+    const sob = (x, y, z) => {
+      let g = G.t.heightAt(x, z);
+      for (const w of G.mundo.paredes) if (x >= w.x0 && x <= w.x1 && z >= w.z0 && z <= w.z1 && w.y1 <= y + 0.05 && w.y1 > g) g = w.y1;
+      return g;
+    };
+    let melhor = null;
+    for (const op of G.mundo.cidade.nexus.ops) {
+      const p = op.plataforma;
+      if (op.tipo !== 'lance' || !p || !p.ramp) continue;
+      const x = (p.x0 + p.x1) / 2;
+      for (let z = p.z0 + 0.05; z < p.z1 - 0.05; z += 0.01) {
+        const y = p.y0 + (p.y1 - p.y0) * (z - p.z0) / (p.z1 - p.z0);
+        const vao = y - sob(x, y, z);
+        if (!melhor || vao > melhor.vao) melhor = { x, y, z, vao };
+      }
+    }
+    assert.ok(melhor && melhor.vao > 1, `cenário: a rampa da escada sempre tem parede a ${melhor && melhor.vao.toFixed(2)} m`);
+    const r = await pilotoEm(t, [melhor.x, melhor.y, melhor.z]);
+    assert.ok(r.foiPiloto && r.ali, 'cenário inválido: não chegou a ficar na rampa');
+    assert.equal(r.ali.heli, false, `repassado como piloto a pé na rampa da escada (vão de ${melhor.vao.toFixed(2)} m pelas paredes)`);
+  });
+
+  it('dado o piloto pairando logo ACIMA de acabamento que o helicóptero atravessa, então ele segue piloto', async t => {
+    const G = await geometria();
+    /* caixa d'água, casa de máquinas de bala, poste: o helicóptero do cliente
+       os atravessa (`Structures.collide` ignora `noCollide`), então 0,25 m
+       acima do topo deles ele está NO AR — o telhado fica bem abaixo */
+    const sobSemAcab = (x, y, z) => {
+      let g = G.t.heightAt(x, z);
+      for (const w of G.mundo.paredes) {
+        if (w.noCollide && w.acabamento) continue;
+        if (x >= w.x0 && x <= w.x1 && z >= w.z0 && z <= w.z1 && w.y1 <= y + 0.05 && w.y1 > g) g = w.y1;
+      }
+      return g;
+    };
+    const peca = G.mundo.paredes.find(w => {
+      if (!w.noCollide || !w.acabamento || (w.x1 - w.x0) < 1 || (w.z1 - w.z0) < 1) return false;
+      const x = (w.x0 + w.x1) / 2, z = (w.z0 + w.z1) / 2, y = w.y1 + 0.25;
+      return y - sobSemAcab(x, y, z) > 1.2 && !G.mundo.paredes.some(o => o !== w && x >= o.x0 && x <= o.x1 && z >= o.z0 && z <= o.z1 && o.y0 < y + 2 && o.y1 > w.y1);
+    });
+    assert.ok(peca, 'cenário: nenhum acabamento sem corpo com o telhado bem abaixo');
+    const x = (peca.x0 + peca.x1) / 2, z = (peca.z0 + peca.z1) / 2;
+    const r = await pilotoEm(t, [x, peca.y1 + 0.25, z]);
+    assert.ok(r.foiPiloto && r.ali, 'cenário inválido: não chegou a pairar ali');
+    assert.equal(r.ali.heli, true, `pairando 0,25 m acima de ${peca.acabamento} deixou de ser piloto`);
+  });
+
   it('dado o piloto com o pé numa laje abaixo do telhado da coluna, então ele deixa de ser tratado como piloto', async t => {
     const { clients, plan } = await playing(t, 3);
     const [a, b] = clients;
