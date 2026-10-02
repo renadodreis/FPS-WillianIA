@@ -56,12 +56,27 @@ function pedir(porta, caminho, headers = {}, method = 'GET') {
 const urlDe = rel => '/assets/models/' + rel.split(path.sep).map(encodeURIComponent).join('/');
 /* os modelos VERSIONADOS — o que vai para a produção. A árvore de quem
    desenvolve tem fontes locais ignoradas pelo git (a bazuca original, o
-   alien de 5 MB, só textura): contá-las mudava o agregado conforme a máquina */
+   alien de 5 MB, só textura): contá-las mudava o agregado conforme a máquina.
+   Numa cópia sem `.git` (a do validador), cai para o diretório inteiro e o
+   agregado vira só diagnóstico — ele depende do que a cópia carrega. */
 function glbs() {
-  const saida = execFileSync('git', ['ls-files', '-z', '--', 'assets/models'], { cwd: RAIZ });
-  return saida.toString('utf8').split('\0')
-    .filter(f => /\.glb$/i.test(f) && path.basename(f) !== 'boss-castle.v1.glb')
-    .map(f => path.relative('assets/models', f).split('/').join(path.sep));
+  try {
+    const saida = execFileSync('git', ['ls-files', '-z', '--', 'assets/models'], { cwd: RAIZ, stdio: ['ignore', 'pipe', 'ignore'] });
+    return { versionados: true, lista: saida.toString('utf8').split('\0')
+      .filter(f => /\.glb$/i.test(f) && path.basename(f) !== 'boss-castle.v1.glb')
+      .map(f => path.relative('assets/models', f).split('/').join(path.sep)) };
+  } catch {
+    const lista = [];
+    const varre = (dir, rel) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const r = rel ? path.join(rel, e.name) : e.name;
+        if (e.isDirectory()) varre(path.join(dir, e.name), r);
+        else if (/\.glb$/i.test(e.name) && e.name !== 'boss-castle.v1.glb') lista.push(r);
+      }
+    };
+    varre(MODELOS, '');
+    return { versionados: false, lista };
+  }
 }
 
 describe('modelos comprimidos no fio', () => {
@@ -70,7 +85,7 @@ describe('modelos comprimidos no fio', () => {
   after(() => { if (srv) { srv.proc.kill(); fs.rmSync(srv.rank, { force: true }); } });
 
   it('com gzip aceito, todo .glb sai em gzip e descomprime nos MESMOS bytes do arquivo', async t => {
-    const lista = glbs();
+    const { versionados, lista } = glbs();
     assert.ok(lista.length >= 15, `cenário: só ${lista.length} modelos`);
     let cru = 0, fio = 0;
     const ruins = [];
@@ -86,7 +101,7 @@ describe('modelos comprimidos no fio', () => {
     }
     t.diagnostic(`${lista.length} modelos: ${(cru / 1048576).toFixed(2)} MB no disco, ${(fio / 1048576).toFixed(2)} MB no fio (${(100 * (1 - fio / cru)).toFixed(0)} % menos)`);
     assert.deepEqual(ruins, []);
-    assert.ok(fio < cru * 0.75, `o fio levou ${(fio / 1048576).toFixed(2)} de ${(cru / 1048576).toFixed(2)} MB`);
+    if (versionados) assert.ok(fio < cru * 0.75, `o fio levou ${(fio / 1048576).toFixed(2)} de ${(cru / 1048576).toFixed(2)} MB`);
   });
 
   it('o fuzil (geometria pura) sai em gzip com menos da metade dos bytes', async () => {
