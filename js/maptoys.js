@@ -10,7 +10,7 @@
    ================================================================ */
 import * as THREE from 'three';
 import {
-  bounceVelocity, passedRing, plateAt, XYLO_NOTES, painelDaGaleria,
+  bounceVelocity, passedRing, plateAt, XYLO_NOTES, painelDaGaleria, paredesDasAtracoes,
   betterMax, betterTime,
 } from './maptoys-core.js';
 import { LAUNCH, horizontalSpeed } from './cannon-core.js';
@@ -81,13 +81,12 @@ export function createMapToys(deps) {
   noSeed(() => {
     gal.spot = place('galeria');
     /* o painel é PAREDE (corpo e bala, no cliente e no bot): desenho e colisor
-       são a mesma caixa, assentada no chão mais baixo da pegada */
+       são a mesma caixa, assentada no chão mais baixo da pegada (a parede
+       entra com as outras das atrações, no fim deste módulo) */
     const pw = painelDaGaleria(gal.spot, heightAt);
     const back = new THREE.Mesh(new THREE.BoxGeometry(pw.x1 - pw.x0, pw.y1 - pw.y0, pw.z1 - pw.z0), mat(0x3a2a5a));
     back.position.set((pw.x0 + pw.x1) / 2, (pw.y0 + pw.y1) / 2, (pw.z0 + pw.z1) / 2); back.castShadow = true; scene.add(back);
     back.name = 'painelGaleria';
-    Structures.walls.push(pw);
-    Structures.invalidateWallCache();
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 1.3, 8), mat(0xffe14a, { metalness: 0.5 }));
     post.position.set(gal.spot.x - 4.6, gal.spot.y + 0.65, gal.spot.z + 1.4); scene.add(post);
     gal.leverPos = { x: gal.spot.x - 4.6, z: gal.spot.z + 1.4 };
@@ -145,7 +144,7 @@ export function createMapToys(deps) {
     fw.spot = place('fogos');
     for (let i = 0; i < 4; i++) {
       const seg = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.7, 1.1), mat(RAINBOW[i * 2 + 1]));
-      seg.position.set(fw.spot.x, fw.spot.y + 0.4 + i * 0.7, fw.spot.z); seg.castShadow = true; scene.add(seg);
+      seg.position.set(fw.spot.x, fw.spot.y + 0.4 + i * 0.7, fw.spot.z); seg.castShadow = true; seg.name = 'totemFogos'; scene.add(seg);
     }
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.7, 0.9, 4), mat(0xffe14a, { emissive: 0xffe14a, emissiveIntensity: 0.3 }));
     tip.position.set(fw.spot.x, fw.spot.y + 3.4, fw.spot.z); scene.add(tip);
@@ -332,6 +331,12 @@ export function createMapToys(deps) {
       return { txt: 'SOLTAR FOGOS 🎆', fn: fireworksFire };
     return null;
   }
+
+  /* as paredes das atrações — painel, totem de fogos, carreta e rodas do
+     canhão —, a MESMA lista e na mesma ordem que o bot e o servidor montam
+     (js/maptoys-core.js, paredesDasAtracoes) */
+  for (const w of paredesDasAtracoes(atracoes, heightAt)) Structures.walls.push(w);
+  Structures.invalidateWallCache();
 
   return {
     update, prompt, tryBounce,

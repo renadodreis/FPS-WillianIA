@@ -373,7 +373,13 @@ escrita pelo validador — quem constrói não edita).
   construções; antes o bot deu 10 acertos num humano que a tela escondia atrás
   dele. **Teste de bala contra um sólido descarta a reta que outro sólido
   corta antes** (relevo rente, tronco) — senão acusa "parou cedo" onde a tela
-  também para.
+  também para. O totem de fogos (corpo e bala: tem altura de gente) e a
+  carreta e as rodas do canhão (só bala: o jogador ENTRA no canhão, e o curso
+  de argolas é desenhado para o tiro que sai do centro dele) também seguram
+  bala (`test/atracoes-bala`, âncora na malha nomeada). A lista ÚNICA é
+  `paredesDasAtracoes`, e o cliente a empilha inteira no fim do
+  `createMapToys`, na ordem do bot e do servidor. O cano do canhão gira para
+  mirar e fica de fora — desenho que se mexe não é parede.
 - **O vulcão desenhado segura bala** (`js/vulcao-solido.js`: o GLB lido sem
   three, na MESMA transformação do `js/volcano.js`, grade XZ de 2 m +
   Möller–Trumbore). O relevo é uma grade 56 × 56 de 8 bits do modelo e a

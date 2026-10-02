@@ -57,13 +57,13 @@ export function createCannon(deps) {
 
     // carreta (base)
     const carriage = new THREE.Mesh(new THREE.CylinderGeometry(1.55, 1.75, 0.7, 20), red);
-    carriage.position.y = 0.55; carriage.castShadow = carriage.receiveShadow = true;
+    carriage.position.y = 0.55; carriage.castShadow = carriage.receiveShadow = true; carriage.name = 'canhaoCarreta';
     group.add(carriage);
     // rodas de circo
     for (const sx of [-1, 1]) {
       const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.26, 16), dark);
       wheel.rotation.z = Math.PI / 2; wheel.position.set(sx * 1.55, 0.72, 0);
-      wheel.castShadow = true; group.add(wheel);
+      wheel.castShadow = true; wheel.name = 'canhaoRoda'; group.add(wheel);
       const rim = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.09, 8, 18), gold);
       rim.rotation.y = Math.PI / 2; rim.position.set(sx * 1.68, 0.72, 0); group.add(rim);
     }

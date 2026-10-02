@@ -5,7 +5,7 @@
    (js/maptoys.js) e nos testes de Node. Reusa pickSpot de cannon-core.
    ================================================================ */
 import { pickSpot } from './cannon-core.js';
-import { ASSENTO } from './paredes.js';
+import { ASSENTO, CILINDRO } from './paredes.js';
 export { pickSpot };
 
 /* ---- ONDE FICA CADA ATRAÇÃO ---------------------------------------------
@@ -53,9 +53,53 @@ export function painelDaGaleria(galeria, heightAt) {
   const y1 = galeria.y + P.alt;
   return { x0, x1, y0: Math.min(galeria.y, chao - ASSENTO.ENTERRO), y1, z0, z1, atracao: 'galeria' };
 }
-/* as paredes das atrações (hoje só o painel) */
+/* o chão mais baixo debaixo de um retângulo (a amostragem do ASSENTO) */
+function chaoMaisBaixo(x0, x1, z0, z1, heightAt) {
+  const nx = Math.max(1, Math.ceil((x1 - x0) / ASSENTO.PASSO)), nz = Math.max(1, Math.ceil((z1 - z0) / ASSENTO.PASSO));
+  let chao = Infinity;
+  for (let i = 0; i <= nx; i++)
+    for (let k = 0; k <= nz; k++) chao = Math.min(chao, heightAt(x0 + (x1 - x0) * i / nx, z0 + (z1 - z0) * k / nz));
+  return chao;
+}
+
+/* ---- o totem de fogos e o canhão também seguram BALA ----------------------
+   "Desenho sólido barra bala" — os laudos 5 a 8 mediram a bala atravessando
+   os dois.
+   • totem (js/maptoys.js): 4 caixas de 1,1 × 0,7 × 1,1 empilhadas de
+     y + 0,05 a y + 2,85 — uma caixa, assentada, de CORPO e bala: tem altura
+     de gente, e laje só de bala em que se entra andando deixa quem entra
+     imune atirando para fora (laudo d381d29, NC-1). A pirâmide do topo (0,9
+     m, acima da cabeça) fica de fora;
+   • canhão (js/cannon.js): a carreta (tronco de cone r 1,75 → 1,55, de
+     y + 0,2 a y + 0,9) e as duas rodas (disco r 0,72, 0,26 de espessura,
+     em x ± 1,55, eixo a y + 0,72), em caixas DENTRO do desenho (as de
+     `caixasDeBala`: caixa maior que o desenho é bala parando no ar). Só de
+     BALA (`noCollide`, como o acabamento): o jogador ENTRA no canhão para
+     ser disparado — o curso de argolas é desenhado para o tiro que sai do
+     centro dele —, e com 0,9 m quem está ali dentro segue com a cabeça (e,
+     em pé, o tronco) por cima. O CANO gira para mirar — desenho que se
+     mexe não é parede. */
+export const TOTEM_FOGOS = Object.freeze({ lado: 1.1, base: 0.05, topo: 2.85 });
+export const CANHAO_PECAS = Object.freeze({ carreta: { r: 1.55, y0: 0.2, y1: 0.9 }, roda: { r: 0.72, x: 1.55, esp: 0.26, y: 0.72 } });
+export function totemDosFogos(fogos, heightAt) {
+  const m = TOTEM_FOGOS.lado / 2, x0 = fogos.x - m, x1 = fogos.x + m, z0 = fogos.z - m, z1 = fogos.z + m;
+  return { x0, x1, y0: Math.min(fogos.y + TOTEM_FOGOS.base, chaoMaisBaixo(x0, x1, z0, z1, heightAt) - ASSENTO.ENTERRO),
+    y1: fogos.y + TOTEM_FOGOS.topo, z0, z1, atracao: 'fogos' };
+}
+const SO_BALA = Object.freeze({ atracao: 'canhao', noCollide: true, acabamento: 'canhao' });
+export function pecasDoCanhao(canhao) {
+  const { carreta: C, roda: R } = CANHAO_PECAS, { x, y, z } = canhao, out = [];
+  for (const [fx, fz] of CILINDRO)
+    out.push({ x0: x - C.r * fx, x1: x + C.r * fx, y0: y + C.y0, y1: y + C.y1, z0: z - C.r * fz, z1: z + C.r * fz, ...SO_BALA });
+  for (const lado of [-1, 1])
+    for (const [fz, fy] of CILINDRO)
+      out.push({ x0: x + lado * R.x - R.esp / 2, x1: x + lado * R.x + R.esp / 2, y0: y + R.y - R.r * fy, y1: y + R.y + R.r * fy,
+        z0: z - R.r * fz, z1: z + R.r * fz, ...SO_BALA });
+  return out;
+}
+/* as paredes das atrações, na ordem em que o cliente as empilha */
 export function paredesDasAtracoes(plano, heightAt) {
-  return [painelDaGaleria(plano.galeria, heightAt)];
+  return [painelDaGaleria(plano.galeria, heightAt), totemDosFogos(plano.fogos, heightAt), ...pecasDoCanhao(plano.canhao)];
 }
 
 // ---- Cama Elástica -------------------------------------------------------

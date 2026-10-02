@@ -5319,10 +5319,11 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, center
    mesmo padrão do canhão — geometria em noSeed; os pontos saem da semente
    (Obstaculos.atracoes: construções + POIs), iguais no bot. */
 MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state, atracoes: Obstaculos.atracoes });
-/* as paredes das atrações (o painel do campo de tiro) nascem DEPOIS do laço
-   que dá corpo CANNON às paredes no boot: sem o próprio corpo, o jogador e a
-   bala paravam e o CARRO atravessava (laudo afb1ae8, §4.4). Não é urbano: não
-   some com a cidade. */
+/* as paredes das atrações (painel do campo de tiro, totem de fogos, carreta e
+   rodas do canhão) nascem DEPOIS do laço que dá corpo CANNON às paredes no
+   boot: sem o próprio corpo, o jogador e a bala paravam e o CARRO atravessava
+   (laudo afb1ae8, §4.4). O carro bate até nas do canhão, que são só de bala
+   para o jogador (ele entra no canhão). Não é urbano: não some com a cidade. */
 for (const w of paredesDasAtracoes(Obstaculos.atracoes, heightAt)) {
   const b = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3((w.x1 - w.x0) / 2, (w.y1 - w.y0) / 2, (w.z1 - w.z0) / 2)) });
   b.position.set((w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2, (w.z0 + w.z1) / 2);

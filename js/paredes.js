@@ -678,7 +678,7 @@ const macica = p => Object.assign(p, { corpo: true });
    quadrado de lado 1,8·r no poste barrava, na diagonal, a reta que passava
    2 cm FORA da haste desenhada (a retícula ficava branca com o inimigo à
    vista, test/reticula-tela.test.js). */
-const CILINDRO = [[0.97, 0.25], [0.25, 0.97], [0.87, 0.5], [0.5, 0.87], [Math.SQRT1_2, Math.SQRT1_2]];
+export const CILINDRO = [[0.97, 0.25], [0.25, 0.97], [0.87, 0.5], [0.5, 0.87], [Math.SQRT1_2, Math.SQRT1_2]];
 export function caixasDeBala(p) {
   if (p.forma === 'caixa') return [caixaDaPeca(p)];
   const y0 = p.y - p.h / 2, y1 = p.y + p.h / 2;
