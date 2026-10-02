@@ -32,8 +32,9 @@
      · InstancedMesh (árvores, pedras, cactos): UMA grade da geometria e as
        matrizes de instância, relidas quando a versão muda (o LOD das árvores
        reescreve tudo a cada 0,45 s);
-     · terreno: marcha de 0,5 m no `heightAt` (o `rayBlockedAt` anda 1,6 m e
-       pula crista fina — o mesmo que o validador mediu nos bots, B6).
+     · terreno: marcha de 0,5 m no `heightAt` — segunda opinião: o
+       `rayBlockedAt`, que a assistência consulta antes, já é exato na grade
+       (js/terrain.js, `retaNoRelevo`).
 
    NA DÚVIDA, NÃO ASSISTE: malha comum ainda não rasterizada conta como a
    CAIXA dela, sólida; o conjunto de instâncias, pela esfera de cada

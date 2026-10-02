@@ -6,7 +6,7 @@ import { meleeBlocked, noHelicoptero, primeiroObstaculo, linhaLivre } from './ai
 
 export function createEnemies(deps) {
   const { Chars, state = null } = deps;
-  const { CFG, clamp, lerp, damp, rand, TAU, _v1, _v2, heightAt, slopeAt, terrainNormal, WATER_LEVEL, obstaclesNear, SFX, FX, scene, csmMat, Structures, addScore, addKillFeed, player, playerDamage, addTrauma, Car, Pickups, knuckleMat, lastShotInfo } = deps;
+  const { CFG, clamp, lerp, damp, rand, TAU, _v1, _v2, heightAt, retaNoRelevo = null, slopeAt, terrainNormal, WATER_LEVEL, obstaclesNear, SFX, FX, scene, csmMat, Structures, addScore, addKillFeed, player, playerDamage, addTrauma, Car, Pickups, knuckleMat, lastShotInfo } = deps;
   // dois esquadrões: padrão (verde-oliva) e pesado (cinza-escuro com detalhe laranja)
   const clothG  = csmMat(new THREE.MeshStandardMaterial({ color: 0x4a5240, roughness: 0.75, metalness: 0.05 }));
   const clothH  = csmMat(new THREE.MeshStandardMaterial({ color: 0x363b46, roughness: 0.7, metalness: 0.1 }));
@@ -150,7 +150,7 @@ export function createEnemies(deps) {
      mesmo com o jogador agachado atrás de um caixote de 1,4 m, e mandava a
      bala no PEITO agachado (0,95 m), através do caixote (80 de dano medido,
      test/pve-parede.test.js). */
-  const mundo = { Structures, heightAt, obstaclesNear };
+  const mundo = { Structures, heightAt, retaNoRelevo, obstaclesNear };
   const hasLOS = (from, to) => linhaLivre(from, to, mundo);
   // o jogador está ao alcance do PvE? (morto não; no helicóptero não — ver aihelpers)
   const alcancavel = () => !player.dead && !noHelicoptero(state);

@@ -309,7 +309,7 @@ if (window.io) {
 }
 
 
-const { simplex, heightAt, buildHeightGrid, groundAt, slopeAt, terrainNormal, biomeAt,
+const { simplex, heightAt, retaNoRelevo, buildHeightGrid, groundAt, slopeAt, terrainNormal, biomeAt,
   sampleAt, geometricNormalAt, slopeDegreesAt, surfaceAt, setBiomes,
   platforms, WATER_LEVEL, addObstacle, obstaclesNear, CITY, VOLCANO } = createTerrain({ lerp, clamp });
 // grade CANÔNICA construída AQUI, antes de QUALQUER consumidor: malha visual,
@@ -2629,12 +2629,8 @@ function updateReload(t) {
 function rayBlockedAt(origin, dir, maxDist, ignorar = null) {
   const wallT = Structures.rayHit(origin, dir, maxDist, ignorar); // paredes e veículos inteiros param bala
   const lim = Math.min(maxDist, wallT);
-  const step = 1.6;
-  let chao = Infinity;
-  for (let d = step; d < lim; d += step) {
-    const x = origin.x + dir.x * d, y = origin.y + dir.y * d, z = origin.z + dir.z * d;
-    if (y < heightAt(x, z)) { chao = d - step * 0.5; break; }
-  }
+  // o relevo desenhado, exato (js/terrain.js): a marcha de 1,6 m furava crista
+  const chao = retaNoRelevo(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, lim);
   const obst = obstaculoNaReta(origin, dir, Math.min(lim, chao));
   if (obst < Infinity) return obst;
   return chao < Infinity ? chao : wallT;
@@ -3450,7 +3446,7 @@ const lastShotInfo = { pos: new THREE.Vector3(), t: -99 };
 function setTimeScale(v) { timeScale = v; }
 const Pickups = createPickups({ heightAt, SFX, scene, Structures, showBanner, centerMsg, getGun: () => gun, updateAmmoHUD, updateInvHUD, updateArmorHUD, player, inventory }); // criado antes: Enemies dropa loot
 const Chars = createCharModels();
-const Enemies = createEnemies({ CFG, clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, heightAt, slopeAt, terrainNormal, WATER_LEVEL, obstaclesNear, SFX, FX, scene, csmMat, Structures, addScore, addKillFeed, player, playerDamage, addTrauma, Car, Pickups, knuckleMat, lastShotInfo, Chars, state });
+const Enemies = createEnemies({ CFG, clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, heightAt, retaNoRelevo, slopeAt, terrainNormal, WATER_LEVEL, obstaclesNear, SFX, FX, scene, csmMat, Structures, addScore, addKillFeed, player, playerDamage, addTrauma, Car, Pickups, knuckleMat, lastShotInfo, Chars, state });
 
 /* registro do último tiro do player (os inimigos "ouvem") */
 /* alvos extras (animais, zumbis, fantasmas) e lista de bosses */

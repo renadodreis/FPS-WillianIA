@@ -86,8 +86,8 @@ function buildHeightGrid(worldSize, segs = Math.round(worldSize / 5)) {
 function sampleAt(i, j) { return S.data[j * S.n + i]; }
 /* localiza a célula e preenche os 4 cantos + coords locais (tx,tz).
    Buffer ÚNICO reaproveitado: `heightAt` é chamada dezenas a centenas de
-   vezes por frame (chão, IA de todo bicho, grama, granada, e um passo por
-   1,6 m do raio de cada bala) e um objeto literal aqui virava lixo de GC
+   vezes por frame (chão, IA de todo bicho, grama, granada, e cada aresta
+   de grade que o raio de uma bala cruza) e um objeto literal aqui virava lixo de GC
    na mesma cadência. Os dois consumidores (heightAt/geometricNormalAt)
    leem e devolvem no mesmo tick, sem reentrância. */
 const _cell = { tx: 0, tz: 0, ha: 0, hd: 0, hb: 0, hc: 0 };
@@ -108,6 +108,59 @@ function heightAt(x, z) {
   return (c.tx + c.tz <= 1)
     ? c.ha + (c.hd - c.ha) * c.tx + (c.hb - c.ha) * c.tz
     : c.hc + (c.hb - c.hc) * (1 - c.tx) + (c.hd - c.hc) * (1 - c.tz);
+}
+/* RETA × RELEVO, EXATA: a distância em que a reta (origem o, versor d) ENTRA
+   no relevo desenhado até `lim`, ou Infinity. O relevo é a grade canônica —
+   plano por triângulo —, então ao longo da reta, entre dois cruzamentos de
+   aresta (linhas de x, de z e a diagonal b–d, x + z inteiro em coordenada de
+   grade), a altura da reta menos a do chão é LINEAR: basta o sinal nas pontas
+   de cada trecho, e a entrada sai por interpolação. A marcha de 1,6 m que
+   isto substitui pulava a crista desenhada que a reta raspa (laudo a9a4ffd,
+   §4.3: 28 pares com a tela tampando e a bala passando) e não olhava o chão
+   em trecho menor que um passo (o segmento da bala lenta por quadro).
+   Origem ENTERRADA (a granada no chão): tem até 1 m para sair; não saiu,
+   barra em 0 — como a marcha, cuja 1ª amostra (1,6 m) já barrava. */
+const ENTERRADA_M = 1.0;
+function retaNoRelevo(ox, oy, oz, dx, dy, dz, lim) {
+  if (!(lim > 0)) return Infinity;
+  if (!Number.isFinite(lim)) lim = 1000;
+  const acima = t => oy + dy * t - heightAt(ox + dx * t, oz + dz * t);
+  const ex = ox + dx * lim, ez = oz + dz * lim;
+  if (!S || Math.min(ox, oz, ex, ez) < -S.half || Math.max(ox, oz, ex, ez) >= S.half) {
+    // fora da grade (borda do mundo): o relevo é analítico, a marcha fina
+    for (let t = 0.5; t < lim + 0.5; t += 0.5) {
+      const tt = Math.min(t, lim);
+      if (acima(tt) < 0) return Math.max(0, tt - 0.25);
+    }
+    return Infinity;
+  }
+  const inv = 1 / S.cell;
+  const ax = (ox + S.half) * inv, az = (oz + S.half) * inv, kx = dx * inv, kz = dz * inv;
+  // próxima linha de cada família: t em que a coordenada cruza um inteiro
+  const prox = (a, k, t) => {
+    if (Math.abs(k) < 1e-12) return Infinity;
+    const v = a + k * t;
+    const n = k > 0 ? Math.floor(v + 1e-9) + 1 : Math.ceil(v - 1e-9) - 1;
+    return (n - a) / k;
+  };
+  let t0 = 0, f0 = acima(0), enterrada = f0 < 0;
+  let tx = prox(ax, kx, 0), tz = prox(az, kz, 0), ts = prox(ax + az, kx + kz, 0);
+  for (;;) {
+    let t1 = Math.min(tx, tz, ts, lim);
+    if (t1 <= t0) t1 = Math.min(lim, t0 + 1e-6);
+    const f1 = acima(t1);
+    if (enterrada) {
+      if (f1 >= 0) enterrada = false;
+      else if (t1 >= ENTERRADA_M) return 0;
+    } else if (f1 < 0) {
+      return t0 + (t1 - t0) * (f0 / (f0 - f1));
+    }
+    if (t1 >= lim) return Infinity;
+    if (t1 >= tx) tx = prox(ax, kx, t1);
+    if (t1 >= tz) tz = prox(az, kz, t1);
+    if (t1 >= ts) ts = prox(ax + az, kx + kz, t1);
+    t0 = t1; f0 = f1;
+  }
 }
 /* normal GEOMÉTRICA do triângulo real (física/dirigibilidade). A visual
    suavizada continua em terrainNormal() — são propositalmente diferentes. */
@@ -234,7 +287,7 @@ function obstaclesNear(x, z) {
   nearCache.set(k, out);
   return out;
 }
-  return { simplex, fbm, heightAt, heightAnalytic, buildHeightGrid, groundAt,
+  return { simplex, fbm, heightAt, retaNoRelevo, heightAnalytic, buildHeightGrid, groundAt,
     slopeAt, terrainNormal, biomeAt,
     sampleAt, geometricNormalAt, slopeDegreesAt, surfaceAt, setBiomes,
     platforms, WATER_LEVEL, addObstacle, obstaclesNear, CITY, VOLCANO };

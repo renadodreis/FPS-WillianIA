@@ -61,14 +61,15 @@ export function corpoEmSolido(pos, r, h, Structures) {
    jogador (`rayBlockedAt` em game.js): parede (Structures.rayHit), chão e
    tronco/pedra (círculo com raio² × 0,8, só perto do chão, até 3,4 m).
    Diferenças deliberadas, ambas a favor de não atravessar nada:
-   • o chão é marchado de 0,5 m em 0,5 m (a bala do jogador marcha 1,6 m e
-     pula crista fina — é o passo do bot, scripts/bots.js LOS_MARCH_M);
+   • com `retaNoRelevo` (js/terrain.js) o chão é EXATO, como o da bala; sem
+     ele, marchado de 0,5 m em 0,5 m (o passo do bot sem grade,
+     scripts/bots.js LOS_MARCH_M);
    • o tronco é testado contra o SEGMENTO inteiro (a marcha de 1,6 m pode
      pular um tronco de 0,3 m entre dois passos).
    Devolve a distância até o obstáculo, ou Infinity se o raio passa livre
    até `maxDist`. `dir` tem de ser unitário. */
 const PASSO_CHAO = 0.5, CELULA_OBST = 16, TRONCO_ALTO = 3.4;
-export function primeiroObstaculo(o, dir, maxDist, { Structures = null, heightAt = null, obstaclesNear = null } = {}) {
+export function primeiroObstaculo(o, dir, maxDist, { Structures = null, heightAt = null, retaNoRelevo = null, obstaclesNear = null } = {}) {
   let best = maxDist;
   if (Structures) {
     if (typeof Structures.rayHit === 'function') {
@@ -79,7 +80,10 @@ export function primeiroObstaculo(o, dir, maxDist, { Structures = null, heightAt
       if (Structures.segBlocked(o, _to)) best = maxDist * 0.5; // sem distância exata: só "bloqueado"
     }
   }
-  if (typeof heightAt === 'function') {
+  if (typeof retaNoRelevo === 'function') {
+    const tc = retaNoRelevo(o.x, o.y, o.z, dir.x, dir.y, dir.z, best);
+    if (tc < best) best = tc;
+  } else if (typeof heightAt === 'function') {
     for (let d = PASSO_CHAO; d < best; d += PASSO_CHAO) {
       const x = o.x + dir.x * d, z = o.z + dir.z * d;
       if (o.y + dir.y * d < heightAt(x, z)) { best = d - PASSO_CHAO * 0.5; break; }
