@@ -427,6 +427,14 @@ escrita pelo validador — quem constrói não edita).
   lajes contam (só o acabamento fica de fora). Piloto precisa de 0,4 m sobre
   esse chão; carro solto no ar segue a parábola da decolagem e não atravessa
   parede; a janela do carro solto só abre para quem DIRIGIU.
+- **Modelo 3D vai em gzip no fio** (server.js, `modeloGz`): a borda comprime
+  o JS mas passa `model/gltf-binary` cru — medido em produção, o fuzil chegava
+  com os mesmos 557 KB do disco, e os modelos são 14 dos 17 MB do boot em 4G.
+  Cada .glb é comprimido UMA vez (threadpool do zlib, em memória; em produção
+  pré-aquecido depois do boot) — comprimir por pedido disputaria a única vCPU
+  com a partida. 13,83 → 7,94 MB. `Vary: Accept-Encoding`, ETag próprio, e a
+  fonte v1 do castelo segue 404 (`test/modelos-gzip`, âncora nos bytes do
+  disco).
 - **Inimigo de POSTO (Executivos da torre, guardas) não renasce à vista:** só
   com o jogador a > 75 m e sem ver o posto nem o corpo (Left 4 Dead, Valve
   2009). O corpo cai no piso do andar em que morreu, não no terreno.

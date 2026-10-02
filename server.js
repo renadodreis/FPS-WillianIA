@@ -11,6 +11,7 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib');
 const { Server } = require('socket.io');
 const CityProto = require('./city-destruction-protocol.js');
 const ShipProto = require('./ship-protocol.js');
@@ -58,9 +59,57 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 // probe automático dos navegadores por /favicon.ico → serve o SVG (evita o 404)
 app.get('/favicon.ico', (req, res) => res.type('image/svg+xml').sendFile(path.join(__dirname, 'favicon.svg')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
+/* MODELOS COMPRIMIDOS NO FIO. O Cloudflare comprime o JS (o game.js chega
+   em brotli, ~107 KB) mas passa o `model/gltf-binary` CRU, e os modelos são
+   quase todo o boot do celular em 4G (14 de 17 MB; laudo a9a4ffd, D6). A
+   geometria dos GLB é float sem compressão: gzip tira ~40 % do que o boot
+   baixa. Cada arquivo é comprimido UMA vez, no threadpool do zlib, e fica em
+   memória — comprimir por pedido disputaria a única vCPU com a partida. O
+   1º pedido de um arquivo espera a compressão dele; em produção elas já
+   rodam depois do boot. Só entra .glb que o express.static serviria: a
+   fonte v1 do castelo já saiu com 404 no bloqueio acima, e sai daqui também. */
+const MODELOS_DIR = path.join(__dirname, 'assets', 'models');
+const modelosGz = new Map();   // caminho da URL (decodificado) → Promise<{ gz, etag, mtime } | null>
+function modeloGz(url) {
+  let pronto = modelosGz.get(url);
+  if (pronto) return pronto;
+  if (!/\.glb$/i.test(url) || path.posix.basename(url).toLowerCase() === 'boss-castle.v1.glb') return Promise.resolve(null);
+  const arq = path.join(MODELOS_DIR, url);
+  pronto = fs.promises.stat(arq).then(st => {
+    if (!st.isFile()) throw new Error('não é arquivo');
+    // null = sai cru (gzip não ganhou nada); fica no mapa para não recomprimir
+    return fs.promises.readFile(arq).then(buf => new Promise(res => zlib.gzip(buf, { level: 9 }, (err, gz) =>
+      res(err || gz.length >= buf.length ? null
+        : { gz, etag: `W/"gz-${buf.length.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`, mtime: st.mtime }))));
+  }).catch(() => { modelosGz.delete(url); return null; });   // o que não existe não ocupa o mapa
+  modelosGz.set(url, pronto);
+  return pronto;
+}
+function preaquecerModelos(dir = MODELOS_DIR, url = '/') {
+  let itens;
+  try { itens = fs.readdirSync(dir, { withFileTypes: true }); } catch { return Promise.resolve(); }
+  // um por vez: em produção a VM tem uma vCPU, e a partida roda nela
+  return itens.reduce((fila, e) => fila.then(() => (e.isDirectory()
+    ? preaquecerModelos(path.join(dir, e.name), url + e.name + '/')
+    : modeloGz(url + e.name))), Promise.resolve());
+}
+app.use('/assets/models', (req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  res.vary('Accept-Encoding');
+  if (req.headers.range || !/\bgzip\b/i.test(req.headers['accept-encoding'] || '')) return next();
+  let url;
+  try { url = path.posix.normalize('/' + decodeURIComponent(req.path).replaceAll('\\', '/')); } catch { return next(); }
+  modeloGz(url).then(m => {
+    if (!m) return next();
+    res.set({ 'Content-Type': 'model/gltf-binary', 'Content-Encoding': 'gzip', ETag: m.etag, 'Last-Modified': m.mtime.toUTCString() });
+    if (req.fresh) return res.status(304).end();
+    res.set('Content-Length', String(m.gz.length));
+    return req.method === 'HEAD' ? res.end() : res.end(m.gz);
+  }, next);
+});
 // modelos 3D: static restrito à pasta (o express.static bloqueia path traversal);
 // a pasta agora tem subdiretórios (Armas/, Cenários/, Personagens/, Veículos/)
-app.use('/assets/models', express.static(path.join(__dirname, 'assets', 'models')));
+app.use('/assets/models', express.static(MODELOS_DIR));
 app.use('/js', express.static(path.join(__dirname, 'js'))); // módulos ES do jogo
 const server = http.createServer(app);
 // Testes com tick manual podem ocupar a thread do Chrome por minutos. O
@@ -1655,6 +1704,7 @@ if (require.main === module) {
   }).finally(() => server.listen(PORT, () => {
     portaReal = server.address().port;
     console.log(`Servidor BR no ar em http://localhost:${portaReal} · seed inicial ${match.seed}`);
+    if (process.env.NODE_ENV === 'production') preaquecerModelos();
     console.log('====================================================');
     console.log(`  CÓDIGO DO ANFITRIÃO: ${HOST_CODE}`);
     console.log('  cole no lobby (campo "código do anfitrião") ou');
