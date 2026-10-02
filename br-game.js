@@ -1911,6 +1911,9 @@
       }
     });
     socket.on('playerLeft', d => removeRemote(d.id));
+    /* alto da cabeça: dentro do capacete desenhado (topo a 0,25 m do centro
+       da esfera de 0,28 m) */
+    const ALTO_DA_CABECA = 0.2;
     socket.on('youWereHit', d => {
       const f = d.fromPos;
       // granada/bazuca: o fromPos É o ponto de impacto. O estouro acontece
@@ -1919,11 +1922,17 @@
       _bv.set(f[0], f[1], f[2]);
       /* cobertura: recusa o dano só se o TRONCO E a CABEÇA estão tampados. Um
          ponto só (pé + 1 m) dentro de um sólido recusava tudo — inclusive o tiro
-         na cabeça que a tela do atirador mostrava (laudo afb1ae8, §4.5–6) */
-      const P = MP.player, cabeca = 1.62 - (1.62 - 1.04) * (P.crouchT || 0);
+         na cabeça que a tela do atirador mostrava (laudo afb1ae8, §4.5–6).
+         Os pontos são os que o atirador VÊ em mim: os centros das esferas de
+         acerto do boneco remoto (`esferasDoCorpo`, a mesma conta, com o avanço
+         da inclinação) e o alto do capacete. Com o OLHO (1,62 m) no lugar da
+         cabeça, atrás de muro de 1,62–1,94 m a tela dele mostrava o alto da
+         cabeça e eu recusava (laudo a9a4ffd, §4.7) */
+      const P = MP.player, e = esferasDoCorpo(P.crouchT || 0);
+      const yaw = G.yawDaVista(), fx = -Math.sin(yaw), fz = -Math.cos(yaw);
       let alcanca = false;
-      for (const h of [1, cabeca]) {
-        _bp.copy(P.pos); _bp.y += h;
+      for (const [h, av] of [[e.tronco.y, e.tronco.f], [e.cabeca.y, e.cabeca.f], [e.cabeca.y + ALTO_DA_CABECA, e.cabeca.f]]) {
+        _bp.set(P.pos.x + fx * av, P.pos.y + h, P.pos.z + fz * av);
         _bp.sub(_bv);
         const len = _bp.length();
         if (len <= 1e-4) { alcanca = true; break; }
@@ -2142,10 +2151,11 @@
         rotY = G.yawDaVista();
       }
       // transições de posse (só em partida; no solo o servidor recusaria)
+      let tomar = -1, largar = -1;
       if (S.phase === 'PLAY') {
-        if (car >= 0 && myCarClaim !== car) claimCar(car);
+        if (car >= 0 && myCarClaim !== car) tomar = car;
         else if (car < 0 && myCarClaim >= 0) {
-          socket.emit('leaveCar', { idx: myCarClaim });
+          largar = myCarClaim;
           carroSolto = { idx: myCarClaim, ate: performance.now() + 10000, parado: 0 };
           myCarClaim = -1;
         }
@@ -2180,6 +2190,12 @@
       sentPos[0] = p.x; sentPos[1] = p.y; sentPos[2] = p.z;
       sentEver = true;
       socket.volatile.emit('state', st);
+      /* a posse vai DEPOIS do `state`: emitida antes, ocupava o transporte e
+         o socket.io descartava o `state` volátil do mesmo tique — 100 ms
+         sumido a cada entrada e saída (laudo a9a4ffd, §4.6). Normal, ela não
+         se perde: sai no próximo flush */
+      if (tomar >= 0) claimCar(tomar);
+      if (largar >= 0) socket.emit('leaveCar', { idx: largar });
     }, 100);
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ'), _eulSolto = new THREE.Euler(0, 0, 0, 'YXZ');
     /* o carro solto de OUTRO: segue a pose que o servidor repassou, como o

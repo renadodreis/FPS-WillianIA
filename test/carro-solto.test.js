@@ -13,6 +13,8 @@
    • OBSERVADOR (o host dirige, sai, e o carro rola 40 m): a página mostra o
      carro onde o servidor diz que ele parou. Âncora: a pose que o host mandou.
 
+   E a saída não perde o 1º `state` a pé (laudo a9a4ffd, §4.6).
+
    Porta 4156.
    ================================================================ */
 'use strict';
@@ -91,6 +93,15 @@ describe('o carro solto (rola depois que o motorista sai)', { skip: !CHROME && '
       if (d && d.id === pageId) ups.push(Date.now());
       if (d && d.solto) rola.push(d.solto);   // o carro solto vem dentro do playerUpdate
     });
+    /* e o 1º `state` A PÉ não se perde na saída (laudo a9a4ffd, §4.6): o
+       `leaveCar` normal saía antes do `state` volátil do mesmo tique e o
+       socket.io descartava o volátil. Na ordem certa, o servidor repassa o
+       ex-motorista a pé ANTES de liberar o carro (`carFree`) */
+    const ordem = [];
+    host.on('carFree', d => { if (d && d.idx === car.i) ordem.push({ ev: 'carFree', t: Date.now() }); });
+    host.on('playerUpdate', d => {
+      if (d && d.id === pageId && d.car === -1 && !ordem.some(o => o.ev === 'aPe')) ordem.push({ ev: 'aPe', t: Date.now() });
+    });
     const tSaida = Date.now();
     const saida = await h.play(i => {
       const G = window.__game;
@@ -119,6 +130,8 @@ describe('o carro solto (rola depois que o motorista sai)', { skip: !CHROME && '
     for (let i = 1; i < marcas.length; i++) buraco = Math.max(buraco, marcas[i] - marcas[i - 1]);
     t.diagnostic(`playerUpdate do ex-motorista nos 4 s depois da saída: ${marcas.length - 1}; maior buraco ${buraco} ms`);
     assert.ok(marcas.length - 1 >= 20 && buraco < 600, `o ex-motorista sumiu para os outros enquanto o carro rolava: ${marcas.length - 1} playerUpdate em 4 s, buraco de ${buraco} ms`);
+    t.diagnostic(`na saída: ${ordem.map(o => `${o.ev} +${o.t - tSaida} ms`).join(', ')}`);
+    assert.deepEqual(ordem.map(o => o.ev), ['aPe', 'carFree'], 'o 1º state a pé se perdeu: o servidor liberou o carro antes de ver o ex-motorista a pé');
     assert.ok(ultima, 'o servidor não repassou nenhuma pose do carro solto');
     assert.ok(Math.hypot(ultima.pos[0] - fim.x, ultima.pos[2] - fim.z) < 0.5,
       `a última pose repassada está a ${Math.hypot(ultima.pos[0] - fim.x, ultima.pos[2] - fim.z).toFixed(2)} m do carro parado`);

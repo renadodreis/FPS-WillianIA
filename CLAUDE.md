@@ -398,11 +398,35 @@ escrita pelo validador — quem constrói não edita).
   encosta, degrau da escada) recusava tudo e atirava. O empurrão da malha
   (pedra/cacto) cobre tronco e olho, e debaixo dos degraus baixos da escada
   da Torre há bloqueio só de corpo (`vao`, o `playerclip` do Source).
-- **O servidor conhece o sólido da coluna** (`soloDaSemente`: paredes da
-  semente nos dois estados da cidade, as das atrações e a rocha do vulcão).
-  Piloto de helicóptero precisa estar 0,4 m acima do chão MAIS ALTO da
-  coluna (laje e telhado contam); carro solto não sai do chão nem atravessa
-  parede.
+  **Os pontos são os que o atirador VÊ**: centros das esferas de acerto do
+  boneco remoto (`esferasDoCorpo`, a mesma conta, com o avanço da
+  inclinação agachado) e o alto do capacete. Com o OLHO (1,62 m) no lugar da
+  cabeça, atrás de muro de 1,62–1,94 m a tela mostrava o alto da cabeça e a
+  vítima recusava.
+- **O relevo da bala é EXATO** (`retaNoRelevo`, js/terrain.js): a grade é
+  plano por triângulo, então entre dois cruzamentos de aresta (x, z e a
+  diagonal b–d) a reta menos o chão é linear — sinal nas pontas e
+  interpolação. A marcha de 1,6 m furava crista desenhada (85 de 160 retas
+  que raspam por baixo) e segmento mais curto que o passo nem olhava o chão
+  (o quadro da balística). `rayBlockedAt` e a visão dos inimigos PvE usam a
+  mesma função; origem enterrada (granada no chão) tem 1 m para sair do chão.
+  Âncora do teste: os triângulos do `terrainMesh` (`test/relevo-bala`).
+- **Posse de veículo (`enterCar`/`leaveCar`) sai DEPOIS do `state` do
+  tique**: antes, o evento normal ocupava o transporte e o `state` volátil
+  sumia a cada entrada e saída (volátil emitido logo depois de outro envio
+  no mesmo tique se perde).
+- **O servidor conhece o chão que SUSTENTA** (`soloDaSemente` +
+  `superficieSob`): relevo, piso das paredes da semente (nos dois estados da
+  cidade, e as atrações), as superfícies do castelo e das torres de vigia e a
+  rocha do vulcão — o que está ABAIXO da pose, não o mais alto da coluna. O
+  castelo sai de `castleGeometry` (js/castle.js, pura: a MESMA conta que o
+  `createCastle` materializa), as torres de `towerPlatforms`. **Acabamento
+  `noCollide` não sustenta**: o helicóptero do cliente atravessa caixa
+  d'água, poste e cobertura, e contá-los tirava o piloto legítimo que
+  pairava por baixo (laudo a9a4ffd, P3). Para o CORPO do carro solto as
+  lajes contam (só o acabamento fica de fora). Piloto precisa de 0,4 m sobre
+  esse chão; carro solto no ar segue a parábola da decolagem e não atravessa
+  parede; a janela do carro solto só abre para quem DIRIGIU.
 - **Inimigo de POSTO (Executivos da torre, guardas) não renasce à vista:** só
   com o jogador a > 75 m e sem ver o posto nem o corpo (Left 4 Dead, Valve
   2009). O corpo cai no piso do andar em que morreu, não no terreno.

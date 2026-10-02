@@ -11,7 +11,9 @@
 
    (a) rede de verdade (BR): o anfitrião atira da altura do olho dele, por
        cima da mureta, e a vítima tem de perder vida; o controle é a parede
-       alta, onde nada passa.
+       alta, onde nada passa. E o muro de 1,70–1,82 m (laudo a9a4ffd, §4.7):
+       tronco e centro da cabeça tampados, o alto do capacete de fora — a
+       tela do atirador mostra, a vítima testava o OLHO (1,62 m) e recusava.
    (b) a escada: o jogador anda de quatro lados para debaixo dos degraus
        baixos; âncora = a malha DESENHADA do interior (paridade da reta para
        cima): nem o tronco nem o olho entram nela.
@@ -44,12 +46,13 @@ describe('onde a vítima testa a cobertura', { skip: !CHROME && 'Chrome não enc
     await sleep(1100);   // janelas de 1 s do servidor
   }
 
-  it('(a) mureta na cintura: com a cabeça de fora o tiro entra; com a parede alta, não', async t => {
+  it('(a) mureta na cintura e muro na altura do olho: com a cabeça de fora o tiro entra; com a parede alta, não', async t => {
     const c = await h.play(() => {
       const G = window.__game, MP = window.__MP, T = MP.THREE;
       const o = new T.Vector3(), d = new T.Vector3();
       const bloqueia = (a, b) => { d.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]); const L = d.length(); d.multiplyScalar(1 / L); o.set(a[0], a[1], a[2]); return MP.rayBlockedAt(o, d, L) < L - 0.15; };
-      const achar = (hMin, hMax) => {
+      // os pontos que o atirador vê em pé: centro do tronco, da cabeça e o alto dela
+      const achar = (hMin, hMax, vale) => {
         for (const w of G.Structures.walls) {
           if (w.noBullet || w.city) continue;
           const lx = w.x1 - w.x0, lz = w.z1 - w.z0;
@@ -66,27 +69,32 @@ describe('onde a vítima testa a cobertura', { skip: !CHROME && 'Chrome não enc
             const alto = w.y1 - gv;
             if (alto < hMin || alto > hMax || Math.abs(gv - gs) > 0.4) continue;
             const olhoHost = [sx, gs + 1.6, sz];
-            const tronco = [vx, gv + 1, vz], cabeca = [vx, gv + 1.62, vz];
-            const tTampa = bloqueia(olhoHost, tronco), cTampa = bloqueia(olhoHost, cabeca);
-            if (hMax < 3 ? (tTampa && !cTampa) : (tTampa && cTampa)) return { v: [vx, vz], host: [sx, gs, sz], olhoHost, alto };
+            const tampa = hh => bloqueia(olhoHost, [vx, gv + hh, vz]);
+            if (vale(tampa(1.1), tampa(1.66), tampa(1.86))) return { v: [vx, vz], host: [sx, gs, sz], olhoHost, alto };
           }
         }
         return null;
       };
-      return { mureta: achar(1.12, 1.45), parede: achar(2.6, 8) };
+      return {
+        mureta: achar(1.12, 1.45, (t, c) => t && !c),
+        muro: achar(1.70, 1.82, (t, c, topo) => t && c && !topo),
+        parede: achar(2.6, 8, (t, c, topo) => t && c && topo),
+      };
     });
     assert.ok(c.mureta, 'cenário: nenhuma mureta com o tronco tampado e a cabeça de fora');
+    assert.ok(c.muro, 'cenário: nenhum muro com só o alto da cabeça de fora');
     assert.ok(c.parede, 'cenário: nenhuma parede alta');
     const pageId = await h.play(() => window.__MP.socket.id);
     const vida = {};
-    for (const [nome, cc] of [['mureta', c.mureta], ['parede', c.parede]]) {
+    for (const [nome, cc] of [['mureta', c.mureta], ['muro', c.muro], ['parede', c.parede]]) {
       await cena(cc.v[0], cc.v[1], cc.host);
       host.emit('shotHit', { targetId: pageId, dmg: 25, weapon: 'FUZIL', fromPos: cc.olhoHost });
       await sleep(400);
       vida[nome] = await h.play(() => { window.QA.tick(2); return window.__MP.player.health; });
     }
-    t.diagnostic(`mureta de ${c.mureta.alto.toFixed(2)} m: vida ${vida.mureta}; parede de ${c.parede.alto.toFixed(2)} m: vida ${vida.parede}`);
+    t.diagnostic(`mureta de ${c.mureta.alto.toFixed(2)} m: vida ${vida.mureta}; muro de ${c.muro.alto.toFixed(2)} m: vida ${vida.muro}; parede de ${c.parede.alto.toFixed(2)} m: vida ${vida.parede}`);
     assert.ok(vida.mureta < 100, `com a cabeça por cima da mureta o tiro foi recusado (vida ${vida.mureta})`);
+    assert.ok(vida.muro < 100, `com o alto da cabeça por cima do muro o tiro foi recusado (vida ${vida.muro})`);
     assert.equal(vida.parede, 100, `o tiro atravessou a parede alta (vida ${vida.parede})`);
   });
 
