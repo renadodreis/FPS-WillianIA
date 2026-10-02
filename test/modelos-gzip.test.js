@@ -20,7 +20,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 
 const RAIZ = path.join(__dirname, '..');
 const MODELOS = path.join(RAIZ, 'assets', 'models');
@@ -54,14 +54,14 @@ function pedir(porta, caminho, headers = {}, method = 'GET') {
   });
 }
 const urlDe = rel => '/assets/models/' + rel.split(path.sep).map(encodeURIComponent).join('/');
-function glbs(dir = MODELOS, rel = '') {
-  const out = [];
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const r = rel ? path.join(rel, e.name) : e.name;
-    if (e.isDirectory()) out.push(...glbs(path.join(dir, e.name), r));
-    else if (/\.glb$/i.test(e.name) && e.name !== 'boss-castle.v1.glb') out.push(r);
-  }
-  return out;
+/* os modelos VERSIONADOS — o que vai para a produção. A árvore de quem
+   desenvolve tem fontes locais ignoradas pelo git (a bazuca original, o
+   alien de 5 MB, só textura): contá-las mudava o agregado conforme a máquina */
+function glbs() {
+  const saida = execFileSync('git', ['ls-files', '-z', '--', 'assets/models'], { cwd: RAIZ });
+  return saida.toString('utf8').split('\0')
+    .filter(f => /\.glb$/i.test(f) && path.basename(f) !== 'boss-castle.v1.glb')
+    .map(f => path.relative('assets/models', f).split('/').join(path.sep));
 }
 
 describe('modelos comprimidos no fio', () => {
