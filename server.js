@@ -713,8 +713,9 @@ function carregarRegrasDeVeiculo() {
   const url = f => require('url').pathToFileURL(path.join(__dirname, 'js', f)).href;
   return Promise.all([import(url('veiculo-vida.js')), import(url('terrain.js')), import(url('config.js')), import(url('paredes.js'))])
     .then(([vv, terrain, config, paredes]) => { VV = vv; MundoNode = { terrain, CFG: config.CFG, paredes }; })
-    .then(() => Promise.all([import(url('obstaculos.js')), import(url('maptoys-core.js')), import(url('vulcao-solido.js'))]))
-    .then(([obst, toys, vulcao]) => { Object.assign(MundoNode, { obst, toys, vulcao }); })
+    .then(() => Promise.all([import(url('obstaculos.js')), import(url('maptoys-core.js')), import(url('vulcao-solido.js')),
+      import(url('castle.js')), import(url('watchtower.js'))]))
+    .then(([obst, toys, vulcao, castelo, torre]) => { Object.assign(MundoNode, { obst, toys, vulcao, castelo, torre }); })
     .catch(err => {
       // falha BARULHENTA: sem a regra, veículo vira cobertura eterna
       console.error(`[VEICULOS] regras indisponíveis: ${err && err.message} — veículo NÃO terá vida nesta execução`);
@@ -757,11 +758,13 @@ function soloDaSemente(seed) {
   soloCache.set(s, solo);
   return solo;
 }
-/* O QUE É SÓLIDO NA COLUNA (x, z), pela semente: as paredes do jogo (pisos,
-   telhados, lajes — js/paredes.js), as das atrações e a rocha desenhada do
-   vulcão. O servidor só conhecia o relevo. Usos: o helicóptero pilotado tem
-   de estar ACIMA do chão mais alto da coluna, e o carro solto não sobe no
-   ar nem atravessa parede. */
+/* ONDE SE PISA, pela semente — o que o `groundAt` do cliente pisa e o que
+   segura corpo: relevo, as paredes da semente (lajes, telhados, degraus,
+   muros — menos o ACABAMENTO `noCollide`, que o helicóptero do cliente
+   atravessa), as plataformas do castelo (adarve, escada da muralha —
+   castleGeometry, js/castle.js) e das torres de vigia (towerPlatforms) e a
+   rocha do vulcão. Usos: o helicóptero pilotado não está PISANDO em nada, e
+   o carro solto cai como cai um carro. */
 const SOLO_CEL = 8;
 function montarSolo(seed, terreno) {
   const M = MundoNode;
@@ -770,9 +773,11 @@ function montarSolo(seed, terreno) {
   const atracoes = M.obst.atracoesDaSemente({ worldSeed: seed, heightAt: terreno.heightAt, slopeAt: terreno.slopeAt,
     biomeAt: terreno.biomeAt, WATER_LEVEL: terreno.WATER_LEVEL, CITY: terreno.CITY, sitios: mundo.plano.sites });
   const extras = M.toys.paredesDasAtracoes(atracoes, terreno.heightAt);
-  const estado = paredes => {
+  const plataformas = M.castelo.castleGeometry({ center: mundo.plano.forte, heightAt: terreno.heightAt }).walkSurfaces
+    .concat(...mundo.plano.torres.map(t => M.torre.towerPlatforms(t.x, t.z, t.y)));
+  const indexar = lista => {
     const celulas = new Map();
-    paredes.forEach((w, i) => {
+    lista.forEach((w, i) => {
       for (let a = Math.floor(w.x0 / SOLO_CEL); a <= Math.floor(w.x1 / SOLO_CEL); a++)
         for (let b = Math.floor(w.z0 / SOLO_CEL); b <= Math.floor(w.z1 / SOLO_CEL); b++) {
           const k = a * 100000 + b;
@@ -780,9 +785,14 @@ function montarSolo(seed, terreno) {
           celulas.get(k).push(i);
         }
     });
-    // o carro bate no que segura corpo e não é laje de piso
-    const corpo = M.paredes.criarConsultaParedes(paredes.filter(w => !w.noCollide));
-    return { paredes, celulas, corpo };
+    return celulas;
+  };
+  const estado = paredes => {
+    // pisável: tudo menos o acabamento sem corpo (cobertura, caixa d'água de bala...)
+    const piso = paredes.filter(w => !(w.noCollide && w.acabamento));
+    // o carro bate no que segura corpo e nas lajes (piso de andar)
+    const corpo = M.paredes.criarConsultaParedes(paredes.filter(w => !w.noCollide || !w.acabamento));
+    return { piso, celulas: indexar(piso), corpo };
   };
   let vulcao = null;
   try {
@@ -791,24 +801,39 @@ function montarSolo(seed, terreno) {
   } catch (err) { console.error(`[SOLO] vulcão indisponível: ${err && err.message}`); }
   return {
     heightAt: terreno.heightAt, VOLCANO: terreno.VOLCANO, vulcao,
+    plataformas, celulasPlat: indexar(plataformas),
     deFe: estado(M.paredes.paredesDoJogo(mundo).concat(extras)),
     destruida: estado(M.paredes.paredesComCidadeDestruida(mundo).concat(extras)),
   };
 }
 const soloAtual = () => (match.solo ? (match.cityDestruction && match.cityDestruction.state === 'destroyed' ? match.solo.destruida : match.solo.deFe) : null);
-/* o chão mais alto da coluna: relevo, topo das paredes que a cobrem, rocha */
-function chaoMaisAlto(x, z) {
+const topoDaPlataforma = (p, x, z) => {
+  if (!p.ramp) return p.y;
+  if (typeof p.heightAt === 'function') return p.heightAt(p.axis === 'x' ? x : z);
+  const k = p.axis === 'x' ? (x - p.x0) / (p.x1 - p.x0) : (z - p.z0) / (p.z1 - p.z0);
+  return p.y0 + (p.y1 - p.y0) * Math.max(0, Math.min(1, k));
+};
+/* a superfície mais alta DEBAIXO de y em (x, z) — onde estaria pisando quem
+   está ali (o que fica acima, como uma cobertura, não conta) */
+function superficieSob(x, z, y) {
   const S = match.solo;
-  if (!S) return match.alturaDoChao ? match.alturaDoChao(x, z) : -Infinity;
-  let g = S.heightAt(x, z);
+  let g = match.alturaDoChao ? match.alturaDoChao(x, z) : -Infinity;
+  if (!S) return g;
+  const lim = y + 0.05, cel = Math.floor(x / SOLO_CEL) * 100000 + Math.floor(z / SOLO_CEL);
   const E = soloAtual();
-  for (const i of E.celulas.get(Math.floor(x / SOLO_CEL) * 100000 + Math.floor(z / SOLO_CEL)) || []) {
-    const w = E.paredes[i];
-    if (x >= w.x0 && x <= w.x1 && z >= w.z0 && z <= w.z1 && w.y1 > g) g = w.y1;
+  for (const i of E.celulas.get(cel) || []) {
+    const w = E.piso[i];
+    if (x >= w.x0 && x <= w.x1 && z >= w.z0 && z <= w.z1 && w.y1 <= lim && w.y1 > g) g = w.y1;
+  }
+  for (const i of S.celulasPlat.get(cel) || []) {
+    const p = S.plataformas[i];
+    if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
+    const t = topoDaPlataforma(p, x, z);
+    if (t <= lim && t > g) g = t;
   }
   if (S.vulcao) {
     const v = MundoNode.vulcao.chaoDoVulcao(S.vulcao, x, z, S.heightAt, S.VOLCANO);
-    if (v > g) g = v;
+    if (v <= lim && v > g) g = v;
   }
   return g;
 }
@@ -934,7 +959,11 @@ setInterval(() => {
 const POSSE_VEICULO_M = 12;
 const CARRO_SOLTO_JANELA_MS = 12000;   // o esportivo a 118 km/h rola ~53 m em poucos segundos
 const CARRO_SOLTO_MS = 45;             // m/s por pacote (o esportivo faz ~42)
-const CARRO_SOLTO_ALTURA_M = 3;        // acima do chão mais alto da coluna (pulo de lombada)
+const CARRO_SOLTO_NO_AR_M = 1.5;       // o centro do chassi acima do que tem debaixo: no ar
+const CARRO_SOLTO_VY_MAX = 15;         // m/s de subida na decolagem (≈ 11 m de pulo)
+const CARRO_SOLTO_FOLGA_M = 1.2;       // folga da parábola (jitter, pose amostrada)
+const CARRO_SOLTO_ALTURA_MAX_M = 14;   // acima do que tem debaixo, nunca
+const CARRO_SOLTO_RODANDO_MS = 1.5;    // abaixo disto, o carro saiu parado: não há o que rolar
 // sem frota montada (terreno indisponível) não há pose para comparar
 const posseArbitrada = () => !!(match.veiculos && match.veiculos.size);
 function pertoDoVeiculo(p, veh) {
@@ -946,13 +975,19 @@ function pertoDoVeiculo(p, veh) {
    está a pé — e o bot não mira em quem pilota. */
 const HELI_SOBRE_O_CHAO_M = 0.4;
 const heliNoAr = pos => !match.alturaDoChao
-  || pos[1] >= chaoMaisAlto(pos[0], pos[2]) + HELI_SOBRE_O_CHAO_M;
+  || (pos[1] >= match.alturaDoChao(pos[0], pos[2]) + HELI_SOBRE_O_CHAO_M
+    && pos[1] - superficieSob(pos[0], pos[2], pos[1]) >= HELI_SOBRE_O_CHAO_M);
 function poseDoOcupante(socketId, p, d) {
   if (!match.veiculos) return;
   const car = Number.isInteger(d.car) ? d.car : -1;
   if (car >= 0 && match.carOwners[car] === socketId) {
     const veh = veiculoPorId(car);
-    if (veh && veh.estado !== 'destruido') { veh.x = p.pos[0]; veh.y = p.pos[1]; veh.z = p.pos[2]; veh.yaw = +d.rotY || 0; veh.poseT = Date.now(); }
+    if (veh && veh.estado !== 'destruido') {
+      const agora = Date.now(), dtv = (agora - (veh.poseT || 0)) / 1000;
+      // velocidade de quem dirige (o carro solto só rola se saiu rodando)
+      if (dtv > 0.03 && dtv < 1) veh.vel = Math.hypot(p.pos[0] - veh.x, p.pos[2] - veh.z) / dtv;
+      veh.x = p.pos[0]; veh.y = p.pos[1]; veh.z = p.pos[2]; veh.yaw = +d.rotY || 0; veh.poseT = agora;
+    }
   }
   const heli = veiculoPorId('heli');
   if (!heli) return;
@@ -1091,6 +1126,7 @@ io.on('connection', socket => {
     if (owner && owner !== socket.id && players.has(owner)) return cb({ ok: false });
     if (posseArbitrada() && owner !== socket.id && !pertoDoVeiculo(p, veiculoPorId(idx))) return cb({ ok: false });
     match.carOwners[idx] = socket.id;
+    { const veh = veiculoPorId(idx); if (veh) veh.vel = 0; }   // a velocidade é de quem dirige AGORA
     socket.broadcast.emit('carTaken', { idx, id: socket.id });
     cb({ ok: true });
   });
@@ -1099,8 +1135,11 @@ io.on('connection', socket => {
     if (match.carOwners[idx] === socket.id) {
       delete match.carOwners[idx];
       const now = Date.now(), veh = veiculoPorId(idx);
-      // `t`: a hora da pose que o servidor tem do carro (o último estado dirigindo)
-      match.carSolto[idx] = { id: socket.id, ate: now + CARRO_SOLTO_JANELA_MS, t: (veh && veh.poseT) || now };
+      // `t`: a hora da pose que o servidor tem do carro (o último estado dirigindo);
+      // carro que saiu PARADO não rola — e entrar e sair sem dirigir não abre janela
+      if (veh && (veh.vel || 0) >= CARRO_SOLTO_RODANDO_MS)
+        match.carSolto[idx] = { id: socket.id, ate: now + CARRO_SOLTO_JANELA_MS, t: veh.poseT || now };
+      else delete match.carSolto[idx];
       io.emit('carFree', { idx });
     }
   });
@@ -1132,9 +1171,21 @@ io.on('connection', socket => {
     const dt = Math.min(Math.max((now - solto.t) / 1000, 0.05), 0.5);
     // + folga: pacotes chegam amontoados (jitter), e o intervalo medido encolhe
     if (Math.hypot(x - veh.x, y - veh.y, z - veh.z) > CARRO_SOLTO_MS * dt + 1.5) return null;
-    // o carro solto rola no chão: não sobe no ar, não afunda, não atravessa parede
+    /* o carro solto CAI como cai um carro: não afunda; fora do chão (mais de
+       CARRO_SOLTO_NO_AR_M acima do que tem debaixo) a altura máxima é a
+       parábola desde a decolagem (vy até CARRO_SOLTO_VY_MAX) — pula lombada
+       de ~10 m e não paira —; e não atravessa parede nem laje */
     if (match.alturaDoChao) {
-      if (y > chaoMaisAlto(x, z) + CARRO_SOLTO_ALTURA_M || y < match.alturaDoChao(x, z) - 2) return null;
+      if (y < match.alturaDoChao(x, z) - 2) return null;
+      const altura = y - superficieSob(x, z, y);
+      if (altura > CARRO_SOLTO_NO_AR_M) {
+        // decolagem: a subida cabe na rampa — não passa da velocidade horizontal
+        if (!solto.ar) solto.ar = { t0: solto.t, y0: veh.y,
+          vy0: Math.min(CARRO_SOLTO_VY_MAX, Math.hypot(x - veh.x, z - veh.z) / dt, Math.max(0, (y - veh.y) / dt)) };
+        const T = (now - solto.ar.t0) / 1000;
+        const teto = solto.ar.y0 + solto.ar.vy0 * T - 4.9 * T * T + CARRO_SOLTO_FOLGA_M;
+        if (y > teto || altura > CARRO_SOLTO_ALTURA_MAX_M) return null;
+      } else solto.ar = null;
       const E = soloAtual();
       if (E && E.corpo.segmentoBloqueado({ x: veh.x, y: veh.y + 0.6, z: veh.z }, { x, y: y + 0.6, z })) return null;
     }

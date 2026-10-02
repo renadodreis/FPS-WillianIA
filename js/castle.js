@@ -571,31 +571,15 @@ function prepareModel(root, csmMat) {
   });
 }
 
-export function createCastle({
-  center,
-  heightAt,
-  scene,
-  csmMat,
-  noSeed,
-  modelUrl = MODEL_URL,
-  legacyRoot = null,
-  legacyFlags = [],
-  legacyFlames = [],
-  walls,
-  platforms,
-  fieldRoofs,
-}) {
+/* A GEOMETRIA do castelo — colisores, superfícies pisáveis e telhados —, só
+   números (o sítio medido no relevo + as medidas do desenho). O createCastle
+   a materializa; o servidor a usa para saber onde há chão pisável (o adarve,
+   a escada da muralha) sem cena nem three. */
+export function castleGeometry({ center, heightAt }) {
   const placement = measureCastleSite({ center, heightAt });
-  const { center: castleCenter, terrain, originY, floorY, foundationBottom,
+  const { center: castleCenter, originY, floorY, foundationBottom,
     approachY, rampSlopeDegrees, rampMaxSlopeDegrees } = placement;
   const { x: cx, z: cz } = castleCenter;
-  if (!scene || typeof scene.add !== 'function') throw new Error('Castelo: scene inválida');
-  if (!Array.isArray(walls) || !Array.isArray(platforms) || !Array.isArray(fieldRoofs))
-    throw new Error('Castelo: walls/platforms/fieldRoofs devem ser arrays');
-  const releaseMaterial = csmMat && typeof csmMat.unregister === 'function'
-    ? material => csmMat.unregister(material)
-    : null;
-
   const colliders = [], walkSurfaces = [], roofs = [];
 
   const wall = (part, x0, x1, y0, y1, z0, z1, extra = {}) => {
@@ -612,7 +596,6 @@ export function createCastle({
     };
     for (const key of ['x0', 'x1', 'y0', 'y1', 'z0', 'z1'])
       finite(collider[key], `${part}.${key}`);
-    walls.push(collider);
     colliders.push(collider);
     return collider;
   };
@@ -622,7 +605,6 @@ export function createCastle({
       part: descriptor.part || descriptor.castlePart,
       castle: true,
     };
-    platforms.push(p);
     walkSurfaces.push(p);
     return p;
   };
@@ -632,7 +614,6 @@ export function createCastle({
       part: descriptor.part || descriptor.castlePart,
       castle: true,
     };
-    fieldRoofs.push(r);
     roofs.push(r);
     return r;
   };
@@ -797,6 +778,39 @@ export function createCastle({
     x0: cx - 2.3, x1: cx + 2.3, z0: cz + 16.3, z1: cz + 18.4,
     roofY: originY + 8.5, castlePart: 'gate-bridge',
   });
+
+  return { placement, colliders, walkSurfaces, roofs, extraFoundation, entryRamp };
+}
+
+export function createCastle({
+  center,
+  heightAt,
+  scene,
+  csmMat,
+  noSeed,
+  modelUrl = MODEL_URL,
+  legacyRoot = null,
+  legacyFlags = [],
+  legacyFlames = [],
+  walls,
+  platforms,
+  fieldRoofs,
+}) {
+  const placement = measureCastleSite({ center, heightAt });
+  const { center: castleCenter, terrain, originY, floorY, foundationBottom, approachY } = placement;
+  const { x: cx, z: cz } = castleCenter;
+  if (!scene || typeof scene.add !== 'function') throw new Error('Castelo: scene inválida');
+  if (!Array.isArray(walls) || !Array.isArray(platforms) || !Array.isArray(fieldRoofs))
+    throw new Error('Castelo: walls/platforms/fieldRoofs devem ser arrays');
+  const releaseMaterial = csmMat && typeof csmMat.unregister === 'function'
+    ? material => csmMat.unregister(material)
+    : null;
+
+  const geo = castleGeometry({ center, heightAt });
+  const { colliders, walkSurfaces, roofs, extraFoundation, entryRamp } = geo;
+  for (const c of colliders) walls.push(c);
+  for (const p of walkSurfaces) platforms.push(p);
+  for (const r of roofs) fieldRoofs.push(r);
 
   const foundationRoot = createFoundationVisual({
     center: castleCenter,

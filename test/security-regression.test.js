@@ -289,6 +289,65 @@ describe('Veículo — posse arbitrada pela posição que o servidor conhece', (
     assert.ok(deA.some(u => u.heli), 'o piloto de verdade não foi repassado como piloto');
   });
 
+  /* a geometria da semente 424242, montada aqui pelos módulos puros (o
+     servidor sobe com a MESMA semente): onde o cliente pisa */
+  async function geometria() {
+    const url = require('node:url');
+    const imp = f => import(url.pathToFileURL(path.join(__dirname, '..', 'js', f)).href);
+    const [Par, Cas, Tor] = await Promise.all([imp('paredes.js'), imp('castle.js'), imp('watchtower.js')]);
+    const t = await require('../scripts/bots.js').createBotTerrain(424242);
+    const mundo = Par.construirMundoSolido({ worldSeed: 424242, heightAt: t.heightAt, slopeAt: t.slopeAt,
+      WATER_LEVEL: t.WATER_LEVEL, CITY: t.CITY });
+    return { t, mundo, castelo: Cas.castleGeometry({ center: mundo.plano.forte, heightAt: t.heightAt }),
+      torre: x => Tor.towerPlatforms(x.x, x.z, x.y) };
+  }
+  /* toma o helicóptero de verdade e manda `heli: true` de `pos` até o servidor
+     aceitar a pose; devolve o último playerUpdate do piloto ali */
+  async function pilotoEm(t, pos) {
+    const { clients, plan } = await playing(t, 3, { WORLD_SEED: '424242' });
+    const [a, b] = clients;
+    const heli = veic(plan, 'heli');
+    const ups = collect(b.s, 'playerUpdate');
+    for (let i = 0; i < 5; i++) { a.s.emit('state', { pos: [heli.pos[0], heli.pos[1] + 0.5, heli.pos[2]], rotY: 0, heli: true }); await sleep(60); }
+    for (let i = 0; i < 14; i++) { a.s.emit('state', { pos, rotY: 0, heli: true }); await sleep(80); }
+    await sleep(150);
+    const deA = ups.filter(u => u.id === a.init.id);
+    return { foiPiloto: deA.some(u => u.heli), ali: deA.filter(u => Math.hypot(u.pos[0] - pos[0], u.pos[2] - pos[2]) < 1 && Math.abs(u.pos[1] - pos[1]) < 1).at(-1) };
+  }
+
+  it('dado o piloto pairando 3 m acima do chão DEBAIXO de uma cobertura que o helicóptero atravessa, então ele segue piloto', async t => {
+    const G = await geometria();
+    const cob = G.mundo.paredes.find(w => w.noCollide && w.acabamento
+      && w.y0 - G.t.heightAt((w.x0 + w.x1) / 2, (w.z0 + w.z1) / 2) > 4.5 && (w.x1 - w.x0) > 3 && (w.z1 - w.z0) > 3);
+    assert.ok(cob, 'cenário: nenhuma cobertura alta de acabamento');
+    const x = (cob.x0 + cob.x1) / 2, z = (cob.z0 + cob.z1) / 2;
+    const r = await pilotoEm(t, [x, G.t.heightAt(x, z) + 3, z]);
+    assert.ok(r.foiPiloto && r.ali, 'cenário inválido: não chegou a pilotar ali');
+    assert.equal(r.ali.heli, true, 'o piloto debaixo da cobertura deixou de ser piloto');
+  });
+
+  it('dado o piloto com o pé numa plataforma do castelo ou de uma torre de vigia, então ele deixa de ser tratado como piloto', async t => {
+    const G = await geometria();
+    /* o caso que só a PLATAFORMA explica: o que as paredes da semente põem
+       debaixo dela fica bem abaixo do pé (o adarve sobre a laje da fundação,
+       o patamar da escada da torre) */
+    const vao = p => {
+      const x = (p.x0 + p.x1) / 2, z = (p.z0 + p.z1) / 2;
+      let sob = G.t.heightAt(x, z);
+      for (const w of G.mundo.paredes) if (x >= w.x0 && x <= w.x1 && z >= w.z0 && z <= w.z1 && w.y1 <= p.y + 0.05 && w.y1 > sob) sob = w.y1;
+      return p.y - sob;
+    };
+    const melhor = lista => lista.filter(p => !p.ramp).sort((p, q) => vao(q) - vao(p))[0];
+    const casos = [['castelo', melhor(G.castelo.walkSurfaces)], ['torre', melhor(G.mundo.plano.torres.flatMap(G.torre))]];
+    for (const [nome, p] of casos) {
+      const x = (p.x0 + p.x1) / 2, z = (p.z0 + p.z1) / 2;
+      assert.ok(vao(p) > 1, `cenário: debaixo da plataforma do ${nome} a parede fica a ${vao(p).toFixed(2)} m`);
+      const r = await pilotoEm(t, [x, p.y, z]);
+      assert.ok(r.foiPiloto && r.ali, `cenário inválido (${nome}): não chegou a ficar ali`);
+      assert.equal(r.ali.heli, false, `repassado como piloto com o pé na plataforma do ${nome}`);
+    }
+  });
+
   it('dado o piloto com o pé numa laje abaixo do telhado da coluna, então ele deixa de ser tratado como piloto', async t => {
     const { clients, plan } = await playing(t, 3);
     const [a, b] = clients;
