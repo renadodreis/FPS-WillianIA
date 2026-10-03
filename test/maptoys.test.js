@@ -203,13 +203,58 @@ describe('Atrações do mapa 🎪', () => {
       const before = M.rings.next;
       cn.fire();
       for (let i = 0; i < 320; i++) { QA.tick(1); if (P.onGround && cn.state === 'idle' && i > 60) break; }
-      return { before, after: M.rings.next, best: M.rings.best };
+      let gravado = null; try { gravado = localStorage.getItem('callofai_ringBest'); } catch (e) { /* off */ }
+      return { before, after: M.rings.next, best: M.rings.best, gravado };
     });
     /* o curso COMPLETO: as 5 argolas (o recorde só é gravado quando a 5ª
        passa). Aceitar "≥ 3" escondia que a 5ª ficava depois do pouso — o
        voo cai a ~54 m e ela estava a 55 (laudo f672d81, observação d) */
     assert.ok(r.best > 0,
       `o voo não completou o curso de argolas (next ${r.before}→${r.after}, recorde ${r.best})`);
+    // o recorde é um TEMPO: gravado com centésimos (inteiro, 1,80 s virava "2")
+    assert.ok(Math.abs(Number(r.gravado) - r.best) < 0.006, `recorde ${r.best} gravado como "${r.gravado}"`);
+  });
+
+  it('PRODUTO: disparado da BEIRA do canhão (4 m, onde o USAR alcança), a carga o puxa e o curso completa', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, M = G.MapToys, cn = G.Cannon, sp = cn.spot;
+      const L = M.rings.list;
+      // 4 m do centro, de lado para o curso (o pior caso: de costas ele sai fora)
+      const nx = L[0].nx, nz = L[0].nz;
+      QA.reset(sp.x - nz * 4, sp.z + nx * 4);
+      const P = QA.MP.player;
+      QA.MP.camera.lookAt(L[2].x, P.pos.y + 1.62, L[2].z);
+      QA.tick(2);
+      const antes = M.rings.completos, dist0 = Math.hypot(P.pos.x - sp.x, P.pos.z - sp.z);
+      const ok = cn.fire();
+      for (let i = 0; i < 360; i++) { QA.tick(1); if (P.onGround && cn.state === 'idle' && i > 60) break; }
+      return { ok, dist0, antes, depois: M.rings.completos };
+    });
+    assert.ok(r.ok, 'fire() recusou o disparo da beira');
+    assert.ok(r.dist0 > 3.5, `cenário: a ${r.dist0.toFixed(2)} m do centro`);
+    assert.equal(r.depois, r.antes + 1, `da beira, o voo não completou o curso (${r.antes} → ${r.depois})`);
+  });
+
+  it('o curso é UM voo: passou argola e voltou ao chão, ele reinicia', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, M = G.MapToys, P = QA.MP.player;
+      const L = M.rings.list, a0 = L[0];
+      // atravessa a 1ª argola pelo meio (como no voo), e cai
+      QA.reset(a0.x - a0.nx * 0.5, a0.z - a0.nz * 0.5);
+      P.pos.set(a0.x - a0.nx * 0.5, a0.y, a0.z - a0.nz * 0.5); P.onGround = false;
+      P.vel.set(a0.nx * 20, 0, a0.nz * 20);
+      QA.tick(1);   // o 1º quadro só registra a posição (o teleporte não conta)
+      P.pos.set(a0.x - a0.nx * 0.2, a0.y, a0.z - a0.nz * 0.2); P.vel.set(a0.nx * 20, 0, a0.nz * 20);
+      let meio = null;
+      for (let i = 0; i < 4; i++) { QA.tick(1); if (M.rings.next === 1) { meio = { next: M.rings.next, running: M.rings.running }; break; } }
+      for (let i = 0; i < 300 && !P.onGround; i++) QA.tick(1);
+      QA.tick(2);
+      return { meio, chao: P.onGround, next: M.rings.next, running: M.rings.running };
+    });
+    assert.ok(r.meio && r.meio.running, `cenário: não atravessou a 1ª argola (${JSON.stringify(r.meio)})`);
+    assert.ok(r.chao, 'cenário: não voltou ao chão');
+    assert.equal(r.next, 0, `de volta ao chão, o curso segue esperando a argola ${r.next + 1}`);
+    assert.equal(r.running, false);
   });
 
   /* CHÃO LIMPO SOB AS ATRAÇÕES. O canhão e as atrações nascem DEPOIS do

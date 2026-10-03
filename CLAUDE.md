@@ -377,7 +377,11 @@ escrita pelo validador — quem constrói não edita).
   carreta e as rodas do canhão (só bala: o jogador ENTRA no canhão, e o curso
   de argolas é desenhado para o tiro que sai do centro dele — na trajetória
   REAL, com o arrasto do voo, `trajetoriaDoCanhao`: pela balística ideal a 5ª
-  argola ficava depois do pouso e o curso não completava) também seguram
+  argola ficava depois do pouso e o curso não completava; a CARGA puxa o
+  jogador da beira para o centro e o voo vai para o PONTO que ele mirava — da
+  beira, voar na direção da câmera saía paralelo e passava 1 de 5; o curso é
+  UM voo, reinicia quando ele volta ao chão; recorde de TEMPO gravado com
+  centésimos, não com o `saveNum` inteiro do placar) também seguram
   bala (`test/atracoes-bala`, âncora na malha nomeada). O desenho do totem
   ASSENTA junto com a caixa (pedestal até o chão mais baixo — sem ele a bala
   parava no ar na fresta da encosta), e cilindro desenhado com N lados usa o

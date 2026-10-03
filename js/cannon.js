@@ -123,17 +123,29 @@ export function createCannon(deps) {
     return _f;
   }
 
+  /* o PONTO mirado, a partir de onde o jogador apertou: a carga o puxa para o
+     centro, e voar na direção da câmera saindo de lá seria voar PARALELO ao
+     que ele mirava — da beira (4 m), ~10 m fora no fim do curso */
+  const ALVO_M = 30;
+  let fireX = 0, fireZ = 0;
+  function alvoDoTiro() {
+    const d = aimDir();
+    const tx = fireX + d.x * ALVO_M - spot.x, tz = fireZ + d.z * ALVO_M - spot.z, l = Math.hypot(tx, tz) || 1;
+    return _f.set(tx / l, 0, tz / l);
+  }
+
   function fire() {
     if (state !== 'idle') return false;
     if (player.dead || !player.onGround) return false;
     if (!nearPlayer(player.pos, RANGE + 1.5)) return false;
+    fireX = player.pos.x; fireZ = player.pos.z;
     state = 'charge'; chargeT = CHARGE_T;
     if (SFX.cannonWind) SFX.cannonWind();
     return true;
   }
 
   function doLaunch() {
-    const d = aimDir();
+    const d = alvoDoTiro();
     barrelPivot.rotation.y = Math.atan2(d.x, d.z);   // trava a mira no visual
     const v = launchVelocity(d.x, d.z);
     player.vel.set(v.x, v.y, v.z);
@@ -180,13 +192,21 @@ export function createCannon(deps) {
     }
     // idle/charge: o cano acompanha pra onde o jogador olha quando está perto
     if (nearPlayer(player.pos, RANGE + 2)) {
-      const d = aimDir();
+      const d = state === 'charge' ? alvoDoTiro() : aimDir();
       const target = Math.atan2(d.x, d.z);
       let cur = barrelPivot.rotation.y;
       let diff = ((target - cur + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
       barrelPivot.rotation.y = cur + diff * Math.min(1, dt * 8);
     }
     if (state === 'charge') {
+      /* a carga PUXA o jogador para dentro do cano: o curso de argolas é
+         desenhado para o tiro que sai do centro, e de onde o USAR alcança (até
+         4,6 m) o voo passava 1 de 5 (laudo 3d7d47a, obs. d). Linear até o fim
+         da carga — no máximo ~12 m/s, longe do teto do anti-teleporte */
+      const ex = spot.x - player.pos.x, ez = spot.z - player.pos.z;
+      const k = Math.min(1, dt / Math.max(chargeT, dt));
+      player.pos.x += ex * k; player.pos.z += ez * k;
+      player.vel.x = 0; player.vel.z = 0;
       chargeT -= dt;
       recoil = Math.min(1, recoil + dt * 2); // recua carregando
       tilt.position.z = -recoil * 0.6;

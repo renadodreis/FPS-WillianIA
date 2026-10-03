@@ -19,6 +19,10 @@ import { criarFarol } from './farbeacon.js';
 const _a = new THREE.Vector3(), _b = new THREE.Vector3();
 const loadNum = (k) => { try { return Number(localStorage.getItem(k)) || 0; } catch (e) { return 0; } };
 const saveNum = (k, v) => { try { localStorage.setItem(k, String(Math.round(v))); } catch (e) { /* off */ } };
+/* TEMPO de recorde: centésimos. Com o `saveNum` (inteiro, feito para o placar
+   da galeria) 1,80 s virava "2" — depois de recarregar o recorde era um tempo
+   que ninguém fez, e a 1ª volta de cada sessão saía "RECORDE" de novo */
+const saveTempo = (k, v) => { try { localStorage.setItem(k, String(Math.round(v * 100) / 100)); } catch (e) { /* off */ } };
 
 export function createMapToys(deps) {
   const {
@@ -185,7 +189,7 @@ export function createMapToys(deps) {
   // ===================================================================== //
   // 💫 AROS DE ACROBACIA                                                    //
   // ===================================================================== //
-  const ring = { spot: null, rings: [], next: 0, running: false, startT: 0, best: loadNum('callofai_ringBest'), prev: new THREE.Vector3() };
+  const ring = { spot: null, rings: [], next: 0, running: false, startT: 0, best: loadNum('callofai_ringBest'), completos: 0, prev: new THREE.Vector3() };
   const RING_N = 5, RING_R = 2.6;
   noSeed(() => {
     // As argolas moram NO ARCO DO CANHÃO: alturas seguem a trajetória REAL do
@@ -236,7 +240,8 @@ export function createMapToys(deps) {
         else {
           const time = t - ring.startT;
           const rec = ring.best === 0 || time < ring.best;
-          ring.best = betterTime(ring.best, time); saveNum('callofai_ringBest', ring.best);
+          ring.best = betterTime(ring.best, time); saveTempo('callofai_ringBest', ring.best);
+          ring.completos++;
           _a.copy(ring.rings[ring.rings.length - 1].c); FX.confetti(_a, 20);
           if (SFX.cannonLand) SFX.cannonLand(_a); // _a = centro do último aro
           if (centerMsg) centerMsg(rec ? `💫 CURSO COMPLETO ${time.toFixed(1)}s — RECORDE!` : `💫 ${time.toFixed(1)}s · recorde ${ring.best.toFixed(1)}s`, 3200);
@@ -244,8 +249,14 @@ export function createMapToys(deps) {
         }
       }
     }
-    // desistência: longe do curso reinicia (sem punir)
-    if (ring.running && _a.distanceTo(ring.rings[0].c) > 140) { ring.running = false; ring.next = 0; ringGlow(0, false); }
+    /* o curso é UM voo: de volta ao chão (a pé), reinicia. Sem isto, o voo
+       que perdia a 5ª argola deixava o curso esperando por ela, e o seguinte
+       "completava" passando só a 5ª, com o tempo dos dois voos somado (laudo
+       3d7d47a, §4.2). E, longe do curso, reinicia também (sem punir) */
+    if (ring.running && ((player.onGround && !state.flying && !state.driving) || _a.distanceTo(ring.rings[0].c) > 140)) {
+      ringGlow(ring.next, false);
+      ring.running = false; ring.next = 0;
+    }
     ring.prev.copy(_a);
   }
   ringGlow(0, true);
@@ -356,7 +367,7 @@ export function createMapToys(deps) {
        ONDE fica a alavanca, não o centro da atração — os dois estão a 4,6 m um
        do outro, e a galeria era o único alvo do mapa sem marcador no headset. */
     get gallery() { return { active: gal.active, score: gal.score, best: gal.best, targets: gal.targets.length, leverPos: gal.leverPos ? { ...gal.leverPos } : null }; },
-    get rings() { return { next: ring.next, running: ring.running, total: ring.rings.length, best: ring.best, list: ring.rings.map(r => ({ x: r.c.x, y: r.c.y, z: r.c.z, nx: r.n.x, nz: r.n.z })) }; },
+    get rings() { return { next: ring.next, running: ring.running, total: ring.rings.length, best: ring.best, completos: ring.completos, list: ring.rings.map(r => ({ x: r.c.x, y: r.c.y, z: r.c.z, nx: r.n.x, nz: r.n.z })) }; },
     get fireworks() { return { cd: fw.cd, shells: fw.shells.length, pos: fw.spot }; },
     startGallery: galleryStart, fireFireworks: fireworksFire,
     plates: xyl.plates,

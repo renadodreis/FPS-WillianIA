@@ -101,7 +101,7 @@ describe('o totem de fogos e o canhão seguram bala', { skip: !CHROME && 'Chrome
       const todas = Object.values(grupos).flat();
       const acerta = (m, ox, oy, oz, dx, dz) => { o.set(ox, oy, oz); d.set(dx, 0, dz); rc.set(o, d); rc.near = 0; rc.far = 12; const h0 = rc.intersectObjects(todas, false)[0]; return h0 && h0.object === m ? h0 : (h0 ? 'outra' : null); };
       for (const [nome, malhas] of Object.entries(grupos)) {
-        const res = out[nome]; res.rente = 0; res.renteAr = 0; res.exRente = null;
+        const res = out[nome]; res.rente = 0; res.renteAr = 0; res.exRente = null; res.dentro = 0; res.atravessa = 0; res.exDentro = null;
         for (const m of malhas) {
           cx.setFromObject(m); cx.getCenter(c); cx.getSize(tam);
           for (let k = 0; k < 36; k++) {
@@ -127,6 +127,20 @@ describe('o totem de fogos e o canhão seguram bala', { skip: !CHROME && 'Chrome
                   if (h1 && h1 !== 'outra') lo = mid; else hi = mid;
                 }
                 testa((hi + 0.01) * lado, y);
+                /* 12 cm para DENTRO da borda: a caixa inscrita pode parar a bala
+                   uns cm depois da casca, mas não deixá-la ATRAVESSAR — a carreta
+                   numa fatia só (o raio do topo do tronco de cone) deixava uma
+                   faixa de ~20 cm por dentro da borda de baixo */
+                if (hi > 0.25) {
+                  const lat = (hi - 0.12) * lado, ox = c.x - dx * 6 + px * lat, oz = c.z - dz * 6 + pz * lat;
+                  const h2 = acerta(m, ox, y, oz, dx, dz);
+                  if (h2 && h2 !== 'outra' && livreDoChao(ox, y, oz, dx, dz, 12)) {
+                    res.dentro++;
+                    o.set(ox, y, oz); d.set(dx, 0, dz);
+                    const tp = MP.rayBlockedAt(o, d, 12);
+                    if (tp > h2.distance + Math.max(tam.x, tam.z)) { res.atravessa++; if (!res.exDentro) res.exDentro = { o: [ox, y, oz].map(v => +v.toFixed(3)), az: +az.toFixed(2), malha: +h2.distance.toFixed(2) }; }
+                  }
+                }
               }
             }
             // topo: em 3 deslocamentos laterais, a borda de cima
@@ -192,6 +206,12 @@ describe('o totem de fogos e o canhão seguram bala', { skip: !CHROME && 'Chrome
       // a carreta fica quase toda atrás das rodas e do cano: menos retas rentes só dela
       assert.ok(x.rente >= (nome === 'canhaoCarreta' ? 36 : 120), `cenário: só ${x.rente} retas rentes`);
       assert.equal(x.renteAr, 0, `a bala parou no ar rente à borda em ${x.renteAr} de ${x.rente}`);
+    });
+    it(`${nome}: 12 cm para dentro da borda desenhada, a bala não atravessa`, t => {
+      const x = r[nome];
+      t.diagnostic(`${x.atravessa} de ${x.dentro} retas 12 cm por dentro atravessaram${x.exDentro ? ' — ex.: ' + JSON.stringify(x.exDentro) : ''}`);
+      assert.ok(x.dentro >= 20, `cenário: só ${x.dentro} retas por dentro`);
+      assert.equal(x.atravessa, 0, `a bala atravessou 12 cm por dentro da borda em ${x.atravessa} de ${x.dentro}`);
     });
   }
 
