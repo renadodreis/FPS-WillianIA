@@ -207,6 +207,11 @@ async function abrir(browser, { w, h, dpr = 1, mobile = false, ponteiro = 'fine'
   ] });
   const html = leia('index.html');
   const folha = leia('style.css');
+  /* o VIGIA do boot (script inline do index.html) trata o módulo abortado como
+     boot que falhou e troca o botão por "tentar de novo". Aqui o estado medido
+     é o CSS do "carregando" — o vigia tem o teste dele (boot-sem-cdn): ele se
+     cala com o mesmo sinal que o game.js dá ao rodar */
+  await page.evaluateOnNewDocument(() => { window.__gameModulo = true; });
   await page.setRequestInterception(true);
   page.on('request', req => {
     const u = req.url();

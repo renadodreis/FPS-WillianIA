@@ -317,8 +317,13 @@ describe('Modo solo — evento local de destruição sem servidor', { skip: !CHR
     const path = require('node:path');
     const root = path.join(__dirname, '..');
     const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+    /* as bibliotecas do cliente saem do servidor do jogo em /vendor/ (server.js,
+       BIBLIOTECAS_DO_CLIENTE): uma hospedagem estática dos arquivos precisa delas */
+    const VENDOR = [['/vendor/three@0.184.0/', 'node_modules/three-cliente/'], ['/vendor/cannon-es@0.20.0/', 'node_modules/cannon-es/']];
     srv = http.createServer((req, res) => {
-      const f = path.join(root, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
+      let u = req.url === '/' ? 'index.html' : req.url.split('?')[0];
+      for (const [de, para] of VENDOR) if (u.startsWith(de)) u = para + u.slice(de.length);
+      const f = path.join(root, u);
       fs.readFile(f, (e, d) => {
         if (e) { res.writeHead(404); res.end(); return; }
         res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream' });
