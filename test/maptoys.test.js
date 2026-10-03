@@ -406,6 +406,31 @@ describe('Atrações do mapa 🎪', () => {
     assert.ok(r.menor >= r.limite * 0.95, `puxado através da pedra: ${r.menor.toFixed(2)} m do centro dela (raio de corpo ${r.limite.toFixed(2)})`);
   });
 
+  it('encostado num obstáculo que fica ATRÁS, o puxão para longe dele acontece', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player;
+      const L = G.MapToys.rings.list, nx = L[0].nx, nz = L[0].nz;
+      // a 4 m do centro, ATRÁS do canhão (contra o curso: os outros casos usam os
+      // lados); a pedra encostada nas costas (mais longe do canhão)
+      const px = sp.x - nx * 4, pz = sp.z - nz * 4, raio = 0.5;
+      const dist = raio + P.radius - 0.02;
+      G.addObstacle(sp.x - nx * (4 + dist), sp.z - nz * (4 + dist), raio, { category: 'rigid', sourceId: 'rock' });
+      QA.reset(px, pz); QA.tick(3);
+      // APERTANDO a pedra (o polegar empurra contra ela): 1 cm dentro do raio do corpo,
+      // como o encosto real deixa por ruído — com o empate exato a regra velha nem barrava
+      const ox = sp.x - nx * (4 + dist), oz = sp.z - nz * (4 + dist);
+      const ex = P.pos.x - ox, ez = P.pos.z - oz, el = Math.hypot(ex, ez);
+      P.pos.x = ox + ex / el * (raio + P.radius - 0.01); P.pos.z = oz + ez / el * (raio + P.radius - 0.01);
+      const ok = cn.fire();
+      let ate = null;
+      for (let i = 0; i < 60 && !ate; i++) { QA.tick(1); if (cn.state === 'flying') ate = Math.hypot(P.pos.x - sp.x, P.pos.z - sp.z); }
+      for (let i = 0; i < 600 && cn.state !== 'idle'; i++) QA.tick(1);
+      return { ok, ate };
+    });
+    assert.ok(r.ok, 'o canhão recusou o disparo');
+    assert.ok(r.ate !== null && r.ate < 0.5, `encostado na pedra de trás, o puxão não aconteceu (saiu a ${r.ate} m do centro)`);
+  });
+
   it('o carro que ENTRA no caminho durante a carga para o puxão; parado, a mira na 3ª argola voa para a 3ª', async () => {
     const r = await h.play(() => {
       const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player;

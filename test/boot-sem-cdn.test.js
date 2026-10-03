@@ -160,6 +160,38 @@ describe('o boot não depende do CDN', { skip: !CHROME && 'Chrome não encontrad
     } finally { await page.close(); }
   });
 
+  it('(f) alarme do vigia num link LENTO e o jogo chegando depois: o alarme se desfaz (o aviso de rotação volta)', async () => {
+    const page = await h.browser.newPage();
+    try {
+      await page.setUserAgent('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36');
+      await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+      // as bibliotecas ficam PRESAS (link lento) até o vigia ter dado o alarme
+      const presas = [];
+      await page.setRequestInterception(true);
+      page.on('request', req => (new URL(req.url()).pathname.startsWith('/vendor/') ? presas.push(req) : req.continue()));
+      // com módulo, o DOMContentLoaded espera o módulo (preso): espera-se o vigia no DOM
+      const navegacao = page.goto(`http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded', timeout: 180000 }).catch(() => {});
+      await page.waitForFunction("!!window.__falhaDoBoot && !!document.getElementById('btnNew')", { timeout: 20000, polling: 50 });
+      await page.evaluate(() => window.__falhaDoBoot());   // o que os 60 s fariam
+      const noAlarme = await page.evaluate(() => document.documentElement.classList.contains('bootfalhou'));
+      // o link "volta": tudo o que estava preso segue, e o módulo roda
+      page.removeAllListeners('request');
+      page.on('request', req => req.continue());
+      for (const req of presas.splice(0)) await req.continue().catch(() => {});
+      await page.waitForFunction('window.__gameModulo === true', { timeout: 120000, polling: 200 });
+      await navegacao;
+      const r = await page.evaluate(() => ({
+        bootfalhou: document.documentElement.classList.contains('bootfalhou'),
+        portao: getComputedStyle(document.getElementById('rotateGate')).display,
+        retrato: innerHeight > innerWidth,
+      }));
+      assert.equal(noAlarme, true, 'cenário: o alarme não marcou bootfalhou');
+      assert.ok(r.retrato, 'cenário: não está em retrato');
+      assert.equal(r.bootfalhou, false, 'o jogo carregou e o alarme do vigia ficou (bootfalhou)');
+      assert.notEqual(r.portao, 'none', 'em retrato, com o jogo carregado, o aviso de rotação sumiu');
+    } finally { await page.close(); }
+  });
+
   it('boot limpo: sem erro de página', () => {
     assert.deepEqual(h.pageErrors.filter(e => !/vendor\/three|Failed to fetch dynamically|net::ERR_FAILED/i.test(String(e))), []);
   });

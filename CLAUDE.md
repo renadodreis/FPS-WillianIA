@@ -71,7 +71,10 @@ quebrou o jogo antes.
   `npm install`. E o `index.html` tem um VIGIA: se o módulo do jogo não roda
   (erro de importação, ou 60 s), o botão diz e recarrega no toque — e tira o
   aviso de rotação da frente (`html.bootfalhou`): em retrato ele cobria o
-  botão, e o "JOGAR ASSIM" dele só o módulo liga (E10). Cache
+  botão, e o "JOGAR ASSIM" dele só o módulo liga (E10). E se o módulo chegar
+  DEPOIS do alarme (link lento), a 1ª linha do game.js desfaz o alarme —
+  senão o aviso de rotação sumia a sessão inteira. Teste com módulo preso
+  não espera `DOMContentLoaded` (com módulo, ele espera o módulo). Cache
   imutável só na resposta de SUCESSO (o 404/301 com um ano de cache a borda
   guardava), e as bibliotecas saem em gzip como os modelos. **Tudo que o
   celular vê ANTES do módulo rodar é HTML+CSS**: a classe `mobile` é posta

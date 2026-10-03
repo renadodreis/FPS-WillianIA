@@ -75,8 +75,11 @@ import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
 import { createSecrets } from './js/secrets.js';
 import { buildChest } from './js/chestmodel.js';
 import { criarVeiculos } from './js/veiculos.js';
-// o módulo RODOU (todas as importações chegaram): o vigia do boot no index.html se cala
+// o módulo RODOU (todas as importações chegaram): o vigia do boot no index.html se cala —
+// e, se ele já tinha dado o alarme (link lento: o módulo chegou depois dos 60 s), desfaz
+// o que o alarme mudou: sem isto o aviso de rotação sumia a sessão inteira (laudo cbfb44a)
 window.__gameModulo = true;
+document.documentElement.classList.remove('bootfalhou');
 
 /* ================================================================
    PORTÃO DO MENU — o estado dos botões é DERIVADO do estado ATUAL.
@@ -5333,18 +5336,28 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, center
      servia (veículo em chamas deixa de proteger) */
   caminhoLivre: (ax, ay, az, bx, _by, bz) => {
     const ux = bx - ax, uz = bz - az, L2 = ux * ux + uz * uz || 1;
+    /* um círculo barra se o caminho CHEGA mais perto dele do que o raio — e
+       mais perto do que o jogador já está: encostado num obstáculo que fica
+       atrás, o puxão para longe dele era recusado (laudo cbfb44a) */
+    const barra = (cx, cz, r) => {
+      const k = Math.max(0, Math.min(1, ((cx - ax) * ux + (cz - az) * uz) / L2));
+      const dMin = Math.hypot(cx - (ax + ux * k), cz - (az + uz * k));
+      return dMin < r - 1e-3 && dMin < Math.hypot(cx - ax, cz - az) - 1e-3;
+    };
     if (Car.vehicles.some(v => {
       if (v.destruido) return false;
       const p = v.group.position;
       if (Math.abs(p.y - ay) > 3) return false;
-      const r = Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + player.radius;
-      const k = Math.max(0, Math.min(1, ((p.x - ax) * ux + (p.z - az) * uz) / L2));
-      return Math.hypot(p.x - (ax + ux * k), p.z - (az + uz * k)) < r;
+      return barra(p.x, p.z, Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + player.radius);
     })) return false;
-    // e o helicóptero pousado: as mesmas caixas que empurram o corpo (js/heli.js)
+    // e o helicóptero pousado: as mesmas caixas que empurram o corpo (js/heli.js);
+    // encostado nele no começo, só barra se o caminho ENTRAR de novo depois de sair
     const n = Math.max(1, Math.ceil(Math.sqrt(L2) / 0.15));
-    for (let i = 0; i <= n; i++) {
-      if (Heli.corpoNaFuselagem(ax + ux * i / n, ay, az + uz * i / n, player.radius)) return false;
+    let saiu = !Heli.corpoNaFuselagem(ax, ay, az, player.radius);
+    for (let i = 1; i <= n; i++) {
+      const dentro = Heli.corpoNaFuselagem(ax + ux * i / n, ay, az + uz * i / n, player.radius);
+      if (dentro && saiu) return false;
+      if (!dentro) saiu = true;
     }
     /* e pedra, árvore, cacto, barril, tenda: o mesmo círculo e a mesma faixa
        de altura do empurrão do corpo (updatePlayer) — o puxão atravessava
@@ -5353,8 +5366,7 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, center
       if (o.corpo === false) continue;
       const topo = Number.isFinite(o.corpoAte) ? o.corpoAte : Number.isFinite(o.y1) ? o.y1 : heightAt(o.x, o.z) + 3.4;
       if (ay > topo + 1.7 || (Number.isFinite(o.y0) && ay + 1.7 < o.y0)) continue;
-      const k = Math.max(0, Math.min(1, ((o.x - ax) * ux + (o.z - az) * uz) / L2));
-      if (Math.hypot(o.x - (ax + ux * k), o.z - (az + uz * k)) < o.r + player.radius) return false;
+      if (barra(o.x, o.z, o.r + player.radius)) return false;
     }
     return true;
   } });
