@@ -41,6 +41,34 @@ export function ballisticApex(prof = LAUNCH) {
   return (vy * vy) / (2 * prof.gravity);
 }
 
+/* a trajetória REAL do disparo, no mesmo passo do jogo (game.js, voo do
+   canhão: arrasto horizontal por quadro, depois a gravidade, depois a
+   posição): pontos { d (m na horizontal), y (acima da saída) } até voltar à
+   altura da saída. Com o arrasto o alcance é ~53 m, não os 64 da balística
+   ideal — o curso de argolas, medido pela ideal, punha a 5ª argola a 55 m,
+   depois do pouso (laudo f672d81, observação d). */
+export function trajetoriaDoCanhao(prof = LAUNCH, passo = 1 / 60) {
+  let vh = horizontalSpeed(prof), vy = verticalSpeed(prof), d = 0, y = 0;
+  const pts = [{ d, y }];
+  for (let i = 0; i < 2000; i++) {
+    vh *= Math.max(0, 1 - prof.drag * passo);
+    vy -= prof.gravity * passo;
+    d += vh * passo; y += vy * passo;
+    pts.push({ d, y });
+    if (y < 0 && vy < 0) break;
+  }
+  return pts;
+}
+/* altura da trajetória a `dist` metros da saída (interpolada) */
+export function alturaNaTrajetoria(pts, dist) {
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].d >= dist) {
+      const a = pts[i - 1], b = pts[i], k = (dist - a.d) / ((b.d - a.d) || 1);
+      return a.y + (b.y - a.y) * k;
+    }
+  }
+  return pts[pts.length - 1].y;
+}
 /* o perfil respeita o anti-cheat com folga? guarda de contrato. */
 export function withinAntiCheat(prof = LAUNCH, caps = ANTICHEAT) {
   return horizontalSpeed(prof) < caps.hStrike && verticalSpeed(prof) < caps.vReject;

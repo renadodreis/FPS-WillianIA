@@ -205,9 +205,11 @@ describe('Atrações do mapa 🎪', () => {
       for (let i = 0; i < 320; i++) { QA.tick(1); if (P.onGround && cn.state === 'idle' && i > 60) break; }
       return { before, after: M.rings.next, best: M.rings.best };
     });
-    // curso completo grava recorde e reseta next → aceitar qualquer um dos sinais
-    assert.ok(r.after >= 3 || r.best > 0,
-      `o voo não atravessou as argolas (next ${r.before}→${r.after}, recorde ${r.best})`);
+    /* o curso COMPLETO: as 5 argolas (o recorde só é gravado quando a 5ª
+       passa). Aceitar "≥ 3" escondia que a 5ª ficava depois do pouso — o
+       voo cai a ~54 m e ela estava a 55 (laudo f672d81, observação d) */
+    assert.ok(r.best > 0,
+      `o voo não completou o curso de argolas (next ${r.before}→${r.after}, recorde ${r.best})`);
   });
 
   /* CHÃO LIMPO SOB AS ATRAÇÕES. O canhão e as atrações nascem DEPOIS do

@@ -71,16 +71,24 @@ function chaoMaisBaixo(x0, x1, z0, z1, heightAt) {
      imune atirando para fora (laudo d381d29, NC-1). A pirâmide do topo (0,9
      m, acima da cabeça) fica de fora;
    • canhão (js/cannon.js): a carreta (tronco de cone r 1,75 → 1,55, de
-     y + 0,2 a y + 0,9) e as duas rodas (disco r 0,72, 0,26 de espessura,
-     em x ± 1,55, eixo a y + 0,72), em caixas DENTRO do desenho (as de
-     `caixasDeBala`: caixa maior que o desenho é bala parando no ar). Só de
+     y + 0,2 a y + 0,9, 20 lados) e as duas rodas (disco r 0,72, 16 lados,
+     0,26 de espessura, em x ± 1,55, eixo a y + 0,72), em caixas DENTRO do
+     desenho (caixa maior que o desenho é bala parando no ar). Só de
      BALA (`noCollide`, como o acabamento): o jogador ENTRA no canhão para
      ser disparado — o curso de argolas é desenhado para o tiro que sai do
      centro dele —, e com 0,9 m quem está ali dentro segue com a cabeça (e,
      em pé, o tronco) por cima. O CANO gira para mirar — desenho que se
      mexe não é parede. */
 export const TOTEM_FOGOS = Object.freeze({ lado: 1.1, base: 0.05, topo: 2.85 });
-export const CANHAO_PECAS = Object.freeze({ carreta: { r: 1.55, y0: 0.2, y1: 0.9 }, roda: { r: 0.72, x: 1.55, esp: 0.26, y: 0.72 } });
+export const CANHAO_PECAS = Object.freeze({
+  carreta: { rTopo: 1.55, rBase: 1.75, y0: 0.2, y1: 0.9, lados: 20 },
+  roda: { r: 0.72, x: 1.55, esp: 0.26, y: 0.72, lados: 16 },
+});
+/* as caixas do `CILINDRO` cabem num CÍRCULO (quina ≤ 1,003·r); o desenho é um
+   polígono de N lados, cuja face fica a r·cos(π/N) do centro — as quinas
+   passavam do desenho em até 2,2 cm (laudo f672d81, §4.2). O raio que cabe
+   no polígono: */
+const raioNoPoligono = (r, lados) => r * Math.cos(Math.PI / lados) / 1.003;
 export function totemDosFogos(fogos, heightAt) {
   const m = TOTEM_FOGOS.lado / 2, x0 = fogos.x - m, x1 = fogos.x + m, z0 = fogos.z - m, z1 = fogos.z + m;
   return { x0, x1, y0: Math.min(fogos.y + TOTEM_FOGOS.base, chaoMaisBaixo(x0, x1, z0, z1, heightAt) - ASSENTO.ENTERRO),
@@ -89,12 +97,21 @@ export function totemDosFogos(fogos, heightAt) {
 const SO_BALA = Object.freeze({ atracao: 'canhao', noCollide: true, acabamento: 'canhao' });
 export function pecasDoCanhao(canhao) {
   const { carreta: C, roda: R } = CANHAO_PECAS, { x, y, z } = canhao, out = [];
-  for (const [fx, fz] of CILINDRO)
-    out.push({ x0: x - C.r * fx, x1: x + C.r * fx, y0: y + C.y0, y1: y + C.y1, z0: z - C.r * fz, z1: z + C.r * fz, ...SO_BALA });
+  /* a carreta é tronco de cone (r da base 1,75 → topo 1,55): quatro fatias,
+     cada uma no raio do TOPO dela (o menor), para a caixa não sair do
+     desenho — com duas, a fatia de cima ficava 9 cm aquém do desenho */
+  const rEm = yy => C.rBase + (C.rTopo - C.rBase) * (yy - C.y0) / (C.y1 - C.y0), FATIAS = 4;
+  for (let i = 0; i < FATIAS; i++) {
+    const a = C.y0 + (C.y1 - C.y0) * i / FATIAS, b = C.y0 + (C.y1 - C.y0) * (i + 1) / FATIAS;
+    const r = raioNoPoligono(rEm(b), C.lados);
+    for (const [fx, fz] of CILINDRO)
+      out.push({ x0: x - r * fx, x1: x + r * fx, y0: y + a, y1: y + b, z0: z - r * fz, z1: z + r * fz, ...SO_BALA });
+  }
+  const rr = raioNoPoligono(R.r, R.lados);
   for (const lado of [-1, 1])
     for (const [fz, fy] of CILINDRO)
-      out.push({ x0: x + lado * R.x - R.esp / 2, x1: x + lado * R.x + R.esp / 2, y0: y + R.y - R.r * fy, y1: y + R.y + R.r * fy,
-        z0: z - R.r * fz, z1: z + R.r * fz, ...SO_BALA });
+      out.push({ x0: x + lado * R.x - R.esp / 2, x1: x + lado * R.x + R.esp / 2, y0: y + R.y - rr * fy, y1: y + R.y + rr * fy,
+        z0: z - rr * fz, z1: z + rr * fz, ...SO_BALA });
   return out;
 }
 /* as paredes das atrações, na ordem em que o cliente as empilha */

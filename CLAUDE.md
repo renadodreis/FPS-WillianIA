@@ -375,8 +375,15 @@ escrita pelo validador — quem constrói não edita).
   corta antes** (relevo rente, tronco) — senão acusa "parou cedo" onde a tela
   também para. O totem de fogos (corpo e bala: tem altura de gente) e a
   carreta e as rodas do canhão (só bala: o jogador ENTRA no canhão, e o curso
-  de argolas é desenhado para o tiro que sai do centro dele) também seguram
-  bala (`test/atracoes-bala`, âncora na malha nomeada). A lista ÚNICA é
+  de argolas é desenhado para o tiro que sai do centro dele — na trajetória
+  REAL, com o arrasto do voo, `trajetoriaDoCanhao`: pela balística ideal a 5ª
+  argola ficava depois do pouso e o curso não completava) também seguram
+  bala (`test/atracoes-bala`, âncora na malha nomeada). O desenho do totem
+  ASSENTA junto com a caixa (pedestal até o chão mais baixo — sem ele a bala
+  parava no ar na fresta da encosta), e cilindro desenhado com N lados usa o
+  raio INSCRITO no polígono (`r·cos(π/N)`): os fatores do `CILINDRO` são de
+  círculo, e a quina passava 2,2 cm do desenho. Teste de borda RENTE precisa
+  de muitos azimutes — a quina só aparece numa janela de ±7°. A lista ÚNICA é
   `paredesDasAtracoes`, e o cliente a empilha inteira no fim do
   `createMapToys`, na ordem do bot e do servidor. O cano do canhão gira para
   mirar e fica de fora — desenho que se mexe não é parede.
@@ -439,15 +446,18 @@ escrita pelo validador — quem constrói não edita).
   (o lance do andar de baixo, 3,3 m) — as plataformas do interior da Torre
   entram no estado "de pé" (somem com a cidade destruída). Carro solto: a
   parábola é um TETO, não a trajetória — subida pela velocidade horizontal
-  (o deslocamento medido subestimava com o jitter), e lançada do MAIOR
-  instante possível entre o último pacote no chão e meio segundo depois
-  (nascendo só no pacote do chão, a descida chegava antes do carro). A
-  janela é ancorada no último pacote ACEITO: ancorada em "agora", cada
-  recusa a renovava e o pairar a 2,8 m voltou a 20 de 40. O QUIQUE entre
-  dois pacotes reinicia a parábola com ≤ 70 % da velocidade que a energia do
-  teto permite (o ápice cai à metade a cada quique). A parede se testa pelos
-  CANTOS do casco (`VV.TIPOS`), não pela reta do centro; a saída vem DENTRO
-  do `state` (`largar`), e o `carFree` sai depois do `playerUpdate` volátil.
+  do pacote (o deslocamento medido subestimava com o jitter), ancorada no
+  último pacote ACEITO (ancorada em "agora", cada recusa a renovava).
+  **Mecanismo que não muda o carro honesto e abre o desonesto SAI**: o
+  QUIQUE (reiniciar a parábola no toque entre pacotes) deixava o carro
+  pairar a ~2,8 m por quiques seguidos — a folga entrava na energia e
+  voltava no teto do arco novo — e nenhuma das sete saídas reais precisava
+  dele; a janela de meio segundo na decolagem tinha efeito medido zero.
+  Saíram os dois (laudo f672d81). A parede se testa por uma GRADE 3 × 5 do
+  casco (`VV.TIPOS`): pela reta do centro o carro entrava na porta com
+  metade dentro da parede, e só pelos cantos um pilar de 0,5 m passava
+  entre as linhas. A saída vem DENTRO do `state` (`largar`), e o `carFree`
+  sai depois do `playerUpdate` volátil.
 - **Modelo 3D vai em gzip no fio** (server.js, `modeloGz`): a borda comprime
   o JS mas passa `model/gltf-binary` cru — medido em produção, o fuzil chegava
   com os mesmos 557 KB do disco, e os modelos são 14 dos 17 MB do boot em 4G.

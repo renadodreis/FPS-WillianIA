@@ -10,10 +10,10 @@
    ================================================================ */
 import * as THREE from 'three';
 import {
-  bounceVelocity, passedRing, plateAt, XYLO_NOTES, painelDaGaleria, paredesDasAtracoes,
+  bounceVelocity, passedRing, plateAt, XYLO_NOTES, painelDaGaleria, paredesDasAtracoes, totemDosFogos,
   betterMax, betterTime,
 } from './maptoys-core.js';
-import { LAUNCH, horizontalSpeed } from './cannon-core.js';
+import { trajetoriaDoCanhao, alturaNaTrajetoria } from './cannon-core.js';
 import { criarFarol } from './farbeacon.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3();
@@ -146,6 +146,14 @@ export function createMapToys(deps) {
       const seg = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.7, 1.1), mat(RAINBOW[i * 2 + 1]));
       seg.position.set(fw.spot.x, fw.spot.y + 0.4 + i * 0.7, fw.spot.z); seg.castShadow = true; seg.name = 'totemFogos'; scene.add(seg);
     }
+    /* pedestal: o totem ASSENTA como a caixa de bala dele (até o chão mais
+       baixo da pegada) — em encosta a base desenhada ficava até 14 cm acima
+       do chão, e a bala parava no ar na fresta (laudo f672d81, §4.2) */
+    const tw = totemDosFogos(fw.spot, heightAt), pe = fw.spot.y + 0.05 - tw.y0;
+    if (pe > 0.01) {
+      const ped = new THREE.Mesh(new THREE.BoxGeometry(tw.x1 - tw.x0, pe, tw.z1 - tw.z0), mat(RAINBOW[1]));
+      ped.position.set(fw.spot.x, tw.y0 + pe / 2, fw.spot.z); ped.name = 'totemFogos'; scene.add(ped);
+    }
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.7, 0.9, 4), mat(0xffe14a, { emissive: 0xffe14a, emissiveIntensity: 0.3 }));
     tip.position.set(fw.spot.x, fw.spot.y + 3.4, fw.spot.z); scene.add(tip);
   });
@@ -188,11 +196,13 @@ export function createMapToys(deps) {
     ring.spot = { x: cs.x, y: y0, z: cs.z };
     const dx = cx - cs.x, dz = cz - cs.z, dl = Math.hypot(dx, dz) || 1;
     const dir = { x: dx / dl, z: dz / dl };
-    const vh = horizontalSpeed(), tanP = Math.tan(LAUNCH.pitch), k = LAUNCH.gravity / (2 * vh * vh);
+    /* na trajetória REAL (com o arrasto do voo): alcance ~53 m — a 5ª argola
+       ficava a 55 m, depois do pouso, e o curso não completava */
+    const traj = trajetoriaDoCanhao(), alcance = traj[traj.length - 1].d;
     for (let i = 0; i < RING_N; i++) {
-      const d = (i + 1) * 11;                          // 11..55 m (alcance do tiro ~63)
+      const d = 10 + i * (alcance - 19) / (RING_N - 1);   // de 10 m até 9 m antes do pouso
       const x = cs.x + dir.x * d, z = cs.z + dir.z * d;
-      let y = y0 + tanP * d - k * d * d;               // balística do canhão
+      let y = y0 + alturaNaTrajetoria(traj, d);
       y = Math.max(y, heightAt(x, z) + 1.8);           // terreno subiu? argola nunca enterra
       const torus = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.18, 10, 26),
         csmMat(new THREE.MeshStandardMaterial({ color: RAINBOW[i], emissive: RAINBOW[i], emissiveIntensity: 0.3, roughness: 0.4 })));
