@@ -328,7 +328,7 @@ describe('vida, queima e explosão (autoritativas)', () => {
     assert.ok(rola.length >= n - 1, `o pulo legítimo foi recusado: ${rola.length} de ${n}`);
   });
 
-  it('carro solto: o pulo que QUICA (sem pacote no toque) é aceito do começo ao fim', async t => {
+  it('carro solto: o pulo FORTE de verdade (perto do teto da regra) é aceito do começo ao fim', async t => {
     const { clients, plan } = await playing(t, 3);
     const [a, b] = clients;
     const buggy = veic(plan, 0), T = await trilha(buggy);
@@ -338,35 +338,51 @@ describe('vida, queima e explosão (autoritativas)', () => {
     assert.equal((await ack(a.s, 'enterCar', { idx: 0 })).ok, true);
     await dirigeESai(a, T);
     const rola = collect(b.s, 'carRola');
-    /* decola, cai, quica com 60 % da velocidade do impacto e cai de novo. A 10 Hz nenhum pacote cai no toque: os que ficam a ≤ 1,6 m do
-       chão "se perdem" (laudo 4433c4d, §4.3 — o carro quicava a 1,5–2,7 m
-       sem nenhum pacote a ≤ 1,5 m, e a parábola da decolagem o recusava) */
-    /* em y ABSOLUTO (no ar o carro não acompanha a encosta): decola do chão
-       da trilha a 15 m/s — o teto da regra, então a parábola-teto do
-       servidor é a do próprio carro e, depois do toque, ela já desceu:
-       sem reiniciar no quique o resto é recusado. O 1º pacote no ar anda
-       2,5 m (velocidade horizontal que dá o teto de 15 m/s mesmo com jitter);
-       depois 0,6 m por pacote, para caber na trilha */
-    const dEm = tt => Math.min(20 + (tt <= 0.1 ? 25 * tt : 2.5 + 6 * (tt - 0.1)), 63);
-    const chaoEm = tt => T.at(dEm(tt))[1];
-    const v0 = 15, y0 = chaoEm(0);
+    /* em y ABSOLUTO (no ar o carro não acompanha a encosta): decola a 14 m/s
+       (o teto da regra é 15) andando 15 m/s, até tocar o chão de novo. Com a
+       subida medida pelo deslocamento do 1º pacote no ar (a regra de r8), o
+       jitter a subestimava e a parábola caía antes do carro */
+    const dEm = tt => Math.min(20 + 15 * tt, 63), chaoEm = tt => T.at(dEm(tt))[1];
+    const v0 = 14, y0 = chaoEm(0);
     let t1 = 0.2; while (y0 + v0 * t1 - 4.9 * t1 * t1 > chaoEm(t1)) t1 += 0.001;
-    const vb = 0.6 * (9.8 * t1 - v0), yc = chaoEm(t1);
-    let t2 = t1 + 0.05; while (yc + vb * (t2 - t1) - 4.9 * (t2 - t1) ** 2 > chaoEm(t2)) t2 += 0.001;
-    const yAbs = tt => (tt < t1 ? y0 + v0 * tt - 4.9 * tt * tt
-      : tt < t2 ? yc + vb * (tt - t1) - 4.9 * (tt - t1) ** 2 : chaoEm(tt));
-    let n = 0, noQuique = 0;
-    for (let k = 1; (k * 0.1) < t2 + 0.3; k++) {
-      const tt = k * 0.1, p = T.at(dEm(tt)), y = yAbs(tt);
-      if (tt > 0.15 && y - terrain.heightAt(p[0], p[2]) <= 1.6) { await sleep(100); continue; }   // "perdido"
+    let n = 0;
+    for (let k = 1; k * 0.1 < t1; k++) {
+      const tt = k * 0.1, p = T.at(dEm(tt)), y = y0 + v0 * tt - 4.9 * tt * tt;
+      if (tt > 0.15 && y - terrain.heightAt(p[0], p[2]) <= 1.6) { await sleep(100); continue; }
       a.s.emit('carSolto', { idx: 0, pos: [p[0], y, p[2]], rotY: 0 }); n++;
-      if (tt > t1) noQuique++;
       await sleep(100);
     }
     await sleep(150);
-    t.diagnostic(`quique: ${rola.length} de ${n} poses repassadas (${noQuique} depois do toque)`);
-    assert.ok(noQuique >= 4, `cenário: só ${noQuique} pacotes no quique`);
-    assert.ok(rola.length >= n - 1, `o carro que quicou foi recusado: ${rola.length} de ${n}`);
+    t.diagnostic(`pulo forte: ${rola.length} de ${n} poses repassadas`);
+    assert.ok(n >= 15, `cenário: ${n} pacotes no ar`);
+    assert.ok(rola.length >= n - 1, `o pulo forte legítimo foi recusado: ${rola.length} de ${n}`);
+  });
+
+  it('carro solto: depois de uma decolagem FORTE, parado no ar a 2,8 m ele cai do teto — não paira a janela inteira', async t => {
+    const { clients, plan } = await playing(t, 3);
+    const [a, b] = clients;
+    const buggy = veic(plan, 0), T = await trilha(buggy);
+    assert.ok(T, 'cenário: nenhuma trilha livre');
+    const terrain = await require('../scripts/bots.js').createBotTerrain(SEED);
+    await aoLado(a, buggy);
+    assert.equal((await ack(a.s, 'enterCar', { idx: 0 })).ok, true);
+    await dirigeESai(a, T);
+    const rola = collect(b.s, 'carRola');
+    /* o 1º pacote no ar anda 2,5 m (subida no teto, 15 m/s) e depois o carro
+       "para no ar" a 2,8 m do chão andando 0,5 m por pacote, 10 s. O teto da
+       decolagem passa abaixo dele em ~3 s; reiniciar a parábola num "quique"
+       entre pacotes o deixava pairar a janela inteira (laudo f672d81: 86 de
+       101). O caso de "pairar baixo" sem decolagem (no ar ele CAI) não
+       exercitava isso: o 1º pacote andava 0,3 m e a subida nem acontecia */
+    let n = 0;
+    for (let k = 1; k <= 100; k++) {
+      const d = Math.min(20 + (k === 1 ? 2.5 : 2.5 + 0.5 * (k - 1)), 63), p = T.at(d);
+      a.s.emit('carSolto', { idx: 0, pos: [p[0], terrain.heightAt(p[0], p[2]) + 2.8, p[2]], rotY: 0 }); n++;
+      await sleep(100);
+    }
+    await sleep(150);
+    t.diagnostic(`parado no ar a 2,8 m depois da decolagem: ${rola.length} de ${n} repassadas`);
+    assert.ok(rola.length <= 40, `o carro solto pairou a 2,8 m por ${rola.length} de ${n} pacotes (10 s)`);
   });
 
   /* a geometria da semente, como o cliente a pisa */
@@ -484,6 +500,36 @@ describe('vida, queima e explosão (autoritativas)', () => {
     t.diagnostic(`poses repassadas dentro da Torre — beira: ${r.beira}, centro: ${r.centro}`);
     assert.equal(r.beira, 0, 'com metade do carro dentro da parede, o carro solto entrou pela porta');
     assert.ok(r.centro >= 2, `centrado na porta, o carro solto não entrou (${r.centro})`);
+  });
+
+  it('carro solto: pilar mais ESTREITO que o carro, com a reta do centro passando ao lado, segura o casco', async t => {
+    const M = await mundoDaSemente();
+    /* os pilares do saguão da Torre (0,5 m): só os cantos deixavam o pilar
+       passar ENTRE as linhas do casco (laudo f672d81). A reta do centro passa
+       5 cm ao lado dele; um carro de 1,5 m de largura o engole inteiro */
+    let caso = null;
+    for (const op of M.mundo.cidade.nexus.ops) {
+      const w = op.tipo === 'pilar' && op.parede;
+      if (!w) continue;
+      const x = w.x1 + 0.05, zc = (w.z0 + w.z1) / 2;
+      const y0 = M.chao(x, zc, w.y0 + 1);
+      if (y0 < w.y0 - 0.5) continue;
+      const P = []; for (let d = 7; d >= -1; d -= 1) P.push([x, M.chao(x, zc + d, y0 + 1) + 0.5, zc + d]);
+      const livre = (lat) => P.every((q, i) => i === 0 || !M.corpo.segmentoBloqueado(
+        { x: P[i - 1][0] + lat, y: P[i - 1][1] + 0.6, z: P[i - 1][2] }, { x: q[0] + lat, y: q[1] + 0.6, z: q[2] }));
+      // o centro passa livre; a meia-largura para o lado do pilar bate nele — e nada mais no caminho
+      if (livre(0) && !livre(-0.3) && livre(0.3)) { caso = { P, zc, w }; break; }
+    }
+    assert.ok(caso, 'cenário: nenhum pilar do saguão com a reta do centro livre ao lado');
+    const { clients, plan } = await playing(t, 3);
+    const [a, b] = clients;
+    const rola = collect(b.s, 'carRola');
+    await levaESai(a, veic(plan, 0), caso.P.slice(0, 3), caso.P[3]);
+    for (const p of caso.P.slice(4)) { a.s.emit('carSolto', { idx: 0, pos: p, rotY: Math.PI / 2 }); await sleep(100); }
+    await sleep(200);
+    const passou = rola.filter(q => q.pos[2] < caso.zc - 0.5).length;
+    t.diagnostic(`pilar ${(caso.w.x1 - caso.w.x0).toFixed(2)} m: ${passou} poses do outro lado`);
+    assert.equal(passou, 0, 'o carro solto atravessou o pilar (passou entre as linhas do casco)');
   });
 
   it('carro solto: entrar e sair sem dirigir não abre a janela', async t => {

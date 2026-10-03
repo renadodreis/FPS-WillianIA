@@ -1017,42 +1017,19 @@ const CARRO_SOLTO_VY_MAX = 15;         // m/s de subida na decolagem (≈ 11 m d
 const CARRO_SOLTO_FOLGA_M = 1.2;       // folga da parábola (jitter, pose amostrada)
 const CARRO_SOLTO_ALTURA_MAX_M = 14;   // acima do que tem debaixo, nunca
 const CARRO_SOLTO_RODANDO_MS = 1.5;    // abaixo disto, o carro saiu parado: não há o que rolar
-const CARRO_SOLTO_QUIQUE = 0.7;        // fração da velocidade do impacto que volta no quique
-const CARRO_SOLTO_CONTATO_M = 0.5;     // o centro do chassi acima do chão no toque
-/* teto da parábola do carro solto no ar, no instante `agora`. A decolagem
-   (ou o toque do quique) aconteceu em algum instante de [t0, t1] — entre o
-   último pacote no chão e o primeiro no ar —, e o teto é o MAIOR dos
-   lançamentos possíveis: nascendo só em t0, a descida chegava antes do carro
-   que decolou depois. A janela é limitada a meio segundo: esperar parado no
-   chão não compra um platô no ápice */
+/* teto da parábola do carro solto no ar, no instante `agora`.
+   SEM quique (laudo f672d81): reiniciar a parábola no "toque" entre dois
+   pacotes deixava o carro pairar a ~2,8 m por quiques seguidos — a folga
+   entrava na energia e voltava no teto do arco novo —, e nenhuma das sete
+   saídas reais medidas precisava dele: o que conserta o carro que pula é a
+   subida pela velocidade horizontal. Também sem a janela de meio segundo na
+   decolagem: efeito medido zero. Mecanismo que não muda o carro honesto e
+   abre o desonesto sai. */
 const tetoDoAr = (ar, agora) => {
-  const a = (agora - ar.t0) / 1000, b = Math.max(0, (agora - ar.t1) / 1000), tA = ar.vy0 / 9.8;
-  const h = b <= tA && tA <= a ? ar.vy0 * ar.vy0 / 19.6
-    : Math.max(ar.vy0 * a - 4.9 * a * a, ar.vy0 * b - 4.9 * b * b);
-  return ar.y0 + h + CARRO_SOLTO_FOLGA_M;
+  const T = (agora - ar.t0) / 1000;
+  return ar.y0 + ar.vy0 * T - 4.9 * T * T + CARRO_SOLTO_FOLGA_M;
 };
-/* QUIQUE: entre dois pacotes (10 Hz) o carro tocou o chão e voltou a subir —
-   nenhum pacote cai no toque, e a parábola da decolagem recusava o carro
-   legítimo que quicava (laudo 4433c4d, §4.3: 12 de 12 recusas). A parábola é
-   um TETO, não a trajetória: a velocidade do carro no pacote anterior não se
-   conhece, mas a ENERGIA tem limite — o ápice do teto. Vale se, caindo dali
-   o mais rápido que essa energia permite, ele chega ao chão antes deste
-   pacote; o quique sai do toque com no máximo CARRO_SOLTO_QUIQUE da
-   velocidade do impacto — o ápice cai a menos da metade a cada quique, então
-   quicar não vira pairar. */
-function quiqueDoCarro(solto, veh, chao, agora) {
-  const ar = solto.ar, toque = chao + CARRO_SOLTO_CONTATO_M;
-  const apice = ar.y0 + ar.vy0 * ar.vy0 / 19.6 + CARRO_SOLTO_FOLGA_M;
-  const h = Math.max(0, veh.y - toque);
-  const vDesce = Math.sqrt(Math.max(0, 19.6 * (apice - veh.y)));   // o mais rápido que ele pode estar caindo
-  const tau = (-vDesce + Math.sqrt(vDesce * vDesce + 19.6 * h)) / 9.8;
-  if (solto.t + tau * 1000 > agora) return null;
-  const vImpacto = Math.sqrt(Math.max(0, 19.6 * (apice - toque)));
-  // o toque foi do mais cedo possível até meio segundo depois (no máximo agora)
-  return { t0: solto.t + tau * 1000, t1: Math.min(agora, solto.t + tau * 1000 + 500), y0: toque,
-    vy0: Math.min(CARRO_SOLTO_VY_MAX, CARRO_SOLTO_QUIQUE * vImpacto) };
-}
-/* meia-medida do casco por tipo (js/veiculo-vida.js, referencial do chassi:
+/* pontos do casco por tipo (js/veiculo-vida.js, referencial do chassi:
    X = comprimento, Z = largura), com folga para o carro que raspa a parede */
 const cantosDoTipo = new Map();
 function cantosDoCarro(tipo) {
@@ -1064,7 +1041,12 @@ function cantosDoCarro(tipo) {
     hl = Math.max(...T.caixas.flatMap(b => [Math.abs(b.min[0]), Math.abs(b.max[0])]));
     hw = Math.max(...T.caixas.flatMap(b => [Math.abs(b.min[2]), Math.abs(b.max[2])]));
   }
-  c = [[0, 0], [hl - 0.2, hw - 0.15], [hl - 0.2, -(hw - 0.15)], [-(hl - 0.2), hw - 0.15], [-(hl - 0.2), -(hw - 0.15)]];
+  /* grade 3 × 5 (comprimento × largura): só os cantos deixavam passar, entre
+     as duas linhas, obstáculo mais estreito que a largura (o pilar de 0,5 m
+     do saguão da Torre, laudo f672d81) — as linhas ficam a ≤ 0,3 m */
+  const L = hl - 0.2, W = hw - 0.15;
+  c = [];
+  for (const lx of [-L, 0, L]) for (const lz of [-W, -W / 2, 0, W / 2, W]) c.push([lx, lz]);
   cantosDoTipo.set(tipo, c);
   return c;
 }
@@ -1297,11 +1279,10 @@ io.on('connection', socket => {
            horizontal do pacote (+25 % do jitter do relógio). É o TETO, não
            uma estimativa: medir a subida pelo deslocamento do 1º pacote no ar
            dava 7,9 m/s a um carro que saiu a 10, e a parábola caía antes dele */
-        /* a janela é ANCORADA no último pacote aceito no chão: pacote
-           recusado não a renova (nem a velocidade, medida no tempo real) */
-        if (!ar) ar = { t0: solto.t, t1: Math.min(now, solto.t + 500), y0: veh.y,
+        /* ANCORADA no último pacote aceito no chão: pacote recusado não a
+           renova (nem a velocidade, medida no tempo real) */
+        if (!ar) ar = { t0: solto.t, y0: veh.y,
           vy0: Math.min(CARRO_SOLTO_VY_MAX, 1.25 * Math.hypot(x - veh.x, z - veh.z) / Math.max(0.05, (now - solto.t) / 1000)) };
-        else if (y > tetoDoAr(ar, now)) ar = quiqueDoCarro(solto, veh, y - altura, now) || ar;
         if (y > tetoDoAr(ar, now) || altura > CARRO_SOLTO_ALTURA_MAX_M) return null;
       } else ar = null;
       /* parede e laje: o CASCO, não só o centro — pela reta do centro o carro
