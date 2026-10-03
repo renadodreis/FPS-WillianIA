@@ -1103,6 +1103,9 @@
      ("JOGAR ASSIM", js/touchcontrols.js) vencer a media query — sem ele, quem
      está com o bloqueio de rotação do sistema ligado fica preso fora do jogo. */
   @media (orientation: portrait) { html.mobile:not(.portraitok) #rotateGate { display: flex; } }
+  /* boot que falhou (vigia do index.html): a única saída é tentar de novo, e
+     ela não exige paisagem — o portão não cobre o botão */
+  html.bootfalhou #rotateGate { display: none !important; }
   #rotateGate .rgIcon { width: clamp(84px, 26vmin, 148px); height: auto; flex: none; }
   #rotateGate .rgPhone rect, #rotateGate .rgPhone line {
     fill: rgba(255,215,106,0.08); stroke: #ffd76a; stroke-width: 3.4; stroke-linecap: round; }

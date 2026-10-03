@@ -5,6 +5,8 @@
 'use strict';
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+const url = require('node:url');
 const { bootGame } = require('./helpers/harness.js');
 
 const PORT = 3261;
@@ -347,27 +349,61 @@ describe('Atrações do mapa 🎪', () => {
   });
 
   it('o puxão do canhão não atravessa o HELICÓPTERO pousado no caminho', async () => {
-    const r = await h.play(() => {
+    // a âncora: as caixas do casco (js/veiculo-vida.js), na conta DESTE teste — não a
+    // função do produto (`corpoNaFuselagem`), que com defeito ainda leria verde
+    const VV = await import(url.pathToFileURL(path.join(__dirname, '..', 'js', 'veiculo-vida.js')).href);
+    const caixas = VV.TIPOS.heli.caixas.map(c => ({ min: [...c.min], max: [...c.max] }));
+    const r = await h.play(caixas => {
       const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player, Hl = G.Heli;
       const L = G.MapToys.rings.list, nx = L[0].nx, nz = L[0].nz;
+      // nenhum carro sobrando no caminho (o do caso anterior segurava o puxão sozinho)
+      for (const v of G.Car.vehicles) if (Math.hypot(v.chassisBody.position.x - sp.x, v.chassisBody.position.z - sp.z) < 12) {
+        v.chassisBody.position.set(sp.x + 60, G.heightAt(sp.x + 60, sp.z) + 1, sp.z + 60); v.chassisBody.velocity.set(0, 0, 0);
+      }
       const px = sp.x - nz * 4.5, pz = sp.z + nx * 4.5;
       // helicóptero pousado entre o jogador e o centro
       const hx = sp.x - nz * 2.3, hz = sp.z + nx * 2.3;
       Hl.group.position.set(hx, G.heightAt(hx, hz), hz); Hl.group.rotation.y = Math.atan2(nx, nz);
       QA.tick(5);
       QA.reset(px, pz); QA.tick(3);
+      const naCaixa = (x, y, z) => {
+        const c = Math.cos(Hl.group.rotation.y), s = Math.sin(Hl.group.rotation.y);
+        const dx = x - Hl.group.position.x, dz = z - Hl.group.position.z, lx = dx * c - dz * s, lz = dx * s + dz * c, ly = y + 1 - Hl.group.position.y;
+        return caixas.some(b => lx > b.min[0] && lx < b.max[0] && lz > b.min[2] && lz < b.max[2] && ly > b.min[1] - 1 && ly < b.max[1]);
+      };
       const ok = cn.fire();
       let dentro = 0, quadros = 0;
       for (let i = 0; i < 40 && cn.state === 'charge'; i++) {
         QA.tick(1); quadros++;
-        if (Hl.corpoNaFuselagem(P.pos.x, P.pos.y, P.pos.z, P.radius * 0.9)) dentro++;
+        if (naCaixa(P.pos.x, P.pos.y, P.pos.z)) dentro++;
       }
       for (let i = 0; i < 600 && cn.state !== 'idle'; i++) QA.tick(1);   // pousa: o caso seguinte acha o canhão livre
+      Hl.group.position.set(sp.x + 80, G.heightAt(sp.x + 80, sp.z - 80), sp.z - 80);   // e sai do caminho dos outros
+      QA.tick(3);
       return { ok, dentro, quadros };
-    });
+    }, caixas);
     assert.ok(r.ok, 'o canhão recusou o disparo');
     assert.ok(r.quadros >= 10, `cenário: ${r.quadros} quadros de carga`);
     assert.equal(r.dentro, 0, `puxado através do helicóptero: ${r.dentro} de ${r.quadros} quadros dentro da fuselagem`);
+  });
+
+  it('o puxão do canhão não atravessa pedra/árvore/cacto no caminho (o mesmo círculo do corpo)', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player;
+      const L = G.MapToys.rings.list, nx = L[0].nx, nz = L[0].nz;
+      // do OUTRO lado do canhão (os casos dos veículos usam este lado de cá)
+      const px = sp.x + nz * 4.5, pz = sp.z - nx * 4.5;
+      const ox = sp.x + nz * 2.4, oz = sp.z - nx * 2.4, raio = 0.6;
+      G.addObstacle(ox, oz, raio, { category: 'rigid', sourceId: 'rock' });
+      QA.reset(px, pz); QA.tick(3);
+      const ok = cn.fire();
+      let menor = Infinity;
+      for (let i = 0; i < 40 && cn.state === 'charge'; i++) { QA.tick(1); menor = Math.min(menor, Math.hypot(P.pos.x - ox, P.pos.z - oz)); }
+      for (let i = 0; i < 600 && cn.state !== 'idle'; i++) QA.tick(1);
+      return { ok, menor, limite: raio + P.radius };
+    });
+    assert.ok(r.ok, 'o canhão recusou o disparo');
+    assert.ok(r.menor >= r.limite * 0.95, `puxado através da pedra: ${r.menor.toFixed(2)} m do centro dela (raio de corpo ${r.limite.toFixed(2)})`);
   });
 
   it('o carro que ENTRA no caminho durante a carga para o puxão; parado, a mira na 3ª argola voa para a 3ª', async () => {

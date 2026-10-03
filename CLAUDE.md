@@ -69,7 +69,9 @@ quebrou o jogo antes.
   `three` das dependências) — trocar a versão do cliente é decisão à parte.
   Tudo isso é `dependencies` (o Docker roda `--omit=dev`); árvore nova pede
   `npm install`. E o `index.html` tem um VIGIA: se o módulo do jogo não roda
-  (erro de importação, ou 60 s), o botão diz e recarrega no toque. Cache
+  (erro de importação, ou 60 s), o botão diz e recarrega no toque — e tira o
+  aviso de rotação da frente (`html.bootfalhou`): em retrato ele cobria o
+  botão, e o "JOGAR ASSIM" dele só o módulo liga (E10). Cache
   imutável só na resposta de SUCESSO (o 404/301 com um ano de cache a borda
   guardava), e as bibliotecas saem em gzip como os modelos. **Tudo que o
   celular vê ANTES do módulo rodar é HTML+CSS**: a classe `mobile` é posta

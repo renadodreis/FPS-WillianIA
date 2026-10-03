@@ -372,6 +372,10 @@
     var b = document.getElementById('btnNew');
     if (!b || b.getAttribute('data-falha')) return;
     b.setAttribute('data-falha', '1');
+    /* a falha não exige paisagem: o aviso de rotação (que no celular já
+       aparece antes do módulo) cobria o "tentar de novo" em retrato, e o
+       "JOGAR ASSIM" dele só o módulo liga — sem saída (laudo ec918ab, E10) */
+    document.documentElement.classList.add('bootfalhou');
     b.textContent = '⚠ O JOGO NÃO CARREGOU — TOQUE PARA TENTAR DE NOVO';
     b.classList.remove('disabled');
     b.setAttribute('aria-disabled', 'false');

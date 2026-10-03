@@ -5346,6 +5346,16 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, center
     for (let i = 0; i <= n; i++) {
       if (Heli.corpoNaFuselagem(ax + ux * i / n, ay, az + uz * i / n, player.radius)) return false;
     }
+    /* e pedra, árvore, cacto, barril, tenda: o mesmo círculo e a mesma faixa
+       de altura do empurrão do corpo (updatePlayer) — o puxão atravessava
+       (laudo ec918ab: 4 de 4 sementes com um deles ao alcance do canhão) */
+    for (const o of obstaclesNear((ax + bx) / 2, (az + bz) / 2)) {
+      if (o.corpo === false) continue;
+      const topo = Number.isFinite(o.corpoAte) ? o.corpoAte : Number.isFinite(o.y1) ? o.y1 : heightAt(o.x, o.z) + 3.4;
+      if (ay > topo + 1.7 || (Number.isFinite(o.y0) && ay + 1.7 < o.y0)) continue;
+      const k = Math.max(0, Math.min(1, ((o.x - ax) * ux + (o.z - az) * uz) / L2));
+      if (Math.hypot(o.x - (ax + ux * k), o.z - (az + uz * k)) < o.r + player.radius) return false;
+    }
     return true;
   } });
 
@@ -5569,7 +5579,7 @@ window.__game = {
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
   platforms, // hook de QA: plataformas/rampas pisáveis (andares e escada da torre)
   terrainMesh, // hook de QA: superfície visual p/ comparar com o heightfield físico
-  heightAt, biomeAt, groundAt, obstaclesNear,
+  heightAt, biomeAt, groundAt, obstaclesNear, addObstacle, // QA: obstáculo de corpo plantado num teste
   surfaceAt, slopeDegreesAt, geometricNormalAt, sampleAt, // superfície canônica (QA)
   forceStart() { startGame(false); },
   teleportToCar() {

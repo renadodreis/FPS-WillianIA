@@ -139,6 +139,27 @@ describe('o boot não depende do CDN', { skip: !CHROME && 'Chrome não encontrad
     } finally { await page.close(); }
   });
 
+  it('(e) celular em RETRATO com o boot falhando: o "tentar de novo" é o que está sob o dedo (E10)', async () => {
+    const page = await h.browser.newPage();
+    try {
+      await page.setUserAgent('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36');
+      await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+      await page.setRequestInterception(true);
+      page.on('request', req => (new URL(req.url()).pathname.startsWith('/vendor/') ? req.abort('failed') : req.continue()));
+      await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction("/NÃO CARREGOU/.test((document.getElementById('btnNew') || {}).textContent || '')", { timeout: 20000, polling: 100 });
+      const r = await page.evaluate(() => {
+        const b = document.getElementById('btnNew'), q = b.getBoundingClientRect();
+        const x = q.left + q.width / 2, y = q.top + q.height / 2;
+        const sob = document.elementFromPoint(x, y);
+        return { retrato: innerHeight > innerWidth, area: q.width * q.height, alvo: sob === b || b.contains(sob), sob: sob && (sob.id || (sob.getAttribute && sob.getAttribute('class')) || sob.tagName) };
+      });
+      assert.ok(r.retrato, 'cenário: não está em retrato');
+      assert.ok(r.area > 400, `o botão não tem área na tela (${r.area})`);
+      assert.ok(r.alvo, `sob o dedo, no centro do "tentar de novo", está ${r.sob}`);
+    } finally { await page.close(); }
+  });
+
   it('boot limpo: sem erro de página', () => {
     assert.deepEqual(h.pageErrors.filter(e => !/vendor\/three|Failed to fetch dynamically|net::ERR_FAILED/i.test(String(e))), []);
   });
