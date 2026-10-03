@@ -10,6 +10,31 @@
 <title>Call of AI — FPS Mundo Aberto</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
+<!-- CELULAR ANTES DA 1ª PINTURA (C4). A classe `mobile` (que tira a dica de
+     TECLADO do menu, entre outras coisas) era posta pelo módulo do jogo — que
+     no 4G roda ~4 s depois, e nunca, na tela de falha do vigia: até lá o
+     celular via "ESC pausa · ↑ ↓ e ENTER" (laudo af4eb8f). É a MESMA regra do
+     js/mobile.js `detectMobile` (paridade: test/mobile-cedo.test.js); o
+     touchcontrols.js põe a mesma classe depois. -->
+<script>
+(function () {
+  try {
+    var num = function (v) { return typeof v === 'number' && isFinite(v) && v > 0 ? v : 0; };
+    var n = window.navigator || {}, w = window.screen || {};
+    var m = /[?&]mobile=([01])(?:&|$)/i.exec(String((window.location && window.location.search) || ''));
+    var ua = typeof n.userAgent === 'string' ? n.userAgent : '';
+    var touch = num(n.maxTouchPoints), a = num(w.width), b = num(w.height);
+    var lado = a && b ? Math.min(a, b) : (a || b);
+    var grosso = false;
+    try { grosso = typeof window.matchMedia === 'function' && !!window.matchMedia('(pointer: coarse)').matches; } catch (e) { grosso = false; }
+    var celular = m ? m[1] === '1'
+      : (n.platform === 'MacIntel' && touch > 1)
+        || /android|iphone|ipad|ipod|windows phone|iemobile|blackberry|opera mini/i.test(ua)
+        || (touch > 0 && grosso && lado > 0 && lado < 900);
+    if (celular) document.documentElement.classList.add('mobile');
+  } catch (e) { /* sem detecção cedo, o módulo põe a classe quando rodar */ }
+})();
+</script>
 </head>
 <body>
 <canvas id="game"></canvas>

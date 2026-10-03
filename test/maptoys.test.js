@@ -309,10 +309,65 @@ describe('Atrações do mapa 🎪', () => {
         const c = v.group.position;
         menor = Math.min(menor, Math.hypot(P.pos.x - c.x, P.pos.z - c.z));
       }
+      for (let i = 0; i < 600 && cn.state !== 'idle'; i++) QA.tick(1);   // pousa: o caso seguinte acha o canhão livre
       return { ok, menor, raio, estado: cn.state };
     });
     assert.ok(r.ok, 'o canhão recusou o disparo');
     assert.ok(r.menor >= r.raio * 0.95, `puxado para dentro do carro: ${r.menor.toFixed(2)} m do centro dele (raio de corpo ${r.raio.toFixed(2)})`);
+  });
+
+  it('o puxão do canhão não atravessa carro EM CHAMAS (que deixou de segurar bala, mas tem corpo)', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player;
+      const L = G.MapToys.rings.list, nx = L[0].nx, nz = L[0].nz;
+      const px = sp.x - nz * 4.5, pz = sp.z + nx * 4.5;
+      const v = G.Car.vehicles.find(c => !c.destruido);
+      const cx = sp.x - nz * 2.3, cz = sp.z + nx * 2.3;
+      v.chassisBody.position.set(cx, G.heightAt(cx, cz) + 1, cz);
+      v.chassisBody.velocity.set(0, 0, 0); v.chassisBody.angularVelocity.set(0, 0, 0);
+      // em chamas: o estado que tira a proteção de bala (js/veiculos.js, queimar)
+      const it = G.Veiculos.itens.find(x => x.ref === v);
+      if (it) { it.estado = 'queimando'; it.inteiro = false; it.queimaAte = performance.now() + 60000; }
+      QA.tick(30);
+      QA.reset(px, pz); QA.tick(3);
+      const raio = Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + P.radius;
+      const ok = cn.fire();
+      let menor = Infinity;
+      for (let i = 0; i < 40 && cn.state === 'charge'; i++) {
+        QA.tick(1);
+        const c = v.group.position;
+        menor = Math.min(menor, Math.hypot(P.pos.x - c.x, P.pos.z - c.z));
+      }
+      if (it) { it.estado = 'inteiro'; it.inteiro = true; }
+      for (let i = 0; i < 600 && cn.state !== 'idle'; i++) QA.tick(1);   // pousa: o caso seguinte acha o canhão livre
+      return { ok, temItem: !!it, menor, raio };
+    });
+    assert.ok(r.ok && r.temItem, 'cenário: sem disparo ou sem o item do veículo');
+    assert.ok(r.menor >= r.raio * 0.95, `puxado para dentro do carro em chamas: ${r.menor.toFixed(2)} m (raio ${r.raio.toFixed(2)})`);
+  });
+
+  it('o puxão do canhão não atravessa o HELICÓPTERO pousado no caminho', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player, Hl = G.Heli;
+      const L = G.MapToys.rings.list, nx = L[0].nx, nz = L[0].nz;
+      const px = sp.x - nz * 4.5, pz = sp.z + nx * 4.5;
+      // helicóptero pousado entre o jogador e o centro
+      const hx = sp.x - nz * 2.3, hz = sp.z + nx * 2.3;
+      Hl.group.position.set(hx, G.heightAt(hx, hz), hz); Hl.group.rotation.y = Math.atan2(nx, nz);
+      QA.tick(5);
+      QA.reset(px, pz); QA.tick(3);
+      const ok = cn.fire();
+      let dentro = 0, quadros = 0;
+      for (let i = 0; i < 40 && cn.state === 'charge'; i++) {
+        QA.tick(1); quadros++;
+        if (Hl.corpoNaFuselagem(P.pos.x, P.pos.y, P.pos.z, P.radius * 0.9)) dentro++;
+      }
+      for (let i = 0; i < 600 && cn.state !== 'idle'; i++) QA.tick(1);   // pousa: o caso seguinte acha o canhão livre
+      return { ok, dentro, quadros };
+    });
+    assert.ok(r.ok, 'o canhão recusou o disparo');
+    assert.ok(r.quadros >= 10, `cenário: ${r.quadros} quadros de carga`);
+    assert.equal(r.dentro, 0, `puxado através do helicóptero: ${r.dentro} de ${r.quadros} quadros dentro da fuselagem`);
   });
 
   it('o carro que ENTRA no caminho durante a carga para o puxão; parado, a mira na 3ª argola voa para a 3ª', async () => {

@@ -49,7 +49,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/assets/models/'))
     res.set('Cache-Control', 'public, max-age=86400');
   else if (req.path.startsWith('/vendor/'))
-    res.set('Cache-Control', 'public, max-age=31536000, immutable');   // a versão está no caminho
+    res.set('Cache-Control', 'no-store');   // o SUCESSO troca por imutável (abaixo); erro não fica guardado
   else res.set('Cache-Control', 'no-cache');
   next();
 });
@@ -67,12 +67,22 @@ const BIBLIOTECAS_DO_CLIENTE = [
   ['/vendor/three@0.184.0/examples/jsm', 'three-cliente', 'examples/jsm', '0.184.0'],
   ['/vendor/cannon-es@0.20.0/dist', 'cannon-es', 'dist', '0.20.0'],
 ];
+/* Cache imutável só na resposta de SUCESSO: o 404 e o 301 saíam com um ano de
+   cache e a borda os guardava — na próxima troca de versão, um caminho errado
+   ficaria errado por um ano (laudo af4eb8f). Sem redirecionamento de pasta. E
+   em gzip no fio, como os modelos: a borda comprime o JS, mas o servidor
+   local mandava o three cru (o D6 medido aqui dava 5,4–5,9 MB). */
+const VENDOR_IMUTAVEL = 'public, max-age=31536000, immutable';
 for (const [rota, pacote, sub, versao] of BIBLIOTECAS_DO_CLIENTE) {
   let instalada = null;
   try { instalada = JSON.parse(fs.readFileSync(path.join(__dirname, 'node_modules', pacote, 'package.json'), 'utf8')).version; } catch { /* abaixo */ }
   if (instalada !== versao) console.error(`[VENDOR] ${pacote} instalado ${instalada} ≠ ${versao} (${rota}) — o cliente vai quebrar`);
-  app.use(rota, express.static(path.join(__dirname, 'node_modules', pacote, sub), { index: false }));
+  const dir = path.join(__dirname, 'node_modules', pacote, sub);
+  app.use(rota, servirComprimido({ dir, aceita: url => /\.js$/i.test(url),
+    tipo: 'application/javascript; charset=UTF-8', cache: VENDOR_IMUTAVEL }).middleware);
+  app.use(rota, express.static(dir, { index: false, redirect: false, setHeaders: res => res.set('Cache-Control', VENDOR_IMUTAVEL) }));
 }
+app.use('/vendor', (req, res) => res.status(404).set('Cache-Control', 'no-store').end());
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
   'city-destruction-client.js', 'city-destruction-protocol.js', 'ship-protocol.js', 'brcolors.js', 'favicon.svg'];
@@ -81,54 +91,62 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 // probe automático dos navegadores por /favicon.ico → serve o SVG (evita o 404)
 app.get('/favicon.ico', (req, res) => res.type('image/svg+xml').sendFile(path.join(__dirname, 'favicon.svg')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
-/* MODELOS COMPRIMIDOS NO FIO. O Cloudflare comprime o JS (o game.js chega
-   em brotli, ~107 KB) mas passa o `model/gltf-binary` CRU, e os modelos são
+/* COMPRIMIDO NO FIO, UMA VEZ. O Cloudflare comprime o JS (o game.js chega em
+   brotli, ~107 KB) mas passa o `model/gltf-binary` CRU, e os modelos são
    quase todo o boot do celular em 4G (14 de 17 MB; laudo a9a4ffd, D6). A
    geometria dos GLB é float sem compressão: gzip tira ~40 % do que o boot
    baixa. Cada arquivo é comprimido UMA vez, no threadpool do zlib, e fica em
    memória — comprimir por pedido disputaria a única vCPU com a partida. O
-   1º pedido de um arquivo espera a compressão dele; em produção elas já
-   rodam depois do boot. Só entra .glb que o express.static serviria: a
-   fonte v1 do castelo já saiu com 404 no bloqueio acima, e sai daqui também. */
+   1º pedido de um arquivo espera a compressão dele; em produção os modelos
+   já rodam depois do boot. Só entra o que `aceita` deixa (e o que o
+   express.static serviria: a fonte v1 do castelo sai com 404 no bloqueio
+   acima, e sai daqui também). Vale para os modelos e para /vendor/. */
+function servirComprimido({ dir, aceita, tipo, cache = null }) {
+  const prontos = new Map();   // caminho da URL (decodificado) → Promise<{ gz, etag, mtime } | null>
+  function comprimido(url) {
+    let pronto = prontos.get(url);
+    if (pronto) return pronto;
+    if (!aceita(url)) return Promise.resolve(null);
+    const arq = path.join(dir, url);
+    pronto = fs.promises.stat(arq).then(st => {
+      if (!st.isFile()) throw new Error('não é arquivo');
+      // null = sai cru (gzip não ganhou nada); fica no mapa para não recomprimir
+      return fs.promises.readFile(arq).then(buf => new Promise(res => zlib.gzip(buf, { level: 9 }, (err, gz) =>
+        res(err || gz.length >= buf.length ? null
+          : { gz, etag: `W/"gz-${buf.length.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`, mtime: st.mtime }))));
+    }).catch(() => { prontos.delete(url); return null; });   // o que não existe não ocupa o mapa
+    prontos.set(url, pronto);
+    return pronto;
+  }
+  function preaquecer(sub = dir, url = '/') {
+    let itens;
+    try { itens = fs.readdirSync(sub, { withFileTypes: true }); } catch { return Promise.resolve(); }
+    // um por vez: em produção a VM tem uma vCPU, e a partida roda nela
+    return itens.reduce((fila, e) => fila.then(() => (e.isDirectory()
+      ? preaquecer(path.join(sub, e.name), url + e.name + '/')
+      : comprimido(url + e.name))), Promise.resolve());
+  }
+  function middleware(req, res, next) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    res.vary('Accept-Encoding');
+    if (req.headers.range || !/\bgzip\b/i.test(req.headers['accept-encoding'] || '')) return next();
+    let url;
+    try { url = path.posix.normalize('/' + decodeURIComponent(req.path).replaceAll('\\', '/')); } catch { return next(); }
+    comprimido(url).then(m => {
+      if (!m) return next();
+      res.set({ 'Content-Type': tipo, 'Content-Encoding': 'gzip', ETag: m.etag, 'Last-Modified': m.mtime.toUTCString() });
+      if (cache) res.set('Cache-Control', cache);
+      if (req.fresh) return res.status(304).end();
+      res.set('Content-Length', String(m.gz.length));
+      return req.method === 'HEAD' ? res.end() : res.end(m.gz);
+    }, next);
+  }
+  return { middleware, preaquecer, comprimido };
+}
 const MODELOS_DIR = path.join(__dirname, 'assets', 'models');
-const modelosGz = new Map();   // caminho da URL (decodificado) → Promise<{ gz, etag, mtime } | null>
-function modeloGz(url) {
-  let pronto = modelosGz.get(url);
-  if (pronto) return pronto;
-  if (!/\.glb$/i.test(url) || path.posix.basename(url).toLowerCase() === 'boss-castle.v1.glb') return Promise.resolve(null);
-  const arq = path.join(MODELOS_DIR, url);
-  pronto = fs.promises.stat(arq).then(st => {
-    if (!st.isFile()) throw new Error('não é arquivo');
-    // null = sai cru (gzip não ganhou nada); fica no mapa para não recomprimir
-    return fs.promises.readFile(arq).then(buf => new Promise(res => zlib.gzip(buf, { level: 9 }, (err, gz) =>
-      res(err || gz.length >= buf.length ? null
-        : { gz, etag: `W/"gz-${buf.length.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`, mtime: st.mtime }))));
-  }).catch(() => { modelosGz.delete(url); return null; });   // o que não existe não ocupa o mapa
-  modelosGz.set(url, pronto);
-  return pronto;
-}
-function preaquecerModelos(dir = MODELOS_DIR, url = '/') {
-  let itens;
-  try { itens = fs.readdirSync(dir, { withFileTypes: true }); } catch { return Promise.resolve(); }
-  // um por vez: em produção a VM tem uma vCPU, e a partida roda nela
-  return itens.reduce((fila, e) => fila.then(() => (e.isDirectory()
-    ? preaquecerModelos(path.join(dir, e.name), url + e.name + '/')
-    : modeloGz(url + e.name))), Promise.resolve());
-}
-app.use('/assets/models', (req, res, next) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-  res.vary('Accept-Encoding');
-  if (req.headers.range || !/\bgzip\b/i.test(req.headers['accept-encoding'] || '')) return next();
-  let url;
-  try { url = path.posix.normalize('/' + decodeURIComponent(req.path).replaceAll('\\', '/')); } catch { return next(); }
-  modeloGz(url).then(m => {
-    if (!m) return next();
-    res.set({ 'Content-Type': 'model/gltf-binary', 'Content-Encoding': 'gzip', ETag: m.etag, 'Last-Modified': m.mtime.toUTCString() });
-    if (req.fresh) return res.status(304).end();
-    res.set('Content-Length', String(m.gz.length));
-    return req.method === 'HEAD' ? res.end() : res.end(m.gz);
-  }, next);
-});
+const Modelos = servirComprimido({ dir: MODELOS_DIR, tipo: 'model/gltf-binary',
+  aceita: url => /\.glb$/i.test(url) && path.posix.basename(url).toLowerCase() !== 'boss-castle.v1.glb' });
+app.use('/assets/models', Modelos.middleware);
 // modelos 3D: static restrito à pasta (o express.static bloqueia path traversal);
 // a pasta agora tem subdiretórios (Armas/, Cenários/, Personagens/, Veículos/)
 app.use('/assets/models', express.static(MODELOS_DIR));
@@ -1790,7 +1808,7 @@ if (require.main === module) {
   }).finally(() => server.listen(PORT, () => {
     portaReal = server.address().port;
     console.log(`Servidor BR no ar em http://localhost:${portaReal} · seed inicial ${match.seed}`);
-    if (process.env.NODE_ENV === 'production') preaquecerModelos();
+    if (process.env.NODE_ENV === 'production') Modelos.preaquecer();
     console.log('====================================================');
     console.log(`  CÓDIGO DO ANFITRIÃO: ${HOST_CODE}`);
     console.log('  cole no lobby (campo "código do anfitrião") ou');

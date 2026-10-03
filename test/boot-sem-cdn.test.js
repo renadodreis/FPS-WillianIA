@@ -87,10 +87,56 @@ describe('o boot não depende do CDN', { skip: !CHROME && 'Chrome não encontrad
       assert.match(r.headers['content-type'] || '', /javascript/, `${p}: ${r.headers['content-type']}`);
       assert.match(r.headers['cache-control'] || '', /immutable/, `${p}: ${r.headers['cache-control']}`);
     }
-    for (const p of ['/vendor/three@0.184.0/package.json', '/vendor/three@0.184.0/src/Three.js', '/vendor/../server.js']) {
+    /* ERRO não fica guardado: o 404 e o 301 saíam com um ano de cache, e a
+       borda os guardava (laudo af4eb8f) — na próxima troca de versão, um
+       caminho errado ficaria errado por um ano. E pasta não redireciona */
+    for (const p of ['/vendor/three@0.184.0/package.json', '/vendor/three@0.184.0/src/Three.js', '/vendor/../server.js',
+      '/vendor/three@0.184.0/build/nao-existe.js', '/vendor/three@0.184.0/examples/jsm/loaders', '/vendor/three@9.9.9/build/three.module.js']) {
       const r = await new Promise((res, rej) => http.get({ host: '127.0.0.1', port: PORT, path: p }, x => { x.resume(); res(x); }).on('error', rej));
       assert.notEqual(r.statusCode, 200, `${p} respondeu 200`);
+      assert.ok(r.statusCode < 300 || r.statusCode >= 400, `${p} redirecionou (${r.statusCode})`);
+      assert.doesNotMatch(r.headers['cache-control'] || '', /immutable|max-age=[1-9]/, `${p} (${r.statusCode}) com cache longo: ${r.headers['cache-control']}`);
     }
+  });
+
+  it('(c2) as bibliotecas saem em gzip, e o que descomprime é o arquivo do pacote', async () => {
+    const zlib = require('node:zlib'), fs = require('node:fs'), path = require('node:path');
+    const disco = fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'three-cliente', 'build', 'three.core.js'));
+    const r = await new Promise((res, rej) => http.get({ host: '127.0.0.1', port: PORT, path: '/vendor/three@0.184.0/build/three.core.js',
+      headers: { 'Accept-Encoding': 'gzip' } }, x => { const c = []; x.on('data', d => c.push(d)); x.on('end', () => res({ h: x.headers, b: Buffer.concat(c) })); }).on('error', rej));
+    assert.equal(r.h['content-encoding'], 'gzip');
+    assert.match(r.h['cache-control'] || '', /immutable/);
+    assert.match(r.h.vary || '', /accept-encoding/i);
+    assert.ok(zlib.gunzipSync(r.b).equals(disco), 'o gzip não descomprime no arquivo do pacote');
+    assert.ok(r.b.length < disco.length * 0.4, `gzip de ${r.b.length} B para ${disco.length} B`);
+  });
+
+  it('(d) no CELULAR, com o módulo do jogo sem rodar, a tela não cita tecla (C4)', async () => {
+    const page = await h.browser.newPage();
+    try {
+      await page.setUserAgent('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36');
+      await page.setViewport({ width: 844, height: 390, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+      await page.setRequestInterception(true);
+      page.on('request', req => (new URL(req.url()).pathname.startsWith('/vendor/') ? req.abort('failed') : req.continue()));
+      await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction("/NÃO CARREGOU/.test((document.getElementById('btnNew') || {}).textContent || '')", { timeout: 20000, polling: 100 });
+      /* o texto VISÍVEL: nó de texto com área na tela (o `innerText` inclui o que o
+         CSS do celular esconde com `font-size: 0`, e a tela não mostra) */
+      const r = await page.evaluate(() => {
+        const partes = [], it = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let n = it.nextNode(); n; n = it.nextNode()) {
+          if (!n.textContent.trim()) continue;
+          const rg = document.createRange(); rg.selectNodeContents(n);
+          const vis = [...rg.getClientRects()].some(q => q.width > 1 && q.height > 1);
+          const cs = getComputedStyle(n.parentElement);
+          if (vis && cs.visibility !== 'hidden' && cs.display !== 'none' && +cs.opacity > 0) partes.push(n.textContent);
+        }
+        return { mobile: document.documentElement.classList.contains('mobile'), texto: partes.join(' ') };
+      });
+      assert.equal(r.mobile, true, 'a classe `mobile` não estava posta antes do módulo do jogo');
+      const teclas = (r.texto.match(/\bESC\b|\bENTER\b|\bESPA[ÇC]O\b|\bSPACE\b|\bWASD\b|\bSHIFT\b|\bCTRL\b|\[[A-Z]\]|\bclique\b|\bmouse\b/gi) || []);
+      assert.deepEqual(teclas, [], `a tela do celular cita tecla: ${teclas.join(', ')}`);
+    } finally { await page.close(); }
   });
 
   it('boot limpo: sem erro de página', () => {

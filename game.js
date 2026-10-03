@@ -5331,15 +5331,23 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, center
   /* o puxão da carga não atravessa veículo: o CORPO dele (o mesmo círculo que
      empurra o jogador), inteiro, em chamas ou parado — o segmento da BALA não
      servia (veículo em chamas deixa de proteger) */
-  caminhoLivre: (ax, ay, az, bx, _by, bz) => !Car.vehicles.some(v => {
-    if (v.destruido) return false;
-    const p = v.group.position;
-    if (Math.abs(p.y - ay) > 3) return false;
-    const r = Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + player.radius;
+  caminhoLivre: (ax, ay, az, bx, _by, bz) => {
     const ux = bx - ax, uz = bz - az, L2 = ux * ux + uz * uz || 1;
-    const k = Math.max(0, Math.min(1, ((p.x - ax) * ux + (p.z - az) * uz) / L2));
-    return Math.hypot(p.x - (ax + ux * k), p.z - (az + uz * k)) < r;
-  }) });
+    if (Car.vehicles.some(v => {
+      if (v.destruido) return false;
+      const p = v.group.position;
+      if (Math.abs(p.y - ay) > 3) return false;
+      const r = Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + player.radius;
+      const k = Math.max(0, Math.min(1, ((p.x - ax) * ux + (p.z - az) * uz) / L2));
+      return Math.hypot(p.x - (ax + ux * k), p.z - (az + uz * k)) < r;
+    })) return false;
+    // e o helicóptero pousado: as mesmas caixas que empurram o corpo (js/heli.js)
+    const n = Math.max(1, Math.ceil(Math.sqrt(L2) / 0.15));
+    for (let i = 0; i <= n; i++) {
+      if (Heli.corpoNaFuselagem(ax + ux * i / n, ay, az + uz * i / n, player.radius)) return false;
+    }
+    return true;
+  } });
 
 /* 5 atrações do mapa (cama elástica, campo de tiro, fogos, aros, xilofone):
    mesmo padrão do canhão — geometria em noSeed; os pontos saem da semente

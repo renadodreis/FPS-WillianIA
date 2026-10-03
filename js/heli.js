@@ -179,6 +179,19 @@ export function createHeli(deps) {
       player.pos.z = group.position.z - lx * s + lz * c;
     }
   }
+  /* o MESMO teste do empurrão, sem empurrar: um corpo de raio r com o pé em
+     (x, y, z) entraria na fuselagem? (o puxão do canhão confere o caminho) */
+  function corpoNaFuselagem(x, y, z, r = 0.42) {
+    if (state.flying || api.destruido) return false;
+    const c = Math.cos(group.rotation.y), s = Math.sin(group.rotation.y);
+    const dx = x - group.position.x, dz = z - group.position.z;
+    const lx = dx * c - dz * s, lz = dx * s + dz * c;
+    for (const cx of TIPOS.heli.caixas) {
+      if (y + ALTURA_CORPO < group.position.y + cx.min[1] || y >= group.position.y + cx.max[1] - 0.12) continue;
+      if (lx > cx.min[0] - r && lx < cx.max[0] + r && lz > cx.min[2] - r && lz < cx.max[2] + r) return true;
+    }
+    return false;
+  }
   /* EXPLODIU: some do mundo. O grupo desce para longe — o prompt de PILOTAR
      (js/interact.js, js/xr/xrinteract.js) mede distância até ele. */
   function remover() {
@@ -195,7 +208,7 @@ export function createHeli(deps) {
     group.visible = true;
     if (group.position.y < -1000) group.position.set(hs.x, hs.y + 0.05, hs.z);
   }
-  const api = { group, update, tryEnter, exit, assentoXR, remover, restaurar,
+  const api = { group, update, tryEnter, exit, assentoXR, remover, restaurar, corpoNaFuselagem,
     destruido: false, semSustentacao: false, get vel() { return vel; } };
   return api;
 }

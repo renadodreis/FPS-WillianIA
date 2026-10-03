@@ -69,7 +69,14 @@ quebrou o jogo antes.
   `three` das dependências) — trocar a versão do cliente é decisão à parte.
   Tudo isso é `dependencies` (o Docker roda `--omit=dev`); árvore nova pede
   `npm install`. E o `index.html` tem um VIGIA: se o módulo do jogo não roda
-  (erro de importação, ou 60 s), o botão diz e recarrega no toque.
+  (erro de importação, ou 60 s), o botão diz e recarrega no toque. Cache
+  imutável só na resposta de SUCESSO (o 404/301 com um ano de cache a borda
+  guardava), e as bibliotecas saem em gzip como os modelos. **Tudo que o
+  celular vê ANTES do módulo rodar é HTML+CSS**: a classe `mobile` é posta
+  por um script clássico no `<head>`, cópia da regra de `js/mobile.js`
+  (paridade em `test/mobile-cedo`) — antes, ~4 s de "ESC pausa · ENTER" no
+  4G e para sempre na tela de falha (C4). Teste de "texto na tela" lê o que
+  tem ÁREA visível, não `innerText` (que inclui o `font-size: 0`).
 - **VR/WebXR: o jogo NÃO move a cabeça do jogador.** Em XR o three sobrescreve a
   pose da câmera todo frame relativa ao PAI — o grafo é `scene > xrRig > camera`,
   o jogo move o RIG (nos pés) e o headset move a câmera. `camera.position` deixa
