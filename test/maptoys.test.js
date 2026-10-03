@@ -315,7 +315,50 @@ describe('Atrações do mapa 🎪', () => {
     assert.ok(r.menor >= r.raio * 0.95, `puxado para dentro do carro: ${r.menor.toFixed(2)} m do centro dele (raio de corpo ${r.raio.toFixed(2)})`);
   });
 
+  it('o carro que ENTRA no caminho durante a carga para o puxão; parado, a mira na 3ª argola voa para a 3ª', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player;
+      const L = G.MapToys.rings.list, nx = L[0].nx, nz = L[0].nz;
+      const px = sp.x - nz * 4.5, pz = sp.z + nx * 4.5;
+      const v = G.Car.vehicles.find(c => !c.destruido);
+      // o carro começa LONGE (caminho livre no aperto)...
+      v.chassisBody.position.set(sp.x + 40, G.heightAt(sp.x + 40, sp.z) + 1, sp.z);
+      v.chassisBody.velocity.set(0, 0, 0); v.chassisBody.angularVelocity.set(0, 0, 0);
+      QA.tick(20);
+      QA.reset(px, pz); QA.tick(3);
+      QA.MP.camera.lookAt(L[2].x, P.pos.y + 1.62, L[2].z);
+      const ok = cn.fire();
+      // ...e entra no caminho no 2º quadro da carga
+      QA.tick(2);
+      const cx = sp.x - nz * 1.8, cz = sp.z + nx * 1.8;
+      v.chassisBody.position.set(cx, G.heightAt(cx, cz) + 1, cz);
+      v.chassisBody.velocity.set(0, 0, 0); v.chassisBody.angularVelocity.set(0, 0, 0);
+      const raio = Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + P.radius;
+      let menor = Infinity, vel = null;
+      for (let i = 0; i < 60 && !vel; i++) {
+        QA.tick(1);
+        const c = v.group.position;
+        menor = Math.min(menor, Math.hypot(P.pos.x - c.x, P.pos.z - c.z));
+        if (cn.state === 'flying') vel = { x: P.vel.x, z: P.vel.z, px: P.pos.x, pz: P.pos.z };
+      }
+      const alvo = { x: L[2].x - vel.px, z: L[2].z - vel.pz };
+      const cos = (vel.x * alvo.x + vel.z * alvo.z) / (Math.hypot(vel.x, vel.z) * Math.hypot(alvo.x, alvo.z));
+      for (let i = 0; i < 300 && !(P.onGround && cn.state === 'idle'); i++) QA.tick(1);
+      return { ok, menor, raio, erroGraus: Math.acos(Math.min(1, cos)) * 180 / Math.PI };
+    });
+    assert.ok(r.ok, 'o canhão recusou o disparo');
+    assert.ok(r.menor >= r.raio * 0.95, `o carro entrou no caminho e o puxão seguiu: ${r.menor.toFixed(2)} m do centro dele (raio ${r.raio.toFixed(2)})`);
+    assert.ok(r.erroGraus < 2, `mirando a 3ª argola, o voo saiu a ${r.erroGraus.toFixed(1)}° dela`);
+  });
+
   it('corpo: tronco e pedra só empurram na faixa de altura deles (o voo do canhão a 20 m passa reto)', async () => {
+    // o mercado entra no obstaclesNear quando o GLB dele chega (assíncrono)
+    await h.page.waitForFunction(() => {
+      const G = window.__game;
+      for (let gx = -520; gx <= 520; gx += 16) for (let gz = -520; gz <= 520; gz += 16)
+        if (G.obstaclesNear(gx, gz).some(c => c.sourceId === 'mercado')) return true;
+      return false;
+    }, { timeout: 60000, polling: 500 });
     const r = await h.play(() => {
       const G = window.__game, QA = window.QA, P = QA.MP.player;
       // um tronco de corpo qualquer, longe de construção
@@ -332,10 +375,32 @@ describe('Atrações do mapa 🎪', () => {
         P.launchT = 0;
         return Math.hypot(P.pos.x - x0, P.pos.z - z0);
       };
-      return { r: o.r, alto: mede(20), chao: mede(0) };
+      /* a tenda (baixa): no alcance do PULO ela bate — passar por cima e cair
+         dentro terminava num teleporte de 1 m; e o mercado: entre 3,4 m (o teto
+         da bala) e o telhado desenhado (7 m) o corpo ficava DENTRO (laudo b92a932) */
+      const empurra = (x, z, y) => {
+        QA.reset(x, z); P.pos.set(x, y, z); P.vel.set(0, 0, 0); P.onGround = false; P.launchT = 1;
+        const x0 = P.pos.x, z0 = P.pos.z; QA.tick(1); P.launchT = 0;
+        return Math.hypot(P.pos.x - x0, P.pos.z - z0);
+      };
+      let tenda = null, mercado = null;
+      for (let gx = -520; gx <= 520 && !(tenda && mercado); gx += 16) for (let gz = -520; gz <= 520 && !(tenda && mercado); gz += 16)
+        for (const c of G.obstaclesNear(gx, gz)) { if (c.sourceId === 'tent') tenda = c; if (c.sourceId === 'mercado') mercado = c; }
+      const res = { r: o.r, alto: mede(20), chao: mede(0) };
+      if (tenda) {
+        res.tendaPulo = empurra(tenda.x + tenda.r * 0.5, tenda.z, tenda.y1 + 1.0);
+        res.tendaVoo = empurra(tenda.x + tenda.r * 0.5, tenda.z, tenda.y1 + 3);
+      }
+      // 6 m: acima do teto da bala + a margem do pulo (3,4 + 1,7), abaixo do telhado desenhado (7)
+      if (mercado) res.mercado = empurra(mercado.x + mercado.r * 0.5, mercado.z, G.heightAt(mercado.x, mercado.z) + 6);
+      return res;
     });
     assert.ok(r.chao > r.r * 0.3, `controle: no chão o tronco não empurrou (${r.chao.toFixed(3)} m)`);
     assert.ok(r.alto < 0.01, `20 m acima do tronco o corpo foi empurrado ${r.alto.toFixed(3)} m`);
+    assert.ok(r.tendaPulo !== undefined && r.mercado !== undefined, 'cenário: sem tenda ou mercado');
+    assert.ok(r.tendaPulo > 0.05, `1 m acima da cumeeira (no alcance do pulo) a tenda não bateu (${r.tendaPulo.toFixed(3)} m)`);
+    assert.ok(r.tendaVoo < 0.01, `3 m acima da cumeeira a tenda empurrou ${r.tendaVoo.toFixed(3)} m`);
+    assert.ok(r.mercado > 0.05, `a 6 m do chão (abaixo do telhado desenhado de 7 m) o corpo ficou DENTRO do mercado`);
   });
 
   /* CHÃO LIMPO SOB AS ATRAÇÕES. O canhão e as atrações nascem DEPOIS do

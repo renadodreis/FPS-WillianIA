@@ -59,6 +59,17 @@ quebrou o jogo antes.
   por construção é pior que falha barulhenta** — ao spawnar filho, decida
   conscientemente se o stderr dele pode sumir.
 
+- **As bibliotecas do cliente saem do PRÓPRIO servidor** (`/vendor/<pacote>@<versão>/`,
+  server.js `BIBLIOTECAS_DO_CLIENTE`, cache imutável). O importmap buscava
+  three, os addons e cannon-es no CDN — 26 requisições por boot — e uma que
+  falhasse em 2 ms deixava o jogo em "CARREGANDO O MUNDO..." para sempre: no
+  4G do jogador e na suíte (os "flakes de boot de XR", 1 → 9 arquivos por
+  rodada, cresciam com o número de boots, não com a carga). O cliente usa
+  `three@0.184.0` pelo alias `three-cliente` (o servidor e os bots seguem no
+  `three` das dependências) — trocar a versão do cliente é decisão à parte.
+  Tudo isso é `dependencies` (o Docker roda `--omit=dev`); árvore nova pede
+  `npm install`. E o `index.html` tem um VIGIA: se o módulo do jogo não roda
+  (erro de importação, ou 60 s), o botão diz e recarrega no toque.
 - **VR/WebXR: o jogo NÃO move a cabeça do jogador.** Em XR o three sobrescreve a
   pose da câmera todo frame relativa ao PAI — o grafo é `scene > xrRig > camera`,
   o jogo move o RIG (nos pés) e o headset move a câmera. `camera.position` deixa
@@ -294,9 +305,13 @@ escrita pelo validador — quem constrói não edita).
   absoluta dela), CONTÍNUA dos dois lados — amostrada a cada 1,6 m, a bala do
   jogador passava por 899 de 1 855 obstáculos que barram o bot. Quem está no
   helicóptero não é alvo de bot (decisão do dono).
-- **O corpo bate em tronco e pedra só na FAIXA de altura deles** (a fatia
-  de tronco tem a dela; o resto vai até o teto da regra, chão + 3,4 m): sem a
-  faixa, o voo do canhão a 20 m de um tronco era empurrado de lado.
+- **O corpo bate em tronco e pedra na FAIXA de altura deles** (a fatia de
+  tronco tem a dela; mercado e refúgio, o topo DESENHADO — `corpoAte`, só
+  para o corpo; o resto, o teto da regra, chão + 3,4 m) e só deixa de bater
+  ACIMA DO PULO (topo + 1,7 m; o ápice é 1,6): sem a faixa o voo do canhão
+  era empurrado de lado a 20 m de um tronco; sem a margem, o pulo passava por
+  cima da tenda e caía dentro dela (teleporte de 1 m); sem o topo desenhado,
+  quem caía do helicóptero ficava dentro do mercado entre 3,4 e 7 m.
 - **Árvore é o MODELO desenhado, não o pivô.** De perto cada árvore é um GLB
   cujo tronco não fica no centro (retorcida a ~1 m, bosquete com 3 troncos em
   fila); o colisor era um círculo no pivô — de 175 troncos vistos da

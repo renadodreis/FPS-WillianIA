@@ -325,17 +325,39 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
+<!-- as bibliotecas saem do PRÓPRIO servidor (server.js, BIBLIOTECAS_DO_CLIENTE):
+     do CDN, uma requisição que falhava travava o boot sem aviso -->
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
-    "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+    "three": "/vendor/three@0.184.0/build/three.module.js",
+    "three/addons/": "/vendor/three@0.184.0/examples/jsm/",
+    "cannon-es": "/vendor/cannon-es@0.20.0/dist/cannon-es.js"
   }
 }
 </script>
+<script>
+/* VIGIA DO BOOT: se o módulo do jogo não chega a rodar (uma importação que
+   falhou, ou 60 s sem nada), o botão do menu diz isso e recarrega no toque —
+   antes ficava "CARREGANDO O MUNDO..." para sempre. O game.js marca
+   `__gameModulo` na 1ª linha; daí em diante o menu é dele. */
+(function () {
+  function falhou() {
+    if (window.__gameModulo) return;
+    var b = document.getElementById('btnNew');
+    if (!b || b.getAttribute('data-falha')) return;
+    b.setAttribute('data-falha', '1');
+    b.textContent = '⚠ O JOGO NÃO CARREGOU — TOQUE PARA TENTAR DE NOVO';
+    b.classList.remove('disabled');
+    b.setAttribute('aria-disabled', 'false');
+    b.addEventListener('click', function () { if (!window.__gameModulo) location.reload(); });
+  }
+  window.__falhaDoBoot = falhou;
+  setTimeout(falhou, 60000);
+})();
+</script>
 
-<script type="module" src="game.js"></script>
+<script type="module" src="game.js" onerror="window.__falhaDoBoot && window.__falhaDoBoot()"></script>
 <script src="ship-protocol.js"></script>
 <script src="brcolors.js"></script>
 <script src="multiplayer-client.js"></script>

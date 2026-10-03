@@ -527,7 +527,6 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
   const cactos = planejarCactos({ rng: rngs.cactos || rngCactos(semente), heightAt, slopeAt, biomeAt, WATER_LEVEL, exclui, WORLD_SIZE });
 
   const solidos = [];
-  const add = (x, z, r, category, sourceId) => solidos.push({ x, z, r, category, sourceId });
   const aBala = Math.sqrt(BALA.FATOR_R2);
   for (const a of arvores) {
     for (const t of troncosDaArvore(a)) solidos.push({ x: t.x, z: t.z, r: t.rMadeira / aBala, category: 'rigid', sourceId: 'tree', y0: t.y0, y1: t.y1 });
@@ -550,8 +549,14 @@ export function construirObstaculos({ worldSeed, heightAt, slopeAt, biomeAt, noi
   // tenda e barril: o cilindro para no TOPO desenhado (antes subia até 3,4 m e
   // a bala que passava por cima deles parava no ar)
   solidos.push({ x: TENDA.x, z: TENDA.z, r: TENDA.r, category: 'rigid', sourceId: 'tent', ...faixaDaTenda(heightAt) });
-  add(pois.mercado.x, pois.mercado.z, raioDoProp(pois.mercado.meia), 'rigid', 'mercado');
-  if (pois.refugio) add(pois.refugio.x, pois.refugio.z, raioDoProp(pois.refugio.meia), 'rigid', 'refúgio');
+  /* mercado e refúgio: a BALA segue a regra de sempre (até 3,4 m do chão);
+     o CORPO bate até o topo desenhado (`corpoAte`, PROPS.altura) — com a faixa
+     de altura do corpo, quem caía do helicóptero ficava 67–150 ms DENTRO do
+     prédio desenhado entre 3,4 m e o telhado (laudo b92a932) */
+  const comCorpo = (prop, medida, nome) => solidos.push({ x: prop.x, z: prop.z, r: raioDoProp(prop.meia), category: 'rigid', sourceId: nome,
+    corpoAte: heightAt(prop.x, prop.z) + medida.altura });
+  comCorpo(pois.mercado, PROPS.mercado, 'mercado');
+  if (pois.refugio) comCorpo(pois.refugio, PROPS.refugio, 'refúgio');
   for (const b of pois.barris) {
     const chao = heightAt(b.x, b.z);
     solidos.push({ x: b.x, z: b.z, r: PROPS.barril.r, category: 'rigid', sourceId: 'barrel', y0: chao - 50, y1: chao + PROPS.barril.altura });

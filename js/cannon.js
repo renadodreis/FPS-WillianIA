@@ -140,13 +140,17 @@ export function createCannon(deps) {
      do centro dela (laudo a03c122, §4.3) */
   function alvoDoTiro() {
     const d = aimDir();
-    let tx = fireX + d.x * ALVO_M, tz = fireZ + d.z * ALVO_M, melhor = Infinity;
+    // a argola MIRADA é a de menor distância à mira (não a primeira ao longo
+    // dela: da beira, mirando a 3ª, a reta passa a 2,6 m da 1ª — laudo b92a932)
+    let tx = fireX + d.x * ALVO_M, tz = fireZ + d.z * ALVO_M, melhor = ALVO_ARGOLA_M;
     for (const a of alvos) {
       const ax = a.x - fireX, az = a.z - fireZ, t = ax * d.x + az * d.z;
-      if (t <= 0 || t >= melhor) continue;
-      if (Math.hypot(ax - d.x * t, az - d.z * t) <= ALVO_ARGOLA_M) { melhor = t; tx = a.x; tz = a.z; }
+      if (t <= 0) continue;
+      const perp = Math.hypot(ax - d.x * t, az - d.z * t);
+      if (perp <= melhor) { melhor = perp; tx = a.x; tz = a.z; }
     }
-    if (!puxa) { tx -= fireX; tz -= fireZ; } else { tx -= spot.x; tz -= spot.z; }
+    // de onde sai o voo: do centro (puxado) ou de onde o jogador está
+    tx -= puxa ? spot.x : player.pos.x; tz -= puxa ? spot.z : player.pos.z;
     const l = Math.hypot(tx, tz) || 1;
     return _f.set(tx / l, 0, tz / l);
   }
@@ -221,6 +225,8 @@ export function createCannon(deps) {
          desenhado para o tiro que sai do centro, e de onde o USAR alcança (até
          4,6 m) o voo passava 1 de 5 (laudo 3d7d47a, obs. d). Linear até o fim
          da carga — no máximo ~12 m/s, longe do teto do anti-teleporte */
+      // o caminho é conferido a CADA quadro: um carro que entra nele para o puxão ali
+      if (puxa && caminhoLivre && !caminhoLivre(player.pos.x, player.pos.y, player.pos.z, spot.x, heightAt(spot.x, spot.z), spot.z)) puxa = false;
       if (puxa) {
         const ex = spot.x - player.pos.x, ez = spot.z - player.pos.z;
         const k = Math.min(1, dt / Math.max(chargeT, dt));

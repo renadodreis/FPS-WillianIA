@@ -75,6 +75,8 @@ import { createMenuCamera, wireMenuUI } from './js/menuscene.js';
 import { createSecrets } from './js/secrets.js';
 import { buildChest } from './js/chestmodel.js';
 import { criarVeiculos } from './js/veiculos.js';
+// o módulo RODOU (todas as importações chegaram): o vigia do boot no index.html se cala
+window.__gameModulo = true;
 
 /* ================================================================
    PORTÃO DO MENU — o estado dos botões é DERIVADO do estado ATUAL.
@@ -978,6 +980,7 @@ function registrarObstaculos(sourceId) {
     if (o.bala === false) meta.bala = false;       // só corpo (o círculo da pedra)
     if (o.malha) meta.malha = o.malha;             // a malha da pedra / do cacto
     if (o.pecas) meta.pecas = o.pecas;             // peças da malha (cacto: a união se sobrepõe)
+    if (o.corpoAte !== undefined) meta.corpoAte = o.corpoAte;   // topo desenhado, só para o corpo
     addObstacle(o.x, o.z, o.r, meta);
   }
 }
@@ -1105,7 +1108,9 @@ const barrisQA = [];    // QA: os barris desenhados (test/cacto-colisor.test.js)
     body.updateAABB();
     world.addBody(body);
     const meia = Math.max(p.size.x, p.size.z) / 2;
-    addObstacle(x, z, raioDoProp(meia), { category: 'rigid', sourceId }); // player e bala não atravessam
+    // player e bala não atravessam; o CORPO bate até o topo DESENHADO (a bala, até
+    // o teto da regra) — sem isso, quem caía do helicóptero ficava dentro do prédio
+    addObstacle(x, z, raioDoProp(meia), { category: 'rigid', sourceId, corpoAte: heightAt(x, z) + p.size.y });
     return meia;
   };
   try {
@@ -1894,13 +1899,16 @@ function playerUpdate(dt, t) {
   }
 
   /* colisão com árvores/pedras (push-out por círculo; fatia de bala não empurra)
-     — só na FAIXA de altura do obstáculo: a fatia de tronco tem a dela, o resto
-     vai até o teto da regra da bala (chão + 3,4 m). Sem isso o voo do canhão, a
-     20 m de um tronco, era empurrado de lado (laudo a03c122, §4.7) */
+     — na FAIXA de altura do obstáculo: a fatia de tronco tem a dela, o POI tem
+     o topo desenhado (`corpoAte`), o resto vai até o teto da regra da bala
+     (chão + 3,4 m). E acima do topo, só deixa de bater ACIMA DO PULO (1,7 m;
+     o ápice é 1,6): o voo do canhão a 20 m de um tronco não é empurrado de
+     lado (laudo a03c122, §4.7), e o pulo não passa por cima da tenda para
+     cair dentro dela e ser teleportado para fora (laudo b92a932) */
   for (const o of obstaclesNear(player.pos.x, player.pos.z)) {
     if (o.corpo === false) continue;
-    const topo = Number.isFinite(o.y1) ? o.y1 : heightAt(o.x, o.z) + 3.4;
-    if (player.pos.y > topo || (Number.isFinite(o.y0) && player.pos.y + 1.7 < o.y0)) continue;
+    const topo = Number.isFinite(o.corpoAte) ? o.corpoAte : Number.isFinite(o.y1) ? o.y1 : heightAt(o.x, o.z) + 3.4;
+    if (player.pos.y > topo + 1.7 || (Number.isFinite(o.y0) && player.pos.y + 1.7 < o.y0)) continue;
     const dx = player.pos.x - o.x, dz = player.pos.z - o.z;
     const d = Math.hypot(dx, dz), min = o.r + player.radius;
     if (d < min && d > 1e-4) {
@@ -5320,8 +5328,18 @@ Grass.refreshAll();
    noSeed dentro do módulo, então nunca desloca o rand seedado do mundo. */
 Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, centerMsg, spot: Obstaculos.atracoes.canhao,
   vistaMundo,
-  // o puxão da carga não atravessa veículo (na altura do peito e dos joelhos)
-  caminhoLivre: (ax, ay, az, bx, by, bz) => [0.5, 1.2].every(h => !Veiculos.segmento({ x: ax, y: ay + h, z: az }, { x: bx, y: by + h, z: bz })) });
+  /* o puxão da carga não atravessa veículo: o CORPO dele (o mesmo círculo que
+     empurra o jogador), inteiro, em chamas ou parado — o segmento da BALA não
+     servia (veículo em chamas deixa de proteger) */
+  caminhoLivre: (ax, ay, az, bx, _by, bz) => !Car.vehicles.some(v => {
+    if (v.destruido) return false;
+    const p = v.group.position;
+    if (Math.abs(p.y - ay) > 3) return false;
+    const r = Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + player.radius;
+    const ux = bx - ax, uz = bz - az, L2 = ux * ux + uz * uz || 1;
+    const k = Math.max(0, Math.min(1, ((p.x - ax) * ux + (p.z - az) * uz) / L2));
+    return Math.hypot(p.x - (ax + ux * k), p.z - (az + uz * k)) < r;
+  }) });
 
 /* 5 atrações do mapa (cama elástica, campo de tiro, fogos, aros, xilofone):
    mesmo padrão do canhão — geometria em noSeed; os pontos saem da semente

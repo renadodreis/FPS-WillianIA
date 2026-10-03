@@ -31,10 +31,12 @@
     "node": ">=18"
   },
   "dependencies": {
+    "cannon-es": "0.20.0",
     "express": "^4.19.2",
     "socket.io": "^4.7.5",
     "socket.io-client": "^4.7.5",
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "three-cliente": "npm:three@0.184.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -42,7 +44,6 @@
     "@gltf-transform/core": "^4.4.1",
     "@gltf-transform/extensions": "^4.4.1",
     "@gltf-transform/functions": "^4.4.1",
-    "cannon-es": "^0.20.0",
     "cloc": "^2.6.0-cloc",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",

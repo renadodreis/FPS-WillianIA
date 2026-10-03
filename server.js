@@ -48,9 +48,31 @@ app.use('/assets/models', (req, res, next) => {
 app.use((req, res, next) => {
   if (req.path.startsWith('/assets/models/'))
     res.set('Cache-Control', 'public, max-age=86400');
+  else if (req.path.startsWith('/vendor/'))
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');   // a versão está no caminho
   else res.set('Cache-Control', 'no-cache');
   next();
 });
+/* AS BIBLIOTECAS DO CLIENTE SAEM DAQUI, não do CDN. O importmap buscava three,
+   os addons e cannon-es no jsDelivr — 26 requisições por boot — e uma que
+   falhasse (net::ERR_FAILED em 2 ms) travava o jogo em "CARREGANDO O
+   MUNDO..." sem aviso nem nova tentativa: no 4G do jogador e na suíte (os
+   "flakes de boot de XR" eram isso; laudo b92a932, §1). As versões são as que
+   o cliente já usava (three 0.184 pelo alias `three-cliente`; o servidor e os
+   bots seguem no `three` das dependências) e vão no CAMINHO: cache imutável.
+   Versão instalada diferente da do caminho grita no log (falha silenciosa por
+   construção é pior que falha barulhenta). */
+const BIBLIOTECAS_DO_CLIENTE = [
+  ['/vendor/three@0.184.0/build', 'three-cliente', 'build', '0.184.0'],
+  ['/vendor/three@0.184.0/examples/jsm', 'three-cliente', 'examples/jsm', '0.184.0'],
+  ['/vendor/cannon-es@0.20.0/dist', 'cannon-es', 'dist', '0.20.0'],
+];
+for (const [rota, pacote, sub, versao] of BIBLIOTECAS_DO_CLIENTE) {
+  let instalada = null;
+  try { instalada = JSON.parse(fs.readFileSync(path.join(__dirname, 'node_modules', pacote, 'package.json'), 'utf8')).version; } catch { /* abaixo */ }
+  if (instalada !== versao) console.error(`[VENDOR] ${pacote} instalado ${instalada} ≠ ${versao} (${rota}) — o cliente vai quebrar`);
+  app.use(rota, express.static(path.join(__dirname, 'node_modules', pacote, sub), { index: false }));
+}
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
   'city-destruction-client.js', 'city-destruction-protocol.js', 'ship-protocol.js', 'brcolors.js', 'favicon.svg'];
