@@ -294,6 +294,9 @@ escrita pelo validador — quem constrói não edita).
   absoluta dela), CONTÍNUA dos dois lados — amostrada a cada 1,6 m, a bala do
   jogador passava por 899 de 1 855 obstáculos que barram o bot. Quem está no
   helicóptero não é alvo de bot (decisão do dono).
+- **O corpo bate em tronco e pedra só na FAIXA de altura deles** (a fatia
+  de tronco tem a dela; o resto vai até o teto da regra, chão + 3,4 m): sem a
+  faixa, o voo do canhão a 20 m de um tronco era empurrado de lado.
 - **Árvore é o MODELO desenhado, não o pivô.** De perto cada árvore é um GLB
   cujo tronco não fica no centro (retorcida a ~1 m, bosquete com 3 troncos em
   fila); o colisor era um círculo no pivô — de 175 troncos vistos da
@@ -378,10 +381,15 @@ escrita pelo validador — quem constrói não edita).
   de argolas é desenhado para o tiro que sai do centro dele — na trajetória
   REAL, com o arrasto do voo, `trajetoriaDoCanhao`: pela balística ideal a 5ª
   argola ficava depois do pouso e o curso não completava; a CARGA puxa o
-  jogador da beira para o centro e o voo vai para o PONTO que ele mirava — da
-  beira, voar na direção da câmera saía paralelo e passava 1 de 5; o curso é
-  UM voo, reinicia quando ele volta ao chão; recorde de TEMPO gravado com
-  centésimos, não com o `saveNum` inteiro do placar) também seguram
+  jogador da beira para o centro — se nenhum veículo estiver no caminho — e o
+  voo vai para a ARGOLA que a mira cruza (ou 30 m à frente): da beira, voar na
+  direção da câmera saía paralelo, e mirando a 1ª argola o ponto a 30 m
+  ficava fora do curso; a mira lê `vistaMundo()` (em XR, com giro
+  artificial, `camera.quaternion` errava o giro inteiro); o curso é UM voo,
+  reinicia com o pé no chão por 0,25 s (o `onGround` do helicóptero vaza no
+  quadro da saída); o tempo é arredondado a centésimos ANTES de comparar e
+  gravar — teste disso no laço REAL: com `QA.tick` o passo fixo dá 1,80 s
+  exatos e esconde o ruído) também seguram
   bala (`test/atracoes-bala`, âncora na malha nomeada). O desenho do totem
   ASSENTA junto com a caixa (pedestal até o chão mais baixo — sem ele a bala
   parava no ar na fresta da encosta), e cilindro desenhado com N lados usa o

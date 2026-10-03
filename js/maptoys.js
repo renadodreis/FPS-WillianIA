@@ -189,7 +189,7 @@ export function createMapToys(deps) {
   // ===================================================================== //
   // 💫 AROS DE ACROBACIA                                                    //
   // ===================================================================== //
-  const ring = { spot: null, rings: [], next: 0, running: false, startT: 0, best: loadNum('callofai_ringBest'), completos: 0, prev: new THREE.Vector3() };
+  const ring = { spot: null, rings: [], next: 0, running: false, startT: 0, best: loadNum('callofai_ringBest'), completos: 0, ultimo: null, chaoT: 0, prev: new THREE.Vector3() };
   const RING_N = 5, RING_R = 2.6;
   noSeed(() => {
     // As argolas moram NO ARCO DO CANHÃO: alturas seguem a trajetória REAL do
@@ -238,24 +238,33 @@ export function createMapToys(deps) {
         ring.next += 1;
         if (ring.next < ring.rings.length) ringGlow(ring.next, true);
         else {
-          const time = t - ring.startT;
+          // centésimos ANTES de comparar: o gravado é em centésimos, e a volta de
+          // 1,7999 s contra o recorde "1.8" saía "RECORDE" depois de recarregar
+          const time = Math.round((t - ring.startT) * 100) / 100;
           const rec = ring.best === 0 || time < ring.best;
           ring.best = betterTime(ring.best, time); saveTempo('callofai_ringBest', ring.best);
-          ring.completos++;
+          ring.completos++; ring.ultimo = { time, rec };
           _a.copy(ring.rings[ring.rings.length - 1].c); FX.confetti(_a, 20);
           if (SFX.cannonLand) SFX.cannonLand(_a); // _a = centro do último aro
           if (centerMsg) centerMsg(rec ? `💫 CURSO COMPLETO ${time.toFixed(1)}s — RECORDE!` : `💫 ${time.toFixed(1)}s · recorde ${ring.best.toFixed(1)}s`, 3200);
-          ring.next = 0; ring.running = false; ringGlow(0, false);
+          ring.next = 0; ring.running = false; ringGlow(0, true);   // a 1ª acesa: "comece aqui"
         }
       }
     }
     /* o curso é UM voo: de volta ao chão (a pé), reinicia. Sem isto, o voo
        que perdia a 5ª argola deixava o curso esperando por ela, e o seguinte
        "completava" passando só a 5ª, com o tempo dos dois voos somado (laudo
-       3d7d47a, §4.2). E, longe do curso, reinicia também (sem punir) */
-    if (ring.running && ((player.onGround && !state.flying && !state.driving) || _a.distanceTo(ring.rings[0].c) > 140)) {
+       3d7d47a, §4.2). "No chão" é pé no chão por 0,25 s: no quadro em que o
+       USAR tira o jogador do helicóptero, o `onGround` ainda é o dele (o
+       helicóptero assenta a pose no chão o voo inteiro) — o curso reiniciava
+       com o jogador a 20 m (laudo a03c122, §4.1). Longe do curso, reinicia
+       também (sem punir); e a 1ª argola volta a ficar acesa */
+    const aPe = player.onGround && !state.flying && !state.driving && !(player.launchT > 0);
+    ring.chaoT = aPe ? ring.chaoT + dt : 0;
+    if (ring.running && (ring.chaoT >= 0.25 || _a.distanceTo(ring.rings[0].c) > 140)) {
       ringGlow(ring.next, false);
       ring.running = false; ring.next = 0;
+      ringGlow(0, true);
     }
     ring.prev.copy(_a);
   }
@@ -367,7 +376,7 @@ export function createMapToys(deps) {
        ONDE fica a alavanca, não o centro da atração — os dois estão a 4,6 m um
        do outro, e a galeria era o único alvo do mapa sem marcador no headset. */
     get gallery() { return { active: gal.active, score: gal.score, best: gal.best, targets: gal.targets.length, leverPos: gal.leverPos ? { ...gal.leverPos } : null }; },
-    get rings() { return { next: ring.next, running: ring.running, total: ring.rings.length, best: ring.best, completos: ring.completos, list: ring.rings.map(r => ({ x: r.c.x, y: r.c.y, z: r.c.z, nx: r.n.x, nz: r.n.z })) }; },
+    get rings() { return { next: ring.next, running: ring.running, total: ring.rings.length, best: ring.best, completos: ring.completos, ultimo: ring.ultimo, list: ring.rings.map(r => ({ x: r.c.x, y: r.c.y, z: r.c.z, nx: r.n.x, nz: r.n.z, lit: r.lit })) }; },
     get fireworks() { return { cd: fw.cd, shells: fw.shells.length, pos: fw.spot }; },
     startGallery: galleryStart, fireFireworks: fireworksFire,
     plates: xyl.plates,

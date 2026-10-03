@@ -23,6 +23,12 @@ export function createCannon(deps) {
   const {
     scene, camera, player, SFX, FX, csmMat, heightAt, centerMsg,
     spot,   // o ponto planejado (js/maptoys-core.js, planejarAtracoes)
+    /* a vista de MUNDO (game.js vistaMundo): em XR `camera.quaternion` é a
+       cabeça RELATIVA ao rig, e com giro artificial o voo saía pelo giro
+       inteiro de erro (84°, 174° — laudo a03c122, §4.6) */
+    vistaMundo = null,
+    // o puxão da carga só atravessa o que é livre (um carro encostado não)
+    caminhoLivre = null,
   } = deps;
 
   // PRNG seedado do worldgen mora em Math.random durante a sessão inteira
@@ -117,7 +123,7 @@ export function createCannon(deps) {
 
   // direção horizontal pra onde o jogador olha (mesma extração do playerUpdate)
   function aimDir() {
-    _f.set(0, 0, -1).applyQuaternion(camera.quaternion); _f.y = 0;
+    _f.set(0, 0, -1).applyQuaternion(vistaMundo ? vistaMundo() : camera.quaternion); _f.y = 0;
     if (_f.lengthSq() < 1e-6) _f.set(0, 0, -1);
     _f.normalize();
     return _f;
@@ -126,11 +132,22 @@ export function createCannon(deps) {
   /* o PONTO mirado, a partir de onde o jogador apertou: a carga o puxa para o
      centro, e voar na direção da câmera saindo de lá seria voar PARALELO ao
      que ele mirava — da beira (4 m), ~10 m fora no fim do curso */
-  const ALVO_M = 30;
-  let fireX = 0, fireZ = 0;
+  const ALVO_M = 30, ALVO_ARGOLA_M = 4;
+  let fireX = 0, fireZ = 0, puxa = false, alvos = [];
+  /* o ponto mirado: a ARGOLA que a mira cruza (a mais próxima, até 4 m do
+     raio da mira — o raio dela é 2,6), ou 30 m à frente. Mirando a 1ª argola
+     da beira, o ponto a 30 m ficava fora do curso e o voo passava 2,6–2,9 m
+     do centro dela (laudo a03c122, §4.3) */
   function alvoDoTiro() {
     const d = aimDir();
-    const tx = fireX + d.x * ALVO_M - spot.x, tz = fireZ + d.z * ALVO_M - spot.z, l = Math.hypot(tx, tz) || 1;
+    let tx = fireX + d.x * ALVO_M, tz = fireZ + d.z * ALVO_M, melhor = Infinity;
+    for (const a of alvos) {
+      const ax = a.x - fireX, az = a.z - fireZ, t = ax * d.x + az * d.z;
+      if (t <= 0 || t >= melhor) continue;
+      if (Math.hypot(ax - d.x * t, az - d.z * t) <= ALVO_ARGOLA_M) { melhor = t; tx = a.x; tz = a.z; }
+    }
+    if (!puxa) { tx -= fireX; tz -= fireZ; } else { tx -= spot.x; tz -= spot.z; }
+    const l = Math.hypot(tx, tz) || 1;
     return _f.set(tx / l, 0, tz / l);
   }
 
@@ -139,6 +156,7 @@ export function createCannon(deps) {
     if (player.dead || !player.onGround) return false;
     if (!nearPlayer(player.pos, RANGE + 1.5)) return false;
     fireX = player.pos.x; fireZ = player.pos.z;
+    puxa = !caminhoLivre || caminhoLivre(player.pos.x, player.pos.y, player.pos.z, spot.x, heightAt(spot.x, spot.z), spot.z);
     state = 'charge'; chargeT = CHARGE_T;
     if (SFX.cannonWind) SFX.cannonWind();
     return true;
@@ -203,9 +221,11 @@ export function createCannon(deps) {
          desenhado para o tiro que sai do centro, e de onde o USAR alcança (até
          4,6 m) o voo passava 1 de 5 (laudo 3d7d47a, obs. d). Linear até o fim
          da carga — no máximo ~12 m/s, longe do teto do anti-teleporte */
-      const ex = spot.x - player.pos.x, ez = spot.z - player.pos.z;
-      const k = Math.min(1, dt / Math.max(chargeT, dt));
-      player.pos.x += ex * k; player.pos.z += ez * k;
+      if (puxa) {
+        const ex = spot.x - player.pos.x, ez = spot.z - player.pos.z;
+        const k = Math.min(1, dt / Math.max(chargeT, dt));
+        player.pos.x += ex * k; player.pos.z += ez * k;
+      }
       player.vel.x = 0; player.vel.z = 0;
       chargeT -= dt;
       recoil = Math.min(1, recoil + dt * 2); // recua carregando
@@ -223,6 +243,8 @@ export function createCannon(deps) {
 
   return {
     group, update, prompt, fire,
+    /* as argolas do curso (MapToys): a mira que cruza uma delas voa para ela */
+    setAlvos(lista) { alvos = Array.isArray(lista) ? lista.map(a => ({ x: a.x, z: a.z })) : []; },
     get pos() { return { x: spot.x, y: baseY, z: spot.z }; },
     get state() { return state; },
     get best() { return best; },

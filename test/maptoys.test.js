@@ -215,23 +215,46 @@ describe('Atrações do mapa 🎪', () => {
     assert.ok(Math.abs(Number(r.gravado) - r.best) < 0.006, `recorde ${r.best} gravado como "${r.gravado}"`);
   });
 
-  it('PRODUTO: disparado da BEIRA do canhão (4 m, onde o USAR alcança), a carga o puxa e o curso completa', async () => {
-    const r = await h.play(() => {
+  it('o tempo do curso é o que se GRAVA (centésimos): a mesma volta não sai "RECORDE" de novo', async () => {
+    /* no laço REAL (relógio de parede): com `QA.tick` o passo é fixo e a volta
+       dá 108 quadros = 1,80 s exatos — o ruído do relógio que fazia 1,7999 s
+       contra o "1.8" gravado nem aparecia */
+    const r = await h.play(async () => {
+      const G = window.__game, QA = window.QA, M = G.MapToys, cn = G.Cannon, sp = cn.spot, P = QA.MP.player;
+      const L = M.rings.list, voltas = [], espera = ms => new Promise(res => setTimeout(res, ms));
+      for (let k = 0; k < 2; k++) {
+        QA.reset(sp.x, sp.z);
+        QA.MP.camera.lookAt(L[2].x, P.pos.y + 1.62, L[2].z);
+        await espera(150);
+        const antes = M.rings.completos;
+        cn.fire();
+        for (let i = 0; i < 160 && !(M.rings.completos > antes && P.onGround && cn.state === 'idle'); i++) await espera(50);
+        voltas.push(M.rings.completos > antes ? { ...M.rings.ultimo } : null);
+      }
+      return voltas;
+    });
+    assert.ok(r[0] && r[1], `cenário: o curso não completou nas duas voltas (${JSON.stringify(r)})`);
+    for (const v of r) assert.ok(Math.abs(v.time * 100 - Math.round(v.time * 100)) < 1e-6, `tempo ${v.time} fora de centésimos — compara-se uma coisa e grava-se outra`);
+    assert.equal(r[1].rec, false, `a volta igual (${r[0].time} → ${r[1].time}) saiu "RECORDE"`);
+  });
+
+  for (const [dist, mira] of [[4, 2], [4.5, 0]]) it(`PRODUTO: disparado da BEIRA do canhão (${dist} m, onde o USAR alcança), mirando a ${mira + 1}ª argola, a carga o puxa e o curso completa`, async () => {
+    const r = await h.play((dist, mira) => {
       const G = window.__game, QA = window.QA, M = G.MapToys, cn = G.Cannon, sp = cn.spot;
       const L = M.rings.list;
-      // 4 m do centro, de lado para o curso (o pior caso: de costas ele sai fora)
+      // de lado para o curso; mirar a 1ª (a acesa) da beira era o caso de r10/r11
       const nx = L[0].nx, nz = L[0].nz;
-      QA.reset(sp.x - nz * 4, sp.z + nx * 4);
+      QA.reset(sp.x - nz * dist, sp.z + nx * dist);
       const P = QA.MP.player;
-      QA.MP.camera.lookAt(L[2].x, P.pos.y + 1.62, L[2].z);
+      QA.MP.camera.lookAt(L[mira].x, P.pos.y + 1.62, L[mira].z);
       QA.tick(2);
       const antes = M.rings.completos, dist0 = Math.hypot(P.pos.x - sp.x, P.pos.z - sp.z);
       const ok = cn.fire();
       for (let i = 0; i < 360; i++) { QA.tick(1); if (P.onGround && cn.state === 'idle' && i > 60) break; }
       return { ok, dist0, antes, depois: M.rings.completos };
-    });
+    }, dist, mira);
     assert.ok(r.ok, 'fire() recusou o disparo da beira');
-    assert.ok(r.dist0 > 3.5, `cenário: a ${r.dist0.toFixed(2)} m do centro`);
+    assert.ok(r.dist0 > dist - 0.5, `cenário: a ${r.dist0.toFixed(2)} m do centro`);
     assert.equal(r.depois, r.antes + 1, `da beira, o voo não completou o curso (${r.antes} → ${r.depois})`);
   });
 
@@ -247,14 +270,72 @@ describe('Atrações do mapa 🎪', () => {
       P.pos.set(a0.x - a0.nx * 0.2, a0.y, a0.z - a0.nz * 0.2); P.vel.set(a0.nx * 20, 0, a0.nz * 20);
       let meio = null;
       for (let i = 0; i < 4; i++) { QA.tick(1); if (M.rings.next === 1) { meio = { next: M.rings.next, running: M.rings.running }; break; } }
+      /* o quadro da SAÍDA DO HELICÓPTERO: o jogador no ar com o `onGround` que o
+         helicóptero deixou (ele assenta a pose no chão o voo inteiro) — o
+         reinício lia esse flag e zerava o curso a 20 m de altura (laudo a03c122) */
+      P.onGround = true;
+      M.update(1 / 60, 0);
+      const noAr = { next: M.rings.next, y: P.pos.y - G.heightAt(P.pos.x, P.pos.z) };
+      P.onGround = false;
       for (let i = 0; i < 300 && !P.onGround; i++) QA.tick(1);
-      QA.tick(2);
-      return { meio, chao: P.onGround, next: M.rings.next, running: M.rings.running };
+      QA.tick(20);
+      return { meio, noAr, chao: P.onGround, next: M.rings.next, running: M.rings.running, acesa: M.rings.list[0].lit };
     });
     assert.ok(r.meio && r.meio.running, `cenário: não atravessou a 1ª argola (${JSON.stringify(r.meio)})`);
+    assert.equal(r.noAr.next, 1, `o curso reiniciou no ar (a ${r.noAr.y.toFixed(1)} m) com o onGround velho do helicóptero`);
     assert.ok(r.chao, 'cenário: não voltou ao chão');
     assert.equal(r.next, 0, `de volta ao chão, o curso segue esperando a argola ${r.next + 1}`);
     assert.equal(r.running, false);
+    assert.equal(r.acesa, true, 'depois do voo, a 1ª argola ("comece aqui") ficou apagada');
+  });
+
+  it('o puxão do canhão não atravessa um carro encostado; o disparo sai de onde o jogador está', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player;
+      const L = G.MapToys.rings.list, nx = L[0].nx, nz = L[0].nz;
+      // jogador a 4,5 m de lado; um carro parado entre ele e o centro
+      const px = sp.x - nz * 4.5, pz = sp.z + nx * 4.5;
+      const v = G.Car.vehicles.find(c => !c.destruido);
+      const cx = sp.x - nz * 2.3, cz = sp.z + nx * 2.3;
+      v.chassisBody.position.set(cx, G.heightAt(cx, cz) + 1, cz);
+      v.chassisBody.velocity.set(0, 0, 0); v.chassisBody.angularVelocity.set(0, 0, 0);
+      QA.tick(30);
+      QA.reset(px, pz); QA.tick(3);
+      const raio = Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + P.radius;
+      const ok = cn.fire();
+      let menor = Infinity;
+      for (let i = 0; i < 40 && cn.state === 'charge'; i++) {
+        QA.tick(1);
+        const c = v.group.position;
+        menor = Math.min(menor, Math.hypot(P.pos.x - c.x, P.pos.z - c.z));
+      }
+      return { ok, menor, raio, estado: cn.state };
+    });
+    assert.ok(r.ok, 'o canhão recusou o disparo');
+    assert.ok(r.menor >= r.raio * 0.95, `puxado para dentro do carro: ${r.menor.toFixed(2)} m do centro dele (raio de corpo ${r.raio.toFixed(2)})`);
+  });
+
+  it('corpo: tronco e pedra só empurram na faixa de altura deles (o voo do canhão a 20 m passa reto)', async () => {
+    const r = await h.play(() => {
+      const G = window.__game, QA = window.QA, P = QA.MP.player;
+      // um tronco de corpo qualquer, longe de construção
+      let o = null;
+      for (let gx = -400; gx <= 400 && !o; gx += 40) for (let gz = -400; gz <= 400 && !o; gz += 40)
+        for (const c of G.obstaclesNear(gx, gz)) if (c.sourceId === 'tree' && c.corpo !== false && c.r > 0.15) { o = c; break; }
+      const chao = G.heightAt(o.x, o.z);
+      const mede = (alto) => {
+        QA.reset(o.x + o.r * 0.5, o.z);
+        P.pos.set(o.x + o.r * 0.5, chao + alto, o.z); P.vel.set(0, 0, 0); P.onGround = alto < 0.01;
+        if (alto > 0.01) P.launchT = 1;   // em voo (o do canhão): nada de chão no meio
+        const x0 = P.pos.x, z0 = P.pos.z;
+        QA.tick(1);
+        P.launchT = 0;
+        return Math.hypot(P.pos.x - x0, P.pos.z - z0);
+      };
+      return { r: o.r, alto: mede(20), chao: mede(0) };
+    });
+    assert.ok(r.chao > r.r * 0.3, `controle: no chão o tronco não empurrou (${r.chao.toFixed(3)} m)`);
+    assert.ok(r.alto < 0.01, `20 m acima do tronco o corpo foi empurrado ${r.alto.toFixed(3)} m`);
   });
 
   /* CHÃO LIMPO SOB AS ATRAÇÕES. O canhão e as atrações nascem DEPOIS do

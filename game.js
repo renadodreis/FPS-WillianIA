@@ -1893,9 +1893,14 @@ function playerUpdate(dt, t) {
     }
   }
 
-  // colisão com árvores/pedras (push-out por círculo; fatia de bala não empurra)
+  /* colisão com árvores/pedras (push-out por círculo; fatia de bala não empurra)
+     — só na FAIXA de altura do obstáculo: a fatia de tronco tem a dela, o resto
+     vai até o teto da regra da bala (chão + 3,4 m). Sem isso o voo do canhão, a
+     20 m de um tronco, era empurrado de lado (laudo a03c122, §4.7) */
   for (const o of obstaclesNear(player.pos.x, player.pos.z)) {
     if (o.corpo === false) continue;
+    const topo = Number.isFinite(o.y1) ? o.y1 : heightAt(o.x, o.z) + 3.4;
+    if (player.pos.y > topo || (Number.isFinite(o.y0) && player.pos.y + 1.7 < o.y0)) continue;
     const dx = player.pos.x - o.x, dz = player.pos.z - o.z;
     const d = Math.hypot(dx, dz), min = o.r + player.radius;
     if (d < min && d > 1e-4) {
@@ -5313,12 +5318,16 @@ Grass.refreshAll();
 
 /* Canhão de Circo: criado DEPOIS de todo o worldgen — a geometria é feita em
    noSeed dentro do módulo, então nunca desloca o rand seedado do mundo. */
-Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, centerMsg, spot: Obstaculos.atracoes.canhao });
+Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, centerMsg, spot: Obstaculos.atracoes.canhao,
+  vistaMundo,
+  // o puxão da carga não atravessa veículo (na altura do peito e dos joelhos)
+  caminhoLivre: (ax, ay, az, bx, by, bz) => [0.5, 1.2].every(h => !Veiculos.segmento({ x: ax, y: ay + h, z: az }, { x: bx, y: by + h, z: bz })) });
 
 /* 5 atrações do mapa (cama elástica, campo de tiro, fogos, aros, xilofone):
    mesmo padrão do canhão — geometria em noSeed; os pontos saem da semente
    (Obstaculos.atracoes: construções + POIs), iguais no bot. */
 MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state, atracoes: Obstaculos.atracoes });
+Cannon.setAlvos(MapToys.rings.list);   // mirando uma argola, o voo vai para ela
 /* as paredes das atrações (painel do campo de tiro, totem de fogos, carreta e
    rodas do canhão) nascem DEPOIS do laço que dá corpo CANNON às paredes no
    boot: sem o próprio corpo, o jogador e a bala paravam e o CARRO atravessava
