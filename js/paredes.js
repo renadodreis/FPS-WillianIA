@@ -594,8 +594,9 @@ export function pecasBase(cx, cz, y, heightAt) {
   const g2 = 6;
   muro(W2 - g2 / 2, 0.7, cx - (g2 / 2 + (W2 - g2 / 2) / 2), cz + D2);
   muro(W2 - g2 / 2, 0.7, cx + (g2 / 2 + (W2 - g2 / 2) / 2), cz + D2);
-  // sacos de areia + caixotes
-  for (let i = 0; i < 5; i++) out.push(assentar(peca(2.2, 0.8, 0.6, cx - 4 + i * 2.4, y + 0.4, cz + D2 - 3, 0x8a7a58), heightAt, 0.8));
+  // Defesas laterais: o corredor do portão precisa continuar livre para
+  // o caminhão. Sem sorteio: preserva o consumo do seed e as cinco peças.
+  for (const ox of [-10, -7.6, -5.2, 5.2, 7.6]) out.push(assentar(peca(2.2, 0.8, 0.6, cx + ox, y + 0.4, cz + D2 - 3, 0x8a7a58), heightAt, 0.8));
   out.push(assentar(peca(1.4, 1.4, 1.4, cx + 6, y + 0.7, cz - 8, 0x6b5a38), heightAt, 1.4));
   out.push(assentar(peca(1.2, 1.2, 1.2, cx + 7.6, y + 0.6, cz - 7.2, 0x6b5a38), heightAt, 1.2));
   return out;
