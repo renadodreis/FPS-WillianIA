@@ -3289,6 +3289,7 @@ const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat, pl
 const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY, stampTrack: Grass.stampTrack });
 
 const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos, isMobile: __mobile,
+  getMove: Touch.getMove,
   aoTrocar: soltarToqueDaTroca });
 
 /* VEÍCULO SEGURA BALA — MAS NÃO PRA SEMPRE (decisão do dono, 2026-09-28).
@@ -3417,6 +3418,7 @@ function tryToggleCar() {
    (test/veiculo-mira.test.js). Guardar o GRUPO (e não o `Car.group`, que é
    getter do carro atual) mantém a volta presa ao veículo que foi deixado. */
 let _perseguido = null;
+const _heliChaseQ = new THREE.Quaternion(), _heliChaseYaw = new THREE.Euler();
 /* Devolve true quando escreveu a câmera (a mistura com a perseguição está
    valendo neste quadro): quem chamou não pode reposicionar o olho depois. */
 function carCameraUpdate(dt) {
@@ -3427,14 +3429,16 @@ function carCameraUpdate(dt) {
   const vg = _perseguido, noHeli = vg === Heli.group;
 
   // alvo atrás do veículo, sempre acima do terreno
-  _v1.set(noHeli ? -10.5 : -7.4, noHeli ? 4.2 : 3.1, 0).applyQuaternion(vg.quaternion).add(vg.position);
+  // Helicóptero inclina sob a câmera: perseguição acompanha só guinada.
+  const chaseRotation = noHeli ? _heliChaseQ.setFromEuler(_heliChaseYaw.set(0, vg.rotation.y, 0)) : vg.quaternion;
+  _v1.set(noHeli ? -10.5 : -7.4, noHeli ? 4.2 : 3.1, 0).applyQuaternion(chaseRotation).add(vg.position);
   const minY = Math.max(heightAt(_v1.x, _v1.z) + 0.7, vg.position.y + 1.6);
   if (_v1.y < minY) _v1.y = minY;
   chaseCamPos.x = damp(chaseCamPos.x, _v1.x, 5.5, dt);
   chaseCamPos.y = damp(chaseCamPos.y, _v1.y, 5.5, dt);
   chaseCamPos.z = damp(chaseCamPos.z, _v1.z, 5.5, dt);
 
-  _v2.set(2.6, 1.15, 0).applyQuaternion(vg.quaternion).add(vg.position);
+  _v2.set(2.6, 1.15, 0).applyQuaternion(chaseRotation).add(vg.position);
   chaseLook.x = damp(chaseLook.x, _v2.x, 9, dt);
   chaseLook.y = damp(chaseLook.y, _v2.y, 9, dt);
   chaseLook.z = damp(chaseLook.z, _v2.z, 9, dt);

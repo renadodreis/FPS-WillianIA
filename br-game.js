@@ -277,6 +277,7 @@
         id, nick: nk || '???', alive: true, isBoss: false,
         group, body, targetPos: group.position.clone(), yaw: 0, targetYaw: 0,
         chute: false, ship: false, fall: false, landed: false, car: -1, heli: false, bot: false,
+        heliMotion: { speed: 0, turn: 0, at: 0 },
         carHintIdx: -1, carHintPos: null, carHintYaw: 0, // dica visual das rodas do carro remoto
         shipLocalTgt: null, shipLocalCur: null,
         heldWeapon: 'FACA', wpnScale: 0, fireT: 0, hitT: 0, deadT: 0,
@@ -1806,6 +1807,17 @@
       const ck = Array.isArray(d.colors) ? d.colors.join('|') : '';
       if (ck && ck !== rp.colorsKey) { rp.colorsKey = ck; rp.body.retint(d.colors); }
       const groundedBot = d.bot && !d.ship && !d.fall && !d.chute && !d.heli && !(d.car >= 0);
+      // Atitude pelo deslocamento entre pacotes, não pelos pulsos do lerp
+      // de 10 Hz: evita simular aceleração/frenagem a cada pacote recebido.
+      const hm = rp.heliMotion, now = performance.now();
+      if (d.heli && rp.heli && hm.at) {
+        const elapsed = Math.max(0.05, (now - hm.at) / 1000);
+        const heading = Number.isFinite(d.rotY) ? d.rotY : rp.targetYaw;
+        hm.speed = Math.max(-27, Math.min(27, ((d.pos[0] - rp.targetPos.x) * Math.cos(heading)
+          - (d.pos[2] - rp.targetPos.z) * Math.sin(heading)) / elapsed));
+        hm.turn = Math.atan2(Math.sin(heading - rp.targetYaw), Math.cos(heading - rp.targetYaw)) / elapsed;
+      } else { hm.speed = 0; hm.turn = 0; }
+      hm.at = d.heli ? now : 0;
       rp.targetPos.set(d.pos[0], groundedBot ? MP.heightAt(d.pos[0], d.pos[2]) : d.pos[1], d.pos[2]);
       rp.targetYaw = d.rotY || 0;
       rp.ship = !!d.ship;
@@ -2463,8 +2475,9 @@
         }
         // voando: o helicóptero (único no mapa) segue o piloto remoto
         if (rp.heli && !G.state.flying && !G.Heli.destruido) {
-          G.Heli.group.position.copy(rp.group.position);
-          G.Heli.group.rotation.set(0, rp.yaw, 0);
+          const hm = rp.heliMotion;
+          if (nowMs - hm.at > 500) { hm.speed = 0; hm.turn = 0; }
+          G.Heli.setRemotePose(rp.group.position, rp.yaw, dt, hm);
         }
       }
       // carro solto de outro (carRola): persegue a pose repassada e assenta

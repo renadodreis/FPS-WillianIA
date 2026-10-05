@@ -8,6 +8,7 @@ import { TIPOS } from './veiculo-vida.js';
 export function createHeli(deps) {
   const { CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos,
     isMobile = false,
+    getMove = () => null,
     /* chamado a cada ENTRADA e SAÍDA (game.js: solta o toque — C10). Aqui e
        não em quem chama: a saída pelo USAR vem de js/interact.js direto em
        `exit()`, sem passar pelo `tryToggleCar` do game.js. */
@@ -46,6 +47,36 @@ export function createHeli(deps) {
 
   const vel = new THREE.Vector3();
   let yaw = 0, pitchK = 0, rollK = 0, rotorSpd = 0;
+  let remoteReady = false, remoteSpeed = 0, remotePoseT = 0;
+  const MAX_PITCH = 18 * Math.PI / 180, MAX_ROLL = 22 * Math.PI / 180;
+
+  function atitude(fwdIn, yawIn, speed, forwardSpeed, dt) {
+    // Aceleração baixa o nariz; inércia sem comando produz a arfagem de
+    // frenagem. Curva banca conforme velocidade; guinada parada nivela.
+    const pitch = clamp(MAX_PITCH * fwdIn - 8 * Math.PI / 180 * forwardSpeed / 27, -MAX_PITCH, MAX_PITCH);
+    pitchK = damp(pitchK, pitch, 6, dt);
+    rollK = damp(rollK, -MAX_ROLL * yawIn * clamp(speed / 27, 0, 1) * Math.sign(forwardSpeed), 6, dt);
+    // Guinada primeiro, depois atitude nos eixos LOCAIS da fuselagem.
+    group.rotation.set(rollK, yaw, -pitchK, 'YXZ');
+  }
+
+  function setRemotePose(pos, heading, dt, motion) {
+    if (state.flying || !(dt > 0) || !Number.isFinite(heading)) return;
+    const dx = pos.x - group.position.x, dz = pos.z - group.position.z;
+    const forward = (dx * Math.cos(heading) - dz * Math.sin(heading)) / dt;
+    const measured = clamp(motion ? motion.speed : forward, -27, 27);
+    const previous = remoteSpeed;
+    remoteSpeed = remoteReady ? damp(remoteSpeed, measured, 8, dt) : 0;
+    const accel = (remoteSpeed - previous) / dt;
+    const input = clamp((remoteSpeed + accel / 1.8) / 27, -1, 1);
+    const turn = motion ? motion.turn
+      : remoteReady ? Math.atan2(Math.sin(heading - yaw), Math.cos(heading - yaw)) / dt : 0;
+    yaw = heading;
+    atitude(input, clamp(turn / 1.4, -1, 1), Math.abs(remoteSpeed), remoteSpeed, dt);
+    group.position.copy(pos);
+    remoteReady = true;
+    remotePoseT = 0.5;
+  }
 
   /* ================================================================
      O ASSENTO DO PILOTO, para o RIG DE VR.
@@ -95,6 +126,11 @@ export function createHeli(deps) {
     if (player.pos.distanceTo(group.position) > 5) return false;
     if (window.__BR_heliTaken) { centerMsg('Helicóptero ocupado!', 1400); return false; }
     state.flying = true;
+    yaw = group.rotation.y;
+    pitchK = -group.rotation.z;
+    rollK = group.rotation.x;
+    remoteReady = false;
+    remotePoseT = 0;
     ui.speedo.style.display = 'block';
     // munição continua visível: dá pra atirar da porta do helicóptero
     mouse.shooting = false; mouse.aiming = false;
@@ -121,11 +157,12 @@ export function createHeli(deps) {
     rotor.rotation.y += rotorSpd * dt;
     trotor.rotation.x += rotorSpd * 3 * dt;
     if (on) {
-      const fwdIn = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
-      const yawIn = (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0);
+      const move = getMove();
+      const fwdIn = move && move.active ? clamp(move.py, -1, 1)
+        : (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
+      const yawIn = move && move.active ? -clamp(move.px, -1, 1)
+        : (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0);
       yaw += yawIn * 1.4 * dt;
-      pitchK = damp(pitchK, fwdIn * 0.2, 4, dt);
-      rollK = damp(rollK, -yawIn * 0.13, 4, dt);
       const fx = Math.cos(yaw), fz = -Math.sin(yaw); // nariz = +X girado
       vel.x = damp(vel.x, fx * fwdIn * 27, 1.8, dt);
       vel.z = damp(vel.z, fz * fwdIn * 27, 1.8, dt);
@@ -143,7 +180,7 @@ export function createHeli(deps) {
       const minY = groundAt(group.position.x, group.position.z, group.position.y) + 0.55;
       if (group.position.y < minY) { group.position.y = minY; vel.y = Math.max(0, vel.y); }
       Structures.collide(group.position, 2.3, 2.2); // prédios/muros barram o heli
-      group.rotation.set(rollK, yaw, -pitchK); // banca na curva, inclina o nariz ao acelerar
+      atitude(fwdIn, yawIn, Math.hypot(vel.x, vel.z), vel.x * fx + vel.z * fz, dt);
       // player acompanha (recentra grama/chunks)
       player.pos.set(group.position.x, groundAt(group.position.x, group.position.z, group.position.y), group.position.z);
       player.vel.set(0, 0, 0);
@@ -151,6 +188,14 @@ export function createHeli(deps) {
       SFX.heliUpdate(true, keys['Space'] ? 1 : 0.45);
     } else {
       SFX.heliUpdate(false, 0);
+      if (!state.paused) {
+        remotePoseT = Math.max(0, remotePoseT - dt);
+        if (remotePoseT === 0) {
+          remoteReady = false;
+          yaw = group.rotation.y;
+          atitude(0, 0, 0, 0, dt);
+        }
+      }
       empurrarDaFuselagem();
     }
   }
@@ -208,7 +253,7 @@ export function createHeli(deps) {
     group.visible = true;
     if (group.position.y < -1000) group.position.set(hs.x, hs.y + 0.05, hs.z);
   }
-  const api = { group, update, tryEnter, exit, assentoXR, remover, restaurar, corpoNaFuselagem,
+  const api = { group, update, tryEnter, exit, assentoXR, remover, restaurar, corpoNaFuselagem, setRemotePose,
     destruido: false, semSustentacao: false, get vel() { return vel; } };
   return api;
 }
