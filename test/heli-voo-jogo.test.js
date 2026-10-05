@@ -69,6 +69,32 @@ describe('Helicóptero: câmera, toque e rede no jogo real', { skip: !CHROME && 
     assert.ok(r.brake > 0.02 && Math.abs(r.level) < 0.01 && r.speed < 0.05, JSON.stringify(r));
   });
 
+  it('mouse e toque giram mira; guinada não arrasta direção escolhida', async () => {
+    const r = await h.play(() => {
+      const { G, MP } = window.QA, H = G.Heli;
+      H.group.position.set(0, 90, 0); MP.player.pos.copy(H.group.position);
+      H.tryEnter(); window.QA.tick(180);
+      const direction = () => MP.camera.getWorldDirection(new MP.THREE.Vector3());
+      const initial = direction();
+      G.state.pointerLocked = true; G.controls.isLocked = true;
+      document.dispatchEvent(new MouseEvent('mousemove', { movementX: 350, movementY: -120, bubbles: true }));
+      window.QA.tick(180); const mouse = direction();
+      G.keys.KeyA = true; window.QA.tick(90); G.keys.KeyA = false;
+      window.QA.tick(180); const held = direction();
+      const el = document.getElementById('tcLook'), b = el.getBoundingClientRect();
+      const send = (type, dx) => el.dispatchEvent(new PointerEvent(type, { pointerId: 89,
+        pointerType: 'touch', clientX: b.left + b.width / 2 + dx,
+        clientY: b.top + b.height / 2, bubbles: true, cancelable: true }));
+      send('pointerdown', 0); send('pointermove', -120); window.QA.tick(2);
+      send('pointerup', -120); window.QA.tick(180); const touch = direction();
+      H.exit(); G.state.pointerLocked = false; G.controls.isLocked = false; window.QA.clearInput();
+      return { mouse: initial.angleTo(mouse), held: mouse.angleTo(held), touch: held.angleTo(touch) };
+    });
+    assert.ok(r.mouse > 0.3, `mouse travado: ${JSON.stringify(r)}`);
+    assert.ok(r.held < 0.04, `guinada arrasta mira: ${JSON.stringify(r)}`);
+    assert.ok(r.touch > 0.2, `toque travado: ${JSON.stringify(r)}`);
+  });
+
   it('receptor multiplayer desenha inclinação a partir de poses remotas', async () => {
     host = await startBRMatch(h, { serverPort: 4111, flags: { golem: false } });
     // Inicializa sessão real; injeta playerUpdate no receptor existente.

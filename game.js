@@ -1466,6 +1466,9 @@ window.addEventListener('mouseup', e => {
 window.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('mousemove', e => {
   if (!state.pointerLocked) return;
+  if (state.flying && !state.paused && !XR.presenting) {
+    mirarHeli(-e.movementX * 0.002 * controls.pointerSpeed, -e.movementY * 0.002 * controls.pointerSpeed);
+  }
   mouse.swayX += e.movementX;
   mouse.swayY += e.movementY;
 });
@@ -2190,6 +2193,10 @@ function applyTouchLook(dt) {
     Touch.setAutoFire(r.fire);
   } else Touch.setAutoFire(false);
   if (!dYaw && !dPitch) return;
+  if (state.flying && !XR.presenting) {
+    mirarHeli(dYaw, dPitch);
+    return;
+  }
   _euler.y += dYaw;
   _euler.x = clampPitch(_euler.x + dPitch);
   camera.quaternion.setFromEuler(_euler);
@@ -3362,6 +3369,9 @@ const _lookM = new THREE.Matrix4();
 /* Decisão do dono (2026-09-28): "já entra dirigindo" — ao ENTRAR só os
    botões soltam e o analógico vira o volante na hora; ao SAIR solta tudo. */
 function soltarToqueDaTroca(entrando = false) {
+  _heliMiraLivre = false;
+  _heliMiraPitch = 0;
+  controls.enabled = !state.flying || XR.presenting;
   if (entrando) Touch.soltarBotoes(); else Touch.releaseAll();
 }
 
@@ -3419,6 +3429,13 @@ function tryToggleCar() {
    getter do carro atual) mantém a volta presa ao veículo que foi deixado. */
 let _perseguido = null;
 const _heliChaseQ = new THREE.Quaternion(), _heliChaseYaw = new THREE.Euler();
+let _heliMiraLivre = false, _heliMiraYaw = 0, _heliMiraPitch = 0;
+function mirarHeli(dYaw, dPitch) {
+  if (!_heliMiraLivre) _heliMiraYaw = Heli.group.rotation.y;
+  _heliMiraLivre = true;
+  _heliMiraYaw += dYaw;
+  _heliMiraPitch = clamp(_heliMiraPitch + dPitch, -Math.PI / 3, Math.PI / 3);
+}
 /* Devolve true quando escreveu a câmera (a mistura com a perseguição está
    valendo neste quadro): quem chamou não pode reposicionar o olho depois. */
 function carCameraUpdate(dt) {
@@ -3429,16 +3446,21 @@ function carCameraUpdate(dt) {
   const vg = _perseguido, noHeli = vg === Heli.group;
 
   // alvo atrás do veículo, sempre acima do terreno
-  // Helicóptero inclina sob a câmera: perseguição acompanha só guinada.
-  const chaseRotation = noHeli ? _heliChaseQ.setFromEuler(_heliChaseYaw.set(0, vg.rotation.y, 0)) : vg.quaternion;
-  _v1.set(noHeli ? -10.5 : -7.4, noHeli ? 4.2 : 3.1, 0).applyQuaternion(chaseRotation).add(vg.position);
-  const minY = Math.max(heightAt(_v1.x, _v1.z) + 0.7, vg.position.y + 1.6);
+  // Atitude da fuselagem não inclina o horizonte da câmera.
+  // Órbita em torno da estação de tiro: mirar não muda rumo do helicóptero.
+  // Posição e alvo giram juntos para manter a linha de tiro perto do piloto.
+  const chaseRotation = noHeli ? _heliChaseQ.setFromEuler(_heliChaseYaw.set(0,
+    _heliMiraLivre ? _heliMiraYaw : vg.rotation.y, _heliMiraPitch, 'YXZ')) : vg.quaternion;
+  _v1.set(noHeli ? -10.5 : -7.4, noHeli ? 2.6 : 3.1, 0).applyQuaternion(chaseRotation).add(vg.position);
+  if (noHeli) _v1.y += 1.6;
+  const minY = noHeli ? heightAt(_v1.x, _v1.z) + 0.7 : Math.max(heightAt(_v1.x, _v1.z) + 0.7, vg.position.y + 1.6);
   if (_v1.y < minY) _v1.y = minY;
   chaseCamPos.x = damp(chaseCamPos.x, _v1.x, 5.5, dt);
   chaseCamPos.y = damp(chaseCamPos.y, _v1.y, 5.5, dt);
   chaseCamPos.z = damp(chaseCamPos.z, _v1.z, 5.5, dt);
 
-  _v2.set(2.6, 1.15, 0).applyQuaternion(chaseRotation).add(vg.position);
+  _v2.set(2.6, noHeli ? -0.45 : 1.15, 0).applyQuaternion(chaseRotation).add(vg.position);
+  if (noHeli) _v2.y += 1.6;
   chaseLook.x = damp(chaseLook.x, _v2.x, 9, dt);
   chaseLook.y = damp(chaseLook.y, _v2.y, 9, dt);
   chaseLook.z = damp(chaseLook.z, _v2.z, 9, dt);

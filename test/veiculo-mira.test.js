@@ -203,7 +203,11 @@ describe('M6 voando — celular V3 (USAR e ATIRAR pelo toque)', { skip: !CHROME 
         M.toque(mv, 'pointermove', 74, mx + 120, my - 120);
         QA.tick(60);                            // a câmera de perseguição fica para trás
         g.mag = g.magSize;
-        tiros.push(...M.rodada(g, 40, k => { if (k === 0) M.toque(f, 'pointerdown', 75, fx, fy); }));
+        // ATIRAR também aceita arrasto de mira enquanto outro dedo pilota.
+        tiros.push(...M.rodada(g, 40, k => {
+          if (k === 0) M.toque(f, 'pointerdown', 75, fx, fy);
+          else M.toque(f, 'pointermove', 75, fx - k * 3, fy - k);
+        }));
         vel = Math.hypot(G.Heli.vel.x, G.Heli.vel.z);
       } finally {
         M.toque(f, 'pointerup', 75, fx, fy); M.toque(mv, 'pointerup', 74, mx, my);
@@ -324,7 +328,12 @@ describe('M6 voando e na volta do veículo — desktop', { skip: !CHROME && 'Chr
       M.armar(0);
       let tiros;
       try {
-        tiros = M.rodada(g, 12, k => { if (k === 0) { G.mouse.shooting = true; G.mouse.clicked = true; } });
+        G.state.pointerLocked = true; G.controls.isLocked = true;
+        tiros = M.rodada(g, 12, k => {
+          document.dispatchEvent(new MouseEvent('mousemove', { movementX: 12, movementY: -3, bubbles: true }));
+          if (k === 0) { G.mouse.shooting = true; G.mouse.clicked = true; }
+        });
+        G.state.pointerLocked = false; G.controls.isLocked = false;
       } finally { G.mouse.shooting = false; G.mouse.clicked = false; if (G.state.flying) G.tryToggleCar(); }
       return { voando, tiros };
     });

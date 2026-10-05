@@ -48,7 +48,7 @@ export function createHeli(deps) {
   const vel = new THREE.Vector3();
   let yaw = 0, pitchK = 0, rollK = 0, rotorSpd = 0;
   let remoteReady = false, remoteSpeed = 0, remotePoseT = 0;
-  const MAX_PITCH = 18 * Math.PI / 180, MAX_ROLL = 22 * Math.PI / 180;
+  const MAX_PITCH = 32 * Math.PI / 180, MAX_ROLL = 32 * Math.PI / 180;
 
   function atitude(fwdIn, yawIn, speed, forwardSpeed, dt) {
     // Aceleração baixa o nariz; inércia sem comando produz a arfagem de
@@ -137,7 +137,7 @@ export function createHeli(deps) {
     SFX.carDoor();
     chaseCamPos.copy(camera.position);
     // celular: ⇧/⇩ são os botões de pular/agachar, que emitem o mesmo Space/Ctrl
-    centerMsg(isMobile ? '⇧ sobe · ⇩ desce · analógico voa' : 'ESPAÇO sobe · CTRL desce · WASD voa', 2600);
+    centerMsg(isMobile ? 'Analógico voa · arrasto direito mira · ⇧/⇩ altura' : 'WASD voa · mouse mira · ESPAÇO/CTRL altura', 3500);
     aoTrocar(true);   // entrando: o analógico já voa (decisão do dono)
     return true;
   }

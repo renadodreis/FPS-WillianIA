@@ -35,7 +35,9 @@ function voo(move) {
 describe('Helicóptero: atitude arcade ligada ao movimento', () => {
   it('acelera com nariz visivelmente baixo; soltar comando levanta nariz e depois nivela', () => {
     const v = voo(); v.keys.KeyW = true; v.step(0.6);
-    assert.ok(v.pose().pitch < -0.21, `inclinação fraca: ${v.pose().pitch}`);
+    assert.ok(v.pose().pitch < -0.40, `inclinação fraca: ${v.pose().pitch}`);
+    v.step(4);
+    assert.ok(v.pose().pitch < -0.40, 'cruzeiro precisa manter pelo menos 23 graus');
     v.step(1.4); v.keys.KeyW = false; v.step(0.4);
     assert.ok(v.pose().pitch > 0.025, `freio não levanta nariz: ${v.pose().pitch}`);
     v.step(4);
@@ -50,7 +52,8 @@ describe('Helicóptero: atitude arcade ligada ao movimento', () => {
     const yaw = v.heli.group.rotation.y;
     const inside = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     assert.ok(v.pose().up.dot(inside) > 0.25, 'sustentação precisa inclinar para dentro da curva');
-    assert.ok(Math.abs(v.heli.group.rotation.x) <= 22 * Math.PI / 180 + 1e-6);
+    assert.ok(Math.abs(v.heli.group.rotation.x) > 0.45);
+    assert.ok(Math.abs(v.heli.group.rotation.x) <= 32 * Math.PI / 180 + 1e-6);
   });
 
   it('inclinação do nariz mantém direção ao mudar rumo', () => {
@@ -111,7 +114,7 @@ describe('Helicóptero: atitude arcade ligada ao movimento', () => {
     const yaw = v.heli.group.rotation.y;
     const right = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     assert.ok(v.pose().up.dot(right) > 0.2);
-    assert.ok(Math.abs(v.pose().pitch) <= 18 * Math.PI / 180 + 1e-6);
+    assert.ok(Math.abs(v.pose().pitch) <= 32 * Math.PI / 180 + 1e-6);
   });
 
   it('em ré, inclina para dentro da trajetória real, não para lado oposto', () => {
