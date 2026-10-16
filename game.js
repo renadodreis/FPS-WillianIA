@@ -80,6 +80,18 @@ import { criarVeiculos } from './js/veiculos.js';
 // o que o alarme mudou: sem isto o aviso de rotação sumia a sessão inteira (laudo cbfb44a)
 window.__gameModulo = true;
 document.documentElement.classList.remove('bootfalhou');
+/* e o botão volta ao que o index.html nasce dizendo: o menu só o repinta depois
+   do socket e do terreno, e até lá ele pedia um toque que não fazia nada
+   (2,3–4,9 s no link lento — laudo 1ae1a81, §A.1.2) */
+{
+  const b = document.getElementById('btnNew');
+  if (b && b.getAttribute('data-falha')) {
+    b.removeAttribute('data-falha');
+    b.textContent = 'CARREGANDO O MUNDO...';
+    b.classList.add('disabled');
+    b.setAttribute('aria-disabled', 'true');
+  }
+}
 
 /* ================================================================
    PORTÃO DO MENU — o estado dos botões é DERIVADO do estado ATUAL.

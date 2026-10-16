@@ -192,6 +192,46 @@ describe('o boot não depende do CDN', { skip: !CHROME && 'Chrome não encontrad
     } finally { await page.close(); }
   });
 
+  /* laudo 1ae1a81, §A.1.2: depois do alarme falso, o botão seguia dizendo
+     "NÃO CARREGOU — TOQUE PARA TENTAR DE NOVO" por 2,3–4,9 s com o jogo já
+     carregando (o módulo só repinta o botão depois do socket e do terreno), e
+     o toque nele não fazia nada. E a guarda do vigia contra recarga com o
+     jogo rodando não tinha teste (o mutante que recarrega sempre ficava verde). */
+  it('(g) o módulo chegou depois do alarme: o botão volta a dizer CARREGANDO na hora, e o toque depois não recarrega', async () => {
+    const page = await h.browser.newPage();
+    try {
+      await page.setViewport({ width: 844, height: 390, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+      const presas = [];
+      await page.setRequestInterception(true);
+      page.on('request', req => (new URL(req.url()).pathname.startsWith('/vendor/') ? presas.push(req) : req.continue()));
+      const navegacao = page.goto(`http://localhost:${PORT}/?mobile=1`, { waitUntil: 'domcontentloaded', timeout: 180000 }).catch(() => {});
+      await page.waitForFunction("!!window.__falhaDoBoot && !!document.getElementById('btnNew')", { timeout: 20000, polling: 50 });
+      await page.evaluate(() => window.__falhaDoBoot());
+      const alarme = await page.evaluate(() => document.getElementById('btnNew').textContent);
+      page.removeAllListeners('request');
+      page.on('request', req => req.continue());
+      for (const req of presas.splice(0)) await req.continue().catch(() => {});
+      // o 1º instante em que o módulo rodou (antes do socket e do terreno)
+      const logo = await page.waitForFunction(() => window.__gameModulo === true && {
+        texto: document.getElementById('btnNew').textContent,
+        travado: document.getElementById('btnNew').getAttribute('aria-disabled'),
+      }, { timeout: 120000, polling: 20 }).then(j => j.jsonValue());
+      await navegacao;
+      assert.match(alarme, /NÃO CARREGOU/, 'cenário: o alarme não pintou o botão');
+      assert.doesNotMatch(logo.texto, /NÃO CARREGOU|TENTAR DE NOVO/, `com o jogo carregando, o botão ainda diz: ${logo.texto}`);
+      assert.equal(logo.travado, 'true', 'o botão ficou tocável antes de o jogo ter dono');
+      // o jogo pronto: o toque no botão (o do vigia continua preso nele) começa a partida e NÃO recarrega
+      await page.waitForFunction("/JOGAR|NOVO JOGO/.test(document.getElementById('btnNew').textContent)", { timeout: 120000, polling: 100 });
+      await page.evaluate(() => { window.__mesmaPagina = 1; });
+      const r = await page.evaluate(() => { const e = document.getElementById('btnNew').getBoundingClientRect(); return { x: e.left + e.width / 2, y: e.top + e.height / 2 }; });
+      await page.touchscreen.tap(r.x, r.y);
+      await page.waitForFunction('window.__game && window.__game.state.started', { timeout: 15000 }).catch(() => {});
+      const depois = await page.evaluate(() => ({ mesma: window.__mesmaPagina === 1, started: !!(window.__game && window.__game.state.started) }));
+      assert.equal(depois.mesma, true, 'o toque no botão depois do alarme RECARREGOU a página com o jogo rodando');
+      assert.equal(depois.started, true, 'o toque no botão depois do alarme não começou a partida');
+    } finally { await page.close(); }
+  });
+
   it('boot limpo: sem erro de página', () => {
     assert.deepEqual(h.pageErrors.filter(e => !/vendor\/three|Failed to fetch dynamically|net::ERR_FAILED/i.test(String(e))), []);
   });
