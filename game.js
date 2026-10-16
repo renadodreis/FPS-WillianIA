@@ -5376,14 +5376,14 @@ Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, heightAt, center
       if (Math.abs(p.y - ay) > 3) return false;
       return barra(p.x, p.z, Math.max(v.cfg.half[0], v.cfg.half[2]) * 0.9 + player.radius);
     })) return false;
-    // e o helicóptero pousado: as mesmas caixas que empurram o corpo (js/heli.js);
-    // encostado nele no começo, só barra se o caminho ENTRAR de novo depois de sair
+    // e o helicóptero pousado: as mesmas caixas que empurram o corpo (js/heli.js),
+    // pela regra dos círculos — barra se o caminho entra MAIS FUNDO do que o
+    // jogador já está (encostado com ele atrás, o puxão para longe acontece; com
+    // ele na frente, atravessar era o caminho "que começa dentro": laudo 1ae1a81)
     const n = Math.max(1, Math.ceil(Math.sqrt(L2) / 0.15));
-    let saiu = !Heli.corpoNaFuselagem(ax, ay, az, player.radius);
+    const fundo0 = Heli.profundidadeNaFuselagem(ax, ay, az, player.radius);
     for (let i = 1; i <= n; i++) {
-      const dentro = Heli.corpoNaFuselagem(ax + ux * i / n, ay, az + uz * i / n, player.radius);
-      if (dentro && saiu) return false;
-      if (!dentro) saiu = true;
+      if (Heli.profundidadeNaFuselagem(ax + ux * i / n, ay, az + uz * i / n, player.radius) > fundo0 + 1e-3) return false;
     }
     /* e pedra, árvore, cacto, barril, tenda: o mesmo círculo e a mesma faixa
        de altura do empurrão do corpo (updatePlayer) — o puxão atravessava

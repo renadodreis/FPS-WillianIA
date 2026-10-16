@@ -224,18 +224,25 @@ export function createHeli(deps) {
       player.pos.z = group.position.z - lx * s + lz * c;
     }
   }
-  /* o MESMO teste do empurrão, sem empurrar: um corpo de raio r com o pé em
-     (x, y, z) entraria na fuselagem? (o puxão do canhão confere o caminho) */
-  function corpoNaFuselagem(x, y, z, r = 0.42) {
-    if (state.flying || api.destruido) return false;
+  /* o MESMO teste do empurrão, sem empurrar: quão FUNDO um corpo de raio r
+     com o pé em (x, y, z) está na fuselagem — o quanto o empurrão o moveria
+     (0 = fora). O puxão do canhão confere o caminho por ela: barra se ENTRA
+     mais fundo do que o jogador já está. Dentro/fora não basta: o corpo
+     empurrado fica na face exata, e o arredondamento da rotação o deixa
+     1 ulp dentro ou fora (laudo 1ae1a81, [NC] 1). */
+  function profundidadeNaFuselagem(x, y, z, r = 0.42) {
+    if (state.flying || api.destruido) return 0;
     const c = Math.cos(group.rotation.y), s = Math.sin(group.rotation.y);
     const dx = x - group.position.x, dz = z - group.position.z;
     const lx = dx * c - dz * s, lz = dx * s + dz * c;
+    let fundo = 0;
     for (const cx of TIPOS.heli.caixas) {
       if (y + ALTURA_CORPO < group.position.y + cx.min[1] || y >= group.position.y + cx.max[1] - 0.12) continue;
-      if (lx > cx.min[0] - r && lx < cx.max[0] + r && lz > cx.min[2] - r && lz < cx.max[2] + r) return true;
+      const x0 = cx.min[0] - r, x1 = cx.max[0] + r, z0 = cx.min[2] - r, z1 = cx.max[2] + r;
+      if (lx <= x0 || lx >= x1 || lz <= z0 || lz >= z1) continue;
+      fundo = Math.max(fundo, Math.min(lx - x0, x1 - lx, lz - z0, z1 - lz));
     }
-    return false;
+    return fundo;
   }
   /* EXPLODIU: some do mundo. O grupo desce para longe — o prompt de PILOTAR
      (js/interact.js, js/xr/xrinteract.js) mede distância até ele. */
@@ -253,7 +260,7 @@ export function createHeli(deps) {
     group.visible = true;
     if (group.position.y < -1000) group.position.set(hs.x, hs.y + 0.05, hs.z);
   }
-  const api = { group, update, tryEnter, exit, assentoXR, remover, restaurar, corpoNaFuselagem, setRemotePose,
+  const api = { group, update, tryEnter, exit, assentoXR, remover, restaurar, profundidadeNaFuselagem, setRemotePose,
     destruido: false, semSustentacao: false, get vel() { return vel; } };
   return api;
 }

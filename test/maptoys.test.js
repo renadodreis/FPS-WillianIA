@@ -350,7 +350,7 @@ describe('Atrações do mapa 🎪', () => {
 
   it('o puxão do canhão não atravessa o HELICÓPTERO pousado no caminho', async () => {
     // a âncora: as caixas do casco (js/veiculo-vida.js), na conta DESTE teste — não a
-    // função do produto (`corpoNaFuselagem`), que com defeito ainda leria verde
+    // função do produto (`profundidadeNaFuselagem`), que com defeito ainda leria verde
     const VV = await import(url.pathToFileURL(path.join(__dirname, '..', 'js', 'veiculo-vida.js')).href);
     const caixas = VV.TIPOS.heli.caixas.map(c => ({ min: [...c.min], max: [...c.max] }));
     const r = await h.play(caixas => {
@@ -385,6 +385,87 @@ describe('Atrações do mapa 🎪', () => {
     assert.ok(r.ok, 'o canhão recusou o disparo');
     assert.ok(r.quadros >= 10, `cenário: ${r.quadros} quadros de carga`);
     assert.equal(r.dentro, 0, `puxado através do helicóptero: ${r.dentro} de ${r.quadros} quadros dentro da fuselagem`);
+  });
+
+  /* laudo 1ae1a81, [NC] 1: ENCOSTADO no helicóptero com ele NA FRENTE, o puxão
+     o levava ATRAVÉS da fuselagem. O empurrão põe o corpo na face exata, e a
+     ida e a volta pela rotação arredondam essa coordenada — às vezes 1 ulp para
+     DENTRO. A regra velha ("encostado no começo: só barra se ENTRAR de novo
+     depois de sair") deixava passar o caminho que começa dentro e sai do outro
+     lado; quando o arredondamento cai para dentro em TODO quadro da carga, o
+     último quadro (k = 1) salta para o centro. O validador achou isso em 12 de
+     12 colocações com giro de 90° e de 270° exatos — aqui, as mesmas: giro de
+     mundo π/2 e 3π/2, aproximação pelos quatro eixos, duas distâncias e dois
+     deslocamentos laterais, com o corpo posto 3 cm dentro e o EMPURRÃO DO
+     PRODUTO o levando à face. Régua deste teste: as caixas do casco
+     (js/veiculo-vida.js) e o SEGMENTO andado em cada quadro contra elas. */
+  async function heliEncostado(lado) {
+    const VV = await import(url.pathToFileURL(path.join(__dirname, '..', 'js', 'veiculo-vida.js')).href);
+    const caixas = VV.TIPOS.heli.caixas.map(c => ({ min: [...c.min], max: [...c.max] }));
+    return h.play(({ caixas, lado }) => {
+      const G = window.__game, QA = window.QA, cn = G.Cannon, sp = cn.spot, P = QA.MP.player, Hl = G.Heli;
+      for (const v of G.Car.vehicles) if (Math.hypot(v.chassisBody.position.x - sp.x, v.chassisBody.position.z - sp.z) < 14) {
+        v.chassisBody.position.set(sp.x + 60, G.heightAt(sp.x + 60, sp.z) + 1, sp.z + 60); v.chassisBody.velocity.set(0, 0, 0);
+      }
+      const out = [];
+      for (const ry of [Math.PI / 2, 3 * Math.PI / 2]) for (const [ux, uz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const lat of [0, 0.3]) {
+        const c = Math.cos(ry), s = Math.sin(ry), r = P.radius;
+        const local = (hx, hz, x, z) => { const dx = x - hx, dz = z - hz; return [dx * c - dz * s, dx * s + dz * c]; };
+        const naCaixa = (hx, hy, hz, x, y, z, m) => {
+          const [lx, lz] = local(hx, hz, x, z);
+          return caixas.some(b => lx > b.min[0] - m && lx < b.max[0] + m && lz > b.min[2] - m && lz < b.max[2] + m
+            && y + 1.7 > hy + b.min[1] && y < hy + b.max[1] - 0.12);
+        };
+        /* "frente": o helicóptero entre o jogador e o centro; "atrás": do outro
+           lado. Onde o corpo encosta, na reta e do lado do jogador: */
+        const sinal = lado === 'frente' ? 1 : -1;
+        let t = 0;
+        while (naCaixa(0, 0, 0, sinal * ux * t - uz * lat, 0, sinal * uz * t + ux * lat, r)) t += 0.01;
+        const dJog = lado === 'frente' ? 4.3 : 3.0;
+        const dHeli = lado === 'frente' ? dJog - t : dJog + t;
+        if (lado === 'frente' && dHeli < 0.6) continue;   // a cauda na reta: o helicóptero cobriria o canhão
+        const hx = sp.x + ux * dHeli + uz * lat, hz = sp.z + uz * dHeli - ux * lat;
+        Hl.group.position.set(hx, G.heightAt(hx, hz), hz); Hl.group.rotation.y = ry;
+        QA.tick(2);
+        const hy = Hl.group.position.y;
+        // o polegar EMPURRANDO a lataria: 3 cm dentro, e o quadro o empurra à face
+        QA.reset(hx + sinal * ux * (t - 0.03) - uz * lat, hz + sinal * uz * (t - 0.03) + ux * lat); QA.tick(1);
+        const p0 = { x: P.pos.x, z: P.pos.z };
+        const ok = cn.fire();
+        let quadros = 0, cruzou = 0, salto = 0, px = P.pos.x, pz = P.pos.z;
+        for (let i = 0; i < 60 && cn.state === 'charge'; i++) {
+          QA.tick(1); quadros++;
+          // o segmento do quadro, de 2 em 2 cm, contra as caixas (sem o raio)
+          const L = Math.hypot(P.pos.x - px, P.pos.z - pz), n = Math.max(1, Math.ceil(L / 0.02));
+          for (let k = 1; k <= n; k++) if (naCaixa(hx, hy, hz, px + (P.pos.x - px) * k / n, P.pos.y, pz + (P.pos.z - pz) * k / n, 0)) { cruzou++; break; }
+          salto = Math.max(salto, L); px = P.pos.x; pz = P.pos.z;
+        }
+        const noCentro = Math.hypot(P.pos.x - sp.x, P.pos.z - sp.z);
+        const longe = Math.hypot(p0.x - sp.x, p0.z - sp.z);
+        for (let i = 0; i < 600 && cn.state !== 'idle'; i++) QA.tick(1);
+        out.push({ caso: `${Math.round(ry * 180 / Math.PI)}°/${ux},${uz}/${lat}`, ok, quadros, cruzou, salto, noCentro, longe });
+      }
+      Hl.group.position.set(sp.x + 80, G.heightAt(sp.x + 80, sp.z - 80), sp.z - 80); Hl.group.rotation.y = 0;
+      QA.tick(3);
+      return out;
+    }, { caixas, lado });
+  }
+
+  it('ENCOSTADO no helicóptero com ele NA FRENTE, o puxão não o atravessa (giro de 90° e 270°)', async t => {
+    const casos = (await heliEncostado('frente')).filter(c => c.longe <= 4.6);   // onde o USAR alcança
+    const ruins = casos.filter(c => c.cruzou > 0);
+    t.diagnostic(`${casos.length} colocações alcançáveis; atravessaram ${ruins.length}${ruins[0] ? ' — ex.: ' + ruins[0].caso + `, salto ${ruins[0].salto.toFixed(2)} m` : ''}`);
+    assert.ok(casos.length >= 12, `cenário: só ${casos.length} colocações alcançáveis`);
+    for (const c of casos) assert.ok(c.ok && c.quadros >= 10, `cenário: ${c.caso}: disparo ${c.ok}, ${c.quadros} quadros de carga`);
+    assert.deepEqual(ruins.map(c => `${c.caso}: o caminho do quadro cruzou o casco ${c.cruzou}×, salto ${c.salto.toFixed(2)} m`), []);
+  });
+
+  it('o avesso: encostado no helicóptero com ele ATRÁS, o puxão para longe dele acontece', async t => {
+    const casos = await heliEncostado('atras');
+    const presos = casos.filter(c => !(c.ok && c.noCentro < 0.5));
+    t.diagnostic(`${casos.length} colocações; não puxadas: ${presos.length}${presos[0] ? ' — ex.: ' + presos[0].caso + ` a ${presos[0].noCentro.toFixed(2)} m` : ''}`);
+    assert.ok(casos.length >= 12, `cenário: só ${casos.length} colocações`);
+    assert.deepEqual(presos.map(c => `${c.caso}: termina a ${c.noCentro.toFixed(2)} m do centro`), []);
   });
 
   it('o puxão do canhão não atravessa pedra/árvore/cacto no caminho (o mesmo círculo do corpo)', async () => {
