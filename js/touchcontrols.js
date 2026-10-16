@@ -893,6 +893,7 @@ export function createTouchControls(deps) {
     tipoDoPonteiro(e);
     pressedEl.set(act, btn);
     capture(btn, e.pointerId);
+    armarFantasma(e, btn);
     pressAct(act);
     paint(act);
   }
@@ -1233,6 +1234,49 @@ export function createTouchControls(deps) {
   win.addEventListener('pointerdown', marcarToque, true);
   win.addEventListener('pointerup', marcarToque, true);
   win.addEventListener('mousedown', engolirCompat, true);
+
+  /* ---- o `click` do MESMO toque de um botão é do botão (laudo 1ae1a81,
+     §A.5 — C9/E9). O ≡ pausa na DESCIDA do dedo e o #overlay aparece no
+     mesmo quadro; o `preventDefault()` do pointerdown corta só o mouse de
+     compatibilidade ("Canceling this event also prevents subsequent firing
+     of compatibility mouse events", Pointer Events 3, §4.1.3.1) — o `click`
+     do toque sai mesmo assim, e o Chrome o entrega ao que está no TOPO no
+     ponto do toque (medido: a captura do ponteiro não o segura no botão).
+     Era o #overlay, que retomava em 4–11 ms; em 667×375, o CONFIGURAÇÕES.
+     O remédio é o clickbuster do Google ("Creating Fast Buttons for Mobile
+     Web Applications": click em captura no corpo, perto de onde um toque
+     acabou de terminar, é cancelado — 25 px, 2,5 s), com duas diferenças:
+     só engole o `click` que caiu FORA do botão que o dedo apertou (o que
+     cai nele mesmo segue — é o gesto que destrava o áudio, br-game.js), e
+     um toque NOVO no mesmo lugar desarma (o defeito conhecido do
+     clickbuster é comer o toque rápido seguinte). ---- */
+  const FANTASMA_PX = 32, FANTASMA_MS = 800;
+  let fantasma = null;   // { id, btn, x, y, soltou }
+  function armarFantasma(e, btn) {
+    fantasma = { id: e.pointerId, btn, x: e.clientX, y: e.clientY, soltou: Infinity };
+  }
+  const pertoDoFantasma = e => Math.hypot(e.clientX - fantasma.x, e.clientY - fantasma.y) <= FANTASMA_PX;
+  function fantasmaPointer(e) {
+    if (!fantasma) return;
+    if (e.pointerId === fantasma.id) {
+      if (e.type === 'pointerup') fantasma.soltou = agora();
+      else if (e.type === 'pointercancel') fantasma = null;   // gesto cancelado não gera click
+    } else if (e.type === 'pointerdown' && pertoDoFantasma(e)) fantasma = null;
+  }
+  function engolirFantasma(e) {
+    const f = fantasma;
+    if (!f) return;
+    if (agora() - f.soltou > FANTASMA_MS) { fantasma = null; return; }
+    if (!pertoDoFantasma(e)) return;
+    fantasma = null;
+    if (e.target && f.btn.contains && f.btn.contains(e.target)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+  win.addEventListener('pointerdown', fantasmaPointer, true);
+  win.addEventListener('pointerup', fantasmaPointer, true);
+  win.addEventListener('pointercancel', fantasmaPointer, true);
+  win.addEventListener('click', engolirFantasma, true);
 
   if (btnsEl) btnsEl.addEventListener('pointerdown', onBtnDown);
   if (avisoPrompt) avisoPrompt.addEventListener('pointerdown', onAvisoDown);
