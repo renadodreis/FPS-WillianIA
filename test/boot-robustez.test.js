@@ -95,7 +95,7 @@ describe('menu nasce sem handler (index.html)', () => {
 
 describe('br-game.js indisponível (Chrome headless)', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   let h;
-  const PORT = 3300;
+  const PORT = 4174;   // fora da 3300: servidor de dev de outro projeto a ocupava (o harness exige porta fixa)
   before(async () => {
     // 404 do br-game.js pelo caminho REAL: a requisição é abortada e o
     // <script> injetado dispara `error`.
@@ -130,7 +130,7 @@ describe('br-game.js indisponível (Chrome headless)', { skip: !CHROME && 'Chrom
 
 describe('queda de socket com o menu na tela (Chrome headless)', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   let h;
-  const PORT = 3301;
+  const PORT = 4175;
   before(async () => {
     h = await bootGame({ port: PORT, autoStart: false, extraEnv: { COUNTDOWN_S: '60' } });
     // o lobby BR só existe depois que br-game.js carrega e boota
