@@ -47,6 +47,38 @@ import { NEXUS } from './paredes.js';
    vértices da lataria no referencial do chassi, percentis 0,5–99,5 % em
    planta e 99,5 % no teto): buggy x ±1,73 z ±0,73 teto 0,54; esportivo
    x −1,82…1,81 z ±0,74 teto 0,52; caminhão x −2,47…2,54 z ±1,03 teto 2,14. */
+/* AS CAIXAS DO HELICÓPTERO SÃO AS PEÇAS DESENHADAS (js/heli.js — os números
+   são os de lá; test/heli-caixas-bala). Eram duas: o leme passava 40 cm da
+   caixa da cauda, e mastro, esquis e suportes não tinham caixa — a bala
+   atravessava 0,41 m² de desenho por vista (laudo 1ae1a81, §A.3). O rotor e
+   o rotor de cauda giram e não seguram bala. Peça fina que não segue um eixo
+   vira caixas em fatias: o cone afina (r 0,30 → 0,16) e o suporte do esqui é
+   uma haste INCLINADA — numa caixa só, a quina sobrava no ar ("caixa maior
+   que o desenho é bala parando no ar"). A 1ª é a fuselagem: a fumaça e o
+   alvo do estilhaço (js/veiculos.js) leem `caixas[0]`. */
+function caixasDoHeli() {
+  const c = [
+    { min: [-1.35, 0.40, -0.80], max: [2.05, 1.90, 0.80] },    // fuselagem 3,1 × 1,5 × 1,6 em x 0,2; vidro até 2,05
+    { min: [-2.20, 1.15, -0.30], max: [-0.90, 1.75, 0.30] },   // cone da cauda, metade grossa
+    { min: [-3.50, 1.22, -0.23], max: [-2.20, 1.68, 0.23] },   // … e a fina
+    { min: [-3.65, 1.35, -0.06], max: [-3.15, 2.25, 0.06] },   // leme 0,5 × 0,9 × 0,12 em (−3,4; 1,8)
+    { min: [0.08, 1.90, -0.12], max: [0.32, 2.30, 0.12] },     // mastro, acima da fuselagem
+  ];
+  for (const z of [0.78, -0.78]) c.push({ min: [-0.90, 0.13, z - 0.05], max: [1.70, 0.23, z + 0.05] });   // esquis
+  // suportes: haste r 0,04 × 0,65 em (sx; 0,55; ±0,7), inclinada 0,4 rad em x
+  const meia = 0.65 / 2, r = 0.04, FATIAS = 3;
+  for (const sx of [-0.5, 1.1]) for (const sz of [0.7, -0.7]) {
+    const th = sz > 0 ? 0.4 : -0.4, uy = Math.cos(th), uz = Math.sin(th);
+    for (let i = 0; i < FATIAS; i++) {
+      const a = -meia + 2 * meia * i / FATIAS, b = -meia + 2 * meia * (i + 1) / FATIAS;
+      const y0 = 0.55 + a * uy, y1 = 0.55 + b * uy, z0 = sz + a * uz, z1 = sz + b * uz;
+      c.push({ min: [sx - r, Math.min(y0, y1) - r * Math.abs(uz), Math.min(z0, z1) - r * uy],
+               max: [sx + r, Math.max(y0, y1) + r * Math.abs(uz), Math.max(z0, z1) + r * uy] });
+    }
+  }
+  return c.map(b => Object.freeze({ min: Object.freeze(b.min.map(v => +v.toFixed(4))), max: Object.freeze(b.max.map(v => +v.toFixed(4))) }));
+}
+
 export const TIPOS = Object.freeze({
   buggy: Object.freeze({
     nome: 'BUGGY', vida: 780, acimaDoChao: 0.58, raio: 1.95,
@@ -60,14 +92,9 @@ export const TIPOS = Object.freeze({
     nome: 'CAMINHÃO MILITAR', vida: 1760, acimaDoChao: 0.554, raio: 2.84,
     caixas: Object.freeze([{ min: [-2.47, -0.20, -1.03], max: [2.54, 2.14, 1.03] }]),
   }),
-  /* fuselagem + cabine de vidro (js/heli.js: 3,1 × 1,5 × 1,6 em x 0,2,
-     vidro até x 2,05) e o cone da cauda com o leme. O rotor não segura bala. */
   heli: Object.freeze({
-    nome: 'HELICÓPTERO', vida: 2180, acimaDoChao: 0, raio: 3.64,
-    caixas: Object.freeze([
-      { min: [-1.35, 0.40, -0.80], max: [2.05, 1.90, 0.80] },
-      { min: [-3.55, 1.15, -0.30], max: [-0.90, 1.85, 0.30] },
-    ]),
+    nome: 'HELICÓPTERO', vida: 2180, acimaDoChao: 0, raio: 3.66,
+    caixas: Object.freeze(caixasDoHeli()),
   }),
 });
 export const HELI = 'heli';

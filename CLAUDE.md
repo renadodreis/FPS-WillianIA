@@ -284,6 +284,16 @@ escrita pelo validador — quem constrói não edita).
   mira passa pelo helicóptero (a câmera de perseguição fica 10 m atrás). XR
   mantém a ordem antiga (contrato de frame do corpo/arma); dirigindo também
   (física, e não se atira dirigindo).
+- **O `click` do MESMO toque é do botão apertado** (js/touchcontrols.js,
+  `engolirFantasma`). O `preventDefault()` do `pointerdown` corta só o mouse
+  de compatibilidade; o `click` do toque sai mesmo assim e o Chrome o entrega
+  ao que está NO TOPO no ponto (a captura do ponteiro não segura). O ≡ pausa
+  na descida, o #overlay aparece, e o `click` caía nele e RETOMAVA em 4–11 ms
+  (ou abria o CONFIGURAÇÕES, conforme o viewport). O `click` que cai FORA do
+  botão é engolido (≤ 32 px, até 0,8 s depois de soltar); no próprio botão
+  segue (é o gesto que destrava o áudio); toque novo no lugar desarma.
+  **Toque de teste é `Input.dispatchTouchEvent`**: `PointerEvent` despachado
+  à mão não gera `click`, e foi assim que `touch-controls` ficou verde.
 - **Bot sem terreno é CEGO** (ouve e investiga, não atira) e grita no stderr.
   Antes, `lineOfSight(null)` via através de tudo.
 - **Agachar é replicado** (`state.crouch` 0..1 → `playerUpdate.crouch`) e o
@@ -369,6 +379,13 @@ escrita pelo validador — quem constrói não edita).
   harness, e `QA.tick` por cima faz o jogo andar MAIS RÁPIDO que o relógio
   (medido: 47 m/s aparentes a 105 km/h) — regra de servidor que mede
   velocidade por relógio recusa o que é legítimo. Use `sleep`, não tick.
+  **As caixas do helicóptero são as PEÇAS desenhadas** (`caixasDoHeli`,
+  19 caixas: fuselagem, cone em 2 fatias, leme, mastro, esquis e suportes
+  em fatias — haste inclinada numa caixa só sobra no ar). Eram 2, e a bala
+  atravessava leme, mastro e esquis. Âncora do teste: a SUPERFÍCIE das
+  malhas amostrada a 2 cm (`test/heli-caixas-bala`) — por vértice, cilindro
+  de um segmento só tem as pontas. `caixas[0]` é a fuselagem (fumaça e
+  estilhaço leem só ela).
 - **Marca `noBullet` em parede** (js/paredes.js): segura o CORPO mas deixa a
   bala passar — guarda-corpo vazado da escada da Torre Nexus (como o
   `playerclip` do Source). Antes barrava bala: 90 quadros de fuzil, 120 → 120
@@ -408,7 +425,11 @@ escrita pelo validador — quem constrói não edita).
   de argolas é desenhado para o tiro que sai do centro dele — na trajetória
   REAL, com o arrasto do voo, `trajetoriaDoCanhao`: pela balística ideal a 5ª
   argola ficava depois do pouso e o curso não completava; a CARGA puxa o
-  jogador da beira para o centro — se nenhum veículo estiver no caminho — e o
+  jogador da beira para o centro — se nenhum veículo ou obstáculo estiver no
+  caminho; barra o caminho que entra MAIS FUNDO do que o jogador já está, no
+  círculo e no helicóptero (`profundidadeNaFuselagem`): dentro/fora não basta,
+  o corpo empurrado fica na face exata e a rotação o arredonda 1 ulp para
+  dentro, e "começou dentro" deixava atravessar a fuselagem inteira — e o
   voo vai para a ARGOLA que a mira cruza (ou 30 m à frente): da beira, voar na
   direção da câmera saía paralelo, e mirando a 1ª argola o ponto a 30 m
   ficava fora do curso; a mira lê `vistaMundo()` (em XR, com giro
