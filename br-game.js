@@ -282,6 +282,9 @@
         shipLocalTgt: null, shipLocalCur: null,
         heldWeapon: 'FACA', wpnScale: 0, fireT: 0, hitT: 0, deadT: 0,
         lastPos: group.position.clone(), speed: 0, walkPh: 0,
+        // pacotes de posição no relógio de quem mandou: desenho no passado
+        // recente, entre os dois que cercam o instante (js/interp-rede.js)
+        interp: MP.InterpRede.criarInterpolador(),
         // postura: `crouchTgt` é a do servidor; `crouch` é a DESENHADA (anda
         // suave até a outra no brTick) — esferas e perna seguem a desenhada
         crouch: 0, crouchTgt: 0, nome,
@@ -800,6 +803,7 @@
     let shipLocalPos = null; // Vector3 LOCAL (y = piso); null fora da fase SHIP
     const _shipPose = { x: 0, y: 0, z: 0, yaw: 0, k: 0 };
     const _swArr = [0, 0, 0]; // scratch local<->mundo (zero alocação por frame)
+    const _interp = { x: 0, y: 0, z: 0, yaw: 0 }; // scratch do desenho dos remotos
     function buildShip() {
       const D = SHIP_DIMS;
       const g = new THREE.Group();
@@ -1643,10 +1647,13 @@
     /* =============== morte → recap → espectador =============== */
     let myDeathInfo = null; // preenchido pelo playerKilled (victim == eu)
     let forceDeath = false; // servidor me matou (zona/AFK): aplica na primeira chance
-    window.__MP_respawn = function () { // chamado pelo jogo 3.6s após a morte
-      MP.setTimeScale(1);
-      // morreu dirigindo/voando: sai do veículo, senão a câmera fica presa no carro no espectador
-      try { if (G.state.driving || G.state.flying) G.tryToggleCar(); } catch (e) {}
+    let morteReportada = 0; // nº da partida em que o `died` já saiu
+    /* chamado pelo jogo NO INSTANTE da morte: o desfecho é do servidor, e ele
+       precisa saber agora — não 3,6 s depois, quando a câmera lenta acaba */
+    window.__MP_died = function () {
+      if (morteReportada === S.matchNum) return;
+      morteReportada = S.matchNum;
+      S.mortoEm = performance.now();
       const cause = MP.player.lastDamageCause || { type: 'environment' };
       // A causa é gravada apenas quando o dano realmente entra. Tiros que chegam
       // durante a animação de morte não podem substituir o autor do golpe letal.
@@ -1668,8 +1675,13 @@
           byZone: cause.type === 'gas',
           cause: { type: cause.type },
         },
-        (err, res) => { if (!err && res && res.placement) S.myPlacement = res.placement; showRecap(); });
-      setTimeout(showRecap, 1500); // garantia caso o ack não venha
+        (err, res) => { if (!err && res && res.placement) S.myPlacement = res.placement; });
+    };
+    window.__MP_respawn = function () { // chamado pelo jogo 3.6s após a morte
+      MP.setTimeScale(1);
+      // morreu dirigindo/voando: sai do veículo, senão a câmera fica presa no carro no espectador
+      try { if (G.state.driving || G.state.flying) G.tryToggleCar(); } catch (e) {}
+      showRecap();
     };
     // o jogo checa esta flag na morte: sem ela, cairia no location.reload() do solo
     // e a morte nunca seria reportada ao servidor (kill perdida + fantasma na partida)
@@ -1841,6 +1853,8 @@
       hm.at = d.heli ? now : 0;
       rp.targetPos.set(d.pos[0], groundedBot ? MP.heightAt(d.pos[0], d.pos[2]) : d.pos[1], d.pos[2]);
       rp.targetYaw = d.rotY || 0;
+      MP.InterpRede.receber(rp.interp, d.t, performance.now(),
+        rp.targetPos.x, rp.targetPos.y, rp.targetPos.z, rp.targetYaw);
       rp.ship = !!d.ship;
       // posição LOCAL na cabine (já validada pelo servidor): interpola no
       // referencial da nave; sem ela (server antigo) cai no lerp mundial
@@ -1973,7 +1987,11 @@
         // veículo INTEIRO no caminho recusa o dano; o MEU veículo não conta
         if (!(MP.rayBlockedAt(_bv, _bp, len, VEI.meu()) < len - 0.15)) { alcanca = true; break; }
       }
-      if (!alcanca) return;
+      /* conta para o log (`diag`): tiro que o atirador viu entrar e a minha
+         posição de AGORA tampou — com RTT + atraso de desenho, quem dobra a
+         esquina recusa o que acertou na tela do outro */
+      if (!alcanca) { Diag.hitTampado++; return; }
+      Diag.hitOk++;
       MP.playerDamage(d.dmg, { x: f[0], y: f[1], z: f[2] },
         { type: 'player', attackerId: d.shooterId, weapon: d.weapon });
     });
@@ -2081,7 +2099,12 @@
         MP.showBanner('🏆 <b>VITÓRIA</b><small>último de pé</small>', VICTORY_BEAT_MS);
         MP.setTimeScale(0.42);
         setTimeout(finish, VICTORY_BEAT_MS);
-      } else finish();
+      } else {
+        /* a morte que ENCERRA a partida chega ao servidor na hora (__MP_died):
+           o placar espera a câmera lenta do perdedor acabar em vez de cortá-la */
+        const resta = MP.player.dead && S.mortoEm ? 3600 - (performance.now() - S.mortoEm) : 0;
+        if (resta > 0) setTimeout(finish, resta); else finish();
+      }
       let n = d.nextIn;
       const iv = setInterval(() => {
         n--;
@@ -2141,7 +2164,7 @@
        física dele e mando a pose (o servidor confere e repassa aos outros) —
        senão o servidor e os outros o deixavam onde eu saí, a até 53 m de onde
        ele parou, e quem chegava nele ouvia "Veículo ocupado!". */
-    let carroSolto = null;   // { idx, ate, parado }
+    let carroSolto = null;   // { idx, ate, paradoDesde }
     function claimCar(idx) {
       myCarClaim = idx;
       socket.timeout(2500).emit('enterCar', { idx }, (err, res) => {
@@ -2163,7 +2186,12 @@
       }
     });
 
-    /* =============== envio do meu estado (10x/s) =============== */
+    /* =============== envio do meu estado (20x/s) ===============
+       Era 10/s. Os outros me desenham no passado por um intervalo de envio +
+       o tremor da rede (js/interp-rede.js): a 20/s são ~50 ms a menos de
+       atraso na tela deles. O servidor conta o anti-teleporte e o teto de
+       `state` pelo RELÓGIO, não por pacote — o ritmo não muda regra nenhuma. */
+    const ENVIO_MS = 50;
     setInterval(() => {
       if (!window.__BR_active || !MP.state.started || MP.state.paused) return;
       if (S.phase === 'SPECT' || S.phase === 'ENDED' || MP.player.dead) return;
@@ -2189,7 +2217,7 @@
         if (car >= 0 && myCarClaim !== car) tomar = car;
         else if (car < 0 && myCarClaim >= 0) {
           largar = myCarClaim;
-          carroSolto = { idx: myCarClaim, ate: performance.now() + 10000, parado: 0 };
+          carroSolto = { idx: myCarClaim, ate: performance.now() + 10000, paradoDesde: 0 };
           myCarClaim = -1;
         }
         const solto = carroSolto && G.Car.vehicles[carroSolto.idx];
@@ -2202,12 +2230,16 @@
              `state` volátil — o ex-motorista sumia para todos enquanto o
              carro rolava (laudo afb1ae8, §4.1) */
           soltoDoTique = { idx: carroSolto.idx, pos: [b.position.x, b.position.y, b.position.z], rotY: _eulSolto.y };
-          // parado meio segundo: acabou (a física dos outros assenta dali)
-          if (b.velocity.length() < 0.3) { if (++carroSolto.parado >= 5) carroSolto = null; } else carroSolto.parado = 0;
+          // parado meio segundo (relógio, não tiques): acabou (a física dos outros assenta dali)
+          if (b.velocity.length() >= 0.3) carroSolto.paradoDesde = 0;
+          else if (!carroSolto.paradoDesde) carroSolto.paradoDesde = performance.now();
+          else if (performance.now() - carroSolto.paradoDesde >= 500) carroSolto = null;
         }
       }
       const st = {
         pos: [p.x, p.y, p.z], rotY, car, heli,
+        // meu relógio: os outros me desenham pelo espaçamento de envio (js/interp-rede.js)
+        t: Math.round(performance.now()),
         ship: S.phase === 'SHIP', fall: S.phase === 'FALL', chute: S.phase === 'FALL' && S.chuteOpen,
         heldWeapon: localWeaponCode(),
         /* agachado: o `crouchT` do game.js (0..1), só a pé no chão. O servidor
@@ -2233,7 +2265,7 @@
          se perde: sai no próximo flush */
       if (tomar >= 0) claimCar(tomar);
       if (largar >= 0) socket.emit('leaveCar', { idx: largar });
-    }, 100);
+    }, ENVIO_MS);
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ'), _eulSolto = new THREE.Euler(0, 0, 0, 'YXZ');
     /* o carro solto de OUTRO: segue a pose que o servidor repassou, como o
        carro de quem dirige (abaixo), até os pacotes pararem */
@@ -2255,7 +2287,7 @@
        de um jogador travou/fechou 82 s depois do começo da partida e não havia
        como saber de quê: este resumo sai a cada 20 s e logo depois de um
        quadro > 1 s — o que chega antes de uma queda conta a história dela. */
-    const Diag = { desde: performance.now(), n: 0, pior: 0, q100: 0, q500: 0, ctxLost: 0, oculta: 0, err: '', ultimo: 0 };
+    const Diag = { desde: performance.now(), n: 0, pior: 0, q100: 0, q500: 0, ctxLost: 0, oculta: 0, err: '', ultimo: 0, hitOk: 0, hitTampado: 0 };
     let maquinaDiag = null;
     function diagQuadro(ms) {
       Diag.n++;
@@ -2279,9 +2311,10 @@
         fps: Diag.n / seg, pior: Diag.pior, q100: Diag.q100, q500: Diag.q500,
         heap: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null,
         rtt: window.__MP_ping, ctxLost: Diag.ctxLost, oculta: Diag.oculta, err: Diag.err,
+        hitOk: Diag.hitOk, hitTampado: Diag.hitTampado,
         ...maquinaDiag,
       });
-      Object.assign(Diag, { desde: agora, n: 0, pior: 0, q100: 0, q500: 0, oculta: 0, err: '', ultimo: agora });
+      Object.assign(Diag, { desde: agora, n: 0, pior: 0, q100: 0, q500: 0, oculta: 0, err: '', ultimo: agora, hitOk: 0, hitTampado: 0 });
     }
     setInterval(enviarDiag, 20000);
     document.addEventListener('visibilitychange', () => { Diag.trocouVisib = true; if (document.hidden) Diag.oculta++; });
@@ -2411,6 +2444,7 @@
         }
         // visível também na nave (todo mundo viaja na cabine); some dentro de carro/heli
         rp.group.visible = rp.alive && rp.car < 0 && !rp.heli;
+        let porInterp = false;
         if (rp.ship && rp.shipLocalCur && ship && S.plan) {
           // na cabine: interpola em coordenadas LOCAIS e converte com a pose
           // ATUAL — sem rastro na translação da nave; pés no piso
@@ -2421,13 +2455,23 @@
           rp.group.position.set(_swArr[0], _swArr[1], _swArr[2]);
           // pernas animam pela caminhada LOCAL (não pelos ~40 m/s da nave)
           rp.speed = Math.hypot(rp.shipLocalCur.x - px, rp.shipLocalCur.z - pz) / Math.max(dt, 0.001);
+        } else if (MP.InterpRede.amostrar(rp.interp, nowMs, _interp)) {
+          /* entre os dois pacotes que cercam (agora − atraso): velocidade
+             desenhada = a de quem anda. O lerp atrás do ÚLTIMO pacote
+             acelerava e freava a cada um (10 Hz) — MQ-6 */
+          rp.group.position.set(_interp.x, _interp.y, _interp.z);
+          rp.speed = rp.lastPos.distanceTo(rp.group.position) / Math.max(dt, 0.001);
+          porInterp = true;
         } else {
           rp.group.position.lerp(rp.targetPos, k);
           rp.speed = rp.lastPos.distanceTo(rp.group.position) / Math.max(dt, 0.001);
         }
-        let dy = rp.targetYaw - rp.yaw;
-        dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-        rp.yaw += dy * k;
+        if (porInterp) rp.yaw = _interp.yaw;
+        else {
+          let dy = rp.targetYaw - rp.yaw;
+          dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+          rp.yaw += dy * k;
+        }
         rp.group.rotation.y = rp.yaw;
         rp.lastPos.copy(rp.group.position);
         rp.walkPh += dt * Math.min(rp.speed, 9) * 1.6;

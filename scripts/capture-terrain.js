@@ -38,7 +38,7 @@ const output = path.resolve(process.argv[3] || path.join(__dirname, '..', 'outpu
     // acha pontos representativos por bioma, deterministicamente
     const spots = await page.evaluate(() => {
       const G = window.__game, MP = window.__MP;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true;
       G.forceStart();
       for (const a of (G.Animals && G.Animals.list) || []) a.alive = false;

@@ -35,7 +35,7 @@ const output = path.join(__dirname, '..', 'output', 'gamefeel');
     await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction('window.__game && window.__MP', { timeout: 60000 });
     await page.evaluate(() => {
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true;
       window.__game.forceStart();
       const P = window.__MP.player;

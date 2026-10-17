@@ -35,7 +35,7 @@ const outFile = path.join(__dirname, '..', 'output', 'weapon-spatial.json');
     await page.waitForFunction('window.__game && window.__game.WeaponModels', { timeout: 60000, polling: 250 });
     const data = await page.evaluate(async () => {
       const G = window.__game, MP = window.__MP, THREE = MP.THREE;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true;
       G.forceStart();
       await G.WeaponModels.ready;

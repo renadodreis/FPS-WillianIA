@@ -107,7 +107,8 @@ describe('Dano — causa explícita e compatível', { skip: !CHROME && 'Chrome n
         fromPos: [victim.pos[0] + 3, victim.pos[1] + 1.5, victim.pos[2]],
       });
       await new Promise(resolve => setTimeout(resolve, 150));
-      await h.play(() => window.__QA_originalRespawn());
+      // o reporte sai no instante da morte (__MP_died); aqui, depois do tiro tardio
+      await h.play(() => window.__QA_originalDied());
 
       const event = await killed;
       assert.equal(event.killerId, host.id, 'o tiro tardio apagou o atacante letal');

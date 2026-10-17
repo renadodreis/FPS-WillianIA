@@ -43,7 +43,7 @@ const SECONDS = +(process.argv[3] || 150);
 
   await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction('window.__game && window.__MP && window.__BR_debug', { timeout: 60000, polling: 250 });
-  await page.evaluate(() => { window.__MP_active = true; window.__MP_respawn = () => {}; });
+  await page.evaluate(() => { window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {}; });
 
   // ---------- host bot: reivindica host, liga 4 bots, inicia ----------
   const host = io(`http://localhost:${PORT}`, { transports: ['websocket'] });

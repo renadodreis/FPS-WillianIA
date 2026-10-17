@@ -37,7 +37,7 @@ const check = (name, ok, detail = '') => { console.log(`  ${ok ? '✔' : '✘'} 
     await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction('window.__game && window.__MP', { timeout: 60000, polling: 250 });
     await page.evaluate(async () => {
-      const G = window.__game; window.__MP_active = true; window.__MP_respawn = () => {};
+      const G = window.__game; window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       G.forceStart(); G.Env.tod = 0.5; G.tick(1 / 60);
       await new Promise(r => setTimeout(r, 1200));
       G.state.cinematic = true;

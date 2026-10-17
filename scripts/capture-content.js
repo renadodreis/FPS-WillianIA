@@ -37,7 +37,7 @@ const output = path.join(__dirname, '..', 'output', 'content');
     await page.waitForFunction('window.__game && window.__game.MapToys', { timeout: 90000, polling: 250 });
     await page.evaluate(() => {
       const G = window.__game;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = false;   // solo: segredos ativos
       G.forceStart();
       G.Env.tod = 0.42; G.state.paused = true;

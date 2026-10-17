@@ -42,7 +42,7 @@ const output = path.join(__dirname, '..', 'output', SUBDIR);
     await page.waitForFunction('window.__game && window.__MP', { timeout: 60000, polling: 250 });
     await page.evaluate(async () => {
       const G = window.__game;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       G.forceStart();
       G.Env.tod = 0.5; G.tick(1 / 60); // meio-dia, assenta luzes
       await new Promise(r => setTimeout(r, 1500));

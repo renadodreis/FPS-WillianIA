@@ -148,7 +148,7 @@ async function main() {
     await page.waitForFunction('window.__game && window.__MP', { timeout: 60000, polling: 250 });
     const castleState = await page.evaluate(async () => {
       const G = window.__game;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       G.forceStart();
       G.Env.tod = 0.5; // meio-dia
       await Promise.all([
@@ -292,7 +292,7 @@ async function main() {
     });
     const fallbackState = await fallbackPage.evaluate(async () => {
       const G = window.__game, MP = window.__MP;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       G.forceStart();
       const c = G.Structures.castle;
       await c.ready;

@@ -19,7 +19,7 @@ async function main() {
     await page.evaluateOnNewDocument(() => {
       window.requestAnimationFrame = () => 0;
       window.__MP_active = true;
-      window.__MP_respawn = () => {};
+      window.__MP_respawn = () => {}; window.__MP_died = () => {};
     });
     page.on('pageerror', e => errors.push(String(e)));
     page.on('console', m => {
@@ -30,7 +30,7 @@ async function main() {
 
     await page.evaluate(() => {
       const G = window.__game, MP = window.__MP;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       if (MP.socket && MP.socket.io && typeof MP.socket.io.off === 'function') MP.socket.io.off('reconnect');
       G.forceStart();
       G.Env.tod = 0.5;

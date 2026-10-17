@@ -172,6 +172,10 @@ const cleanSoft = s => String(s == null ? '' : s).replace(/[<>&]/g, '').trim();
 const cleanNick = n => clean(n).slice(0, 14) || 'Recruta';
 // texto do cliente que vai para o LOG: uma linha só, sem controle, com teto
 // (um "\n[CHEAT] ..." no nick ou no `diag` forjaria linha própria no log)
+// anti-teleporte: recusando seguido por este tempo, a posição re-ancora (lag extremo legítimo)
+const RECUSA_ANCORA_MS = 1000;
+// `state` por jogador: rajada máxima e ritmo sustentado (o cliente manda 20/s)
+const STATE_RAJADA = 60, STATE_POR_S = 30;
 const paraLog = (s, max = 60) => String(s == null ? '' : s)
   // eslint-disable-next-line no-control-regex -- tirar controle é o objetivo
   .replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, ' ').replace(/"/g, "'").slice(0, max);
@@ -1309,7 +1313,8 @@ io.on('connection', socket => {
     p.diagMaquina = true;
     console.log(`[DIAG] ${paraLog(p.nick, 14)} ${faseDoJogador(p)}${tempoDePartida()}` +
       ` fps=${n(d.fps, 1000)} pior=${n(d.pior, 600000)}ms >100ms=${n(d.q100, 1e5)} >500ms=${n(d.q500, 1e5)}` +
-      ` heap=${n(d.heap, 1e5)}MB rtt=${n(d.rtt, 1e5)}ms ctxLost=${n(d.ctxLost, 99)} oculta=${n(d.oculta, 99)}${maquina}` +
+      ` heap=${n(d.heap, 1e5)}MB rtt=${n(d.rtt, 1e5)}ms ctxLost=${n(d.ctxLost, 99)} oculta=${n(d.oculta, 99)}` +
+      ` levou=${n(d.hitOk, 1e4)} tampou=${n(d.hitTampado, 1e4)}${maquina}` +
       (d.err ? ` err="${paraLog(d.err, 120)}"` : ''));
   });
 
@@ -1459,7 +1464,7 @@ io.on('connection', socket => {
     pos[1] = Math.max(-100, Math.min(600, pos[1]));
     pos[2] = Math.max(-WORLD, Math.min(WORLD, pos[2]));
     const now = Date.now();
-    /* BURACO DE PACOTE: o cliente manda `state` a 10 Hz. Mais de 1,5 s sem
+    /* BURACO DE PACOTE: o cliente manda `state` a 20 Hz. Mais de 1,5 s sem
        nenhum, vivo na partida, é aba travada (o laço do jogo parou) ou rede
        parada — e os outros o viram congelar e teleportar. Medido na
        CHEGADA, antes de qualquer recusa do anti-teleporte. */
@@ -1469,6 +1474,14 @@ io.on('connection', socket => {
     }
     p.chegouState = now;
     p.chegouStateNum = match.num;
+    /* TETO DE `state`: o cliente honesto manda 20/s, e cada pacote é repassado
+       para a sala inteira — sem teto, quem inunda multiplica o tráfego de todos.
+       Balde de fichas: a rajada de quem volta de 3 s de rede parada (60
+       represados) passa inteira; o ritmo sustentado acima de 30/s não. */
+    const fichas = Math.min(STATE_RAJADA, (p.stateFichas ?? STATE_RAJADA) + (now - (p.stateFichasT || now)) * STATE_POR_S / 1000);
+    p.stateFichasT = now;
+    if (fichas < 1) { p.stateFichas = fichas; return; }
+    p.stateFichas = fichas - 1;
 
     /* ---- anti-cheat: teleporte/speedhack e abuso do flag "ship" ----
        rejeitado = posição não propaga e lastState não renova (vira AFK pra zona) */
@@ -1511,13 +1524,16 @@ io.on('connection', socket => {
         // carro esportivo ~42 m/s, queda 46 m/s: acima de 90/120 é teleporte
         if (hSpd > 90 || vSpd > 120) {
           p.strikes = (p.strikes || 0) + 1;
-          p.rejects = (p.rejects || 0) + 1;
-          if (p.strikes === 20) console.log(`[CHEAT] ${p.nick} (${socket.id}) movimento impossível: ${hSpd.toFixed(0)} m/s`);
-          if (p.strikes > 120) { console.log(`[CHEAT] ${p.nick} expulso por speedhack`); socket.disconnect(true); return; }
-          if (p.rejects <= 10) return; // rejeita; após 10 seguidas re-ancora (lag extremo legítimo)
-          p.rejects = 0;
+          if (!p.recusaDesde) p.recusaDesde = now;
+          if (p.strikes === 20) console.log(`[CHEAT] ${paraLog(p.nick, 14)} (${socket.id}) movimento impossível: ${hSpd.toFixed(0)} m/s`);
+          if (p.strikes > 120) { console.log(`[CHEAT] ${paraLog(p.nick, 14)} expulso por speedhack`); socket.disconnect(true); return; }
+          /* rejeita; depois de RECUSA_ANCORA_MS recusando seguido, re-ancora
+             (lag extremo legítimo). Pelo RELÓGIO: contada em pacotes (eram 10),
+             quem manda 100/s re-ancorava um teleporte em 0,1 s */
+          if (now - p.recusaDesde < RECUSA_ANCORA_MS) return;
+          p.recusaDesde = 0;
         } else {
-          p.rejects = 0;
+          p.recusaDesde = 0;
           if (hSpd > 55) p.strikes = (p.strikes || 0) + 1; // suspeito, mas passa
         }
       }
@@ -1559,6 +1575,10 @@ io.on('connection', socket => {
       shipLocal: p.ship && p.shipLocal ? p.shipLocal : undefined,
       nick: p.nick, colors: p.colors, bot: !!p.bot, heldWeapon: p.heldWeapon,
       crouch: p.crouch,
+      /* relógio do REMETENTE (performance.now dele): os outros desenham o
+         boneco entre os pacotes pelo espaçamento de ENVIO, não de chegada
+         (js/interp-rede.js). Só serve para desenho — nada aqui confia nele. */
+      t: Number.isFinite(d.t) ? d.t : undefined,
     });
     if (largou) io.emit('carFree', { idx: d.largar });
   });

@@ -19,7 +19,7 @@ async function main() {
     await page.evaluateOnNewDocument(() => {
       window.requestAnimationFrame = () => 0;
       window.__MP_active = true;
-      window.__MP_respawn = () => {};
+      window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true;
     });
     page.on('pageerror', e => errors.push(String(e)));

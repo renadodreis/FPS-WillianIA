@@ -34,7 +34,7 @@ const output = path.join(__dirname, '..', 'output', 'chest');
     await page.waitForFunction('window.__game && !!window.__game.buildChest', { timeout: 60000, polling: 250 });
     const report = await page.evaluate(() => {
       const G = window.__game, MP = window.__MP;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true;
       G.forceStart();
       G.Env.tod = 0.5; G.state.paused = true;

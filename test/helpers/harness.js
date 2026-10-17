@@ -201,10 +201,25 @@ async function bootGame({
     // As flags existem antes do primeiro tick: sob máquina carregada, uma morte
     // no boot não pode cair no fluxo errado e destruir o contexto do QA.
     await page.evaluateOnNewDocument(onlineNaPagina => {
+      /* NEUTRALIZA A MORTE ONLINE guardando a função REAL. O br-game.js
+         publica os ganchos quando sobe, e isso pode ser antes OU depois da
+         neutralização do boot: guardar "o que estiver lá" gravava a função
+         VAZIA como original numa parte das execuções (e o gancho real ficava
+         ativo). A vazia é marcada; o startBRMatch chama isto de novo com o
+         br-game já de pé. */
+      window.__QA_neutralizarMorte = () => {
+        for (const [gancho, original] of [['__MP_respawn', '__QA_originalRespawn'], ['__MP_died', '__QA_originalDied']]) {
+          const f = window[gancho];
+          if (typeof f === 'function' && !f.__qaNeutro) window[original] = f;
+          const neutro = () => {};
+          neutro.__qaNeutro = true;
+          window[gancho] = neutro;
+        }
+      };
       if (onlineNaPagina) {
         window.__MP_active = true;
         window.__BR_active = true;
-        window.__MP_respawn = () => {};
+        window.__QA_neutralizarMorte();
       } else {
         /* SOLO DE VERDADE. O servidor de QA está no ar (ele serve a página),
            então sem esta bandeira o cliente BR bootaria e publicaria
@@ -256,8 +271,8 @@ async function bootGame({
       // a morte online devolve o fluxo pro servidor — no QA o respawn é neutro
     if (onlineNaPagina) {
       window.__MP_active = true;
-      window.__QA_originalRespawn = window.__MP_respawn;
-      window.__MP_respawn = () => {};
+      // respawn e o reporte da morte (no instante dela): o servidor não a marca morta
+      window.__QA_neutralizarMorte();
       // IA fora do caminho: __BR_active desliga Enemies/Night/Boss no tick
       // (o hitscan continua acertando os bonecos parados) e os animais morrem
       window.__BR_active = true;
@@ -352,6 +367,8 @@ async function waitForBRClientReady(h) {
       ' && window.__MP_init.id === window.__MP.socket.id',
     { timeout: 60000 },
   );
+  // br-game de pé: os ganchos de morte publicados por ele são os reais
+  await h.play(() => { if (window.__QA_neutralizarMorte && window.__MP_active) window.__QA_neutralizarMorte(); });
 }
 
 /* O SERVIDOR NÃO ACREDITA NO TELEPORTE DO HARNESS.

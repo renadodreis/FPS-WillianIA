@@ -1358,6 +1358,7 @@ function tickPlayingBot(world, b, zone, t, dt, rng) {
   b.yaw = combatFacingYaw(b, target, action, dx, dz);
   b.s.volatile.emit('state', {
     pos: [b.x, b.y, b.z], rotY: b.yaw, heldWeapon: b.weapon, car: -1,
+    t: Math.round(performance.now()), // relógio de envio: os clientes desenham por ele (js/interp-rede.js)
   });
   const profile = WEAPON_PROFILES[action.weapon] || WEAPON_PROFILES.FACA;
   const fromPos = [b.x, b.y + AI.EYE_H, b.z];
@@ -1413,12 +1414,12 @@ function tickBots(world, t, rng = Math.random) {
       const w = ShipProto.localToWorld(ShipProto.poseAt(plan.ship, t), local);
       [b.x, b.y, b.z] = w;
       if (t >= b.jumpAt) b.phase = 'FALL';
-      b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, shipLocal: local, heldWeapon: 'FACA', car: -1 });
+      b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, shipLocal: local, heldWeapon: 'FACA', car: -1, t: Math.round(performance.now()) });
     } else if (b.phase === 'FALL') {
       const groundY = terrain ? chaoDoBot(terrain, b.x, b.z) : 4;
       b.y = Math.max(groundY, b.y - 4.2);
       if (b.y <= groundY + 0.01) b.phase = 'PLAY';
-      b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, fall: true, chute: true, heldWeapon: 'FACA', car: -1 });
+      b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, fall: true, chute: true, heldWeapon: 'FACA', car: -1, t: Math.round(performance.now()) });
     } else {
       tickPlayingBot(world, b, zone, t, dt, rng);
     }

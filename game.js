@@ -28,6 +28,7 @@ import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
 import * as HitCore from './js/hitfeel-core.js';
+import * as InterpRede from './js/interp-rede.js';
 import { createHitFeel } from './js/hitfeel.js';
 import { createWeapons } from './js/weapons.js';
 import { createWeaponRig } from './js/weaponrig.js';
@@ -3299,7 +3300,13 @@ function playerDamage(dmg, fromPos, cause) {
        SOLO não recarrega mais a página — a tela de morte ganhou saída
        própria e JOGAR DE NOVO reinicia a PARTIDA, não o MUNDO (o worldgen
        não roda de novo: a ordem de consumo do rand seedado é contrato). */
-    if (window.__MP_active || window.__BR_active) setTimeout(() => window.__MP_respawn(), 3600);
+    if (window.__MP_active || window.__BR_active) {
+      /* o SERVIDOR sabe na hora (MQ-1): com o `died` esperando os 3,6 s da
+         câmera lenta, o boneco ficava em pé na tela dos outros e o "kill"
+         de quem atirou atrasava 3,5 s. A encenação local segue igual. */
+      if (window.__MP_died) window.__MP_died();
+      setTimeout(() => window.__MP_respawn(), 3600);
+    }
   }
 }
 
@@ -5757,6 +5764,8 @@ window.__MP = {
   // game feel: br-game.js é script clássico e não importa ESM — o núcleo puro
   // e a camada de tela chegam por aqui (ver js/hitfeel-core.js e js/hitfeel.js)
   HitCore, HitFeel,
+  // boneco dos outros desenhado entre os pacotes (br-game.js; js/interp-rede.js)
+  InterpRede,
   FX, DmgNums, SFX, rayBlockedAt, weaponRoot, centerMsg, showBanner,
   WATER_LEVEL, slopeAt, justPressed, world,
   socket: __mpSocket, spawn: __mpSpawn,

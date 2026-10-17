@@ -35,7 +35,7 @@ const output = path.join(__dirname, '..', 'output', 'toys');
     await page.waitForFunction('window.__game && window.__game.MapToys', { timeout: 60000, polling: 250 });
     await page.evaluate(() => {
       const G = window.__game;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true;
       G.forceStart();
       G.Env.tod = 0.5; G.state.paused = true;

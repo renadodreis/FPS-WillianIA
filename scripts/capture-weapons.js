@@ -51,7 +51,7 @@ const onlyModes = flag('modos') && new Set(flag('modos'));
     await page.waitForFunction('window.__game && window.__game.WeaponModels', { timeout: 60000, polling: 250 });
     await page.evaluate(async () => {
       const G = window.__game, MP = window.__MP;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true;
       G.forceStart();
       await G.WeaponModels.ready;

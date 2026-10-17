@@ -56,7 +56,7 @@ const SHOTS = [
     await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction('window.__game && window.__MP', { timeout: 60000, polling: 250 });
     await page.evaluate(async () => {
-      const G = window.__game; window.__MP_active = true; window.__MP_respawn = () => {};
+      const G = window.__game; window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true; // IA/NPCs fora: draw calls estáveis (sem bonecos vagando na cena)
       G.forceStart();
       for (const a of (G.Animals && G.Animals.list) || []) a.alive = false;

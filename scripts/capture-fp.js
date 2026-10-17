@@ -40,7 +40,7 @@ const output = path.join(__dirname, '..', 'output', 'fp');
     await page.waitForFunction('window.__game && window.__game.WeaponModels', { timeout: 60000, polling: 250 });
     await page.evaluate(async () => {
       const G = window.__game;
-      window.__MP_active = true; window.__MP_respawn = () => {};
+      window.__MP_active = true; window.__MP_respawn = () => {}; window.__MP_died = () => {};
       window.__BR_active = true; // sem IA no caminho
       G.forceStart();
       await G.WeaponModels.ready;
