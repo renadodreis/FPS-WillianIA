@@ -536,6 +536,52 @@ escrita pelo validador — quem constrói não edita).
   bala passavam por baixo. **Teste que escolhe parede pela altura da CAIXA
   erra** (caixote com fundação tem caixa de 2,1 m): use altura acima do chão.
 
+## Frente multiplayer
+
+Registro em `docs/multiplayer/`: `criterio.md` (a régua, escrita pelo auditor —
+quem constrói não edita) e um `auditoria-<commit>.md` por rodada.
+
+- **Pronto = `hello`.** O socket conecta no começo do módulo do jogo, antes do
+  mundo; o ouvinte do `matchStart` só existe depois do boot do BR, no MESMO
+  bloco síncrono que emite o `hello` (multiplayer-client.js `boot`). Quem não
+  mandou `hello` quando a partida começa entra ESPECTADOR (`participa` em
+  server.js) — antes ficava VIVO na nave sem nunca mandar estado (o fantasma,
+  86 s até o backstop). O roster leva `carregando`; o `hello` responde a fase
+  por ack, e o cliente que perdeu o `matchStart` recarrega (`__BR_aoHello`).
+  **Cliente de teste sem `hello` não entra na partida — e um `await
+  matchStart` sem timeout TRAVA a suíte** (já aconteceu).
+- **Queda não é saída.** Queda involuntária (`transport close/error`, `ping
+  timeout`) de quem está vivo em partida guarda o personagem por
+  `RECONEXAO_S` (120 s): a connection state recovery do socket.io devolve o
+  MESMO id e os eventos perdidos, e o servidor reencaixa sem `init` (que faria
+  o cliente recarregar). Sair por escolha (`disconnect()` do cliente) e
+  expulsão saem na hora (`sairDaSala`). **Página fechada em PLAYING é
+  `transport close`**: teste que fecha página e espera vitória imediata espera
+  120 s — use `RECONEXAO_S` baixo ou `disconnect()`.
+- **Segundo plano é rotina no celular.** A aba oculta não roda rAF; o `state`
+  sai do `setInterval`. Tudo o que o `state` leva tem de existir sem quadro: a
+  cabine (`shipLocalPos`) nasce no `matchStart`, e o salto do watchdog
+  reprojeta na pose ATUAL da nave — só com quadro velho (com tela viva, o
+  salto sai da posição desenhada: test/ship 16.11 cobra "sem teleporte").
+  **O puppeteer desliga o estrangulamento de timers por padrão**: segundo
+  plano de verdade é janela minimizada (rAF para) e, para timers, Chrome sem
+  as bandeiras `--disable-background-*`.
+- **Rota da nave dentro do quadrado da queda** (±530; a queda prende em
+  ±542): fora dele o salto saía preso na borda e o anti-teleporte via
+  78–230 m num pacote — strike em quem joga limpo em 56,5 % das partidas.
+- **Sala vazia só volta à fábrica depois de `SALA_VAZIA_S` (60 s) vazia**: no
+  `nextMatch` todos recarregam juntos e a sala esvazia por ~250 ms.
+- **Relógio da partida pelo `pingx`** (hora do servidor, amostra de menor ida
+  e volta): o offset do boot vinha de um `init` recebido segundos antes —
+  quem entra no meio via a partida atrasada. Teste de relógio: servidor,
+  navegador e teste rodam na MESMA máquina, então o relógio dela é a régua.
+- **Esfriamento do código diz que é espera** (`esfriando`, `faltam`) e não
+  apaga o código salvo. A política (5 erros por IP) é do dono.
+- **Teste de multiplayer de verdade = navegadores pelo lobby**, não
+  `startBRMatch` (pula a nave) nem dublê de socket. Partida, `nextMatch` com
+  recarga, queda com o `pingTimeout` de produção (o QA usa 10 min) e rede
+  degradada só aparecem assim.
+
 ## Fluxo de trabalho (git flow)
 
 `dev` → `hom` → `prod`. Trabalho novo sai de `dev`; `hom` é o que está em

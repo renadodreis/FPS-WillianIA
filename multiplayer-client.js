@@ -470,6 +470,13 @@
         if (!err && res && res.ok) {
           try { localStorage.setItem('br_hostcode', code); } catch (e) {}
           if (hm) hm.textContent = '👑 você é o anfitrião — só você inicia a partida';
+        } else if (!err && res && res.esfriando) {
+          /* muitas tentativas erradas NESTA rede (o limite é por IP): não é
+             "código errado", e o código salvo fica — a re-reivindicação
+             silenciosa da rodada seguinte tenta de novo quando passar (MP-7) */
+          const s = Math.max(1, +res.faltam || 1);
+          if (hm) hm.textContent = `⏳ muitas tentativas erradas nesta rede — tente de novo em ${s}s`;
+          if (silent) setTimeout(() => claimHost(code, true), s * 1000 + 300);
         } else {
           try { localStorage.removeItem('br_hostcode'); } catch (e) {}
           if (hm && !silent) hm.textContent = '✖ código errado';
@@ -749,20 +756,36 @@
     };
 
     /* ---------- ping (mostrado ao lado do FPS quando habilitado) ---------- */
-    setInterval(() => {
+    let relogio = null;   // a melhor amostra do relógio do servidor (menor ida e volta)
+    function pingar() {
       // Uma aba suspensa pode retomar enquanto o transporte antigo ainda
       // fecha. Emitir nesse intervalo faz o WebSocket tentar escrever em
       // CLOSING/CLOSED; a reconexão cuidará do próximo ping válido.
       if (!socket.connected) return;
       const t0 = performance.now();
-      socket.timeout(4000).emit('pingx', err => {
+      socket.timeout(4000).emit('pingx', (err, horaServidor) => {
         if (!err) {
           const rtt = performance.now() - t0;
           window.__MP_ping = Math.round(rtt);
           S.halfRtt = rtt / 2; // o serverNow chegou atrasado ~meia viagem
+          /* o RELÓGIO da partida pela hora do servidor (algoritmo de Cristian):
+             a amostra de MENOR ida e volta dos últimos 30 s, na mesma convenção
+             do init e do matchStart (hora do servidor − chegada; o `S.now`
+             soma a meia viagem). Antes o offset nascia no boot, com o
+             `serverNow` de um init recebido segundos antes — quem entrava no
+             meio via a partida 2–6,6 s atrasada (MP-6). */
+          if (Number.isFinite(horaServidor)) {
+            const agora = performance.now();
+            if (!relogio || rtt <= relogio.rtt || agora - relogio.t > 30000) {
+              relogio = { rtt, t: agora };
+              S.clockOffset = horaServidor - Date.now();
+            }
+          }
         }
       });
-    }, 2000);
+    }
+    pingar();   // o 1º já no boot: quem entra no meio não espera 2 s com o relógio velho
+    setInterval(pingar, 2000);
 
     /* ---------- reivindica anfitrião: código salvo ou ?host=CODIGO na URL ----------
        mesma fonte usada pela reconexão no lobby (ver handler de `init`) */

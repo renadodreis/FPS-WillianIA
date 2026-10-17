@@ -1282,7 +1282,16 @@ io.on('connection', socket => {
     const nowH = Date.now();
     const ipKey = socket.data.ip || 'unknown';
     const fails = (claimFailByIp.get(ipKey) || []).filter(t => nowH - t < CLAIM_COOLDOWN_MS);
-    if (fails.length >= 5) { claimFailByIp.set(ipKey, fails); if (typeof cb === 'function') cb({ ok: false }); return; }
+    /* esfriando: a resposta DIZ que é espera (e quanto falta) — antes era a
+       mesma recusa do código errado, e o cliente apagava o código salvo e
+       dizia "código errado" até para o código certo, inclusive no aparelho
+       do dono na mesma rede (auditoria do multiplayer 338d153, MP-7) */
+    if (fails.length >= 5) {
+      claimFailByIp.set(ipKey, fails);
+      const faltam = Math.max(1, Math.ceil((fails[fails.length - 5] + CLAIM_COOLDOWN_MS - nowH) / 1000));
+      if (typeof cb === 'function') cb({ ok: false, esfriando: true, faltam });
+      return;
+    }
     const ok = clean(d && d.code).toUpperCase() === HOST_CODE;
     if (!ok) fails.push(nowH);
     claimFailByIp.set(ipKey, fails);
@@ -1294,8 +1303,10 @@ io.on('connection', socket => {
     if (typeof cb === 'function') cb({ ok });
   });
 
-  /* latência: o cliente mede o RTT deste ack */
-  socket.on('pingx', cb => { if (typeof cb === 'function') cb(); });
+  /* latência e RELÓGIO: o cliente mede o RTT deste ack e acerta o relógio da
+     partida pela hora do servidor (MP-6: quem entra no meio usava o
+     `serverNow` de um init recebido segundos antes do boot) */
+  socket.on('pingx', cb => { if (typeof cb === 'function') cb(Date.now()); });
 
   /* resumo de quadros do cliente (br-game.js, a cada 20 s e logo depois de
      um engasgo): só vai para o LOG — nada de estado de jogo depende dele.
