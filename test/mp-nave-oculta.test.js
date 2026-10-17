@@ -68,18 +68,25 @@ describe('app em segundo plano durante a nave', { skip: !CHROME && 'Chrome não 
         const pose = ShipProto.poseAt(plan, (u.t + offset - ms.t0) / 1000);
         return Math.hypot(u.pos[0] - pose.x, u.pos[2] - pose.z);
       });
+      /* a 1ª pose da queda contra a ROTA da nave entre o fim do voo (o salto
+         automático: o watchdog confere a cada 0,5 s) e a chegada do pacote —
+         a nave do teste voa a ~130 m/s, e o pacote chega depois do salto */
       const queda = ups.find(u => u.fall);
       let erroSalto = null;
       if (queda) {
-        const pose = ShipProto.poseAt(plan, (queda.t + offset - ms.t0) / 1000);
-        erroSalto = Math.hypot(queda.pos[0] - pose.x, queda.pos[2] - pose.z);
+        const tq = (queda.t + offset - ms.t0) / 1000;
+        erroSalto = Infinity;
+        for (let tt = FLY - 0.6; tt <= tq + 0.05; tt += 0.02) {
+          const pose = ShipProto.poseAt(plan, tt);
+          erroSalto = Math.min(erroSalto, Math.hypot(queda.pos[0] - pose.x, queda.pos[2] - pose.z));
+        }
       }
-      t.diagnostic(`aba ${oculto}; poses aceitas na nave: ${naNave.length} (maior erro ${erros.length ? Math.max(...erros).toFixed(1) : '—'} m); 1ª da queda a ${erroSalto == null ? '—' : erroSalto.toFixed(1)} m da nave`);
+      t.diagnostic(`aba ${oculto}; poses aceitas na nave: ${naNave.length} (maior erro ${erros.length ? Math.max(...erros).toFixed(1) : '—'} m); 1ª da queda a ${erroSalto == null ? '—' : erroSalto.toFixed(1)} m da rota da nave`);
       assert.equal(oculto, 'hidden', 'cenário: a aba não ficou oculta');
       assert.ok(naNave.length >= 20, `o servidor recusou a posição na nave: ${naNave.length} poses aceitas em ${FLY} s`);
       assert.ok(Math.max(...erros) < 25, `pose aceita fora da nave: ${Math.max(...erros).toFixed(1)} m`);
       assert.ok(queda, 'o salto automático não chegou ao servidor (aba oculta)');
-      assert.ok(erroSalto < 60, `o salto automático saiu a ${erroSalto.toFixed(1)} m da nave`);
+      assert.ok(erroSalto < 30, `o salto automático saiu a ${erroSalto.toFixed(1)} m da rota da nave`);
     } finally {
       clearInterval(pulso);
       const { windowId } = await cdp.send('Browser.getWindowForTarget');

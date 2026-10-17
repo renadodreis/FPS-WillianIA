@@ -1245,12 +1245,12 @@ io.on('connection', socket => {
     p.nick = cleanNick(d && d.nick);
     p.bot = !!(d && d.bot);
     if (d && Array.isArray(d.colors)) p.colors = BRColors.sanitizeColors(d.colors); // hex validado: nunca vira avatar branco
+    // pronto ANTES do roster: senão o 1º roster dele ainda dizia "carregando"
+    const primeiro = !p.greeted;
+    p.greeted = true;
     broadcastRoster();
     // o lobby emite hello a cada tecla digitada no nick — só anuncia UMA vez
-    if (!p.greeted) {
-      p.greeted = true;
-      sysChat(`${p.nick} entrou${p.spectator ? ' (espectador até a próxima partida)' : ''}`);
-    }
+    if (primeiro) sysChat(`${p.nick} entrou${p.spectator ? ' (espectador até a próxima partida)' : ''}`);
   });
 
   socket.on('requestStart', () => {
