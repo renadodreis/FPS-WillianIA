@@ -157,6 +157,12 @@
       .brSub { text-align: center; opacity: .7; font-size: 12px; letter-spacing: 3px; margin: 4px 0 14px; }
       .brRow { display: flex; gap: 20px; align-items: flex-start; }
       .brCol { flex: 1; min-width: 0; }
+      /* NO CELULAR A SALA VEM PRIMEIRO: o cartão rola dentro de ~300 px, e na
+         ordem do desktop (nick, cores, prévia) a lista de quem está na sala e
+         o COMEÇAR ficavam em y 550–706 numa tela de 360 (auditoria do
+         multiplayer 338d153, MQ-3). O desktop segue a ordem do DOM. */
+      .brColMain { display: flex; flex-direction: column; }
+      html.mobile #brSala { order: -1; }
       .brH { font-size: 11px; letter-spacing: 3px; opacity: .65; margin: 12px 0 6px; }
       .brBtn { display: block; width: 100%; margin-top: 16px; padding: 12px; text-align: center; cursor: pointer;
         background: #ffd76a; color: #1a1408; font-weight: 800; letter-spacing: 3px; border-radius: 8px; border: 0; font-size: 15px; }
@@ -328,7 +334,7 @@
         <div class="brSub">BATTLE ROYALE · PARTIDA #${S.matchNum + 1} · mapa novo a cada rodada</div>
         ${extra || ''}
         <div class="brRow">
-          <div class="brCol">
+          <div class="brCol brColMain"><div id="brPerfil">
             <div class="brH">SEU NICK</div>
             <input id="brNick" class="brInput" maxlength="14" value="${esc(S.nick)}">
             <div class="brH">CORES DO PERSONAGEM</div>
@@ -348,6 +354,7 @@
               <canvas id="brPreview" width="132" height="168"
                 style="width:110px;height:150px;border-radius:9px;background:linear-gradient(160deg,#1b2536,#0c1017);flex:none;box-shadow:inset 0 0 0 1px #ffffff14"></canvas>
             </div>
+            </div><div id="brSala">
             <div class="brH">NA SALA</div>
             <div class="brPlayers" id="brLobbyList">—</div>
             <button class="brBtn" id="brStartBtn" disabled>AGUARDANDO O ANFITRIÃO...</button>
@@ -358,6 +365,7 @@
               <button class="brBtn" id="brHostBtn" style="width:auto;margin-top:0;padding:8px 14px;font-size:12px">OK</button>
             </div>
             <div id="brHostMsg" style="font-size:11px;opacity:.75;margin-top:4px"></div>
+            </div>
             <button class="brBtn" id="brCfgBtn"
               style="background:#3a4250;color:#e8f1f8;margin-top:10px">⚙ GRÁFICOS &amp; ÁUDIO</button>
           </div>
