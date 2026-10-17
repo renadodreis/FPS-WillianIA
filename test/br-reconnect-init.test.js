@@ -39,24 +39,30 @@ describe('BR — reconexão na janela sem br-game.js',
         assert.equal(await h.play(() => !!window.__BR_debug), false,
           'pré-condição inválida: br-game bootou antes da janela sob teste');
 
-        const socketAntes = await h.play(() => window.__MP.socket.id);
-        // queda de transporte REAL (o que a rede ruim / main thread travada
-        // faz sozinha): o socket.io reconecta e o servidor manda um init novo
-        await h.play(() => window.__MP.socket.io.engine.close());
-        await h.page.waitForFunction(
-          `window.__MP.socket.connected && window.__MP.socket.id !== ${JSON.stringify(socketAntes)}`,
-          { timeout: 30000 });
+        /* queda de transporte REAL (o que a rede ruim / main thread travada
+           faz sozinha): o socket.io reconecta e o servidor manda um init novo.
+           Com a recuperação de sessão (MP-2, server.js) o id pode ser o MESMO —
+           então "INIT.id === socket.id" sozinho passaria sem adotar nada: a
+           prova da adoção é o `serverNow` do init renovado. */
+        const serverNowAntes = await h.play(() => {
+          const s = window.__MP.socket;
+          window.__reconectou = false;
+          s.once('disconnect', () => s.once('connect', () => { window.__reconectou = true; }));
+          s.io.engine.close();
+          return window.__MP_init.serverNow;
+        });
+        await h.page.waitForFunction('window.__reconectou && window.__MP.socket.connected', { timeout: 30000 });
 
         // a identidade tem de acompanhar o socket AINDA na janela sem br-game
-        const janela = await h.play(async () => {
+        const janela = await h.play(async antes => {
           const fim = Date.now() + 8000;
           for (;;) {
-            const ok = window.__MP_init.id === window.__MP.socket.id;
+            const ok = window.__MP_init.id === window.__MP.socket.id && window.__MP_init.serverNow > antes;
             const brBootou = !!window.__BR_debug;
             if (ok || brBootou || Date.now() > fim) return { ok, brBootou };
             await new Promise(r => setTimeout(r, 50));
           }
-        });
+        }, serverNowAntes);
         assert.equal(janela.brBootou, false,
           'pré-condição inválida: br-game bootou antes de a reconexão ser julgada');
         assert.equal(janela.ok, true,
