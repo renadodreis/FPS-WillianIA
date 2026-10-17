@@ -684,8 +684,13 @@ function prewarmIfIdle(nowMs) {
   prewarmNextAt = nowMs + 1000;
   // sem await no loop: rejeição aqui viraria unhandledrejection no console
   Promise.resolve(prewarm.flush())
-    // no BR, depois do que falta na contagem de agora, as contagens da partida (uma por janela)
-    .then(() => (window.__BR_active ? prewarm.luzes(LUZES_EXTRAS_DO_BR, luzesDeAquecer) : false))
+    /* no BR, depois do que falta na contagem de agora, as contagens da
+       partida — só ANTES de ela começar: a pausa do BR não para o mundo (em
+       VR, abrir o painel caindo com 20 ms de compilação por quadro deixou o
+       painel 13,4 m atrás do olho, test/xr-criterio-i4-estados). Em VR a
+       fatia é de 4 ms: o quadro do headset tem 13,9 ms. */
+    .then(() => (window.__BR_active && !state.started
+      ? prewarm.luzes(LUZES_EXTRAS_DO_BR, luzesDeAquecer, XR.presenting ? 4 : 20) : false))
     .then(trabalhou => { if (trabalhou) prewarmNextAt = 0; })   // fatia feita: a próxima no quadro seguinte
     .catch(() => {}).finally(() => { prewarmBusy = false; });
 }

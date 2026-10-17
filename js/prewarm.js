@@ -175,7 +175,7 @@ export function createPrewarm({ renderer, scene, camera, alvo = null }) {
     }
     return fila;
   }
-  async function warmLightVariant(extras, luzes) {
+  async function warmLightVariant(extras, luzes, fatiaMs = FATIA_MS) {
     if (!renderer) return false;
     for (const k of extras) {
       let feitos = porVariante.get(k);
@@ -190,7 +190,7 @@ export function createPrewarm({ renderer, scene, camera, alvo = null }) {
         for (const o of fila) {
           prontos.push(compilarAgora(o));
           for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m) feitos.add(chaveDe(o, m));
-          if (agora() - t0 > FATIA_MS) break;
+          if (agora() - t0 > fatiaMs) break;
         }
       } catch (e) {
         stats.errors++;
@@ -208,8 +208,8 @@ export function createPrewarm({ renderer, scene, camera, alvo = null }) {
     /* Linka uma fatia (≤ 20 ms) do que falta na primeira contagem de luzes
        extras com pendência; true = trabalhou (chame de novo no próximo
        quadro). `luzes`: PointLights de intensidade 0 criadas por quem chama
-       (criar Object3D consome o rand seedado). */
-    luzes(extras, luzes) { return warmLightVariant(extras, luzes); },
+       (criar Object3D consome o rand seedado). `fatiaMs`: teto por quadro. */
+    luzes(extras, luzes, fatiaMs) { return warmLightVariant(extras, luzes, fatiaMs); },
 
     /* Linka tudo que ainda falta na raiz dada (padrão: a cena toda).
        Chame só em janela segura — boot, lobby, contagem regressiva. */
