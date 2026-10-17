@@ -43,8 +43,12 @@ describe('o carro solto (rola depois que o motorista sai)', { skip: !CHROME && '
      47 m/s aparentes a 105 km/h no velocímetro) */
   const quadro = (ms = 100) => sleep(ms);
 
+  /* o salto até o carro é recusado pelo anti-teleporte por 1 s de RELÓGIO
+     (server.js, RECUSA_ANCORA_MS) e só então re-ancora — a 20 Hz, como o
+     cliente real */
   async function hostEm(pos) {
-    for (let i = 0; i < 14; i++) { host.emit('state', { pos, rotY: 0, heldWeapon: 'FUZIL' }); await sleep(25); }
+    const t0 = Date.now();
+    while (Date.now() - t0 < 1300) { host.emit('state', { pos, rotY: 0, heldWeapon: 'FUZIL' }); await sleep(50); }
     await sleep(150);
   }
   async function paginaEm(x, z) {

@@ -43,7 +43,12 @@ describe('Rodas de carros remotos (BR)', { skip: !CHROME && 'Chrome não encontr
      o cenário do teste vira outro. Assentar aqui é o que um jogador de verdade
      faz: ele ANDA até o carro antes de dirigir. */
   async function botSettlesInCar(p0) {
-    await botDrives(20, () => ({ pos: [p0[0] + 3, 4.4, p0[1]], rotY: 0, heldWeapon: 'PISTOLA' }));
+    /* o salto do spawn até o carro é recusado pelo anti-teleporte por 1 s de
+       RELÓGIO (server.js, RECUSA_ANCORA_MS) e só então re-ancora — contar
+       pacotes deixava re-ancorar em 0,1 s com rajada. Assentar menos que isso
+       deixa o remoto "longe do carro" para o servidor */
+    const t0 = Date.now();
+    while (Date.now() - t0 < 1300) await botDrives(1, () => ({ pos: [p0[0] + 3, 4.4, p0[1]], rotY: 0, heldWeapon: 'PISTOLA' }));
     /* e PEDE o carro, como o cliente real (br-game.js, claimCar): o servidor
        só repassa como motorista quem ele arbitrou — e só a quem está ao lado */
     const r = await new Promise((res, rej) => bot.timeout(3000).emit('enterCar', { idx: 1 }, (e, d) => (e ? rej(e) : res(d))));

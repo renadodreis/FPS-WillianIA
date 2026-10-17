@@ -52,8 +52,11 @@ describe('veículo com vida no jogo (BR online)', { skip: !CHROME && 'Chrome nã
 
   /* põe o bot-host em `pos` com o servidor aceitando (anti-teleporte:
      re-ancora depois de 10 recusas) e espera a página ver o boneco lá */
+  /* o salto é recusado pelo anti-teleporte por 1 s de RELÓGIO (server.js,
+     RECUSA_ANCORA_MS) e só então re-ancora — a 20 Hz, como o cliente real */
   async function hostEm(pos, extra = {}) {
-    for (let i = 0; i < 14; i++) { host.emit('state', { pos, rotY: 0, heldWeapon: 'FUZIL', ...extra }); await sleep(25); }
+    const t0 = Date.now();
+    while (Date.now() - t0 < 1300) { host.emit('state', { pos, rotY: 0, heldWeapon: 'FUZIL', ...extra }); await sleep(50); }
     for (let k = 0; k < 40; k++) {
       const ok = await h.play((id, p) => {
         const rp = window.__BR_debug.remotes.get(id);
