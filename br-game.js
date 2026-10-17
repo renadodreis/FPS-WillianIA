@@ -1093,10 +1093,14 @@
     }
     function jumpFromShip() {
       if (S.phase !== 'SHIP') return;
-      /* salta de onde a nave ESTÁ: o salto automático vem do watchdog com a
-         aba oculta (sem quadro), e a posição de mundo era a de quando a aba
-         sumiu — ~900 m da nave (MP-3) */
-      if (shipLocalPos && S.plan) { ShipProto.poseAt(S.plan.ship, S.matchT(), _shipPose); shipProject(_shipPose); }
+      /* salta de onde a nave ESTÁ quando o quadro é VELHO: o salto automático
+         vem do watchdog com a aba oculta (sem quadro), e a posição de mundo era
+         a de quando a aba sumiu — ~900 m da nave (MP-3). Com a tela viva o
+         quadro acabou de projetar: o salto sai da posição desenhada, sem os
+         milímetros que a nave andou desde então (test/ship 16.11) */
+      if (shipLocalPos && S.plan && performance.now() - lastRaf > 250) {
+        ShipProto.poseAt(S.plan.ship, S.matchT(), _shipPose); shipProject(_shipPose);
+      }
       S.phase = 'FALL';
       S.jumped = true;
       shipLocalPos = null; // estado da cabine morre aqui; a pos MUNDIAL fica intacta
