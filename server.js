@@ -1325,8 +1325,26 @@ io.on('connection', socket => {
     console.log(`[DIAG] ${paraLog(p.nick, 14)} ${faseDoJogador(p)}${tempoDePartida()}` +
       ` fps=${n(d.fps, 1000)} pior=${n(d.pior, 600000)}ms >100ms=${n(d.q100, 1e5)} >500ms=${n(d.q500, 1e5)}` +
       ` heap=${n(d.heap, 1e5)}MB rtt=${n(d.rtt, 1e5)}ms ctxLost=${n(d.ctxLost, 99)} oculta=${n(d.oculta, 99)}` +
-      ` levou=${n(d.hitOk, 1e4)} tampou=${n(d.hitTampado, 1e4)}${maquina}` +
+      ` levou=${n(d.hitOk, 1e4)} tampou=${n(d.hitTampado, 1e4)}` +
+      ` prog=${n(d.prog, 1e4)} tex=${n(d.tex, 1e5)} geo=${n(d.geo, 1e6)}${maquina}` +
       (d.err ? ` err="${paraLog(d.err, 120)}"` : ''));
+  });
+
+  /* CAIXA-PRETA (br-game.js): a aba que morre — crash do Chrome, falta de
+     memória, GPU — não se despede. O cliente grava um resumo no navegador
+     durante o jogo e o apaga ao sair direito; se sobrou, a aba anterior
+     MORREU, e a abertura seguinte conta aqui. Só log; uma por conexão. */
+  socket.on('caixaPreta', d => {
+    const p = players.get(socket.id);
+    if (!p || p.caixaPreta || !d || typeof d !== 'object') return;
+    p.caixaPreta = true;
+    const n = (v, max) => (Number.isFinite(+v) ? Math.round(Math.max(0, Math.min(max, +v))) : '?');
+    const fase = ['LOBBY', 'COUNTDOWN', 'SHIP', 'FALL', 'PLAY', 'SPECT', 'ENDED'].includes(d.fase) ? d.fase : '?';
+    console.log(`[CRASH] ${paraLog(p.nick, 14)}: a aba anterior morreu sem fechar há ${n(d.idade, 1e9)}s` +
+      ` — partida ${n(d.partida, 1e6)} t=${n(d.t, 1e5)}s fase=${fase} ${d.oculta ? 'oculta' : 'visível'}` +
+      ` heap=${n(d.heap, 1e5)}MB pior=${n(d.pior, 600000)}ms >500ms=${n(d.q500, 1e5)}` +
+      ` prog=${n(d.prog, 1e4)} tex=${n(d.tex, 1e5)} geo=${n(d.geo, 1e6)} ctxLost=${n(d.ctxLost, 99)}` +
+      ` gpu="${paraLog(d.gpu, 80)}"`);
   });
 
   /* regras da sala: só o anfitrião altera (GOLEM, animais, ciclo dia/noite) */

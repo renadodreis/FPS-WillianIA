@@ -41,5 +41,7 @@ describe('Diagnóstico — o cliente conta os engasgos ao servidor', () => {
     const primeira = h.serverLog().split('\n').find(l => l.startsWith('[DIAG]'));
     assert.match(primeira, /gpu="[^"]+"/, 'a 1ª linha devia trazer a GPU: ' + primeira);
     assert.match(primeira, /cores=[1-9]/);
+    // shaders compilados e memória da GPU, do renderer de verdade
+    assert.match(linha, /prog=[1-9]\d* tex=\d+ geo=[1-9]/, 'sem prog/tex/geo: ' + linha);
   });
 });

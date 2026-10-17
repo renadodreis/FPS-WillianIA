@@ -2289,6 +2289,23 @@
        quadro > 1 s — o que chega antes de uma queda conta a história dela. */
     const Diag = { desde: performance.now(), n: 0, pior: 0, q100: 0, q500: 0, ctxLost: 0, oculta: 0, err: '', ultimo: 0, hitOk: 0, hitTampado: 0 };
     let maquinaDiag = null;
+    function maquina() {
+      if (!maquinaDiag) {
+        maquinaDiag = { cores: navigator.hardwareConcurrency || 0, mem: navigator.deviceMemory || 0, gpu: '' };
+        try {
+          const gl = MP.renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+          maquinaDiag.gpu = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+        } catch (e) { /* sem GL: segue sem GPU */ }
+      }
+      return maquinaDiag;
+    }
+    const heapMB = () => (performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null);
+    /* shaders compilados (sobe = recompilação, que trava o quadro) e o que
+       ocupa a GPU (sobe sem parar = vazamento) */
+    function gpuDoQuadro() {
+      const info = MP.renderer.info;
+      return { prog: info.programs ? info.programs.length : 0, tex: info.memory.textures, geo: info.memory.geometries };
+    }
     function diagQuadro(ms) {
       Diag.n++;
       if (ms > Diag.pior) Diag.pior = ms;
@@ -2299,20 +2316,13 @@
     function enviarDiag() {
       const agora = performance.now();
       if (!socket.connected || agora - Diag.ultimo < 5000) return; // o servidor aceita um a cada 4 s
-      if (!maquinaDiag) {
-        maquinaDiag = { cores: navigator.hardwareConcurrency || 0, mem: navigator.deviceMemory || 0, gpu: '' };
-        try {
-          const gl = MP.renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
-          maquinaDiag.gpu = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
-        } catch (e) { /* sem GL: segue sem GPU */ }
-      }
       const seg = Math.max(0.001, (agora - Diag.desde) / 1000);
       socket.emit('diag', {
         fps: Diag.n / seg, pior: Diag.pior, q100: Diag.q100, q500: Diag.q500,
-        heap: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null,
+        heap: heapMB(),
         rtt: window.__MP_ping, ctxLost: Diag.ctxLost, oculta: Diag.oculta, err: Diag.err,
         hitOk: Diag.hitOk, hitTampado: Diag.hitTampado,
-        ...maquinaDiag,
+        ...gpuDoQuadro(), ...maquina(),
       });
       Object.assign(Diag, { desde: agora, n: 0, pior: 0, q100: 0, q500: 0, oculta: 0, err: '', ultimo: agora, hitOk: 0, hitTampado: 0 });
     }
@@ -2322,6 +2332,49 @@
     window.addEventListener('error', e => {
       Diag.err = `${e.message || e.type} @${String(e.filename || '').split('/').pop()}:${e.lineno || 0}`;
     });
+
+    /* CAIXA-PRETA (server.js, `caixaPreta`). A aba que MORRE — crash do
+       Chrome ("Aw, Snap"), falta de memória, pane de GPU — não se despede:
+       nenhum evento, nenhum pacote; o servidor só vê o socket cair. Então o
+       resumo vai para o PRÓPRIO navegador a cada 2 s (e na hora em que a aba
+       sai de vista) e é apagado no `pagehide`, que toda saída de verdade
+       dispara (fechar, recarregar, navegar). Se sobrou, a aba anterior
+       morreu: é lido AQUI, antes da 1ª gravação desta, e contado ao
+       servidor quando o hello for respondido (`__BR_aoHello`). Oculta no
+       último registro = o sistema matou a aba em segundo plano (celular).
+       Duas abas do jogo abertas dividem a chave — a que fecha apaga o
+       registro da outra até a próxima gravação (2 s); raro e inofensivo. */
+    const CAIXA = 'br_caixaPreta';
+    const armazem = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+    let caixaAnterior = null, caixaLigada = true;
+    try {
+      caixaAnterior = armazem && JSON.parse(armazem.getItem(CAIXA));
+      if (armazem) armazem.removeItem(CAIXA);
+    } catch (e) { caixaAnterior = null; }
+    function gravarCaixa() {
+      if (!armazem || !caixaLigada) return;
+      const t = S.matchT();
+      try {
+        armazem.setItem(CAIXA, JSON.stringify({
+          ts: Date.now(), partida: S.matchNum || 0, t: Number.isFinite(t) && t > 0 ? Math.round(t * 10) / 10 : 0,
+          fase: S.phase, oculta: document.hidden, heap: heapMB(), pior: Diag.pior, q500: Diag.q500,
+          ctxLost: Diag.ctxLost, ...gpuDoQuadro(), gpu: maquina().gpu,
+        }));
+      } catch (e) { /* cota cheia ou armazém bloqueado: segue sem caixa-preta */ }
+    }
+    function contarCaixaPreta() {
+      const r = caixaAnterior;
+      caixaAnterior = null;
+      if (r && typeof r === 'object') socket.emit('caixaPreta', { ...r, idade: (Date.now() - (+r.ts || Date.now())) / 1000 });
+    }
+    setInterval(gravarCaixa, 2000);
+    document.addEventListener('visibilitychange', gravarCaixa);
+    window.addEventListener('pagehide', () => {
+      caixaLigada = false;
+      try { if (armazem) armazem.removeItem(CAIXA); } catch (e) { /* idem */ }
+    });
+    // voltou do bfcache (botão voltar): a aba segue viva, a caixa volta a gravar
+    window.addEventListener('pageshow', e => { if (e.persisted) { caixaLigada = true; gravarCaixa(); } });
 
     let lastRaf = performance.now();
     setInterval(() => {
@@ -2751,6 +2804,7 @@
        o `nextMatch` também se perdeu, e o mundo daqui é o velho. */
     window.__BR_aoHello = r => {
       window.__BR_aoHello = null;
+      contarCaixaPreta();   // o servidor já sabe quem somos: a aba anterior morreu?
       if (!r) return;
       const rodadaNova = (r.worldSeed >>> 0) !== (INIT.worldSeed >>> 0);
       const antesDaPartida = INIT.phase === 'LOBBY' || INIT.phase === 'COUNTDOWN';

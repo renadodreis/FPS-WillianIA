@@ -152,11 +152,14 @@ describe('Diagnóstico — resumo de quadros do cliente (`diag`)', () => {
     clients[1].s.emit('diag', {
       fps: 58.4, pior: 1234.5, q100: 7, q500: 2, heap: 412.3, rtt: 141,
       ctxLost: 0, gpu: 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11)', cores: 4, mem: 8,
+      prog: 41, tex: 120, geo: 300,
     });
     assert.ok(await ate(() => linhas(srv.log, '[DIAG]').length === 1), 'sem linha [DIAG]');
     const l = linhas(srv.log, '[DIAG]')[0];
     for (const pedaco of ['Windows', 'fps=58', 'pior=1235ms', '>100ms=7', '>500ms=2', 'heap=412MB', 'rtt=141ms',
-      'gpu="ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11)"', 'cores=4', 'mem=8'])
+      'gpu="ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11)"', 'cores=4', 'mem=8',
+      // shaders compilados e memória de GPU: travada por recompilação e vazamento se veem daqui
+      'prog=41', 'tex=120', 'geo=300'])
       assert.ok(l.includes(pedaco), `faltou "${pedaco}" em: ${l}`);
   });
 
@@ -181,5 +184,63 @@ describe('Diagnóstico — resumo de quadros do cliente (`diag`)', () => {
     for (let i = 0; i < 20; i++) clients[1].s.emit('diag', { fps: 60, pior: 16 });
     await sleep(500);
     assert.equal(linhas(srv.log, '[DIAG]').length, 1);
+  });
+});
+
+/* CAIXA-PRETA: a aba que MORRE (crash do Chrome, falta de memória, GPU) não
+   avisa ninguém — não há despedida. O cliente grava um resumo no próprio
+   navegador durante o jogo e apaga ao sair direito; se o resumo sobrou, a
+   aba anterior morreu, e a próxima abertura do jogo conta ao servidor. Sem
+   depender de o jogador mandar print de nada. */
+describe('Diagnóstico — caixa-preta da aba que morreu', () => {
+  const REG = {
+    idade: 12.4, partida: 3, t: 82.2, fase: 'PLAY', oculta: false, heap: 812.6, pior: 2400.2, q500: 3,
+    prog: 57, tex: 140, geo: 512, ctxLost: 1, gpu: 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11)',
+  };
+  it('chega ao log como [CRASH], com o nick, o momento e a máquina', async t => {
+    const srv = await spawnServer();
+    t.after(() => srv.stop());
+    const { s } = await connect(srv.port);
+    t.after(() => s.close());
+    s.emit('hello', { nick: 'Amigo' });
+    await sleep(100);
+    s.emit('caixaPreta', REG);
+    assert.ok(await ate(() => linhas(srv.log, '[CRASH]').length === 1), 'sem linha [CRASH]; log:\n' + srv.log.slice(-600));
+    const l = linhas(srv.log, '[CRASH]')[0];
+    for (const pedaco of ['Amigo', 'há 12s', 'partida 3 t=82s', 'fase=PLAY', 'visível', 'heap=813MB', 'pior=2400ms',
+      '>500ms=3', 'prog=57', 'tex=140', 'geo=512', 'ctxLost=1', 'gpu="ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11)"'])
+      assert.ok(l.includes(pedaco), `faltou "${pedaco}" em: ${l}`);
+  });
+
+  it('aba que estava OCULTA quando morreu diz isso (o celular mata aba em segundo plano)', async t => {
+    const srv = await spawnServer();
+    t.after(() => srv.stop());
+    const { s } = await connect(srv.port);
+    t.after(() => s.close());
+    s.emit('hello', { nick: 'Celular' });
+    await sleep(100);
+    s.emit('caixaPreta', { ...REG, oculta: true });
+    assert.ok(await ate(() => linhas(srv.log, '[CRASH]').length === 1), 'sem linha [CRASH]');
+    assert.ok(linhas(srv.log, '[CRASH]')[0].includes('oculta'), linhas(srv.log, '[CRASH]')[0]);
+  });
+
+  it('uma por conexão, saneada: texto forjado não vira linha nem leva controle', async t => {
+    const srv = await spawnServer();
+    t.after(() => srv.stop());
+    const { s } = await connect(srv.port);
+    t.after(() => s.close());
+    s.emit('hello', { nick: 'Forjador' });
+    await sleep(100);
+    s.emit('caixaPreta', { ...REG, fase: 'PLAY\n[CHEAT] x', gpu: 'A\n[-] forjado\x1b' + 'B'.repeat(500), heap: 1e12 });
+    for (let i = 0; i < 10; i++) s.emit('caixaPreta', REG);
+    await sleep(500);
+    assert.equal(linhas(srv.log, '[CRASH]').length, 1, 'mais de uma [CRASH] na mesma conexão');
+    assert.equal(linhas(srv.log, '[CHEAT]').length, 0);
+    assert.ok(!linhas(srv.log, '[-]').some(l => l.includes('forjado')), 'texto do cliente virou linha própria');
+    const l = linhas(srv.log, '[CRASH]')[0];
+    // eslint-disable-next-line no-control-regex -- procurar controle é o objetivo
+    assert.ok(!/[\x00-\x1f]/.test(l), 'controle no log: ' + JSON.stringify(l));
+    assert.ok(l.length < 400, `linha com ${l.length} caracteres`);
+    assert.ok(/fase=\?/.test(l), 'fase fora da lista devia virar "?": ' + l);
   });
 });
