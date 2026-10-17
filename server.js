@@ -155,9 +155,15 @@ const server = http.createServer(app);
 // Testes com tick manual podem ocupar a thread do Chrome por minutos. O
 // cliente de produção recarrega ao reconectar, mas o harness preserva o
 // contexto para inspecioná-lo; em QA, portanto, mantenha a identidade viva.
-const io = new Server(server, process.env.QA_BOOT_TOKEN
-  ? { pingTimeout: 10 * 60 * 1000 }
-  : {});
+/* QUEDA NÃO É SAÍDA (auditoria do multiplayer 338d153, MP-2): a conexão que
+   cai sem o jogador pedir volta com a MESMA identidade e os eventos perdidos
+   (connection state recovery do socket.io), dentro da janela em que o
+   servidor guarda o personagem (`RECONEXAO_S`, ver o `disconnect`). */
+const RECONEXAO_S = Math.max(1, +process.env.RECONEXAO_S || 120);
+const io = new Server(server, {
+  ...(process.env.QA_BOOT_TOKEN ? { pingTimeout: 10 * 60 * 1000 } : {}),
+  connectionStateRecovery: { maxDisconnectionDuration: RECONEXAO_S * 1000, skipMiddlewares: true },
+});
 
 /* ---------------- utilidades ---------------- */
 const clean = s => String(s == null ? '' : s).replace(/[<>&"']/g, '').trim();
@@ -273,6 +279,7 @@ let hostId = null;
 /* knobs de teste (QA) — em produção ficam nos padrões */
 const COUNTDOWN_S = Math.max(1, +process.env.COUNTDOWN_S || 10);
 const NEXT_IN_S = Math.max(1, +process.env.NEXT_IN_S || 14);
+const SALA_VAZIA_S = Math.max(1, +process.env.SALA_VAZIA_S || 60);   // sala vazia por isto volta à fábrica (MP-5)
 const FLY_TIME = Math.max(1, +process.env.FLY_TIME || 55);
 const BR_FAST = !!process.env.BR_FAST; // acelera o backstop da zona nos testes
 const ZONE_HP = BR_FAST ? 20 : 175;
@@ -389,10 +396,17 @@ function buildPlan(seed, gasMode = 'classica', tempo = 'normal') {
   const rng = mulberry32(seed ^ 0x9E3779B9);
   const tScale = TEMPO_SCALE[tempo] || 1; // escala a duração da zona pelo preset
   // nave: atravessa o mapa passando perto do centro
+  /* as pontas DENTRO do quadrado em que a queda prende o jogador (br-game.js:
+     ±WORLD_SIZE/2 − 8 = ±542): fora dele o salto saía preso na borda e o
+     servidor via 78–230 m num pacote — strike e pose recusada para quem joga
+     limpo, em 56,5 % das partidas no salto automático (auditoria do
+     multiplayer 338d153, MP-4). Os sorteios são os mesmos (o resto do plano
+     não muda). */
+  const BORDA = 530, naBorda = v => Math.max(-BORDA, Math.min(BORDA, v));
   const a = rng() * Math.PI * 2;
   const ship = {
-    from: [Math.cos(a) * 620, Math.sin(a) * 620],
-    to: [-Math.cos(a) * 620 + (rng() - 0.5) * 300, -Math.sin(a) * 620 + (rng() - 0.5) * 300],
+    from: [naBorda(Math.cos(a) * 620), naBorda(Math.sin(a) * 620)],
+    to: [naBorda(-Math.cos(a) * 620 + (rng() - 0.5) * 300), naBorda(-Math.sin(a) * 620 + (rng() - 0.5) * 300)],
     alt: 250, flyTime: FLY_TIME,
   };
   // flag da sala: gás pode ser sorteado, invertido ou desligado (playtest:
@@ -463,6 +477,7 @@ function roster(withPos) {
   return [...players.entries()].map(([id, p]) => ({
     id, nick: p.nick, colors: p.colors, kills: p.kills,
     alive: p.alive, spectator: p.spectator, bot: !!p.bot,
+    carregando: !p.greeted,   // conectou, mas o jogo dele ainda não subiu (MP-1)
     ...(withPos ? { pos: p.pos } : {}), // pos só no init — broadcast viraria wallhack
   }));
 }
@@ -483,9 +498,17 @@ function startCountdown() {
   broadcastRoster();
 }
 
+/* PRONTO = o `hello` chegou. O socket conecta no começo do módulo do jogo,
+   antes do mundo; o ouvinte do `matchStart` só existe depois do boot do BR,
+   no MESMO bloco síncrono que emite o `hello` (multiplayer-client.js). Quem
+   não está pronto quando a partida começa perderia o `matchStart` e ficaria
+   VIVO na nave sem nunca mandar estado: um fantasma contado nos vivos até o
+   backstop de inatividade (auditoria do multiplayer 338d153, MP-1). */
+const participa = p => !p.spectator && p.greeted;
+
 function startMatch() {
   // sala esvaziou durante a contagem: volta pro lobby em vez de rodar partida vazia
-  if (![...players.values()].some(p => !p.spectator)) {
+  if (![...players.values()].some(participa)) {
     match.phase = 'LOBBY';
     broadcastRoster();
     return;
@@ -529,7 +552,7 @@ function startMatch() {
   const shipSlots = {};
   let slotIdx = 0;
   for (const [id, p] of players) {
-    if (p.spectator) continue; // quem entrou tarde continua espectador
+    if (!participa(p)) { p.spectator = true; continue; } // entrou tarde ou ainda carrega: espectador
     p.alive = true; p.kills = 0; p.placement = 0;
     p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true; p.landed = false; p.hitBy = {}; p.pendingDrop = null;
     shipSlots[id] = slotIdx;
@@ -1125,6 +1148,38 @@ function poseDoOcupante(socketId, p, d) {
   } else if (match.heliOwner === socketId) match.heliOwner = null;
 }
 
+/* o jogador sai da sala de vez: na desconexão por escolha, ou quando a janela
+   de reconexão de quem caiu acaba (MP-2) */
+const QUEDA_INVOLUNTARIA = new Set(['transport close', 'transport error', 'ping timeout']);
+function sairDaSala(id, p) {
+  players.delete(id);
+  // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
+  if (hostId === id) hostId = null;
+  freeCarsOf(id);
+  if (match.heliOwner === id) match.heliOwner = null;
+  if (players.size === 0) {
+    if (match.phase === 'COUNTDOWN' && match.countdownTimer) clearInterval(match.countdownTimer);
+    if (match.phase !== 'PLAYING' && match.phase !== 'ENDED') match.phase = 'LOBBY';
+    /* sala vazia volta à FÁBRICA — mas só se ficar vazia. No `nextMatch`
+       todos os navegadores recarregam e desconectam juntos (10 ms): só com
+       humanos a sala chegava a 0 e o anfitrião, de volta 250 ms depois,
+       achava as regras padrão (auditoria do multiplayer 338d153, MP-5). */
+    clearTimeout(match.fabricaTimer);
+    match.fabricaTimer = setTimeout(() => {
+      if (players.size > 0) return;
+      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT };
+      match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
+      match.botsPending = false; // a sala zerou: não há troca pendente a aplicar
+      syncBots(); // flags.bots voltou a 0
+    }, SALA_VAZIA_S * 1000);
+  }
+  io.emit('playerLeft', { id });
+  if (p) sysChat(`${p.nick} saiu`);
+  if (p && p.alive) { p.alive = false; checkVictory(); }
+  broadcastRoster();
+  console.log(`[-] ${id} (${players.size} online)`);
+}
+
 /* ---------------- conexões ---------------- */
 io.on('connection', socket => {
   // recusa a conexão acima do teto por IP (loopback isento)
@@ -1140,38 +1195,53 @@ io.on('connection', socket => {
     connByIp.set(ip, n + 1);
     socket.data.ipCounted = ip;
   }
-  const isMidMatch = match.phase === 'PLAYING' || match.phase === 'ENDED';
-  players.set(socket.id, {
-    nick: 'Recruta', colors: null, kills: 0,
-    alive: false, spectator: isMidMatch, placement: 0,
-    pos: [0, 0, 0], lastChat: 0, hitWindow: [], lastState: Date.now(), zoneHp: ZONE_HP, canDrop: true,
-    bot: false, heldWeapon: 'FACA', ship: false, fall: false, chute: false, landed: false,
-  });
+  /* VOLTOU: o socket.io recuperou a sessão (mesmo id) e o personagem ainda
+     estava guardado — reencaixa, sem `init` (que faria o cliente recarregar) */
+  const guardado = socket.recovered ? players.get(socket.id) : null;
+  if (guardado && guardado.retorno) {
+    clearTimeout(guardado.retorno);
+    guardado.retorno = null;
+    guardado.lastState = Date.now();
+    console.log(`[~] ${socket.id} voltou (${guardado.nick})`);
+  } else {
+    const isMidMatch = match.phase === 'PLAYING' || match.phase === 'ENDED';
+    players.set(socket.id, {
+      nick: 'Recruta', colors: null, kills: 0,
+      alive: false, spectator: isMidMatch, placement: 0,
+      pos: [0, 0, 0], lastChat: 0, hitWindow: [], lastState: Date.now(), zoneHp: ZONE_HP, canDrop: true,
+      bot: false, heldWeapon: 'FACA', ship: false, fall: false, chute: false, landed: false,
+    });
 
-  socket.emit('init', {
-    id: socket.id,
-    mode: 'br',
-    worldSeed: match.seed,
-    phase: match.phase,
-    matchNum: match.num,
-    t0: match.t0, serverNow: Date.now(),
-    plan: match.phase === 'PLAYING' || match.phase === 'ENDED' ? match.plan : null,
-    bossHp: match.bossHp, bossMaxHp: match.bossMaxHp, bossDead: match.bossDead,
-    openedChests: [...match.openedChests],
-    drops: [...match.drops.entries()].filter(([, d]) => !d.taken).map(([id, d]) => ({ id, pos: d.pos, items: d.items.length })),
-    hostId,
-    flags: match.flags,
-    cityDestruction: match.cityDestruction,
-    // quem entra no meio vê a mesma vida/estado dos veículos que todos veem
-    veiculos: match.phase === 'PLAYING' && match.veiculos ? [...match.veiculos.values()].map(resumoDoVeiculo) : [],
-    players: roster(true).filter(p => p.id !== socket.id),
-    globalTop: topRank(),
-  });
+    socket.emit('init', {
+      id: socket.id,
+      mode: 'br',
+      worldSeed: match.seed,
+      phase: match.phase,
+      matchNum: match.num,
+      t0: match.t0, serverNow: Date.now(),
+      plan: match.phase === 'PLAYING' || match.phase === 'ENDED' ? match.plan : null,
+      bossHp: match.bossHp, bossMaxHp: match.bossMaxHp, bossDead: match.bossDead,
+      openedChests: [...match.openedChests],
+      drops: [...match.drops.entries()].filter(([, d]) => !d.taken).map(([id, d]) => ({ id, pos: d.pos, items: d.items.length })),
+      hostId,
+      flags: match.flags,
+      cityDestruction: match.cityDestruction,
+      // quem entra no meio vê a mesma vida/estado dos veículos que todos veem
+      veiculos: match.phase === 'PLAYING' && match.veiculos ? [...match.veiculos.values()].map(resumoDoVeiculo) : [],
+      players: roster(true).filter(p => p.id !== socket.id),
+      globalTop: topRank(),
+    });
+    console.log(`[+] ${socket.id} (${players.size} online, fase ${match.phase})`);
+  }
   broadcastRoster();
-  console.log(`[+] ${socket.id} (${players.size} online, fase ${match.phase})`);
 
-  socket.on('hello', d => {
+  /* a resposta diz a fase: o cliente que terminou de carregar DEPOIS do
+     `matchStart` (que se perdeu) descobre que a partida começou sem ele */
+  socket.on('hello', (d, cb) => {
     const p = players.get(socket.id); if (!p) return;
+    if (typeof cb === 'function') {
+      cb({ phase: match.phase, worldSeed: match.seed, matchNum: match.num, spectator: !!p.spectator });
+    }
     p.nick = cleanNick(d && d.nick);
     p.bot = !!(d && d.bot);
     if (d && Array.isArray(d.colors)) p.colors = BRColors.sanitizeColors(d.colors); // hex validado: nunca vira avatar branco
@@ -1727,7 +1797,7 @@ io.on('connection', socket => {
     io.emit('chat', { nick: p.nick, msg });
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', reason => {
     // devolve a vaga do IP ao pool (só se esta conexão foi contada)
     const ipc = socket.data.ipCounted;
     if (ipc && connByIp.has(ipc)) {
@@ -1737,24 +1807,19 @@ io.on('connection', socket => {
     // o histórico de tentativas de anfitrião NÃO sai junto: só o que expirou
     pruneClaimFails();
     const p = players.get(socket.id);
-    players.delete(socket.id);
-    // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
-    if (hostId === socket.id) hostId = null;
-    freeCarsOf(socket.id);
-    if (match.heliOwner === socket.id) match.heliOwner = null;
-    if (players.size === 0) { // sala vazia: sessão volta ao estado de fábrica
-      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT };
-      match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
-      if (match.phase === 'COUNTDOWN' && match.countdownTimer) clearInterval(match.countdownTimer);
-      if (match.phase !== 'PLAYING' && match.phase !== 'ENDED') match.phase = 'LOBBY';
-      match.botsPending = false; // a sala zerou: não há troca pendente a aplicar
-      syncBots(); // flags.bots voltou a 0
+    /* caiu SEM pedir, vivo, em partida: o personagem fica no mundo (como no
+       Apex/PUBG/Warzone) e a vaga é guardada pela janela de reconexão. Sair
+       por escolha (`io client disconnect`) e expulsão saem na hora. */
+    if (p && QUEDA_INVOLUNTARIA.has(reason) && match.phase === 'PLAYING' && p.alive) {
+      clearTimeout(p.retorno);
+      p.retorno = setTimeout(() => {
+        p.retorno = null;
+        if (players.get(socket.id) === p) sairDaSala(socket.id, p);
+      }, RECONEXAO_S * 1000);
+      console.log(`[~] ${socket.id} caiu (${reason}) — guardado por ${RECONEXAO_S}s`);
+      return;
     }
-    io.emit('playerLeft', { id: socket.id });
-    if (p) sysChat(`${p.nick} saiu`);
-    if (p && p.alive) { p.alive = false; checkVictory(); }
-    broadcastRoster();
-    console.log(`[-] ${socket.id} (${players.size} online)`);
+    sairDaSala(socket.id, p);
   });
 });
 

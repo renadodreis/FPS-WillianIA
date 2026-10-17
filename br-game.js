@@ -1007,6 +1007,18 @@
       ShipProto.clampToCabin(shipLocalPos, SHIP_DIMS.playerRadius);
       shipLocalPos.y = SHIP_DIMS.floorY; // pés SEMPRE no piso: sem nado/flutuação
     }
+    /* a cabine nasce no `matchStart`, não no 1º quadro: com o app em segundo
+       plano não há quadro, e o `state` (setInterval, roda oculto) ia sem
+       `shipLocal` — o servidor convertia a posição do LOBBY para a cabine,
+       achava fora, somava 1 strike por pacote e recusava (auditoria do
+       multiplayer 338d153, MP-3: 23–49 strikes, ninguém o via na nave) */
+    function entrarNaCabine() {
+      if (!shipLocalPos) {
+        const sl = ShipProto.slotLocal(shipSlotIndex());
+        shipLocalPos = new THREE.Vector3(sl[0], SHIP_DIMS.floorY, sl[1]);
+      }
+      if (S.plan) { ShipProto.poseAt(S.plan.ship, S.matchT(), _shipPose); shipProject(_shipPose); }
+    }
     /* projeta a posição local no mundo (posição final do frame) */
     function shipProject(pose) {
       _swArr[0] = shipLocalPos.x; _swArr[1] = shipLocalPos.y; _swArr[2] = shipLocalPos.z;
@@ -1081,6 +1093,10 @@
     }
     function jumpFromShip() {
       if (S.phase !== 'SHIP') return;
+      /* salta de onde a nave ESTÁ: o salto automático vem do watchdog com a
+         aba oculta (sem quadro), e a posição de mundo era a de quando a aba
+         sumiu — ~900 m da nave (MP-3) */
+      if (shipLocalPos && S.plan) { ShipProto.poseAt(S.plan.ship, S.matchT(), _shipPose); shipProject(_shipPose); }
       S.phase = 'FALL';
       S.jumped = true;
       shipLocalPos = null; // estado da cabine morre aqui; a pos MUNDIAL fica intacta
@@ -1737,6 +1753,7 @@
         setupLoadout();
         S.phase = 'SHIP';
         S.jumped = false; S.chuteOpen = false;
+        entrarNaCabine();
         window.__BR_freeze = true;
         MP.player.invulnUntil = MP.state.gameTime + 6;
         UI.hint(`🛸 NA NAVE — ${PULO} pra pular quando quiser`);
@@ -2324,10 +2341,7 @@
         ship.g.visible = _shipPose.k < 1.15;
         ship.ring.rotation.z += dt * 0.8;
         if (S.phase === 'SHIP') {
-          if (!shipLocalPos) {
-            const sl = ShipProto.slotLocal(shipSlotIndex());
-            shipLocalPos = new THREE.Vector3(sl[0], SHIP_DIMS.floorY, sl[1]);
-          }
+          if (!shipLocalPos) entrarNaCabine();
           // testes determinísticos pilotam via __BR_debug.shipDebug.step()
           if (!window.__BR_shipManual) shipWalk(dt, _shipPose);
           shipProject(_shipPose);
@@ -2637,6 +2651,22 @@
         },
         resume() { golemManual = false; },
       },
+    };
+
+    /* a resposta do `hello` do boot (multiplayer-client.js) traz a fase do
+       servidor. Se a partida começou enquanto este cliente carregava, o
+       `matchStart` chegou antes do ouvinte e sumiu, e o servidor já o pôs de
+       espectador (server.js `participa`, MP-1): recarregar cai no caminho de
+       quem entra no meio — o init diz PLAYING. Rodada nova (semente outra):
+       o `nextMatch` também se perdeu, e o mundo daqui é o velho. */
+    window.__BR_aoHello = r => {
+      window.__BR_aoHello = null;
+      if (!r) return;
+      const rodadaNova = (r.worldSeed >>> 0) !== (INIT.worldSeed >>> 0);
+      const antesDaPartida = INIT.phase === 'LOBBY' || INIT.phase === 'COUNTDOWN';
+      const perdeuInicio = antesDaPartida && (r.phase === 'PLAYING' || r.phase === 'ENDED')
+        && (S.phase === 'LOBBY' || S.phase === 'COUNTDOWN');
+      if (rodadaNova || perdeuInicio) (window.__MP_reload || (() => location.reload()))();
     };
 
     if (INIT.phase === 'PLAYING') {

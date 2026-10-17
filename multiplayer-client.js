@@ -446,7 +446,7 @@
       const el = document.getElementById('brLobbyList');
       if (el) el.innerHTML = lastRosterList.map(p =>
         `<div><span class="brDot" style="background:${esc((p.colors || ['#888'])[0])}"></span>
-         ${esc(p.nick)}${p.id === S.hostId ? ' 👑' : ''}${p.spectator ? ' <i style="opacity:.5">(espectador)</i>' : ''}</div>`).join('')
+         ${p.carregando ? '<i style="opacity:.6">⏳ carregando…</i>' : esc(p.nick)}${p.id === S.hostId ? ' 👑' : ''}${p.spectator ? ' <i style="opacity:.5">(espectador)</i>' : ''}</div>`).join('')
         || '<div style="opacity:.5">só você por enquanto — chama a galera!</div>';
       const btn = document.getElementById('brStartBtn');
       const isHost = INIT.id === S.hostId;
@@ -678,7 +678,12 @@
       S.flags = f;
       if (window.__BR_syncFlagsUI) window.__BR_syncFlagsUI();
     });
-    socket.emit('hello', { nick: S.nick, colors: S.myColors });
+    /* a resposta diz a fase do servidor (MP-1): quem terminou de carregar
+       depois do `matchStart` descobre que a partida começou sem ele — o BR
+       (br-game.js, `__BR_aoHello`) decide; os ouvintes dele são registrados
+       neste mesmo bloco síncrono, antes de qualquer resposta chegar */
+    socket.emit('hello', { nick: S.nick, colors: S.myColors },
+      r => { if (window.__BR_aoHello) window.__BR_aoHello(r); });
 
     /* ---------- a sala caiu com o lobby na tela ----------
        Não havia NENHUM tratamento de queda: com o socket morto o lobby seguia
