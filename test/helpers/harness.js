@@ -163,6 +163,9 @@ async function bootGame({
      instalar `navigator.xr` antes do game.js ler o ambiente no escopo do
      módulo. Vazio = comportamento histórico, byte por byte. */
   initScripts = [],
+  /* true = guarda o stdout do servidor (h.serverLog()). O log é o produto dos
+     testes de diagnóstico de rede. Padrão: stdio ignorado, como sempre foi. */
+  captureServerLog = false,
 }) {
   const puppeteer = require('puppeteer-core');
   const rankFile = extraEnv.RANK_FILE || path.join(os.tmpdir(),
@@ -174,8 +177,13 @@ async function bootGame({
     // modo por partida; os modos novos têm testes dedicados que setam a flag)
     env: { ...process.env, PORT: String(serverPort || port), WORLD_SEED: worldSeed,
       GAS_DEFAULT: 'classica', RANK_FILE: rankFile, QA_BOOT_TOKEN: bootToken, ...extraEnv },
-    stdio: 'ignore',
+    stdio: captureServerLog ? ['ignore', 'pipe', 'pipe'] : 'ignore',
   });
+  let serverLog = '';
+  if (captureServerLog) {
+    srv.stdout.on('data', d => { serverLog += d; });
+    srv.stderr.on('data', d => { serverLog += d; }); // lido: pipe cheio trava o servidor
+  }
   let browser = null;
   let closed = false;
   try {
@@ -307,6 +315,7 @@ async function bootGame({
 
   return {
     browser, page, srv, port, pageErrors, consoleErrors, requestFailures,
+    serverLog: () => serverLog,
     play: (fn, ...args) => page.evaluate(fn, ...args),
     async close() {
       if (closed) return;

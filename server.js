@@ -170,6 +170,16 @@ const clean = s => String(s == null ? '' : s).replace(/[<>&"']/g, '').trim();
 // versão leve: preserva aspas (nomes de arma, chat) — o cliente escapa antes de renderizar
 const cleanSoft = s => String(s == null ? '' : s).replace(/[<>&]/g, '').trim();
 const cleanNick = n => clean(n).slice(0, 14) || 'Recruta';
+// texto do cliente que vai para o LOG: uma linha só, sem controle, com teto
+// (um "\n[CHEAT] ..." no nick ou no `diag` forjaria linha própria no log)
+const paraLog = (s, max = 60) => String(s == null ? '' : s)
+  // eslint-disable-next-line no-control-regex -- tirar controle é o objetivo
+  .replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, ' ').replace(/"/g, "'").slice(0, max);
+// onde o jogador está na partida, para as linhas de diagnóstico
+const faseDoJogador = p => match.phase !== 'PLAYING' ? match.phase.toLowerCase()
+  : p.ship ? 'nave' : p.fall ? 'queda' : 'chão';
+const tempoDePartida = () => match.phase === 'PLAYING' || match.phase === 'ENDED'
+  ? ` · partida ${match.num} t=${Math.round((Date.now() - match.t0) / 1000)}s` : '';
 const WEAPON_CODES = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA', 'SNIPER'];
 function weaponCode(value) {
   const raw = cleanSoft(value).toUpperCase().slice(0, 48);
@@ -1151,7 +1161,7 @@ function poseDoOcupante(socketId, p, d) {
 /* o jogador sai da sala de vez: na desconexão por escolha, ou quando a janela
    de reconexão de quem caiu acaba (MP-2) */
 const QUEDA_INVOLUNTARIA = new Set(['transport close', 'transport error', 'ping timeout']);
-function sairDaSala(id, p) {
+function sairDaSala(id, p, motivo) {
   players.delete(id);
   // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
   if (hostId === id) hostId = null;
@@ -1177,7 +1187,9 @@ function sairDaSala(id, p) {
   if (p) sysChat(`${p.nick} saiu`);
   if (p && p.alive) { p.alive = false; checkVictory(); }
   broadcastRoster();
-  console.log(`[-] ${id} (${players.size} online)`);
+  /* o MOTIVO separa aba que morreu (`transport close`, na hora) de aba que
+     travou (`ping timeout`, 20–45 s depois do travamento) */
+  console.log(`[-] ${id}${p ? ' ' + paraLog(p.nick, 14) : ''} (${players.size} online) motivo=${motivo || '?'}${tempoDePartida()}`);
 }
 
 /* ---------------- conexões ---------------- */
@@ -1280,6 +1292,26 @@ io.on('connection', socket => {
 
   /* latência: o cliente mede o RTT deste ack */
   socket.on('pingx', cb => { if (typeof cb === 'function') cb(); });
+
+  /* resumo de quadros do cliente (br-game.js, a cada 20 s e logo depois de
+     um engasgo): só vai para o LOG — nada de estado de jogo depende dele.
+     Saneado (números com teto, texto numa linha só) e um a cada 4 s. */
+  socket.on('diag', d => {
+    const p = players.get(socket.id);
+    if (!p || !d || typeof d !== 'object') return;
+    const now = Date.now();
+    if (now - (p.ultimoDiag || 0) < 4000) return;
+    p.ultimoDiag = now;
+    const n = (v, max) => (Number.isFinite(+v) ? Math.round(Math.max(0, Math.min(max, +v))) : '?');
+    // a máquina (GPU, núcleos, memória) não muda numa conexão: sai uma vez
+    const maquina = p.diagMaquina ? ''
+      : ` cores=${n(d.cores, 256)} mem=${n(d.mem, 1024)} gpu="${paraLog(d.gpu, 80)}"`;
+    p.diagMaquina = true;
+    console.log(`[DIAG] ${paraLog(p.nick, 14)} ${faseDoJogador(p)}${tempoDePartida()}` +
+      ` fps=${n(d.fps, 1000)} pior=${n(d.pior, 600000)}ms >100ms=${n(d.q100, 1e5)} >500ms=${n(d.q500, 1e5)}` +
+      ` heap=${n(d.heap, 1e5)}MB rtt=${n(d.rtt, 1e5)}ms ctxLost=${n(d.ctxLost, 99)} oculta=${n(d.oculta, 99)}${maquina}` +
+      (d.err ? ` err="${paraLog(d.err, 120)}"` : ''));
+  });
 
   /* regras da sala: só o anfitrião altera (GOLEM, animais, ciclo dia/noite) */
   socket.on('setFlags', d => {
@@ -1427,6 +1459,16 @@ io.on('connection', socket => {
     pos[1] = Math.max(-100, Math.min(600, pos[1]));
     pos[2] = Math.max(-WORLD, Math.min(WORLD, pos[2]));
     const now = Date.now();
+    /* BURACO DE PACOTE: o cliente manda `state` a 10 Hz. Mais de 1,5 s sem
+       nenhum, vivo na partida, é aba travada (o laço do jogo parou) ou rede
+       parada — e os outros o viram congelar e teleportar. Medido na
+       CHEGADA, antes de qualquer recusa do anti-teleporte. */
+    if (match.phase === 'PLAYING' && p.alive && !p.spectator && p.chegouState && p.chegouStateNum === match.num) {
+      const buraco = now - p.chegouState;
+      if (buraco > 1500) console.log(`[NET] ${paraLog(p.nick, 14)}: ${(buraco / 1000).toFixed(1)} s sem state (${faseDoJogador(p)}${tempoDePartida()})`);
+    }
+    p.chegouState = now;
+    p.chegouStateNum = match.num;
 
     /* ---- anti-cheat: teleporte/speedhack e abuso do flag "ship" ----
        rejeitado = posição não propaga e lastState não renova (vira AFK pra zona) */
@@ -1814,12 +1856,12 @@ io.on('connection', socket => {
       clearTimeout(p.retorno);
       p.retorno = setTimeout(() => {
         p.retorno = null;
-        if (players.get(socket.id) === p) sairDaSala(socket.id, p);
+        if (players.get(socket.id) === p) sairDaSala(socket.id, p, `não voltou em ${RECONEXAO_S}s (${reason})`);
       }, RECONEXAO_S * 1000);
-      console.log(`[~] ${socket.id} caiu (${reason}) — guardado por ${RECONEXAO_S}s`);
+      console.log(`[~] ${socket.id} ${paraLog(p.nick, 14)} caiu (${reason}) — guardado por ${RECONEXAO_S}s${tempoDePartida()}`);
       return;
     }
-    sairDaSala(socket.id, p);
+    sairDaSala(socket.id, p, reason);
   });
 });
 

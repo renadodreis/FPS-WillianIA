@@ -2251,6 +2251,45 @@
        da zona, e a partida nunca terminava. Aqui, em setInterval (roda mesmo
        em segundo plano): pulo automático, queda grosseira até o chão e o dano
        do gás continuam acontecendo. */
+    /* DIAGNÓSTICO NO LOG DO SERVIDOR (server.js, `diag`). Em 2026-10-17 a aba
+       de um jogador travou/fechou 82 s depois do começo da partida e não havia
+       como saber de quê: este resumo sai a cada 20 s e logo depois de um
+       quadro > 1 s — o que chega antes de uma queda conta a história dela. */
+    const Diag = { desde: performance.now(), n: 0, pior: 0, q100: 0, q500: 0, ctxLost: 0, oculta: 0, err: '', ultimo: 0 };
+    let maquinaDiag = null;
+    function diagQuadro(ms) {
+      Diag.n++;
+      if (ms > Diag.pior) Diag.pior = ms;
+      if (ms > 100) Diag.q100++;
+      if (ms > 500) Diag.q500++;
+      if (ms > 1000) enviarDiag();
+    }
+    function enviarDiag() {
+      const agora = performance.now();
+      if (!socket.connected || agora - Diag.ultimo < 5000) return; // o servidor aceita um a cada 4 s
+      if (!maquinaDiag) {
+        maquinaDiag = { cores: navigator.hardwareConcurrency || 0, mem: navigator.deviceMemory || 0, gpu: '' };
+        try {
+          const gl = MP.renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+          maquinaDiag.gpu = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+        } catch (e) { /* sem GL: segue sem GPU */ }
+      }
+      const seg = Math.max(0.001, (agora - Diag.desde) / 1000);
+      socket.emit('diag', {
+        fps: Diag.n / seg, pior: Diag.pior, q100: Diag.q100, q500: Diag.q500,
+        heap: performance.memory ? performance.memory.usedJSHeapSize / 1048576 : null,
+        rtt: window.__MP_ping, ctxLost: Diag.ctxLost, oculta: Diag.oculta, err: Diag.err,
+        ...maquinaDiag,
+      });
+      Object.assign(Diag, { desde: agora, n: 0, pior: 0, q100: 0, q500: 0, oculta: 0, err: '', ultimo: agora });
+    }
+    setInterval(enviarDiag, 20000);
+    document.addEventListener('visibilitychange', () => { Diag.trocouVisib = true; if (document.hidden) Diag.oculta++; });
+    MP.renderer.domElement.addEventListener('webglcontextlost', () => { Diag.ctxLost++; enviarDiag(); });
+    window.addEventListener('error', e => {
+      Diag.err = `${e.message || e.type} @${String(e.filename || '').split('/').pop()}:${e.lineno || 0}`;
+    });
+
     let lastRaf = performance.now();
     setInterval(() => {
       if (S.phase === 'SHIP' && S.plan && S.matchT() >= S.plan.ship.flyTime) jumpFromShip();
@@ -2283,6 +2322,9 @@
          não com o rAF vivo e lento. Teto de 0,5 s porque acima disso o watchdog
          assume. */
       const dtQueda = Math.min(bruto, 0.5);
+      // aba oculta para o rAF: o quadro da volta não é engasgo do jogo
+      if (Diag.trocouVisib) Diag.trocouVisib = false;
+      else diagQuadro(bruto * 1000);
       lastT = nowMs;
       lastRaf = nowMs; // sinal de "aba visível" pro watchdog de segundo plano
       /* QUEM É O DONO DE `player.pos` NESTE FRAME — a bandeira que o game.js
