@@ -70,8 +70,8 @@ async function ate(cond, ms = 3000) {
   return cond();
 }
 
-async function partida(t, nicks) {
-  const srv = await spawnServer();
+async function partida(t, nicks, env) {
+  const srv = await spawnServer(env);
   t.after(() => srv.stop());
   const clients = [];
   for (const nick of nicks) {
@@ -108,6 +108,19 @@ describe('Diagnóstico — motivo da desconexão no log', () => {
     clients[1].s.disconnect();
     assert.ok(await ate(() => /\[-\] .*Visita.*motivo=client namespace disconnect.*partida \d+ t=\d+s/.test(srv.log)),
       'esperava motivo e "partida N t=Xs" no log; veio:\n' + linhas(srv.log, '[-]').join('\n'));
+  });
+
+  /* o caso do dia: a aba morre em partida. A vaga fica guardada (janela de
+     reconexão), e o log tem de contar a queda NA HORA — com o motivo e o
+     tempo de partida — e depois que desistiu de esperar, de novo com ele. */
+  it('em partida, a aba que morre: "caiu (motivo)" na hora e "não voltou" no fim da janela', async t => {
+    const { srv, clients } = await partida(t, ['Anfitriao', 'Visita'], { RECONEXAO_S: '1' });
+    await sleep(300);
+    clients[1].s.io.engine.close();
+    assert.ok(await ate(() => /\[~\] .*Visita caiu \(transport close\).*partida \d+ t=\d+s/.test(srv.log)),
+      'esperava "[~] ... Visita caiu (transport close) ... partida N t=Xs"; veio:\n' + linhas(srv.log, '[~]').join('\n'));
+    assert.ok(await ate(() => /\[-\] .*Visita.*motivo=não voltou em 1s \(transport close\).*partida \d+ t=\d+s/.test(srv.log)),
+      'esperava "[-] ... Visita ... motivo=não voltou em 1s (transport close)"; veio:\n' + linhas(srv.log, '[-]').join('\n'));
   });
 });
 
