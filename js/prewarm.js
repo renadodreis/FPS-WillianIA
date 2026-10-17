@@ -58,10 +58,10 @@ function collectTextures(material, out) {
   }
 }
 
-export function createPrewarm({ renderer, scene, camera }) {
+export function createPrewarm({ renderer, scene, camera, alvo = null }) {
   const warmed = new Set();          // uuids já linkados
   const queue = [];                  // raízes que chegaram em hora ruim
-  const stats = { runs: 0, materials: 0, textures: 0, errors: 0, lastMs: 0 };
+  const stats = { runs: 0, materials: 0, textures: 0, errors: 0, lastMs: 0, variantes: 0 };
 
   function collectNew(root) {
     const materials = [];
@@ -88,13 +88,32 @@ export function createPrewarm({ renderer, scene, camera }) {
     return { materials, textures };
   }
 
+  /* O ALVO entra na chave do programa: tone mapping e espaço de cor saem do
+     render target em que se desenha. O jogo desenha a cena no buffer do
+     pós-processamento (linear, sem tone mapping); compilado contra a TELA, o
+     programa saía com outra chave e o quadro de verdade compilava tudo de
+     novo — medido: os programas de "Mercado", "eyes", "02_-_Default"
+     relinkando na queda da cidade com a variante já "aquecida". `alvo()`
+     devolve o target do desenho real (null = tela). O `compile` roda
+     síncrono dentro de `compileAsync`, então o target volta antes da espera. */
+  function compilarAgora(root) {
+    const anterior = renderer.getRenderTarget ? renderer.getRenderTarget() : null;
+    try {
+      if (alvo && renderer.setRenderTarget) renderer.setRenderTarget(alvo() || null);
+      if (typeof renderer.compileAsync === 'function') return renderer.compileAsync(root, camera, scene);
+      if (typeof renderer.compile === 'function') renderer.compile(root, camera, scene);
+      return null;
+    } finally {
+      if (alvo && renderer.setRenderTarget) renderer.setRenderTarget(anterior);
+    }
+  }
+
   /* Nunca propaga: prewarm é otimização. Se o contexto GL sumiu ou o
      ambiente é headless, o jogo tem que continuar rodando igual. */
   async function compile(root) {
     if (!renderer) return;
     try {
-      if (typeof renderer.compileAsync === 'function') await renderer.compileAsync(root, camera, scene);
-      else if (typeof renderer.compile === 'function') renderer.compile(root, camera, scene);
+      await compilarAgora(root);
     } catch (e) {
       stats.errors++;
     }
@@ -123,7 +142,75 @@ export function createPrewarm({ renderer, scene, camera }) {
     return { materials: materials.length, textures: uploaded, ms, skipped: false };
   }
 
+  /* VARIANTES DE LUZ (2026-10-17). A chave do programa carrega a CONTAGEM
+     de luzes da cena, e o three guarda um programa por material POR contagem
+     (`materialProperties.programs` é um Map). Quando a nave aparece (+4) ou
+     a cidade cai (+2 ruínas, +1 explosão), todo material relinka no quadro
+     seguinte — medido numa partida real (RTX 3050): 14–24 programas e
+     188–288 ms por troca; o ANGLE/D3D11 do Windows compila várias vezes mais
+     devagar. Aqui cada contagem extra é linkada na janela segura. As luzes de
+     aquecimento (intensidade 0) entram e saem DENTRO desta chamada — o
+     `compile` é síncrono antes da espera —, então nenhum quadro é desenhado
+     com elas. Em FATIAS de 20 ms (objeto a objeto): a cena inteira de uma
+     vez travou o lobby por 2,7 s com a máquina carregada — e a cena inteira
+     já tinha travado o boot (br-game.js, ao lado do `buildShip`). Material
+     que chega depois (GLB tardio) entra na próxima fatia. */
+  const porVariante = new Map();      // nº de luzes extras → chaves já linkadas nela
+  const FATIA_MS = 20;                // por quadro: o lobby continua fluido em máquina lenta
+  const agora = () => (typeof performance !== 'undefined' ? performance : Date).now();
+  /* a chave do programa também depende do OBJETO (instanciado, skinado):
+     material + tipo de malha */
+  const chaveDe = (o, m) => m.uuid + (o.isInstancedMesh ? 'i' : '') + (o.isSkinnedMesh ? 's' : '') + (o.isBatchedMesh ? 'b' : '');
+  function pendentesDa(feitos) {
+    const fila = [];
+    try {
+      scene.traverse(object => {
+        const material = object && object.material;
+        if (!material || !(object.isMesh || object.isPoints || object.isLine || object.isSprite)) return;
+        for (const m of Array.isArray(material) ? material : [material])
+          if (m && !feitos.has(chaveDe(object, m))) { fila.push(object); return; }
+      });
+    } catch (e) {
+      stats.errors++;
+    }
+    return fila;
+  }
+  async function warmLightVariant(extras, luzes) {
+    if (!renderer) return false;
+    for (const k of extras) {
+      let feitos = porVariante.get(k);
+      if (!feitos) porVariante.set(k, (feitos = new Set()));
+      const fila = pendentesDa(feitos);
+      if (!fila.length) continue;
+      const usadas = luzes.slice(0, k);
+      const prontos = [];
+      const t0 = agora();
+      for (const l of usadas) scene.add(l);
+      try {
+        for (const o of fila) {
+          prontos.push(compilarAgora(o));
+          for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m) feitos.add(chaveDe(o, m));
+          if (agora() - t0 > FATIA_MS) break;
+        }
+      } catch (e) {
+        stats.errors++;
+      } finally {
+        for (const l of usadas) scene.remove(l);
+      }
+      stats.variantes++;
+      try { await Promise.all(prontos); } catch (e) { stats.errors++; }
+      return true;
+    }
+    return false;
+  }
+
   return {
+    /* Linka uma fatia (≤ 20 ms) do que falta na primeira contagem de luzes
+       extras com pendência; true = trabalhou (chame de novo no próximo
+       quadro). `luzes`: PointLights de intensidade 0 criadas por quem chama
+       (criar Object3D consome o rand seedado). */
+    luzes(extras, luzes) { return warmLightVariant(extras, luzes); },
+
     /* Linka tudo que ainda falta na raiz dada (padrão: a cena toda).
        Chame só em janela segura — boot, lobby, contagem regressiva. */
     warm(root = scene) { return warmRoot(root); },

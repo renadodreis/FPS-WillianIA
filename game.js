@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { noSeed } from './js/meshutils.js';
 import * as CANNON from 'cannon-es';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { Sky } from 'three/addons/objects/Sky.js';
@@ -664,8 +665,17 @@ const perfHud = createPerfHud({ renderer,
   getScale: () => resScaler.scale, getCeiling: () => resScaler.ceiling });
 
 /* ---- prewarm: linka os programas WebGL fora do tiroteio ---- */
-const prewarm = createPrewarm({ renderer, scene, camera });
+// o alvo do desenho de verdade: o buffer do pós (fora de XR) ou a tela/sessão
+const prewarm = createPrewarm({ renderer, scene, camera, alvo: () => (XR.presenting ? null : composer.readBuffer) });
 let prewarmBusy = false, prewarmNextAt = 0;
+/* As contagens de luz que uma partida do BR visita, além da base (sol em
+   cascatas, fogueira, vulcão, granada e o clarão da arma — todas sempre na
+   cena): +4 da nave (br-game.js, buildShip), +3 com a cidade caída e a
+   explosão acesa (2 brasas das ruínas, js/structures.js; 1 luz da explosão,
+   city-destruction-client.js) e +2 depois que a explosão apaga. Luz nova
+   num desses lugares muda a conta: test/luzes-sem-recompilar mede. */
+const LUZES_EXTRAS_DO_BR = [4, 3, 2];
+const luzesDeAquecer = noSeed(() => Array.from({ length: 4 }, () => new THREE.PointLight(0xffffff, 0)));
 /* Janela segura = menu, lobby ou pausa. Aqui ninguém sente meio segundo
    de compilação; no meio do combate seria o travamento que queremos matar. */
 function prewarmIfIdle(nowMs) {
@@ -673,7 +683,11 @@ function prewarmIfIdle(nowMs) {
   prewarmBusy = true;
   prewarmNextAt = nowMs + 1000;
   // sem await no loop: rejeição aqui viraria unhandledrejection no console
-  Promise.resolve(prewarm.flush()).catch(() => {}).finally(() => { prewarmBusy = false; });
+  Promise.resolve(prewarm.flush())
+    // no BR, depois do que falta na contagem de agora, as contagens da partida (uma por janela)
+    .then(() => (window.__BR_active ? prewarm.luzes(LUZES_EXTRAS_DO_BR, luzesDeAquecer) : false))
+    .then(trabalhou => { if (trabalhou) prewarmNextAt = 0; })   // fatia feita: a próxima no quadro seguinte
+    .catch(() => {}).finally(() => { prewarmBusy = false; });
 }
 
 /* ================== física (cannon-es) ================== */
@@ -1378,8 +1392,19 @@ const muzzleMatFlash = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparen
   for (const f of [f1, f2, f3]) f.userData.weaponFx = true; // FX transparente: não conta como corpo da arma
   muzzle.add(f1, f2, f3);
 }
+/* O CLARÃO MORA NA CENA, NÃO NA ARMA. Filho do cano, a luz deixava de ser
+   CONTADA sempre que a arma sumia — pulo da nave, carro, helicóptero,
+   luneta, cinemática da cidade — e a contagem de luzes entra na chave do
+   programa WebGL: cada troca relinkava todo material visível (medido: 13–17
+   programas, ~200 ms de quadro por troca). Na cena ela conta sempre; no
+   quadro do disparo vai para a boca, e com a arma escondida fica em 0. */
 const muzzleLight = new THREE.PointLight(0xffc274, 0, 11, 2.2);
-muzzle.add(muzzleLight);
+scene.add(muzzleLight);
+/* está DESENHADO: visível ele e todos os pais, até a cena */
+function naCenaVisivel(o) {
+  for (; o; o = o.parent) { if (!o.visible) return false; if (o === scene) return true; }
+  return false;
+}
 gun.muzzleAnchor.add(muzzle);
 let muzzleT = 0;
 function muzzleFlash(scale = 1) {
@@ -2512,7 +2537,8 @@ function applyFpsCamera(dt, t, vistaPronta = false, olhoPronto = false) {
   muzzleT = Math.max(0, muzzleT - dt);
   const mk = muzzleT / 0.05;
   muzzleMatFlash.opacity = mk * 0.95;
-  muzzleLight.intensity = mk * 26;
+  muzzleLight.intensity = mk > 0 && naCenaVisivel(muzzle) ? mk * 26 : 0;
+  if (muzzleLight.intensity > 0) muzzle.getWorldPosition(muzzleLight.position);
 
   // ---- luneta: overlay + sensibilidade do mouse reduzida no zoom ----
   setOpacityOnce(ui.scope, scopedK.toFixed(2));
