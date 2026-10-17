@@ -145,6 +145,7 @@ describe('Destruição da cidade — servidor autoritativo', () => {
   it('dada a flag desabilitada antes do início, então NÃO há agendamento', async t => {
     const srv = await spawnServer(); t.after(() => srv.stop());
     const a = await connect(srv.port); t.after(() => a.s.close());
+    a.s.emit('hello', { nick: 'QA' });   // sem hello é "ainda carregando" e não entra na partida (MP-1)
     await ack(a.s, 'claimHost', { code: 'QA123' });
     a.s.emit('setFlags', { cidade: false });
     const started = once(a.s, 'matchStart');
@@ -274,13 +275,15 @@ describe('Destruição da cidade — servidor autoritativo', () => {
   });
 
   it('dada a sala esvaziada, então a próxima sessão volta com flag habilitada e cidade intacta', async t => {
-    const srv = await spawnServer(); t.after(() => srv.stop());
+    // a sala só volta à fábrica depois de ficar VAZIA por SALA_VAZIA_S (MP-5:
+    // na troca de rodada todos recarregam juntos e ela esvazia por ~250 ms)
+    const srv = await spawnServer({ SALA_VAZIA_S: '1' }); t.after(() => srv.stop());
     const a = await connect(srv.port);
     await ack(a.s, 'claimHost', { code: 'QA123' });
     a.s.emit('setFlags', { cidade: false });
     await sleep(200);
     a.s.close(); // sala esvazia
-    await sleep(400);
+    await sleep(1500);
     const b = await connect(srv.port); t.after(() => b.s.close());
     assert.equal(b.init.flags.cidade, true, 'flag não resetou com a sala vazia');
     assert.equal(b.init.cityDestruction.state, 'intact');
